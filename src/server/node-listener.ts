@@ -18,7 +18,9 @@
 // it is forgotten.
 
 import { type DoorCert, ensureDoorCert } from '../adapters/door-cert.ts'
-import type { MasterRecord, NodeStore } from '../adapters/node-store.ts'
+import { isRecord } from '../adapters/json-store.ts'
+import type { NodeJoinStore } from '../adapters/node-join-store.ts'
+import { type MasterRecord, masterName, type NodeStore } from '../adapters/node-store.ts'
 import { RateLimiter } from '../core/access.ts'
 import { doorRoute, loopbackHost, NODE_API } from '../core/node-door.ts'
 import { type NodeConfig, nodeConfig } from '../core/nodes.ts'
@@ -37,6 +39,8 @@ export interface NodeListenerOptions {
   /** The board's own hello (server/remote.ts), which the door's adds `node` to. */
   hello: () => Hello
   store: NodeStore
+  /** One-time join code store for claiming a computer behind NAT (#513); optional. */
+  join?: NodeJoinStore
   /** The door's own routes (server/routes/node.ts): its status and a start from the master. */
   doorRoutes: Route[]
   log: (text: string) => void
@@ -84,6 +88,46 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
   const configKey = (): string => JSON.stringify(o.cfg.node ?? null)
   let lastConfig = configKey()
   const wrong = new RateLimiter(WRONG_TOKENS)
+  let claiming = false
+
+  async function handleClaim(req: Request, here: NodeConfig): Promise<Response> {
+    if (req.headers.get('x-board') !== '1') return json(403, { error: 'header' })
+    if (o.store.list().length > 0) {
+      o.join?.clear()
+      return json(409, { error: 'claimed' })
+    }
+    if (!o.join) return json(410, { error: 'expired' })
+    let rawText = ''
+    try {
+      rawText = await req.text()
+    } catch {
+      return json(400, { error: 'claim' })
+    }
+    if (rawText.length > 4096) return json(400, { error: 'claim' })
+    let body: unknown = null
+    try {
+      body = rawText ? JSON.parse(rawText) : null
+    } catch {
+      return json(400, { error: 'claim' })
+    }
+    if (!isRecord(body)) return json(400, { error: 'claim' })
+    const name = masterName(isRecord(body.master) ? body.master.name : undefined)
+    if (!name) return json(400, { error: 'claim' })
+    if (claiming || o.store.list().length > 0) return json(409, { error: 'claimed' })
+    claiming = true
+    try {
+      const checked = o.join.attempt(typeof body.code === 'string' ? body.code : '')
+      if (!checked.ok) {
+        return checked.status === 410
+          ? json(410, { error: 'expired' })
+          : json(403, { error: 'code', remaining: checked.remaining, ...(checked.ended && { ended: true }) })
+      }
+      const { token } = o.store.add(name, 'claim')
+      return json(200, { token, id: here.id })
+    } finally {
+      claiming = false
+    }
+  }
 
   async function answer(req: Request, srv?: Server): Promise<Response> {
     // The door as this request found it, should a sync change it meanwhile.
@@ -98,16 +142,20 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
       url = new URL(req.url)
       const raw = url.pathname
       if (req.method === 'GET' && raw === '/api/hello') {
+        const claimed = o.store.list().length > 0
+        const join = !claimed && boundTls && boundCertFp && o.join ? o.join.hello(here.id, boundCertFp) : null
         return json(200, {
           ...o.hello(),
           node: {
             api: NODE_API,
             id: here.id,
-            claimed: o.store.list().length > 0,
+            claimed,
             ...(boundTls && boundCertFp ? { cert: boundCertFp } : {}),
+            ...(join && { join }),
           },
         })
       }
+      if (req.method === 'POST' && raw === '/api/node/claim') return await handleClaim(req, here)
       const token = bearerOf(req.headers.get('authorization'))
       master = token ? o.store.verify(token) : null
       if (!master) {

@@ -16,6 +16,7 @@ import { useHeld } from '../../hooks/useHeld.ts'
 import { useLatest } from '../../hooks/useLatest.ts'
 import { useRowReorder } from '../../hooks/useRowReorder.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
+import type { ComputerSetupView } from '../../models/computer-setup.ts'
 import {
   type DeviceRow,
   deviceRows,
@@ -36,6 +37,7 @@ import { classNames } from '../class-names.ts'
 import { GripGlyph, PencilIcon } from '../icons.tsx'
 import { Panel, type PanelBack } from '../panel/Panel.tsx'
 import { Switch } from '../team/Switch.tsx'
+import { AddComputer } from './AddComputer.tsx'
 import { AddServer, LoginLines } from './AddServer.tsx'
 
 export interface DevicesPanelProps {
@@ -46,6 +48,8 @@ export interface DevicesPanelProps {
   initial?: PanelSettings
   /** The Add a server form's view, for a test (components/devices/AddServer.tsx). */
   setup?: NodeSetupView
+  /** The Add a computer form's view, for a test (components/devices/AddComputer.tsx). */
+  computerSetup?: ComputerSetupView
 }
 
 /** How long the panel waits after the devices change before it asks for the next device again. */
@@ -54,7 +58,7 @@ const NEXT_MS = 1000
 /** POST /api/nodes; the settings it answered with, or null when it was refused (a toast says why). */
 type Send = (body: Record<string, unknown>) => Promise<PanelSettings | null>
 
-export function DevicesPanel({ open, onClose, back, initial, setup }: DevicesPanelProps) {
+export function DevicesPanel({ open, onClose, back, initial, setup, computerSetup }: DevicesPanelProps) {
   const t = useT()
   const { data, canEdit, toast, now } = useBoardContext()
   const [settings, setSettings] = useState<PanelSettings | null>(initial ?? null)
@@ -180,6 +184,7 @@ export function DevicesPanel({ open, onClose, back, initial, setup }: DevicesPan
           ))}
         </div>
         <AddServer open={open} {...(setup && { initial: setup })} />
+        <AddComputer open={open} {...(computerSetup && { initial: computerSetup })} />
         {master && <LanesSection settings={settings} disabled={!canEdit} send={send} />}
         {master && (
           <section className="devices-section">

@@ -102,6 +102,8 @@ export const DOOR_ROUTES: readonly DoorRoute[] = [
   { method: 'POST', path: /^\/api\/node\/pilot-call\/[A-Za-z0-9_-]{8,64}\/(stdin|mcp-reply|close)$/, door: true },
   { method: 'POST', path: '/api/node/pilot-call/files', door: true },
   { method: 'POST', path: '/api/node/pilot-call/report', door: true },
+  // Claiming a computer behind NAT by one-time join code (#513, design 6.2, 20.2), before token auth.
+  { method: 'POST', path: '/api/node/claim', door: true },
 ]
 
 const allows = (r: DoorRoute, method: string, rawPath: string, path: string): boolean =>

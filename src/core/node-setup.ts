@@ -6,6 +6,7 @@
 // creates; the device's id is found from what the master and the server already say; and the view
 // the panel reads, with the master's own steps after the server's. Pure, with no node: import.
 
+import type { RelayLink } from './node-computer-setup.ts'
 import { LINK_USER } from './node-texts.ts'
 import { DEVICE_ID, deviceIdFromHost, LOCAL, type NodeStatus } from './nodes.ts'
 import type { Text } from './server-plan.ts'
@@ -107,7 +108,7 @@ const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 export function putDevice(
   nodes: Record<string, unknown>,
   had: boolean,
-  d: { id: string; link: SshLink; selfId: string },
+  d: { id: string; link: SshLink | RelayLink; selfId: string },
 ): boolean {
   if (!had) {
     for (const key of Object.keys(nodes)) delete nodes[key]

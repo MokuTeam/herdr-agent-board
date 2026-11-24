@@ -7,23 +7,26 @@
 // it cannot type into a session.
 
 import { randomBytes, randomUUID } from 'node:crypto'
-import { existsSync, type FSWatcher, mkdirSync, readFileSync, watch } from 'node:fs'
-import { hostname } from 'node:os'
+import { existsSync, type FSWatcher, mkdirSync, mkdtempSync, readFileSync, rmSync, watch } from 'node:fs'
+import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { localAgyLimits } from '../adapters/agy-limits.ts'
 import { allCards } from '../adapters/cards.ts'
 import { editNodes, editNodesAdding, loadConfig, saveFoundProfiles } from '../adapters/config-file.ts'
 import { dbFile } from '../adapters/db.ts'
+import { pinnedTls, probeDoorCert } from '../adapters/door-cert.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { archiveCommit, headCommit } from '../adapters/git.ts'
 import { gitTools, masterGit } from '../adapters/git-access.ts'
 import { workspaceList } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
+import { createNodeJoinStore } from '../adapters/node-join-store.ts'
 import {
   createDeviceStore,
   createNodeStore,
   dropRelayCredentials,
   nodeDir,
+  nodesDir,
   readLanesSeen,
   relayKeyPath,
   writeLanesSeen,
@@ -34,7 +37,7 @@ import { knobMs, pace, pause } from '../adapters/pacing.ts'
 import { archiveDir, cardsDir, pluginRoot, ROOT, scheduleDir } from '../adapters/paths.ts'
 import { goLater, pluginCommit, startGuard, touchCode } from '../adapters/plugin-update.ts'
 import { fetchProbe, PROBE_TIMEOUT_MS, probeOrigin, probeOriginAt } from '../adapters/probe.ts'
-import { programsOnPath } from '../adapters/process.ts'
+import { programsOnPath, run as runProcess } from '../adapters/process.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
 import { listEntries, watchesDir } from '../adapters/schedule-store.ts'
 import { writeSink } from '../adapters/secret-sinks.ts'
@@ -62,6 +65,7 @@ import {
   spawnRemote,
   spawnSsh,
   sshBin,
+  sshKeygenBin,
   sshVersion,
   writePidRecord,
 } from '../adapters/ssh.ts'
@@ -73,6 +77,7 @@ import { journalConfig } from '../core/journal.ts'
 import { t } from '../core/lang.ts'
 import { messageGate } from '../core/message-gate.ts'
 import { dropMovedCards } from '../core/node-items.ts'
+import { JOIN_TTL_MS } from '../core/node-join.ts'
 import { deviceIdFromHost, fillThresholds, markRevoked, nodeConfig, nodesConfig, parseNodeKey } from '../core/nodes.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
 import type { BackupPayload, CalendarPayload, TimePayload } from '../core/payload.ts'
@@ -120,10 +125,12 @@ import { createNodeUpdate, type NodeUpdate } from '../services/node/update.ts'
 import { createNodeUplink, type NodeUplink } from '../services/node/uplink.ts'
 import { createNodeAggregate, type NodeAggregate } from '../services/nodes/aggregate.ts'
 import { type BundleSync, createBundleSync } from '../services/nodes/bundle-sync.ts'
+import { type ComputerSetup, createComputerSetup } from '../services/nodes/computer-setup.ts'
 import { createNodeLinks, linkTimes, type NodeLinks } from '../services/nodes/links.ts'
 import { moveToDevice } from '../services/nodes/move-device.ts'
 import { createNodePilotCalls, type NodePilotCalls } from '../services/nodes/pilot-call.ts'
 import { createPlacer, type Placer } from '../services/nodes/placer.ts'
+import { openRelayForward, relayEnrolFor } from '../services/nodes/relay.ts'
 import { createRelaySetup, type RelaySetup } from '../services/nodes/relay-setup.ts'
 import { createRevoker, type Revoker } from '../services/nodes/revoke.ts'
 import { createNodeSetup, type NodeSetup } from '../services/nodes/setup.ts'
@@ -182,7 +189,7 @@ import { mokupilotRoutes } from './routes/mokupilot.ts'
 import { moveRoute } from './routes/move.ts'
 import { nodeCallRoutes, nodeDoorRoutes } from './routes/node.ts'
 import { createNodeProxy, type NodeProxy } from './routes/node-proxy.ts'
-import { nodeSetupRoutes, nodesRoutes, relaySetupRoutes } from './routes/nodes.ts'
+import { computerSetupRoutes, nodeSetupRoutes, nodesRoutes, relaySetupRoutes } from './routes/nodes.ts'
 import { pageLogRoute } from './routes/page-log.ts'
 import { pilotCallRoutes } from './routes/pilot-call.ts'
 import { presenceRoutes } from './routes/presence.ts'
@@ -1238,7 +1245,9 @@ export async function startServer({
                   ? localSetupRoutes
                   : path === '/api/nodes/relay/setup'
                     ? localRelaySetupRoutes
-                    : routes
+                    : path === '/api/nodes/computer/setup'
+                      ? localComputerSetupRoutes
+                      : routes
       return await dispatch(selected, req, url, path, guards, () => peerOf(srv, req))
     } catch (err) {
       // The path only: a query can carry the page's token.
@@ -1400,6 +1409,7 @@ export async function startServer({
       workspaces: () => workspaceList(8000),
     })
     const nodeStore = createNodeStore()
+    const nodeJoin = createNodeJoinStore()
     door = createNodeListener({
       cfg,
       routes: ownRoutes,
@@ -1409,6 +1419,7 @@ export async function startServer({
       guards: { ...guards, ownFiles: ownFileCheck(cfg) },
       hello: () => listener.hello(),
       store: nodeStore,
+      join: nodeJoin,
       // Its status, a start from the master (#504) through this board's own launch pipeline, the
       // profile bundle its master sends (#506) and a secret given to one of its sinks (#507).
       doorRoutes: nodeDoorRoutes({
@@ -1534,6 +1545,145 @@ export async function startServer({
         newId: setupId,
       })),
   )
+  let computerSetup: ComputerSetup | null = null
+  const pendingEnrolsFile = (): string => join(nodesDir(), 'relay', 'pending-enrols.json')
+  const computerSetupInstance = (): ComputerSetup =>
+    (computerSetup ??= createComputerSetup({
+      cfg,
+      relayHostKey: async (host, sshPort) => {
+        const bin = sshKeygenBin()
+        const kh = knownHostsFile()
+        if (!bin || !existsSync(kh)) return null
+        const name = (sshPort === 22 ? host : `[${host}]:${sshPort}`).toLowerCase()
+        const r = await runProcess(bin, ['-F', name, '-f', kh], { timeout: 5000 })
+        if (r.code !== 0) return null
+        const lines = r.stdout
+          .split(/\r?\n/)
+          .map(l => l.trim())
+          .filter(l => l && !l.startsWith('#'))
+          .map(l => {
+            const parts = l.split(/\s+/)
+            return parts.length >= 3 && !parts[0]?.startsWith('@') ? `${name} ${parts[1]} ${parts[2]}` : l
+          })
+        return lines.length ? lines.join('\n') : null
+      },
+      generateDialKey: async socket => {
+        const dir = mkdtempSync(join(tmpdir(), 'ab-dial-'))
+        try {
+          const keyPath = join(dir, 'dial')
+          const made = await generateKey(`agent-board relay node ${socket}`, keyPath)
+          if (!made.ok) return made
+          return { ok: true, publicKey: made.publicKey, privateKey: readFileSync(keyPath, 'utf8') }
+        } finally {
+          rmSync(dir, { recursive: true, force: true })
+        }
+      },
+      enrol: {
+        add: (relay, socket, publicKey) => relayEnrolFor(relay, { store: createDeviceStore() }).add(socket, publicKey),
+        remove: (relay, socket) => relayEnrolFor(relay, { store: createDeviceStore() }).remove(socket),
+      },
+      probe: async (relay, socket) => {
+        const opened = await openRelayForward({ relay, socket, timeoutMs: 10_000 })
+        if (!opened.ok) return null
+        const fwd = opened.forward
+        try {
+          const { cert, fingerprint } = await probeDoorCert(fwd.localPort, { timeoutMs: 5000 })
+          const res = await fetch(`https://127.0.0.1:${fwd.localPort}/api/hello`, {
+            headers: { host: `127.0.0.1:${fwd.localPort}` },
+            tls: pinnedTls(cert),
+            signal: AbortSignal.timeout(5000),
+          })
+          if (!res.ok) return null
+          const body = (await res.json()) as {
+            host?: unknown
+            platform?: unknown
+            version?: unknown
+            node?: { api?: unknown; id?: unknown; claimed?: unknown; join?: unknown }
+          }
+          if (
+            typeof body.host !== 'string' ||
+            typeof body.platform !== 'string' ||
+            typeof body.version !== 'string' ||
+            !isRecord(body.node) ||
+            typeof body.node.api !== 'number' ||
+            typeof body.node.id !== 'string' ||
+            typeof body.node.claimed !== 'boolean'
+          )
+            return null
+          return {
+            ok: true,
+            certPem: cert,
+            certFingerprint: fingerprint,
+            hello: {
+              host: body.host,
+              platform: body.platform,
+              version: body.version,
+              node: {
+                api: body.node.api,
+                id: body.node.id,
+                claimed: body.node.claimed,
+                ...(body.node.join !== undefined && { join: body.node.join }),
+              },
+            },
+          }
+        } catch {
+          return null
+        } finally {
+          await fwd.close()
+        }
+      },
+      claim: async (relay, socket, req) => {
+        const opened = await openRelayForward({ relay, socket, timeoutMs: 10_000 })
+        if (!opened.ok) return { ok: false, error: opened.error }
+        const fwd = opened.forward
+        try {
+          const res = await fetch(`https://127.0.0.1:${fwd.localPort}/api/node/claim`, {
+            method: 'POST',
+            headers: {
+              host: `127.0.0.1:${fwd.localPort}`,
+              'content-type': 'application/json',
+              'x-board': '1',
+            },
+            body: JSON.stringify({ code: req.code, master: { name: req.masterName } }),
+            tls: pinnedTls(req.certPem),
+            signal: AbortSignal.timeout(10_000),
+          })
+          const body = (await res.json().catch(() => null)) as { token?: unknown; id?: unknown; error?: unknown } | null
+          if (!res.ok || !body || typeof body.token !== 'string' || typeof body.id !== 'string') {
+            return {
+              ok: false,
+              status: res.status,
+              error: typeof body?.error === 'string' ? body.error : `HTTP ${res.status}`,
+            }
+          }
+          return { ok: true, token: body.token, id: body.id }
+        } catch (err) {
+          return { ok: false, error: messageOf(err) }
+        } finally {
+          await fwd.close()
+        }
+      },
+      pinCert: (deviceId, certPem) => {
+        createDeviceStore().setCert(deviceId, certPem)
+      },
+      store: createDeviceStore(),
+      editNodes: editNodesAdding,
+      follow: linksFollow,
+      links: () => nodeLinks,
+      bundles: () => bundleSync,
+      commit: runningCommit,
+      hostName: () => hostname(),
+      pendingFile: pendingEnrolsFile,
+      onChange: () => {},
+      log,
+      now: () => Date.now(),
+      newId: setupId,
+      joinTtlMs: knobMs('BOARD_NODE_JOIN_TTL_MS', JOIN_TTL_MS),
+      pollMs: knobMs('BOARD_NODE_JOIN_POLL_MS', 2000),
+      linkWaitMs: knobMs('BOARD_NODE_SETUP_LINK_MS', 120_000),
+      pause,
+    }))
+  const localComputerSetupRoutes = computerSetupRoutes(computerSetupInstance)
   let nodeUpdater: NodeUpdater | null = null
   let scheduler: ReturnType<typeof startScheduler> | null = null
   function linksFollow(): void {
@@ -1543,6 +1693,9 @@ export async function startServer({
       return
     }
     if (nodesConfig(cfg.nodes) === null) return
+    if (nodesConfig(cfg.nodes)?.relay && existsSync(pendingEnrolsFile())) {
+      void computerSetupInstance().sweepExpired()
+    }
     nodeLinks = createNodeLinks({ cfg, log, commit: runningCommit })
     nodeLinks.onChange(id => scheduler?.wakeDevice(id))
     // Where a new session runs (#504), and the Devices row of this computer (#500): this computer's
@@ -1968,6 +2121,7 @@ export async function startServer({
       nodePlacer?.close()
       nodeUpdater?.close()
       nodeRevoker?.close()
+      computerSetup?.close()
       bundleSync?.close()
       if (nodeLinks) {
         await nodeLinks.close()

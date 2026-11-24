@@ -20,6 +20,7 @@ import {
 } from '../../core/nodes.ts'
 import { FIELD_NAME, MAX_FIELDS, SINK_ID } from '../../core/secrets.ts'
 import type { BundleSync } from '../../services/nodes/bundle-sync.ts'
+import type { ComputerSetup } from '../../services/nodes/computer-setup.ts'
 import type { NodeLinks } from '../../services/nodes/links.ts'
 import type { RelaySetup } from '../../services/nodes/relay-setup.ts'
 import type { Revoker } from '../../services/nodes/revoke.ts'
@@ -146,6 +147,34 @@ export function relaySetupRoutes(setup: () => RelaySetup): Route[] {
                     : body.op === 'cancel'
                       ? s.cancel()
                       : { status: 400, body: { ok: false, error: 'op' } }
+        return json(a.status, a.body)
+      },
+    },
+  ]
+}
+
+/**
+ * "Add a computer" (#513, services/nodes/computer-setup.ts): local board only, lazy, keeping
+ * the shared route table untouched.
+ */
+export function computerSetupRoutes(setup: () => ComputerSetup): Route[] {
+  return [
+    { method: 'GET', path: '/api/nodes/computer/setup', handle: () => json(200, setup().view()) },
+    {
+      method: 'POST',
+      path: '/api/nodes/computer/setup',
+      guard: ['board-header', 'origin'],
+      async handle(_req, ctx) {
+        const body = await ctx.body()
+        const s = setup()
+        const a =
+          body.op === 'start'
+            ? await s.start(body)
+            : body.op === 'approve'
+              ? await s.approve(body)
+              : body.op === 'cancel'
+                ? await s.cancel()
+                : { status: 400, body: { ok: false, error: 'op' } }
         return json(a.status, a.body)
       },
     },

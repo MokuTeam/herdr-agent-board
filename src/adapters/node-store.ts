@@ -267,6 +267,8 @@ export interface DeviceStore {
   certPath(id: string): string
   /** The device's pinned door certificate PEM, or null when missing, unreadable, or invalid. */
   cert(id: string): string | null
+  /** Stores the device's pinned door certificate PEM, mode 0600, whole or not at all. */
+  setCert(id: string, pem: string): void
   /**
    * The device's offline copy (`snapshot.json`, #500): when its last payload came and its part of
    * the master's payload as checked then (core/node-items.ts). null: none, unreadable, or not one.
@@ -351,6 +353,12 @@ export function createDeviceStore({ dir = nodesDir() }: { dir?: string } = {}): 
       } catch {
         return null
       }
+    },
+    setCert(id, pem) {
+      if (!isValidCertPem(pem)) throw new Error('not a valid X.509 certificate')
+      const at = folder(id)
+      mkdirSync(at, { recursive: true })
+      replaceFile(join(at, 'door-cert.pem'), `${pem.trim()}\n`, undefined, 0o600)
     },
     snapshot(id) {
       try {

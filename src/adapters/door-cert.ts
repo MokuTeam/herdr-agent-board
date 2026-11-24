@@ -12,6 +12,7 @@ import {
 } from 'node:crypto'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { connect as tlsConnect } from 'node:tls'
 import { replaceFile } from './json-store.ts'
 import { nodeDir } from './paths.ts'
 
@@ -247,4 +248,52 @@ export function isCertError(err: unknown): boolean {
     cur = obj.cause
   }
   return false
+}
+
+/**
+ * Connects over TLS to `host:port` (127.0.0.1 by default) without CA verification and returns the
+ * peer's X.509 PEM certificate and SHA-256 fingerprint (used during T18 enrolment before HMAC check).
+ */
+export function probeDoorCert(
+  port: number,
+  opts?: { host?: string; timeoutMs?: number },
+): Promise<{ cert: string; fingerprint: string }> {
+  const host = opts?.host ?? '127.0.0.1'
+  const timeoutMs = opts?.timeoutMs ?? 5000
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const socket = tlsConnect({ host, port, rejectUnauthorized: false })
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      socket.destroy()
+      reject(new Error(`TLS certificate probe timed out after ${timeoutMs} ms`))
+    }, timeoutMs)
+    const fail = (err: Error): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      socket.destroy()
+      reject(err)
+    }
+    socket.once('error', fail)
+    socket.once('secureConnect', () => {
+      if (settled) return
+      try {
+        const peer = socket.getPeerCertificate(true)
+        const raw = peer?.raw
+        if (!(raw instanceof Uint8Array) || raw.length === 0) {
+          return fail(new Error('peer presented no TLS certificate'))
+        }
+        const cert = toPem('CERTIFICATE', raw)
+        const fingerprint = createHash('sha256').update(raw).digest('hex')
+        settled = true
+        clearTimeout(timer)
+        socket.destroy()
+        resolve({ cert, fingerprint })
+      } catch (err) {
+        fail(err instanceof Error ? err : new Error(String(err)))
+      }
+    })
+  })
 }

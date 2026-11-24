@@ -107,6 +107,7 @@ describe('the door takes what 6.2 lists', () => {
       ['POST', String(/^\/api\/node\/pilot-call\/[A-Za-z0-9_-]{8,64}\/(stdin|mcp-reply|close)$/)],
       ['POST', '/api/node/pilot-call/files'],
       ['POST', '/api/node/pilot-call/report'],
+      ['POST', '/api/node/claim'],
     ])
     // A move to or from another device (#616): a session id, a file's number, a hash; nothing else.
     const sid = '0f8fad5b-d9cb-469f-a165-70867728950e'
@@ -229,7 +230,6 @@ describe('everything else is 404, whatever the spelling', () => {
       ['GET', '/api/archive'],
       ['GET', '/api/session/s1/helper/h1'],
       ['POST', '/api/session/s1/mokupilot'],
-      ['POST', '/api/node/claim'],
       // A node's own `board thread` hands its call here: this computer's, never the master's (#508).
       ['POST', '/api/node/call'],
       ['GET', '/'],
