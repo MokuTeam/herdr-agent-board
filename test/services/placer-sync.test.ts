@@ -10,7 +10,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { QueueEntry } from '../../src/adapters/node-queue.ts'
+import { createNodeQueue, type NodeQueue, QUEUE_MAX, type QueueEntry } from '../../src/adapters/node-queue.ts'
 import type { GitIdentity } from '../../src/core/git-access.ts'
 import type { NodeStatus } from '../../src/core/nodes.ts'
 import type { Profile } from '../../src/core/profiles.ts'
@@ -18,7 +18,7 @@ import type { Config } from '../../src/core/types.ts'
 import type { LaunchRequest } from '../../src/services/launch/request.ts'
 import { type Launch, newLaunch } from '../../src/services/launch/run.ts'
 import { createBundleSync, type SyncReport } from '../../src/services/nodes/bundle-sync.ts'
-import { createPlacer } from '../../src/services/nodes/placer.ts'
+import { createPlacer, SENT_TTL_MS } from '../../src/services/nodes/placer.ts'
 import { isolatedHome } from '../support/env.ts'
 
 const NOW = 1_800_000_000_000
@@ -187,6 +187,8 @@ function master(o: {
   remote?: () => { items: unknown[]; launches: unknown[]; schedules: unknown[]; devices: { id: string }[] } | null
   /** Per-device config overrides (e.g. revoked, paused, drain). */
   deviceCfg?: Record<string, Record<string, unknown>>
+  /** Optional custom NodeQueue implementation (e.g. real createNodeQueue or throwing put). */
+  queue?: NodeQueue
 }) {
   isolatedHome()
   const dir = mkdtempSync(join(tmpdir(), 'placer-sync-'))
@@ -287,7 +289,7 @@ function master(o: {
     log: text => void logs.push(text),
     ...(o.sync !== false && { bundle }),
     ...(o.awaitsBoard && { awaitsBoard: true }),
-    queue: {
+    queue: o.queue ?? {
       read: () => o.restored ?? [],
       put: (e: QueueEntry) => {
         queuePuts.push(e)
@@ -772,6 +774,7 @@ describe('a start on its way to a node survives a master restart (#588)', () => 
     one.release()
     await until(() => one.requests.includes('POST /api/node/launch'))
     expect(m.queued.get(l.id)?.sent).toBe('server-1')
+    expect(m.queued.get(l.id)?.sentAt).toBe(NOW)
     expect(m.queued.get(l.id)?.syncing).toBeUndefined()
     one.releaseLaunch()
     await until(settledOf(l))
@@ -880,6 +883,121 @@ describe('a start on its way to a node survives a master restart (#588)', () => 
     expect(one.starts).toEqual([])
     expect(two.starts[0]?.id).toBe(saved.session)
     expect(m.queued.size).toBe(0)
+    m.close()
+  }, 15_000)
+
+  test('restart with sent when that device is paused or draining clears sent and places on the next device', async () => {
+    for (const flag of ['paused', 'drain'] as const) {
+      const one = door('server-1')
+      const two = door('server-2')
+      const saved = entry({ sent: 'server-1', sentAt: NOW - 10_000 })
+      const m = master({
+        nodes: [one, two],
+        restored: [saved],
+        deviceCfg: { 'server-1': { [flag]: true } },
+      })
+      await until(() => two.starts.length === 1)
+      expect(one.starts).toEqual([])
+      expect(one.requests).toEqual([])
+      expect(two.starts[0]?.id).toBe(saved.session)
+      expect(m.queued.size).toBe(0)
+      m.close()
+    }
+  }, 15_000)
+
+  test('sent pin expires after SENT_TTL_MS and falls back to decide(), checking nodeShows first', async () => {
+    const one = door('server-1')
+    one.down = true
+    const two = door('server-2')
+    const saved = entry({ sent: 'server-1', sentAt: NOW })
+    const m = master({ nodes: [one, two], restored: [saved], whenFull: 'local' })
+    await Bun.sleep(40)
+    // Inside SENT_TTL_MS: stays pinned to server-1 even though server-2 and local have room.
+    expect(two.starts).toEqual([])
+    expect(m.ran).toEqual([])
+    // Past SENT_TTL_MS: pin expires and decide() places it on server-2 with the same session id.
+    m.clock.advance(SENT_TTL_MS)
+    await until(() => two.starts.length === 1)
+    expect(two.starts[0]?.id).toBe(saved.session)
+    expect(m.queued.size).toBe(0)
+    m.close()
+
+    // Past SENT_TTL_MS when the node already shows the session: "there" check settles it first.
+    const oneAgain = door('server-1')
+    oneAgain.down = true
+    const twoAgain = door('server-2')
+    const shownSaved = entry({ id: 'expired-there', sent: 'server-1', sentAt: NOW - SENT_TTL_MS - 1000 })
+    const m2 = master({
+      nodes: [oneAgain, twoAgain],
+      restored: [shownSaved],
+      remote: () => ({
+        items: [{ device: 'server-1', key: `@server-1:${shownSaved.session}`, session: shownSaved.session }],
+        launches: [],
+        schedules: [],
+        devices: [{ id: 'server-1' }],
+      }),
+    })
+    await until(() => !m2.queued.has(shownSaved.id))
+    expect(twoAgain.starts).toEqual([])
+    expect(oneAgain.starts).toEqual([])
+    m2.close()
+  }, 15_000)
+
+  test('50 waiting starts in queue.json do not block a start that has room on a node', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'placer-max-'))
+    scratch.push(dir)
+    const file = join(dir, 'queue.json')
+    const realQueue = createNodeQueue({ file })
+    for (let i = 1; i <= QUEUE_MAX; i++) {
+      expect(
+        realQueue.put(
+          entry({
+            id: `wait-${i}`,
+            session: `5d0c6a1e-1111-4222-8333-${String(i).padStart(12, '0')}`,
+            // Pinned to an offline node so restored waiting entries stay queued during the test.
+            task: {
+              lane: 'atlas',
+              profile: 'default',
+              agent: 'claude',
+              byHand: false,
+              origin: 'local',
+              portable: { ok: true },
+              pin: { device: 'server-2' },
+            },
+          }),
+        ),
+      ).toBe(true)
+    }
+    const one = door('server-1')
+    const two = door('server-2')
+    two.down = true
+    const m = master({ nodes: [one, two], queue: realQueue })
+    const l = m.start('atlas has room')
+    await until(settledOf(l))
+    expect(l.state).toBe('done')
+    expect(one.starts.map(s => s.id)).toEqual([l.sessionGiven])
+    // All 50 waiting entries stay intact on disk, and the acknowledged start is gone.
+    expect(realQueue.read('laptop').length).toBe(QUEUE_MAX)
+    m.close()
+  }, 15_000)
+
+  test('a queue write error during in-flight persistence logs and lets the start proceed', async () => {
+    const one = door('server-1')
+    const m = master({
+      nodes: [one],
+      queue: {
+        read: () => [],
+        put: () => {
+          throw new Error('disk full')
+        },
+        remove: () => {},
+      },
+    })
+    const l = m.start('atlas unpersisted')
+    await until(settledOf(l))
+    expect(l.state).toBe('done')
+    expect(one.starts.map(s => s.id)).toEqual([l.sessionGiven])
+    expect(m.logs.some(x => x.includes('placer: the queue: disk full'))).toBe(true)
     m.close()
   }, 15_000)
 

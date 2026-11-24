@@ -1,9 +1,10 @@
 // The master's queue of starts that wait for room or are on their way to a node (#504, #588,
 // docs/design/nodes 8.3): `<state>/nodes/queue.json`, so a start that waits or has not been
 // acknowledged by a node yet survives a restart of the master (launches themselves live in
-// memory). At most 50 entries; each names the master that accepted it (`nodes.id`), and a board
-// reads back only its own, leaving another's as it found them. Written through the locked JSON
-// writer, 0600: a start's first message is in it.
+// memory). At most 50 waiting entries (in-flight syncing/sent entries do not count toward or block
+// at 50); each names the master that accepted it (`nodes.id`), and a board reads back only its
+// own, leaving another's as it found them. Written through the locked JSON writer, 0600: a start's
+// first message is in it.
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { GitIdentity } from '../core/git-access.ts'
@@ -49,6 +50,8 @@ export interface QueueEntry {
   syncing?: string
   /** The node `POST /api/node/launch` was sent to without an acknowledgement yet (#588). */
   sent?: string
+  /** When `POST /api/node/launch` was sent to `sent` (ms, #588). */
+  sentAt?: number
   /** True when the start must use `session` as an exact Claude session id (a verifier, #675). */
   exactSession?: true
 }
@@ -59,7 +62,9 @@ interface QueueFile {
 }
 
 const SESSION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-const isDevice = (v: unknown): boolean => v === undefined || (typeof v === 'string' && v.length > 0)
+const optionalDevice = (v: unknown): boolean => v === undefined || (typeof v === 'string' && v.length > 0)
+const optionalAt = (v: unknown): boolean => v === undefined || (typeof v === 'number' && Number.isFinite(v))
+const inFlight = (e: QueueEntry): boolean => e.sent !== undefined || e.syncing !== undefined
 const isEntry = (v: unknown): v is QueueEntry =>
   isRecord(v) &&
   typeof v.id === 'string' &&
@@ -71,14 +76,15 @@ const isEntry = (v: unknown): v is QueueEntry =>
   typeof v.request.name === 'string' &&
   typeof v.request.cwd === 'string' &&
   isRecord(v.task) &&
-  isDevice(v.syncing) &&
-  isDevice(v.sent)
+  optionalDevice(v.syncing) &&
+  optionalDevice(v.sent) &&
+  optionalAt(v.sentAt)
 const isQueueFile = (v: unknown): v is QueueFile => isRecord(v) && v.version === 1 && Array.isArray(v.entries)
 
 export interface NodeQueue {
   /** This master's entries, oldest first; what is not an entry is left out. */
   read(master: string): QueueEntry[]
-  /** Adds or replaces an entry; false when 50 of its master's wait already. */
+  /** Adds or replaces an entry; false when 50 waiting entries of its master wait already (in-flight entries never count or fail here). */
   put(entry: QueueEntry): boolean
   remove(id: string): void
 }
@@ -106,8 +112,11 @@ export function createNodeQueue({ file = join(nodesDir(), 'queue.json') }: { fil
       let ok = true
       change(entries => {
         const others = entries.filter(e => !(isEntry(e) && e.id === entry.id))
-        // Another master's entries (a board renamed, say) do not count against this one's 50.
-        if (others.filter(e => isEntry(e) && e.master === entry.master).length >= QUEUE_MAX) {
+        // Another master's entries and in-flight starts do not count against this master's 50 waiting slots.
+        if (
+          !inFlight(entry) &&
+          others.filter(e => isEntry(e) && e.master === entry.master && !inFlight(e)).length >= QUEUE_MAX
+        ) {
           ok = false
           return null
         }

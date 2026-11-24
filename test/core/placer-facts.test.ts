@@ -154,11 +154,18 @@ test('the queue keeps 50 starts, each its master’s; another master’s entries
   // Put again: replaced, not added.
   expect(q.put({ ...entry('1'), at: 2 })).toBe(true)
   expect(q.read('laptop').find(e => e.id === '1')?.at).toBe(2)
-  // Optional in-flight markers (#588) round-trip and are checked when present.
-  expect(q.put({ ...entry('2'), syncing: 'server-1' })).toBe(true)
-  expect(q.put({ ...entry('3'), sent: 'server-1' })).toBe(true)
-  expect(q.read('laptop').find(e => e.id === '2')?.syncing).toBe('server-1')
-  expect(q.read('laptop').find(e => e.id === '3')?.sent).toBe('server-1')
+  // Optional in-flight markers (#588) round-trip, do not count toward QUEUE_MAX, and are checked when present.
+  expect(q.put({ ...entry('501'), syncing: 'server-1' })).toBe(true)
+  expect(q.put({ ...entry('502'), sent: 'server-1', sentAt: 1234 })).toBe(true)
+  expect(q.read('laptop').find(e => e.id === '501')?.syncing).toBe('server-1')
+  expect(q.read('laptop').find(e => e.id === '502')?.sent).toBe('server-1')
+  expect(q.read('laptop').find(e => e.id === '502')?.sentAt).toBe(1234)
+  // 50 waiting entries already: another waiting one is refused, while in-flight ones still fit.
+  expect(q.put(entry('52'))).toBe(false)
+  expect(q.put({ ...entry('503'), sent: 'server-2', sentAt: 5678 })).toBe(true)
+  q.remove('501')
+  q.remove('502')
+  q.remove('503')
   q.remove('1')
   q.remove('nope')
   expect(q.read('laptop').some(e => e.id === '1')).toBe(false)
@@ -172,6 +179,7 @@ test('the queue keeps 50 starts, each its master’s; another master’s entries
         { ...entry('y'), session: '' },
         { ...entry('z1'), syncing: '' },
         { ...entry('z2'), sent: 42 },
+        { ...entry('z3'), sent: 'server-1', sentAt: 'bad' },
       ],
     }),
   )
