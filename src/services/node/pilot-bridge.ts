@@ -43,7 +43,7 @@ export interface NodePilotBridge {
   stream(req: Request): Response
   reqBody(reqId: string): Response
   respond(reqId: string, rawBody: unknown): Answer
-  streamChunk(streamId: string, rawBody: unknown): Answer
+  streamChunk(streamId: string, rawBody: unknown, signal?: AbortSignal): Promise<Answer>
 
   // Local MokuPilot-facing endpoints (server/routes/pilot-call.ts)
   open(rawBody: unknown): Promise<Response>
@@ -75,6 +75,9 @@ export interface NodePilotBridgeDeps {
   env?: Record<string, string | undefined>
   grantTtlMs?: number
   rpcTimeoutMs?: number
+  startTimeoutMs?: number
+  filesTimeoutMs?: number
+  streamQueueBytes?: number
 }
 
 interface PendingRpc {
@@ -83,12 +86,17 @@ interface PendingRpc {
 }
 
 interface ActiveStream {
-  write(chunk: string): boolean
-  close(): void
+  write(chunk: string, signal?: AbortSignal): Promise<boolean>
+  end(): void
+  abort(): void
 }
 
 const DEFAULT_GRANT_TTL_MS = 6 * 3600 * 1000
 const DEFAULT_RPC_TIMEOUT_MS = 30_000
+const DEFAULT_START_TIMEOUT_MS = 120_000
+const DEFAULT_FILES_TIMEOUT_MS = 300_000
+const DEFAULT_STREAM_QUEUE_BYTES = 1024 * 1024
+const EXPIRED_START_TTL_MS = 10 * 60 * 1000
 const PING_MS = 20_000
 
 const jsonRes = (status: number, body: unknown): Response =>
@@ -116,12 +124,19 @@ export function createNodePilotBridge(deps: NodePilotBridgeDeps): NodePilotBridg
   const platform = deps.platform ?? process.platform
   const grantTtlMs = deps.grantTtlMs ?? knobMs('BOARD_PILOT_GRANT_TTL_MS', DEFAULT_GRANT_TTL_MS)
   const rpcTimeoutMs = deps.rpcTimeoutMs ?? knobMs('BOARD_PILOT_BRIDGE_MS', DEFAULT_RPC_TIMEOUT_MS)
+  const startTimeoutMs = deps.startTimeoutMs ?? knobMs('BOARD_PILOT_START_MS', DEFAULT_START_TIMEOUT_MS)
+  const filesTimeoutMs = deps.filesTimeoutMs ?? knobMs('BOARD_PILOT_FILES_MS', DEFAULT_FILES_TIMEOUT_MS)
+  const maxStreamQueueBytes = Math.max(
+    64,
+    deps.streamQueueBytes ?? knobMs('BOARD_PILOT_STREAM_QUEUE_BYTES', DEFAULT_STREAM_QUEUE_BYTES),
+  )
 
   const encoder = new TextEncoder()
   const clients = new Set<ReadableStreamDefaultController<Uint8Array>>()
   const grants = new Map<string, NodeBridgeGrant>()
   const pendingRpcs = new Map<string, PendingRpc>()
   const pendingBodies = new Map<string, string>()
+  const expiredStarts = new Map<string, { grantId: string; at: number }>()
   const activeStreams = new Map<string, ActiveStream>()
   let ping: ReturnType<typeof setInterval> | null = null
   let closed = false
@@ -129,6 +144,13 @@ export function createNodePilotBridge(deps: NodePilotBridgeDeps): NodePilotBridg
   function sweepGrants(): void {
     const now = Date.now()
     for (const [id, g] of grants) if (g.expiresAt <= now) grants.delete(id)
+    for (const [id, s] of expiredStarts) if (now - s.at > EXPIRED_START_TTL_MS) expiredStarts.delete(id)
+  }
+
+  function timeoutFor(op: PilotBridgeOp): number {
+    if (op === 'files') return filesTimeoutMs
+    if (op === 'start') return startTimeoutMs
+    return rpcTimeoutMs
   }
 
   function failAllWaiting(): void {
@@ -138,14 +160,15 @@ export function createNodePilotBridge(deps: NodePilotBridgeDeps): NodePilotBridg
       clearTimeout(pending.timer)
       pending.resolve(jsonRes(503, { ok: false, error: t('mokupilot.err.masterOffline') }))
     }
+    expiredStarts.clear()
     for (const [streamId, s] of [...activeStreams.entries()]) {
       activeStreams.delete(streamId)
-      s.close()
+      s.abort()
     }
   }
 
   function leave(client: ReadableStreamDefaultController<Uint8Array>): void {
-    clients.delete(client)
+    if (!clients.delete(client)) return
     if (!clients.size) {
       if (ping) {
         clearInterval(ping)
@@ -197,8 +220,12 @@ export function createNodePilotBridge(deps: NodePilotBridgeDeps): NodePilotBridg
       const timer = setTimeout(() => {
         pendingRpcs.delete(id)
         pendingBodies.delete(id)
+        if (op === 'start' && o.grantId) {
+          sweepGrants()
+          expiredStarts.set(id, { grantId: o.grantId, at: Date.now() })
+        }
         resolve(jsonRes(504, { ok: false, error: 'master bridge request timed out' }))
-      }, rpcTimeoutMs)
+      }, timeoutFor(op))
       pendingRpcs.set(id, { resolve, timer })
       if (!emitReq(req)) {
         pendingRpcs.delete(id)
@@ -253,7 +280,28 @@ export function createNodePilotBridge(deps: NodePilotBridgeDeps): NodePilotBridg
       const body = new ReadableStream<Uint8Array>({
         start(controller) {
           client = controller
-          if (closed) return controller.close()
+          if (closed || req.signal.aborted) {
+            try {
+              controller.close()
+            } catch {}
+            return
+          }
+          // Supersede any half-open previous bridge connection immediately so stale
+          // streams/RPCs fail promptly and late aborts on the old socket cannot clear the new one.
+          if (clients.size > 0) {
+            const stale = [...clients]
+            clients.clear()
+            if (ping) {
+              clearInterval(ping)
+              ping = null
+            }
+            failAllWaiting()
+            for (const old of stale) {
+              try {
+                old.close()
+              } catch {}
+            }
+          }
           clients.add(controller)
           writeClient(controller, ': pilot-bridge\n\n')
           if (!clients.has(controller)) return
@@ -288,7 +336,28 @@ export function createNodePilotBridge(deps: NodePilotBridgeDeps): NodePilotBridg
     respond(reqId, rawBody) {
       if (!isPilotCallId(reqId)) return { status: 404, body: { ok: false, error: 'not found' } }
       const pending = pendingRpcs.get(reqId)
-      if (!pending) return { status: 404, body: { ok: false, error: 'unknown or expired bridge request' } }
+      if (!pending) {
+        const expired = expiredStarts.get(reqId)
+        if (expired) {
+          expiredStarts.delete(reqId)
+          const parsed = parseBridgeResponse(rawBody)
+          if (parsed?.status === 200 && clients.size > 0) {
+            try {
+              const body = JSON.parse(parsed.body) as { ok?: unknown; id?: unknown }
+              if (body?.ok === true && isPilotCallId(body.id)) {
+                emitReq({
+                  id: newId(),
+                  op: 'close',
+                  grantId: expired.grantId,
+                  runId: body.id,
+                  body: JSON.stringify({ kill: true }),
+                })
+              }
+            } catch {}
+          }
+        }
+        return { status: 404, body: { ok: false, error: 'unknown or expired bridge request' } }
+      }
       const parsed = parseBridgeResponse(rawBody)
       if (!parsed) return { status: 400, body: { ok: false, error: 'invalid bridge response' } }
       pendingRpcs.delete(reqId)
@@ -303,26 +372,29 @@ export function createNodePilotBridge(deps: NodePilotBridgeDeps): NodePilotBridg
       return { status: 200, body: { ok: true } }
     },
 
-    streamChunk(streamId, rawBody) {
+    async streamChunk(streamId, rawBody, signal) {
       if (!isPilotCallId(streamId)) return { status: 404, body: { ok: false, error: 'not found' } }
       const active = activeStreams.get(streamId)
       if (!active) return { status: 404, body: { ok: false, error: 'stream closed' } }
       const chunk = parseBridgeStreamChunk(rawBody)
       if (!chunk) return { status: 400, body: { ok: false, error: 'invalid stream chunk' } }
+      let payload = ''
       if (chunk.events) {
-        for (const ev of chunk.events) {
-          if (!active.write(`event: ${ev.name}\ndata: ${ev.data}\n\n`)) {
-            activeStreams.delete(streamId)
-            return { status: 404, body: { ok: false, error: 'stream closed' } }
-          }
-        }
+        for (const ev of chunk.events) payload += `event: ${ev.name}\ndata: ${ev.data}\n\n`
       }
       if (chunk.error) {
-        active.write(`event: exit\ndata: ${JSON.stringify({ code: -1, stderr: chunk.error })}\n\n`)
+        payload += `event: exit\ndata: ${JSON.stringify({ code: -1, stderr: chunk.error })}\n\n`
+      }
+      if (payload) {
+        const ok = await active.write(payload, signal)
+        if (!ok) {
+          activeStreams.delete(streamId)
+          return { status: 404, body: { ok: false, error: 'stream closed' } }
+        }
       }
       if (chunk.done) {
         activeStreams.delete(streamId)
-        active.close()
+        active.end()
       }
       return { status: 200, body: { ok: true } }
     },
@@ -455,12 +527,22 @@ export function createNodePilotBridge(deps: NodePilotBridgeDeps): NodePilotBridg
       }
       const streamId = newId()
       let ended = false
+      let eof = false
       let pingTimer: ReturnType<typeof setInterval> | null = null
       let streamController: ReadableStreamDefaultController<Uint8Array> | null = null
+      const queue: Uint8Array[] = []
+      let queuedBytes = 0
+      const drainWaiters: (() => void)[] = []
+
+      const wakeWaiters = (): void => {
+        for (const resolve of drainWaiters.splice(0)) resolve()
+      }
 
       const cleanup = (notifyMaster: boolean): void => {
         if (ended) return
         ended = true
+        queue.length = 0
+        queuedBytes = 0
         activeStreams.delete(streamId)
         if (pingTimer) clearInterval(pingTimer)
         pingTimer = null
@@ -468,53 +550,114 @@ export function createNodePilotBridge(deps: NodePilotBridgeDeps): NodePilotBridg
         try {
           streamController?.close()
         } catch {}
+        wakeWaiters()
         if (notifyMaster && clients.size > 0) {
           emitReq({ id: newId(), op: 'events-close', streamId })
         }
       }
       const onAbort = (): void => cleanup(true)
 
-      const stream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          streamController = controller
-          if (req.signal.aborted || closed || !clients.size) {
-            cleanup(false)
+      const flush = (): void => {
+        if (ended || !streamController) return
+        while (queue.length > 0 && (streamController.desiredSize ?? 0) > 0) {
+          const next = queue.shift() as Uint8Array
+          queuedBytes -= next.byteLength
+          try {
+            streamController.enqueue(next)
+          } catch {
+            cleanup(true)
             return
           }
-          req.signal.addEventListener('abort', onAbort, { once: true })
+        }
+        if (queuedBytes < maxStreamQueueBytes && drainWaiters.length > 0) {
+          wakeWaiters()
+        }
+        if (eof && queue.length === 0) {
+          cleanup(false)
+        }
+      }
 
-          const write = (chunk: string): boolean => {
-            if (ended) return false
-            try {
-              controller.enqueue(encoder.encode(chunk))
-              return true
-            } catch {
-              cleanup(true)
-              return false
-            }
-          }
-
-          activeStreams.set(streamId, {
-            write,
-            close: () => cleanup(false),
-          })
-
-          if (!write(': connected\n\n')) return
-          pingTimer = setInterval(
-            () => {
-              write(': ping\n\n')
-            },
-            Math.max(50, knobMs('BOARD_EVENTS_PING_MS', PING_MS)),
-          )
-
-          if (!emitReq({ id: streamId, op: 'events', grantId: grant.remoteGrantId, runId, streamId })) {
-            cleanup(false)
-          }
-        },
-        cancel() {
+      const enqueueDirect = (text: string): boolean => {
+        if (ended || !streamController) return false
+        try {
+          streamController.enqueue(encoder.encode(text))
+          return true
+        } catch {
           cleanup(true)
+          return false
+        }
+      }
+
+      const write = async (chunk: string, signal?: AbortSignal): Promise<boolean> => {
+        if (ended || eof || signal?.aborted) return false
+        const bytes = encoder.encode(chunk)
+        queue.push(bytes)
+        queuedBytes += bytes.byteLength
+        flush()
+        while (!ended && queuedBytes >= maxStreamQueueBytes) {
+          if (signal?.aborted) return false
+          await new Promise<void>(resolve => {
+            const onWake = (): void => {
+              signal?.removeEventListener('abort', onSignalAbort)
+              resolve()
+            }
+            const onSignalAbort = (): void => {
+              const idx = drainWaiters.indexOf(onWake)
+              if (idx >= 0) drainWaiters.splice(idx, 1)
+              resolve()
+            }
+            drainWaiters.push(onWake)
+            signal?.addEventListener('abort', onSignalAbort, { once: true })
+          })
+        }
+        return !ended && !signal?.aborted
+      }
+
+      const stream = new ReadableStream<Uint8Array>(
+        {
+          start(controller) {
+            streamController = controller
+            if (req.signal.aborted || closed || !clients.size) {
+              cleanup(false)
+              return
+            }
+            req.signal.addEventListener('abort', onAbort, { once: true })
+
+            activeStreams.set(streamId, {
+              write,
+              end: () => {
+                if (ended || eof) return
+                eof = true
+                activeStreams.delete(streamId)
+                if (pingTimer) clearInterval(pingTimer)
+                pingTimer = null
+                flush()
+              },
+              abort: () => cleanup(false),
+            })
+
+            if (!enqueueDirect(': connected\n\n')) return
+            pingTimer = setInterval(
+              () => {
+                if (ended || eof || queue.length > 0 || (streamController?.desiredSize ?? 0) <= 0) return
+                enqueueDirect(': ping\n\n')
+              },
+              Math.max(50, knobMs('BOARD_EVENTS_PING_MS', PING_MS)),
+            )
+
+            if (!emitReq({ id: streamId, op: 'events', grantId: grant.remoteGrantId, runId, streamId })) {
+              cleanup(false)
+            }
+          },
+          pull() {
+            flush()
+          },
+          cancel() {
+            cleanup(true)
+          },
         },
-      })
+        new ByteLengthQueuingStrategy({ highWaterMark: Math.min(64 * 1024, maxStreamQueueBytes) }),
+      )
 
       return new Response(stream, {
         status: 200,

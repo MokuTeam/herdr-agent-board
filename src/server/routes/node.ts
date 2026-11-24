@@ -325,7 +325,7 @@ function pilotBridgeDoorRoutes(pb: NodePilotBridge): Route[] {
       async handle(req, ctx) {
         const body = await jsonUpTo(req, MAX_BRIDGE_STREAM_BATCH_BYTES + 4096)
         if (body === undefined) return json(413, { ok: false, error: 'too-big' })
-        return answer(pb.streamChunk(ctx.params[0] ?? '', body))
+        return answer(await pb.streamChunk(ctx.params[0] ?? '', body, req.signal))
       },
     },
   ]

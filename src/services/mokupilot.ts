@@ -14,8 +14,14 @@ import { itemProfile } from '../core/item-profile.ts'
 import { t } from '../core/lang.ts'
 import { sameDir } from '../core/launch/names.ts'
 import { callable, callCommand, callLink } from '../core/mokupilot.ts'
-import { mokupilotMode, type Resolved, resolveMode, type Viewer } from '../core/mokupilot-mode.ts'
-import { nodesConfig } from '../core/nodes.ts'
+import {
+  isRegisteredNodeViewer,
+  mokupilotMode,
+  type Resolved,
+  resolveMode,
+  type Viewer,
+} from '../core/mokupilot-mode.ts'
+import { configuredNodeAddresses, nodesConfig } from '../core/nodes.ts'
 import {
   absoluteProfileDir,
   defaultProfileDir,
@@ -57,6 +63,8 @@ export interface CallOptions {
   viewer?: Viewer | null | undefined
   /** This computer's own addresses (services/tunnel.ts ownAddresses), asked only under `auto` with a viewer. */
   own?: () => readonly string[]
+  /** Registered node addresses, used to allow node viewers to open secondary-profile links (#700). */
+  nodeAddresses?: () => readonly string[]
   /** The home folder, where the default profile's `.claude` is. */
   home?: string
   /** When set (#618), MokuPilot runs the agent side on the session's node through this master bridge. */
@@ -133,6 +141,7 @@ export async function startCall(
     profiles,
     viewer,
     own = () => [],
+    nodeAddresses,
     home = homedir(),
     nodeCall,
   }: CallOptions = {},
@@ -145,9 +154,12 @@ export async function startCall(
   // Here or on the viewer's computer: by the mode, and under `auto` by who asks.
   const mode = mokupilotMode(cfg.mokupilot)
   const decided = resolveMode(mode, viewer, mode === 'auto' && viewer ? own() : [])
-  // Without `nodes`, a link call runs over ssh in the board's inherited profile; with `nodes`,
-  // MokuPilot on a node routes back to the master bridge, which runs the agent in its own profile (#700).
-  if (!nodeCall && profiles && profileEnv && decided.resolved === 'link' && !nodesConfig(cfg.nodes)) {
+  // Without a registered node viewer, a link call runs over ssh in the board's inherited profile;
+  // a registered node's MokuPilot routes back to the master bridge, which runs in its own profile (#700).
+  const registeredNode =
+    decided.resolved === 'link' &&
+    isRegisteredNodeViewer(viewer, nodeAddresses ? nodeAddresses() : configuredNodeAddresses(nodesConfig(cfg.nodes)))
+  if (!nodeCall && profiles && profileEnv && decided.resolved === 'link' && !registeredNode) {
     const board = profiles.inherited?.title || profiles.inheritedDir
     return { ok: false, error: t('mokupilot.err.profile', { board, profile: profileLabel(item, profiles) }) }
   }

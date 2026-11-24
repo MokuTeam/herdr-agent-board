@@ -393,7 +393,11 @@ describe('MokuPilot with a master on another device (#700)', () => {
         mkdirSync(work, { recursive: true })
         const def = join(home, '.claude')
         mkdirSync(def, { recursive: true })
-        return void box
+        mkdirSync(box.cards, { recursive: true })
+        writeFileSync(
+          join(box.cards, `${MASTER_SID}.json`),
+          JSON.stringify({ key: MASTER_SID, profile: 'work', profileDir: work }),
+        )
       },
       masterCfg: {
         mokupilot: { mode: 'auto' },
@@ -417,9 +421,41 @@ describe('MokuPilot with a master on another device (#700)', () => {
       )
     }, 5000)
 
-    // 1. Web UI on master in link mode (remote viewer via x-forwarded-for): returns mokupilot:// links
-    //    for server-1 (desktop node), laptop (master, even in secondary work profile), and server-2 (3rd node).
-    const remoteHeaders = { 'x-board': '1', 'content-type': 'application/json', 'x-forwarded-for': '100.64.0.99' }
+    // 1. Web UI on master in link mode:
+    //    - An unregistered remote viewer (phone at 100.64.0.99) is STILL refused with nodeLink
+    //      on node cards and with the wrong-account guard on secondary-profile master cards.
+    //    - A registered node viewer (server-1 reporting 100.64.0.50 in its node status) gets
+    //      mokupilot:// links for server-1, master (secondary work profile), and server-2.
+    server1.proxy.intercept = async (method, path, forward) => {
+      if (method !== 'GET' || path !== '/api/node/status') return null
+      const res = await forward()
+      if (!res.ok) return res
+      const data = (await res.json()) as Record<string, unknown>
+      data.addresses = ['100.64.0.50']
+      return new Response(JSON.stringify(data), {
+        status: res.status,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    await pair.waitDevice('server-1', d => d.status?.addresses?.includes('100.64.0.50') ?? false)
+    server1.proxy.intercept = null
+
+    const phoneHeaders = { 'x-board': '1', 'content-type': 'application/json', 'x-forwarded-for': '100.64.0.99' }
+    const refusedNode = await fetch(
+      `${pair.master.url}/api/session/${encodeURIComponent(`@server-1:${NODE_SID}`)}/mokupilot`,
+      { method: 'POST', headers: phoneHeaders, body: '{}' },
+    )
+    expect(refusedNode.status).toBe(409)
+    expect(((await refusedNode.json()) as { error: string }).error).toContain('master computer')
+
+    const refusedMasterProfile = await fetch(
+      `${pair.master.url}/api/session/${encodeURIComponent(MASTER_SID)}/mokupilot`,
+      { method: 'POST', headers: phoneHeaders, body: '{}' },
+    )
+    expect(refusedMasterProfile.status).toBe(409)
+    expect(((await refusedMasterProfile.json()) as { error: string }).error).toContain('wrong account')
+
+    const remoteHeaders = { 'x-board': '1', 'content-type': 'application/json', 'x-forwarded-for': '100.64.0.50' }
     for (const [key, expectedCwd] of [
       [`@server-1:${NODE_SID}`, nodeCwd],
       [MASTER_SID, masterCwd],

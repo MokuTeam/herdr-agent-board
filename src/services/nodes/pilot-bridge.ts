@@ -414,6 +414,7 @@ export function createPilotBridgeRunner(o: PilotBridgeRunnerOptions): PilotBridg
               }
             } finally {
               ac.signal.removeEventListener('abort', stop)
+              await reader.cancel().catch(() => {})
               reader.releaseLock()
             }
           }

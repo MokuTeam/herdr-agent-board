@@ -8,6 +8,7 @@
 //   "node": { "id": "server-1", "port": 12430, "workRoot": "~/work" }
 import { type BoardAgyLimits, boardAgyLimitsOf } from './agy-limits.ts'
 import { type GitFacts, gitFactsOf } from './git-access.ts'
+import { isLoopback, plainAddress } from './mokupilot-mode.ts'
 import { DEVICE_ID, isDevice, LOCAL, parseNodeKey } from './node-key.ts'
 import { hasUnprintable } from './team.ts'
 
@@ -566,6 +567,8 @@ export interface NodeStatus {
   git?: GitFacts
   /** Antigravity (Gemini) usage reading (#647), only when agy is installed on this node; null when unknown. */
   agyLimits?: BoardAgyLimits | null
+  /** Non-internal interface addresses of this node (#700); absent from a node of an older board. */
+  addresses?: string[]
   at: number
 }
 
@@ -650,8 +653,40 @@ export function nodeStatusOf(raw: unknown): NodeStatus | null {
       s.programs.every(p => typeof p === 'string') && { programs: [...(s.programs as string[])] }),
     ...gitOf(s.git),
     ...agyLimitsOf(s.agyLimits),
+    ...(Array.isArray(s.addresses) &&
+      s.addresses.length <= 32 &&
+      s.addresses.every(a => typeof a === 'string' && a.length > 0 && a.length <= 64) && {
+        addresses: [...(s.addresses as string[])],
+      }),
     at: s.at as number,
   }
+}
+
+/**
+ * Non-loopback addresses configured for non-revoked nodes in `nodes` (`tailnet` address, `ssh`
+ * host, `direct` hostname). Relay links do not carry a host here; those come from node status.
+ */
+export function configuredNodeAddresses(nodes: NodesConfig | null): string[] {
+  if (!nodes) return []
+  const seen = new Set<string>()
+  const out: string[] = []
+  const push = (raw: string): void => {
+    const addr = plainAddress(raw)
+    if (!addr || isLoopback(addr) || seen.has(addr)) return
+    seen.add(addr)
+    out.push(addr)
+  }
+  for (const device of Object.values(nodes.devices)) {
+    if (device.revoked || !device.link) continue
+    if (device.link.kind === 'tailnet') push(device.link.address)
+    else if (device.link.kind === 'ssh') push(device.link.host)
+    else if (device.link.kind === 'direct') {
+      try {
+        push(new URL(device.link.url).hostname)
+      } catch {}
+    }
+  }
+  return out
 }
 
 /**

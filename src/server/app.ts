@@ -76,7 +76,15 @@ import { t } from '../core/lang.ts'
 import { messageGate } from '../core/message-gate.ts'
 import { dropMovedCards } from '../core/node-items.ts'
 import { JOIN_TTL_MS } from '../core/node-join.ts'
-import { deviceIdFromHost, fillThresholds, markRevoked, nodeConfig, nodesConfig, parseNodeKey } from '../core/nodes.ts'
+import {
+  configuredNodeAddresses,
+  deviceIdFromHost,
+  fillThresholds,
+  markRevoked,
+  nodeConfig,
+  nodesConfig,
+  parseNodeKey,
+} from '../core/nodes.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
 import type { BackupPayload, CalendarPayload, TimePayload } from '../core/payload.ts'
 import type { Observation } from '../core/presence.ts'
@@ -164,6 +172,7 @@ import {
   createProbes,
   createSupervisor,
   networkSignature,
+  ownAddresses,
   PROBE_FIRST_MS,
   realClock,
   type TunnelPlan,
@@ -1192,6 +1201,7 @@ export async function startServer({
     ),
     ...launchRoutes(launches, board.items),
     terminalRoute({ cfg, terminals, find: board.find, publish: board.publish }),
+    // Updated once `nodes` starts so MokuPilot link calls can recognize registered node viewers.
     ...sessionRoutes({
       deps,
       launches,
@@ -1200,6 +1210,7 @@ export async function startServer({
       refresh,
       gate: messageGate(),
       answering: new Set(),
+      nodeAddresses: () => registeredNodeAddresses(),
     }),
     // The Omarchy theme's colors for the Terminal style, on a computer with Omarchy.
     {
@@ -1381,6 +1392,7 @@ export async function startServer({
       programs: () => [...programsOnPath(NODE_PROGRAMS), ...nodeGit.programs()],
       git: () => nodeGit.facts(),
       agyLimits: () => localAgyLimits(cfg.launch),
+      addresses: ownAddresses,
     })
     // The plugin at the master's commit (#590): unpacked beside this one, installed, swapped in.
     // Then the board ends with 75 and run.ts, the pane's process, starts it again from the plugin's
@@ -1515,6 +1527,16 @@ export async function startServer({
   // alone: made the first time config.json has `nodes`, and from then on following it. Without
   // `nodes` nothing of it exists: no ssh, no timer, no file, no route.
   let nodeLinks: NodeLinks | null = null
+  const registeredNodeAddresses = (): string[] => {
+    const conf = nodesConfig(cfg.nodes, hostname())
+    if (!conf || !nodeLinks?.on()) return []
+    const out = [...configuredNodeAddresses(conf)]
+    for (const dev of nodeLinks.view().devices) {
+      if (dev.revoked || !dev.status?.addresses) continue
+      out.push(...dev.status.addresses)
+    }
+    return out
+  }
   let localNodeRoutes: Route[] | null = null
   let nodeProxy: NodeProxy | null = null
   let bundleSync: BundleSync | null = null
@@ -1714,6 +1736,7 @@ export async function startServer({
       remoteItems: () => aggregate.part()?.items ?? [],
       masterId: () => nodesConfig(cfg.nodes, hostname())?.id ?? '',
       profiles: () => deps.profiles(),
+      nodeAddresses: registeredNodeAddresses,
     })
     nodePilotCalls = pilotCalls
     refreshLocalPilotCallRoutes()
