@@ -244,6 +244,13 @@ export const ChevIcon = () => (
   </Icon>
 )
 
+/** A back control in a panel header (#679). */
+export const ChevLeftIcon = () => (
+  <Icon>
+    <path d="m12 5-5 5 5 5" />
+  </Icon>
+)
+
 /** A folded toolbar control's pill (SegmentPick.tsx): its choices open in a menu under it. */
 export const DownIcon = () => (
   <Icon>

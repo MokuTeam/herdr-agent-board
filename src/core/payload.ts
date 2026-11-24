@@ -35,6 +35,12 @@ export interface BoardCategory {
 /** A color the category editor offers. */
 export type Swatch = { name: string; hex: string }
 
+/** Node housekeeping switches as the board has them (#652, #682): absent while both are off. */
+export interface HousekeepingPayload {
+  memory: boolean
+  tabs: boolean
+}
+
 export type { AgyLimitWindow, BoardAgyLimits }
 
 /** Claude's usage windows from the board's status line or the usagebar cache. */
@@ -128,6 +134,8 @@ export interface BoardPayload {
   compactDefault?: string
   /** Continue mid-turn Claude sessions after a restart (#633): absent when on (the default), false when off. */
   turnResume?: false
+  /** Node housekeeping switches (#652, #682): memory guard and tab sweep; absent while both are off. */
+  housekeeping?: HousekeepingPayload
   /** The remote mode (core/remote.ts), only while it is on. */
   remote?: RemoteView
   /** The user's presence (#172, core/presence.ts), only while config.json turns it on. */

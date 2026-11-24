@@ -22,11 +22,12 @@ import {
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { CopyButton } from '../access/Snippets.tsx'
 import { classNames } from '../class-names.ts'
-import { Panel } from '../panel/Panel.tsx'
+import { Panel, type PanelBack } from '../panel/Panel.tsx'
 
 export interface BackupPanelProps {
   open: boolean
   onClose(): void
+  back?: PanelBack | undefined
 }
 
 /** A line under a section: what an action found, or why it failed. */
@@ -46,7 +47,7 @@ export interface BackupActions {
   newKey(): void
 }
 
-export function BackupPanel({ open, onClose }: BackupPanelProps) {
+export function BackupPanel({ open, onClose, back }: BackupPanelProps) {
   const t = useT()
   const { data, canEdit } = useBoardContext()
   const latest = useLatest({ t })
@@ -161,6 +162,7 @@ export function BackupPanel({ open, onClose }: BackupPanelProps) {
     <Panel
       id="backup-sheet"
       kind="backup"
+      back={back}
       open={open}
       onClose={onClose}
       title={

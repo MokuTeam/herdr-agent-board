@@ -22,11 +22,12 @@ import {
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import { ChevIcon, CloseIcon, PlusIcon, WarnIcon } from '../icons.tsx'
-import { Panel } from '../panel/Panel.tsx'
+import { Panel, type PanelBack } from '../panel/Panel.tsx'
 
 export interface CalendarSettingsPanelProps {
   open: boolean
   onClose(): void
+  back?: PanelBack | undefined
 }
 
 interface Reminders {
@@ -96,7 +97,7 @@ function fieldsOf(d: Draft): Record<string, unknown> {
   return out
 }
 
-export function CalendarSettingsPanel({ open, onClose }: CalendarSettingsPanelProps) {
+export function CalendarSettingsPanel({ open, onClose, back }: CalendarSettingsPanelProps) {
   const t = useT()
   const { data, toast, canEdit } = useBoardContext()
   const latest = useLatest({ t })
@@ -192,6 +193,7 @@ export function CalendarSettingsPanel({ open, onClose }: CalendarSettingsPanelPr
     <Panel
       id="cal-settings-sheet"
       kind="calendarSettings"
+      back={back}
       open={open}
       onClose={onClose}
       title={

@@ -9,7 +9,9 @@ import { useT } from '../../i18n/I18nProvider.tsx'
 import type { Edge } from '../../models/panel-layout.ts'
 import { EDGES, edgeChrome, type PanelChrome } from '../../models/panel-motion.ts'
 import { classNames } from '../class-names.ts'
-import { PanelHead } from './PanelHead.tsx'
+import { type PanelBack, PanelHead } from './PanelHead.tsx'
+
+export type { PanelBack }
 
 export type PanelKind =
   | 'session'
@@ -68,6 +70,8 @@ const KINDS: Record<PanelKind, { label: string; closeId?: string }> = {
 interface ShellProps {
   id: string
   kind: PanelKind
+  /** Back control left of the title (#679). */
+  back?: PanelBack | undefined
   /** What goes in the head's `.sheet-title`. */
   title: ReactNode
   /** Buttons of the panel's own in the head, before the place button. */
@@ -125,6 +129,7 @@ export function PanelView(props: PanelViewProps) {
   const {
     id,
     kind,
+    back,
     title,
     tools,
     className,
@@ -155,6 +160,7 @@ export function PanelView(props: PanelViewProps) {
       <div className="sheet-grip" aria-hidden="true" />
       <div className="sheet-inner">
         <PanelHead
+          back={back}
           title={title}
           tools={tools}
           glyph={chrome.glyph}

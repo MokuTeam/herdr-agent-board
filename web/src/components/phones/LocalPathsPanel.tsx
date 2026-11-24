@@ -6,14 +6,15 @@ import { useT } from '../../i18n/I18nProvider.tsx'
 import { type PathMap, SERVER_ROOT } from '../../models/local-paths.ts'
 import { keepLocalPaths, localPaths, suggestion } from '../../state/local-paths.ts'
 import { useStore } from '../../state/store.ts'
-import { Panel } from '../panel/Panel.tsx'
+import { Panel, type PanelBack } from '../panel/Panel.tsx'
 
 export interface LocalPathsPanelProps {
   open: boolean
   onClose(): void
+  back?: PanelBack | undefined
 }
 
-export function LocalPathsPanel({ open, onClose }: LocalPathsPanelProps) {
+export function LocalPathsPanel({ open, onClose, back }: LocalPathsPanelProps) {
   const t = useT()
   const maps = useStore(localPaths())
   const suggested = suggestion()
@@ -23,6 +24,7 @@ export function LocalPathsPanel({ open, onClose }: LocalPathsPanelProps) {
     <Panel
       id="paths-sheet"
       kind="paths"
+      back={back}
       open={open}
       onClose={onClose}
       title={

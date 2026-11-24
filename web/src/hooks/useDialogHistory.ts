@@ -7,8 +7,12 @@ import { anyLayerOpen, type DialogLayer, dialogHistory, topLayer } from '../mode
 import { PHONE_QUERY } from '../models/panel-motion.ts'
 import { useLatest } from './useLatest.ts'
 
-export function useDialogHistory(layers: readonly DialogLayer[]): void {
-  const latest = useLatest(layers)
+export function useDialogHistory(
+  layers: readonly DialogLayer[],
+  opts?: { always?: boolean; isAlways?: () => boolean },
+): void {
+  const isAlways = opts?.isAlways ?? (() => opts?.always ?? false)
+  const latest = useLatest({ layers, isAlways })
   const back = useRef<ReturnType<typeof dialogHistory> | null>(null)
 
   useEffect(() => {
@@ -16,8 +20,9 @@ export function useDialogHistory(layers: readonly DialogLayer[]): void {
     back.current ??= dialogHistory({
       history,
       mobile: () => matchMedia(PHONE_QUERY).matches,
-      isOpen: () => anyLayerOpen(latest.current),
-      closeTop: () => topLayer(latest.current)?.close(),
+      always: () => latest.current.isAlways(),
+      isOpen: () => anyLayerOpen(latest.current.layers),
+      closeTop: () => topLayer(latest.current.layers)?.close(),
     })
     const controller = back.current
     const onPop = () => controller.pop()
@@ -25,7 +30,7 @@ export function useDialogHistory(layers: readonly DialogLayer[]): void {
     return () => removeEventListener('popstate', onPop)
   }, [latest])
 
-  const shown = layers.map(layer => (layer.open ? '1' : '0')).join('')
+  const shown = `${layers.map(layer => (layer.open ? '1' : '0')).join('')}:${opts?.always ? '1' : '0'}`
   // biome-ignore lint/correctness/useExhaustiveDependencies: a layer opening or closing is when to sync, not something it reads
   useEffect(() => back.current?.sync(), [shown])
 }

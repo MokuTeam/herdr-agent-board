@@ -19,6 +19,7 @@ import { isCodexItem } from '../core/codex.ts'
 import { compactDefaultText } from '../core/compact.ts'
 import type { DecisionsPayload } from '../core/decisions.ts'
 import { foldModeOf } from '../core/fold-mode.ts'
+import { housekeepingConfig } from '../core/housekeeping.ts'
 import { LANGUAGES } from '../core/i18n/translator.ts'
 import { lang, t } from '../core/lang.ts'
 import { claudeProgram, commandText } from '../core/launch/spawn-args.ts'
@@ -415,6 +416,11 @@ export function createBoardState({
       compactDefault: compactDefaultText(cfg.compact),
       // Continue after restart (#633): absent while on (default), false while off.
       ...(!turnResumeConfig(cfg.turnResume).on && { turnResume: false as const }),
+      // Node housekeeping (#652, #682): absent while both memory guard and tab sweep are off.
+      ...(() => {
+        const hk = housekeepingConfig(cfg.housekeeping)
+        return hk.memory.on || hk.tabs.on ? { housekeeping: { memory: hk.memory.on, tabs: hk.tabs.on } } : {}
+      })(),
       // remote: only while the remote mode is on; a board without it sends none.
       ...remoteOf(remote),
       // presence: only while config.json turns it on (#172).

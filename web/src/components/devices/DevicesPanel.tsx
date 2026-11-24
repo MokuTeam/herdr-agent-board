@@ -34,13 +34,14 @@ import type { NodeSetupView } from '../../models/node-setup.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import { GripGlyph, PencilIcon } from '../icons.tsx'
-import { Panel } from '../panel/Panel.tsx'
+import { Panel, type PanelBack } from '../panel/Panel.tsx'
 import { Switch } from '../team/Switch.tsx'
 import { AddServer, LoginLines } from './AddServer.tsx'
 
 export interface DevicesPanelProps {
   open: boolean
   onClose(): void
+  back?: PanelBack | undefined
   /** What GET /api/nodes said, for a test that draws the panel without a server. */
   initial?: PanelSettings
   /** The Add a server form's view, for a test (components/devices/AddServer.tsx). */
@@ -53,7 +54,7 @@ const NEXT_MS = 1000
 /** POST /api/nodes; the settings it answered with, or null when it was refused (a toast says why). */
 type Send = (body: Record<string, unknown>) => Promise<PanelSettings | null>
 
-export function DevicesPanel({ open, onClose, initial, setup }: DevicesPanelProps) {
+export function DevicesPanel({ open, onClose, back, initial, setup }: DevicesPanelProps) {
   const t = useT()
   const { data, canEdit, toast, now } = useBoardContext()
   const [settings, setSettings] = useState<PanelSettings | null>(initial ?? null)
@@ -151,6 +152,7 @@ export function DevicesPanel({ open, onClose, initial, setup }: DevicesPanelProp
     <Panel
       id="devices-sheet"
       kind="devices"
+      back={back}
       open={open}
       onClose={onClose}
       title={
