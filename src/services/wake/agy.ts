@@ -15,7 +15,7 @@ import { herdrText } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { cliWakeHerdr, type WakeHerdr } from '../../adapters/wake-herdr.ts'
 import { AGY_AGENT } from '../../core/agy.ts'
-import { agyDraft, agyFooterTasks } from '../../core/dialogs/agy-dialogs.ts'
+import { agyDraft } from '../../core/dialogs/agy-dialogs.ts'
 import { stillTyped } from '../../core/launch/spawn-args.ts'
 import {
   type AgySleeper,
@@ -142,9 +142,8 @@ export async function putAgyToSleep(
     if (cur.agent_status !== 'idle' && cur.agent_status !== 'done') return no(`${name} is not idle`)
     if (ops.hasRunningHelpers(session))
       return no(`${name} is not idle (subagents or background tasks are still running)`)
-    const screen = await ops.herdr.inputBox(pane)
-    if ((agyFooterTasks(screen) ?? 0) > 0) return no(`${name} is not idle (background tasks are still running)`)
-    if (agyDraft(screen) !== '') return no(`${name} did not go to sleep (busy, or text in its input box)`)
+    if (agyDraft(await ops.herdr.inputBox(pane)) !== '')
+      return no(`${name} did not go to sleep (busy, or text in its input box)`)
     const proc = await ops.agyProcess(pane).catch(() => null)
     const argv = proc?.argv ?? []
     if (argv.length) {

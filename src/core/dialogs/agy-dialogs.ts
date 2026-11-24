@@ -8,7 +8,7 @@ import { stripAnsi } from './input-box.ts'
 const ESCAPES = /\x1b\[([0-9;?]*)([A-Za-z])|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b./g
 const RULE = /^\s*─{8,}/
 const DIALOG_FOOTER = /\b(?:enter to (?:continue|confirm|select|submit)|esc(?:ape)? to close)\b|↑↓|↑\/↓/i
-const FOOTER_TASK_RE = /\b(\d+)\s+(?:background\s+)?task(?:\(s\)|s)?\b/i
+const FOOTER_TASK_RE = /(?:^|·)\s*(\d+)\s+(?:background\s+)?task\(s\)(?:\s*(?:·|$)|\s{2,})/i
 
 /** A line without ANSI escapes and without SGR-2 dim placeholder fragments. */
 function nonDimText(line: string): string {
@@ -58,9 +58,9 @@ export function agyDraft(ansiScreen: unknown): string | null {
 }
 
 /**
- * Number of running background tasks shown in Antigravity CLI's footer below the bottom `───`
- * rule (e.g. `1 task(s)`), 0 when the footer shows none, or null when no footer rule is visible or
- * a dialog is open. Never matches text above the input box rule.
+ * Number of running background tasks shown on Antigravity CLI's unambiguous status-bar line
+ * immediately below a complete `───` -> `>` -> `───` input box (e.g. `1 task(s)`), 0 when the
+ * status line shows none, or null when no complete input box is visible or a dialog is open.
  */
 export function agyFooterTasks(ansiScreen: unknown): number | null {
   const plain = String(ansiScreen ?? '')
@@ -77,18 +77,11 @@ export function agyFooterTasks(ansiScreen: unknown): number | null {
       break
     }
   }
-  if (end < 0) {
-    const floor = Math.max(0, plain.length - 8)
-    for (let i = plain.length - 1; i >= floor; i--) {
-      if (RULE.test(plain[i] ?? '')) {
-        end = i
-        break
-      }
-    }
-  }
   if (end < 0) return null
-  const footer = plain.slice(end + 1).join('\n')
+  const footerLines = plain.slice(end + 1)
+  const footer = footerLines.join('\n')
   if (/^\s*[❯→]/m.test(footer) || DIALOG_FOOTER.test(footer)) return null
-  const match = FOOTER_TASK_RE.exec(footer)
+  const statusLine = footerLines.find(l => l.trim().length > 0) ?? ''
+  const match = FOOTER_TASK_RE.exec(statusLine)
   return match ? Number(match[1]) : 0
 }

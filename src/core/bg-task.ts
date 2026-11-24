@@ -31,13 +31,24 @@ function singleLineClip(raw: string, max = MAX_BG_TASK_DETAIL): string {
 
 /**
  * Threshold in minutes after which a running background task is flagged as potentially stuck.
- * Returns 0 when explicitly disabled (`0`), clamps positive numbers to [1, BG_TASK_STUCK_MAX_MIN],
- * and defaults to BG_TASK_STUCK_DEFAULT_MIN (30).
+ * Returns 0 when disabled (`0`, `false`, or a non-positive number/numeric string), clamps positive
+ * numbers to [1, BG_TASK_STUCK_MAX_MIN], and defaults to BG_TASK_STUCK_DEFAULT_MIN (30).
  */
 export function bgTaskStuckMin(raw: unknown): number {
-  if (raw === 0) return 0
-  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) {
+  if (raw === false) return 0
+  if (typeof raw === 'number') {
+    if (!Number.isFinite(raw)) return BG_TASK_STUCK_DEFAULT_MIN
+    if (raw <= 0) return 0
     return Math.min(BG_TASK_STUCK_MAX_MIN, Math.max(1, Math.round(raw)))
+  }
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (!trimmed) return BG_TASK_STUCK_DEFAULT_MIN
+    if (trimmed.toLowerCase() === 'false') return 0
+    const n = Number(trimmed)
+    if (!Number.isFinite(n)) return BG_TASK_STUCK_DEFAULT_MIN
+    if (n <= 0) return 0
+    return Math.min(BG_TASK_STUCK_MAX_MIN, Math.max(1, Math.round(n)))
   }
   return BG_TASK_STUCK_DEFAULT_MIN
 }

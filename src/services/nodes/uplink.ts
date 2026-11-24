@@ -447,7 +447,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
       return { code: 0, out: ['[', ...views.map((v, i) => (i < views.length - 1 ? `${v},` : v)), ']'], err: [] }
     }
     const own = nodesConfig(o.cfg.nodes)?.id ?? ''
-    const lines = formatAgentLines(targets, { selfKey: key, own })
+    const lines = formatAgentLines(targets, { selfKey: key, own, now: Date.now() })
     return { code: 0, out: lines.length ? lines : ['no sessions on the board'], err: [] }
   }
 

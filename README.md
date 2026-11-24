@@ -4720,7 +4720,8 @@ web board off), `terminal` (false turns the web board's [terminal](#terminal) of
 (path for the app window), `foldWaiting` (how the web board folds a session asleep in
 "Waiting" down to its name, what it waits for and its time: `push`, the default, unfolds it on
 hover moving the cards below apart; `over` unfolds it over them; `off` keeps it whole; the gear's
-Settings set it too), `terminalTitle` (window title pattern to
+Settings set it too), `bgTaskStuckMin` (minutes before a running `agy` background task is flagged as
+possibly stuck, 30; `0`, `false` or a non-positive value turns the warning off), `terminalTitle` (window title pattern to
 raise, default `<COMPUTERNAME>:*`), `raiseTerminal`, `launch` (how new sessions start: `claude`,
 `command`, `agent`, `args`, `timeoutSec`, see [New sessions](#new-sessions)), `mokupilot` (calls
 with a fork of a session: `false` turns them off; `{ "dir": "<MokuPilot checkout>" }` runs its

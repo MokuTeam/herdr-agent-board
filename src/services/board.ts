@@ -381,7 +381,7 @@ export async function collect(
       session: string | null
       info: TranscriptInfo | null
       runningSubagent: boolean
-      footer: { count: number; since: number } | null
+      footerCount: number | null
     }
   >()
   if (hasAgyPane) {
@@ -393,11 +393,11 @@ export async function collect(
       const info = session ? deps.agy.transcriptInfo(session) : null
       const runningSubagent = !!session && deps.agy.hasRunningSubagent(session)
       const st = isAgentStatus(p.agent_status) ? p.agent_status : 'unknown'
-      const footer =
+      const footerCount =
         st !== 'blocked' && st !== 'working' && !runningSubagent && !info?.bgTasks?.length && deps.agyFooter
           ? deps.agyFooter.peek(p.pane_id, p.terminal_id ?? '', now, onBgChange)
           : null
-      agyMeta.set(p.pane_id, { session, info, runningSubagent, footer })
+      agyMeta.set(p.pane_id, { session, info, runningSubagent, footerCount })
     }
   }
   const items: Item[] = []
@@ -581,11 +581,12 @@ export async function collect(
     const reg = session ? live.get(session)?.session : null
     let status: AgentStatus = isAgentStatus(p.agent_status) ? p.agent_status : 'unknown'
     if (agyPane && status !== 'blocked' && meta?.runningSubagent) status = 'working'
+    const footerRemaining = meta?.footerCount ? meta.footerCount - (meta.info?.daemonBgTasks?.length ?? 0) : 0
     const bgTasks = agyPane
       ? meta?.info?.bgTasks?.length
         ? summarizeBgTasks(meta.info.bgTasks, stuckMin, now)
-        : meta?.footer
-          ? bgTaskFromFooter(meta.footer.count, meta.footer.since, stuckMin, now)
+        : footerRemaining > 0
+          ? bgTaskFromFooter(footerRemaining, null, stuckMin, now)
           : null
       : null
     if (bgTasks && status !== 'blocked') status = 'working'

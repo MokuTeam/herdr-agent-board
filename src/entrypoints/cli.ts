@@ -573,7 +573,7 @@ async function runAgents({
   const offline = body ? A.offlineDevices(body) : new Set<string>()
   const own = body ? A.ownDeviceOf(body) : ''
   if (json) return { code: 0, out: [JSON.stringify(A.agentViewsOf(targets, { selfKey, offline }))], err: [] }
-  const lines = A.formatAgentLines(targets, { selfKey, offline, own })
+  const lines = A.formatAgentLines(targets, { selfKey, offline, own, now: Date.now() })
   return { code: 0, out: lines.length ? lines : ['no sessions on the board'], err: [] }
 }
 

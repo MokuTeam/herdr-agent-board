@@ -174,24 +174,26 @@ export function agentViewsOf(
  */
 export function formatAgentLines(
   targets: readonly Target[],
-  o: { selfKey?: string; offline?: ReadonlySet<string>; own?: string; maxSleeping?: number } = {},
+  o: { selfKey?: string; offline?: ReadonlySet<string>; own?: string; maxSleeping?: number; now?: number } = {},
 ): string[] {
   const live = targets.filter(t => !t.sleeping)
   const asleep = targets.filter(t => t.sleeping).sort((a, b) => b.activity - a.activity)
   const shownAsleep = o.maxSleeping !== undefined ? asleep.slice(0, o.maxSleeping) : asleep
   const hasRemote = targets.some(t => t.device !== null)
-  const row = (t: Target): string =>
-    [
+  const row = (t: Target): string => {
+    const stuck = t.bgTasks ? (o.now !== undefined ? isBgTaskStuck(t.bgTasks, o.now) : t.bgTasks.stuck === true) : false
+    return [
       labelOf(t),
       t.agent ?? '',
       t.device ? `node ${t.device}` : hasRemote && o.own ? o.own : '',
       t.sleeping ? 'asleep' : t.status || 'live',
       o.selfKey && t.key === o.selfKey ? '(this session)' : '',
-      t.bgTasks && isBgTaskStuck(t.bgTasks, Date.now()) ? 'background task may be stuck' : '',
+      stuck ? 'background task may be stuck' : '',
       t.device && o.offline?.has(t.device) ? 'node offline now: goes out once it is back' : '',
     ]
       .filter(Boolean)
       .join('  ·  ')
+  }
   const rows = [...live, ...shownAsleep].map(row)
   if (asleep.length > shownAsleep.length)
     rows.push(`... and ${asleep.length - shownAsleep.length} more asleep; board send / SendMessage reaches them too`)

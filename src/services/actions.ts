@@ -21,7 +21,7 @@ import { peekAgySleepers, peekPiSleepers, peekWakeSessions } from '../adapters/w
 import { cliWakeHerdr } from '../adapters/wake-herdr.ts'
 import { AGY_AGENT, isAgyItem } from '../core/agy.ts'
 import { CODEX_AGENT } from '../core/codex.ts'
-import { agyDraft, agyFooterTasks } from '../core/dialogs/agy-dialogs.ts'
+import { agyDraft } from '../core/dialogs/agy-dialogs.ts'
 import { codexDraft } from '../core/dialogs/codex-input.ts'
 import { inputDraft } from '../core/dialogs/input-box.ts'
 import { piDraft } from '../core/dialogs/pi-dialogs.ts'
@@ -497,12 +497,9 @@ async function readyAgyToSleep(
     if (agent.status === 'working') return { ok: false, why: 'busy' }
     if (item.session && (deps.agy.hasRunningSubagent(item.session) || deps.agy.hasRunningBgTask(item.session)))
       return { ok: false, why: 'tasks' }
-    const screen = await herdrText(
-      ['agent', 'read', item.pane ?? '', '--source', 'recent', '--lines', '40', '--ansi'],
-      10_000,
+    const draft = agyDraft(
+      await herdrText(['agent', 'read', item.pane ?? '', '--source', 'recent', '--lines', '40', '--ansi'], 10_000),
     )
-    if ((agyFooterTasks(screen) ?? 0) > 0) return { ok: false, why: 'tasks' }
-    const draft = agyDraft(screen)
     if (draft === null) return { ok: false, why: 'dialog' }
     return draft === '' ? { ok: true, status: agent.status } : { ok: false, why: 'draft' }
   } catch (err) {

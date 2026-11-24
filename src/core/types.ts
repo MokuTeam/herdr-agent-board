@@ -330,6 +330,8 @@ export interface TranscriptInfo {
   checklist?: Checklist
   /** Active non-daemon background tasks parsed from the transcript (#676); absent when none. */
   bgTasks?: RunningBgTask[]
+  /** Active daemon background tasks (`IsDaemon: true`) parsed from the transcript (#676); absent when none. */
+  daemonBgTasks?: RunningBgTask[]
   [extra: string]: unknown
 }
 

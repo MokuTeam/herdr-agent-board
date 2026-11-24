@@ -181,6 +181,15 @@ interface ParsedTranscript {
   effort?: string | null
   lastAt?: number
   bgTasks?: RunningBgTask[]
+  daemonBgTasks?: RunningBgTask[]
+}
+
+interface PendingMeta {
+  callId: string
+  name: string
+  detail: string
+  cmd: string
+  daemon: boolean
 }
 
 const FINISHED_STEP = new Set(['DONE', 'ERROR', 'CANCELED', 'CANCELLED', 'SKIPPED'])
@@ -198,14 +207,51 @@ const BG_TASK_CREATED_AT_RE = /^Created At:\s*(.+)$/m
 const BG_TASK_DESC_RE = /^Task Description:\s*(.+)$/m
 const BG_TASK_SYS_DONE_RE =
   /Task id\s+"([^"]+)"\s+(?:finished|was cance[ll]+ed|cance[ll]+ed|failed|errored|completed|stopped|terminated|timed out|ended)\b/gi
+const BG_TASK_SYS_SENDER_RE = /\bsender=([^\s<>'"]+)/g
+const BG_TASK_STILL_RUNNING_RE = /\b(?:is still running|still running after)\b/i
+const BG_TASK_STEP_ID_RE = /\/task-(\d+)$/
 const BG_TASK_KILLED_RE = /Task\s+"([^"]+)"\s+cance[ll]+ed\b/gi
 const BG_TASK_LIST_EMPTY_RE = /You have 0 background task\(s\) currently running\b/i
 const BG_TASK_LIST_HEAD_RE = /You have \d+ background task\(s\) currently running:\s*/i
 
+function clearBgFromSystemMessage(text: string, bgTasks: Map<string, RunningBgTask & { daemon: boolean }>): void {
+  for (const m of text.matchAll(BG_TASK_SYS_DONE_RE)) {
+    const id = (m[1] ?? '').trim()
+    if (id) bgTasks.delete(id)
+  }
+  if (!BG_TASK_STILL_RUNNING_RE.test(text)) {
+    for (const m of text.matchAll(BG_TASK_SYS_SENDER_RE)) {
+      const id = (m[1] ?? '').trim()
+      if (id) bgTasks.delete(id)
+    }
+  }
+}
+
+function callIdOf(obj: Rec): string {
+  for (const key of ['call_id', 'tool_call_id', 'tool_use_id', 'id']) {
+    const v = str(obj[key]).trim()
+    if (v) return v
+  }
+  return ''
+}
+
+function pendingMatchIndex(pendingMeta: readonly PendingMeta[], entry: Rec, desc = ''): number {
+  const cid = callIdOf(entry)
+  if (cid) {
+    const byId = pendingMeta.findIndex(m => m.callId === cid)
+    if (byId >= 0) return byId
+  }
+  if (desc && pendingMeta.length > 1) {
+    const byDesc = pendingMeta.findIndex(m => m.cmd === desc || m.detail === desc)
+    if (byDesc >= 0) return byDesc
+  }
+  return 0
+}
+
 function readTranscript(lines: readonly string[]): ParsedTranscript {
   const conversation: ConversationTurn[] = []
   const pendingCalls: ToolTurn[] = []
-  const pendingMeta: { name: string; detail: string; daemon: boolean }[] = []
+  const pendingMeta: PendingMeta[] = []
   const bgTasks = new Map<string, RunningBgTask & { daemon: boolean }>()
   let tool: ToolCall | null = null
   let context: number | undefined
@@ -233,11 +279,7 @@ function readTranscript(lines: readonly string[]): ParsedTranscript {
       settleAll()
       const rawContent = str(entry.content)
       for (const sm of rawContent.matchAll(/<SYSTEM_MESSAGE>([\s\S]*?)<\/SYSTEM_MESSAGE>/g)) {
-        const body = sm[1] ?? ''
-        for (const m of body.matchAll(BG_TASK_SYS_DONE_RE)) {
-          const id = (m[1] ?? '').trim()
-          if (id) bgTasks.delete(id)
-        }
+        clearBgFromSystemMessage(sm[1] ?? '', bgTasks)
       }
       const text = agyUserText(rawContent)
       if (!text) continue
@@ -273,82 +315,88 @@ function readTranscript(lines: readonly string[]): ParsedTranscript {
         if (!name) continue
         const detail = agyToolDetail(name, call.args)
         const path = agyToolPath(name, call.args)
+        const argsRec = rec(call.args)
+        const cmd = argsRec ? unwrapArg(argsRec.CommandLine || argsRec.command).trim() : ''
         const turn: ToolTurn = { role: 'tool', label: toolLabel(name), detail, path, done: false, at }
         pendingCalls.push(turn)
-        pendingMeta.push({ name, detail, daemon: isDaemonFlag(call.args) })
+        pendingMeta.push({ callId: callIdOf(call), name, detail, cmd, daemon: isDaemonFlag(call.args) })
         conversation.push(turn)
         tool = { id: `${stepIdx}:${j}`, name, label: turn.label, detail, pending: true }
       }
       continue
     }
 
-    if (type === 'SYSTEM_MESSAGE' || str(entry.source).toUpperCase() === 'SYSTEM') {
-      const sysText = str(entry.content)
-      for (const m of sysText.matchAll(BG_TASK_SYS_DONE_RE)) {
+    const content = str(entry.content)
+    const isSystem = type === 'SYSTEM_MESSAGE' || str(entry.source).toUpperCase() === 'SYSTEM'
+    if (isSystem) {
+      clearBgFromSystemMessage(content, bgTasks)
+    } else {
+      const bgStart = BG_TASK_START_RE.exec(content)
+      if (bgStart) {
+        const descMatch = BG_TASK_DESC_RE.exec(content)
+        const idx = pendingCalls.length > 0 ? pendingMatchIndex(pendingMeta, entry, descMatch?.[1]?.trim() ?? '') : -1
+        const [done] = idx >= 0 ? pendingCalls.splice(idx, 1) : [undefined]
+        const [meta] = idx >= 0 ? pendingMeta.splice(idx, 1) : [undefined]
+        if (done) done.done = true
+        if (pendingCalls.length === 0 && tool) tool.pending = false
+        const id = (bgStart[1] ?? '').trim()
+        if (id && !FINISHED_STEP.has(status)) {
+          const stepIndex = typeof entry.step_index === 'number' ? entry.step_index : null
+          const createdMatch = BG_TASK_CREATED_AT_RE.exec(content)
+          const startedAt = at || (createdMatch ? Date.parse(createdMatch[1]?.trim() ?? '') || 0 : 0)
+          const rawDetail = meta?.detail || descMatch?.[1]?.trim() || ''
+          const detail = rawDetail ? clip(firstLine(rawDetail), MAX_BG_TASK_DETAIL) : ''
+          bgTasks.set(id, { id, stepIndex, startedAt, detail, daemon: !!meta?.daemon })
+        }
+        continue
+      }
+
+      for (const m of content.matchAll(BG_TASK_KILLED_RE)) {
         const id = (m[1] ?? '').trim()
         if (id) bgTasks.delete(id)
       }
-      continue
-    }
-
-    const content = str(entry.content)
-    const bgStart = BG_TASK_START_RE.exec(content)
-    if (bgStart) {
-      const done = pendingCalls.shift()
-      const meta = pendingMeta.shift()
-      if (done) done.done = true
-      if (pendingCalls.length === 0 && tool) tool.pending = false
-      const id = (bgStart[1] ?? '').trim()
-      if (id && !FINISHED_STEP.has(status)) {
-        const stepIndex = typeof entry.step_index === 'number' ? entry.step_index : null
-        const createdMatch = BG_TASK_CREATED_AT_RE.exec(content)
-        const startedAt = at || (createdMatch ? Date.parse(createdMatch[1]?.trim() ?? '') || 0 : 0)
-        const descMatch = BG_TASK_DESC_RE.exec(content)
-        const rawDetail = meta?.detail || descMatch?.[1]?.trim() || ''
-        const detail = rawDetail ? clip(firstLine(rawDetail), MAX_BG_TASK_DETAIL) : ''
-        bgTasks.set(id, { id, stepIndex, startedAt, detail, daemon: !!meta?.daemon })
-      }
-      continue
-    }
-
-    for (const m of content.matchAll(BG_TASK_KILLED_RE)) {
-      const id = (m[1] ?? '').trim()
-      if (id) bgTasks.delete(id)
-    }
-    if (BG_TASK_LIST_EMPTY_RE.test(content)) {
-      bgTasks.clear()
-    } else {
-      const listHead = BG_TASK_LIST_HEAD_RE.exec(content)
-      if (listHead) {
-        const rest = content.slice(listHead.index + listHead[0].length).trim()
-        if (rest.startsWith('[')) {
-          let parsed: unknown
-          try {
-            parsed = JSON.parse(rest)
-          } catch {
-            const single = /^(\[[\s\S]*?\])(?:\r?\n|$)/.exec(rest)
-            if (single) {
-              try {
-                parsed = JSON.parse(single[1] ?? '')
-              } catch {}
-            }
-          }
-          if (Array.isArray(parsed)) {
-            const listed = new Set<string>()
-            for (const rawItem of parsed) {
-              const item = rec(rawItem)
-              const taskId = str(item?.taskId).trim()
-              if (!taskId) continue
-              listed.add(taskId)
-              if (!bgTasks.has(taskId)) {
-                const startTime = Date.parse(str(item?.startTime)) || 0
-                const rawDetail = str(item?.toolSummary || item?.description).trim()
-                const detail = rawDetail ? clip(firstLine(rawDetail), MAX_BG_TASK_DETAIL) : ''
-                bgTasks.set(taskId, { id: taskId, stepIndex: null, startedAt: startTime, detail, daemon: false })
+      if (BG_TASK_LIST_EMPTY_RE.test(content)) {
+        bgTasks.clear()
+      } else {
+        const listHead = BG_TASK_LIST_HEAD_RE.exec(content)
+        if (listHead) {
+          const rest = content.slice(listHead.index + listHead[0].length).trim()
+          if (rest.startsWith('[')) {
+            let parsed: unknown
+            try {
+              parsed = JSON.parse(rest)
+            } catch {
+              const single = /^(\[[\s\S]*?\])(?:\r?\n|$)/.exec(rest)
+              if (single) {
+                try {
+                  parsed = JSON.parse(single[1] ?? '')
+                } catch {}
               }
             }
-            for (const id of bgTasks.keys()) {
-              if (!listed.has(id)) bgTasks.delete(id)
+            if (Array.isArray(parsed)) {
+              const listed = new Set<string>()
+              for (const rawItem of parsed) {
+                const item = rec(rawItem)
+                const taskId = str(item?.taskId).trim()
+                if (!taskId) continue
+                listed.add(taskId)
+                if (!bgTasks.has(taskId)) {
+                  const startTime = Date.parse(str(item?.startTime)) || 0
+                  const rawDetail = str(item?.toolSummary || item?.description).trim()
+                  const detail = rawDetail ? clip(firstLine(rawDetail), MAX_BG_TASK_DETAIL) : ''
+                  const idStep = BG_TASK_STEP_ID_RE.exec(taskId)?.[1]
+                  const stepIndex =
+                    typeof item?.stepIndex === 'number' && Number.isInteger(item.stepIndex) && item.stepIndex >= 0
+                      ? item.stepIndex
+                      : idStep
+                        ? Number(idStep)
+                        : null
+                  bgTasks.set(taskId, { id: taskId, stepIndex, startedAt: startTime, detail, daemon: false })
+                }
+              }
+              for (const id of bgTasks.keys()) {
+                if (!listed.has(id)) bgTasks.delete(id)
+              }
             }
           }
         }
@@ -357,17 +405,22 @@ function readTranscript(lines: readonly string[]): ParsedTranscript {
 
     // Tool result steps (GENERIC, RUN_COMMAND, etc.) resolve pending tool calls in order.
     if (pendingCalls.length > 0 && (!status || FINISHED_STEP.has(status))) {
-      const done = pendingCalls.shift()
-      pendingMeta.shift()
+      const idx = pendingMatchIndex(pendingMeta, entry)
+      const [done] = pendingCalls.splice(idx, 1)
+      pendingMeta.splice(idx, 1)
       if (done) done.done = true
       if (pendingCalls.length === 0 && tool) tool.pending = false
     }
   }
 
-  const liveBgTasks: RunningBgTask[] = [...bgTasks.values()]
-    .filter(t => !t.daemon)
-    .map(({ daemon: _d, ...rest }) => rest)
-    .sort((a, b) => (a.startedAt || Number.POSITIVE_INFINITY) - (b.startedAt || Number.POSITIVE_INFINITY))
+  const stripDaemon = (daemonFlag: boolean): RunningBgTask[] =>
+    [...bgTasks.values()]
+      .filter(t => t.daemon === daemonFlag)
+      .map(({ daemon: _d, ...rest }) => rest)
+      .sort((a, b) => (a.startedAt || Number.POSITIVE_INFINITY) - (b.startedAt || Number.POSITIVE_INFINITY))
+
+  const liveBgTasks = stripDaemon(false)
+  const daemonBgTasks = stripDaemon(true)
 
   return {
     conversation,
@@ -378,12 +431,13 @@ function readTranscript(lines: readonly string[]): ParsedTranscript {
     ...(effort !== undefined && { effort }),
     ...(lastAt > 0 && { lastAt }),
     ...(liveBgTasks.length > 0 && { bgTasks: liveBgTasks }),
+    ...(daemonBgTasks.length > 0 && { daemonBgTasks }),
   }
 }
 
 /** The last prompt, answer, question, tool, model and context size for an Antigravity card. */
 export function parseAgyTail(lines: readonly string[]): TranscriptInfo {
-  const { conversation, tool, context, model, modelAt, effort, lastAt, bgTasks } = readTranscript(lines)
+  const { conversation, tool, context, model, modelAt, effort, lastAt, bgTasks, daemonBgTasks } = readTranscript(lines)
   let prompt = ''
   let lastText = ''
   let question = ''
@@ -412,6 +466,7 @@ export function parseAgyTail(lines: readonly string[]): TranscriptInfo {
     ...(effort !== undefined && { effort }),
     ...(lastAt !== undefined && { lastAt }),
     ...(bgTasks !== undefined && { bgTasks }),
+    ...(daemonBgTasks !== undefined && { daemonBgTasks }),
   }
 }
 

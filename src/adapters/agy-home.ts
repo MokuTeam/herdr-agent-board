@@ -112,8 +112,9 @@ export function createAgyHome(root = defaultAgyRoot()): AgyHome {
 
   /**
    * Cross-check running transcript background tasks against `conversations/<id>.db`'s `steps`
-   * table (status 2 = RUNNING, 3 = DONE, 6 = CANCELED). Keeps tasks when the DB or row is absent
-   * or unreadable; drops tasks whose DB step already settled.
+   * table (`status === 2`, verified on live `step_type = 132` background steps; `3` = DONE,
+   * `6` = CANCELED). Fails closed: drops tasks whose step is missing, lacks a valid `stepIndex`,
+   * cannot be read, or has any status other than `2`.
    */
   function filterLiveBgTasks(session: string, tasks: readonly RunningBgTask[]): RunningBgTask[] {
     if (tasks.length === 0) return []
@@ -122,11 +123,11 @@ export function createAgyHome(root = defaultAgyRoot()): AgyHome {
         tasks.map(t => t.stepIndex).filter((n): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0),
       ),
     ]
-    if (stepIndices.length === 0) return [...tasks]
+    if (stepIndices.length === 0) return []
     const dbPath = convDbPath(session)
-    if (!dbPath) return [...tasks]
+    if (!dbPath) return []
     const mainSt = statOf(dbPath)
-    if (!mainSt?.isFile()) return [...tasks]
+    if (!mainSt?.isFile()) return []
     const walSt = statOf(`${dbPath}-wal`)
     const stamp = `${mainSt.mtimeMs}:${mainSt.size}|${walSt?.mtimeMs ?? 0}:${walSt?.size ?? 0}`
     let entry = stepStatusCache.get(dbPath)
@@ -147,7 +148,7 @@ export function createAgyHome(root = defaultAgyRoot()): AgyHome {
         for (const idx of missing) entry.queried.add(idx)
         for (const r of rows) entry.statuses.set(r.idx, r.status)
       } catch {
-        return [...tasks]
+        return []
       } finally {
         try {
           db?.close(false)
@@ -155,9 +156,8 @@ export function createAgyHome(root = defaultAgyRoot()): AgyHome {
       }
     }
     return tasks.filter(t => {
-      if (typeof t.stepIndex !== 'number' || !Number.isInteger(t.stepIndex) || t.stepIndex < 0) return true
-      const status = entry.statuses.get(t.stepIndex)
-      return status === undefined || status === 2
+      if (typeof t.stepIndex !== 'number' || !Number.isInteger(t.stepIndex) || t.stepIndex < 0) return false
+      return entry.statuses.get(t.stepIndex) === 2
     })
   }
 
@@ -291,7 +291,8 @@ export function createAgyHome(root = defaultAgyRoot()): AgyHome {
     let info: TranscriptInfo = {}
     for (const bytes of CARD_WINDOWS) {
       info = parseAgyTail(readTail(file, st.size, bytes).split('\n'))
-      if ((info.prompt && info.lastText && !info.bgTasks?.length) || bytes >= st.size) break
+      if ((info.prompt && info.lastText && !info.bgTasks?.length && !info.daemonBgTasks?.length) || bytes >= st.size)
+        break
     }
     if (!info.prompt && hit?.info.prompt && st.size >= hit.size) info.prompt = hit.info.prompt
     info.activity = st.mtimeMs
@@ -321,13 +322,14 @@ export function createAgyHome(root = defaultAgyRoot()): AgyHome {
     try {
       const info = readTailInfo(file, st)
       let next = info
-      if (info.bgTasks?.length) {
-        const liveBg = filterLiveBgTasks(session, info.bgTasks)
-        if (liveBg.length === 0) {
-          const { bgTasks: _dropped, ...rest } = info
-          next = rest
-        } else if (liveBg.length !== info.bgTasks.length) {
-          next = { ...info, bgTasks: liveBg }
+      if (info.bgTasks?.length || info.daemonBgTasks?.length) {
+        const liveBg = info.bgTasks?.length ? filterLiveBgTasks(session, info.bgTasks) : []
+        const liveDaemon = info.daemonBgTasks?.length ? filterLiveBgTasks(session, info.daemonBgTasks) : []
+        const { bgTasks: _droppedBg, daemonBgTasks: _droppedDaemon, ...rest } = info
+        next = {
+          ...rest,
+          ...(liveBg.length > 0 && { bgTasks: liveBg }),
+          ...(liveDaemon.length > 0 && { daemonBgTasks: liveDaemon }),
         }
       }
       return title && !next.title ? { ...next, title } : next
@@ -482,42 +484,31 @@ export function createAgyHome(root = defaultAgyRoot()): AgyHome {
 }
 
 export interface AgyFooterTracker {
-  check(pane: string, terminal: string, now?: number): Promise<{ count: number; since: number } | null>
-  /** Synchronous read of cached footer state; refreshes stale entries in the background without blocking collect(). */
-  peek(pane: string, terminal: string, now?: number, onChange?: () => void): { count: number; since: number } | null
+  check(pane: string, terminal: string, now?: number): Promise<number | null>
+  /** Synchronous read of cached footer task count; refreshes stale entries in the background without blocking collect(). */
+  peek(pane: string, terminal: string, now?: number, onChange?: () => void): number | null
 }
 
 /**
  * Throttled per-pane tracker for Antigravity CLI's footer task indicator (`N task(s)`), falling
- * back when a running task is visible on screen without a transcript entry.
+ * back only for the running count when a non-daemon task is visible on screen without a transcript entry.
  */
 export function createAgyFooterTracker(
   readScreen: (pane: string) => Promise<string | null> = pane =>
     herdrText(['agent', 'read', pane, '--source', 'recent', '--lines', '12', '--ansi'], 3_000).catch(() => null),
   pollMs = 15_000,
 ): AgyFooterTracker {
-  const cache = new Map<string, { at: number; count: number; since: number | null }>()
+  const cache = new Map<string, { at: number; count: number }>()
   const inFlight = new Set<string>()
-  async function check(
-    pane: string,
-    terminal: string,
-    now = Date.now(),
-  ): Promise<{ count: number; since: number } | null> {
+  async function check(pane: string, terminal: string, now = Date.now()): Promise<number | null> {
     const key = `${pane}|${terminal}`
     const hit = cache.get(key)
-    if (hit && now - hit.at < pollMs) {
-      return hit.count > 0 && hit.since != null ? { count: hit.count, since: hit.since } : null
-    }
+    if (hit && now - hit.at < pollMs) return hit.count > 0 ? hit.count : null
     const screen = await readScreen(pane).catch(() => null)
-    const count = screen === null ? null : agyFooterTasks(screen)
-    const prevSince = hit?.since ?? null
-    if (count !== null && count > 0) {
-      const since = hit?.since != null ? hit.since : now
-      cache.set(key, { at: now, count, since })
-      return { count, since }
-    }
-    cache.set(key, { at: now, count: 0, since: count === null ? prevSince : null })
-    return null
+    const raw = screen === null ? null : agyFooterTasks(screen)
+    const count = raw !== null && raw > 0 ? raw : 0
+    cache.set(key, { at: now, count })
+    return count > 0 ? count : null
   }
   return {
     check,
@@ -530,14 +521,14 @@ export function createAgyFooterTracker(
         void check(pane, terminal, now).then(
           res => {
             inFlight.delete(key)
-            if ((res?.count ?? 0) !== prevCount) onChange?.()
+            if ((res ?? 0) !== prevCount) onChange?.()
           },
           () => {
             inFlight.delete(key)
           },
         )
       }
-      return hit && hit.count > 0 && hit.since != null ? { count: hit.count, since: hit.since } : null
+      return hit && hit.count > 0 ? hit.count : null
     },
   }
 }

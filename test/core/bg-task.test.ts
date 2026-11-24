@@ -19,13 +19,23 @@ const RULE = '─'.repeat(60)
 const step = (data: Record<string, unknown>) => JSON.stringify({ created_at: '2026-11-24T09:00:00Z', ...data })
 
 describe('bg-task core rules (#676)', () => {
-  test('bgTaskStuckMin defaults to 30, clamps [1, 1440], and allows 0 to disable stuck warnings', () => {
+  test('bgTaskStuckMin defaults to 30, clamps [1, 1440], and treats 0, false, or non-positive values as off', () => {
     expect(bgTaskStuckMin(undefined)).toBe(BG_TASK_STUCK_DEFAULT_MIN)
     expect(bgTaskStuckMin(null)).toBe(BG_TASK_STUCK_DEFAULT_MIN)
-    expect(bgTaskStuckMin('45')).toBe(BG_TASK_STUCK_DEFAULT_MIN)
-    expect(bgTaskStuckMin(-5)).toBe(BG_TASK_STUCK_DEFAULT_MIN)
+    expect(bgTaskStuckMin('')).toBe(BG_TASK_STUCK_DEFAULT_MIN)
+    expect(bgTaskStuckMin('   ')).toBe(BG_TASK_STUCK_DEFAULT_MIN)
+    expect(bgTaskStuckMin(true)).toBe(BG_TASK_STUCK_DEFAULT_MIN)
+    expect(bgTaskStuckMin('abc')).toBe(BG_TASK_STUCK_DEFAULT_MIN)
     expect(bgTaskStuckMin(Number.NaN)).toBe(BG_TASK_STUCK_DEFAULT_MIN)
     expect(bgTaskStuckMin(0)).toBe(0)
+    expect(bgTaskStuckMin('0')).toBe(0)
+    expect(bgTaskStuckMin(false)).toBe(0)
+    expect(bgTaskStuckMin('false')).toBe(0)
+    expect(bgTaskStuckMin('FALSE')).toBe(0)
+    expect(bgTaskStuckMin(-5)).toBe(0)
+    expect(bgTaskStuckMin('-1')).toBe(0)
+    expect(bgTaskStuckMin('45')).toBe(45)
+    expect(bgTaskStuckMin(' 15 ')).toBe(15)
     expect(bgTaskStuckMin(0.4)).toBe(1)
     expect(bgTaskStuckMin(45.6)).toBe(46)
     expect(bgTaskStuckMin(5000)).toBe(BG_TASK_STUCK_MAX_MIN)
@@ -134,17 +144,42 @@ describe('Antigravity transcript background task parsing (#676)', () => {
       },
     ])
 
-    // Progress reminder ("is still running") keeps the task active.
+    // Progress reminder ("is still running" / "still running after") keeps the task active.
     const stillRunning = parseAgyTail([
       ...baseLines,
       step({
         step_index: 4,
         type: 'SYSTEM_MESSAGE',
         source: 'SYSTEM',
-        content: `<SYSTEM_MESSAGE>\nTask id "${SID}/task-2" is still running after 120s.\n</SYSTEM_MESSAGE>`,
+        content: `<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-24T09:05:00Z sender=${SID}/task-2 priority=MESSAGE_PRIORITY_HIGH content=Background command is still running after 290s.\n</SYSTEM_MESSAGE>`,
       }),
     ])
     expect(stillRunning.bgTasks).toHaveLength(1)
+
+    // Schedule timer SYSTEM_MESSAGE clears via sender=<taskId>.
+    const timerFired = parseAgyTail([
+      ...baseLines,
+      step({
+        step_index: 4,
+        type: 'SYSTEM_MESSAGE',
+        source: 'SYSTEM',
+        content: `<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-24T09:01:00Z sender=${SID}/task-2 priority=MESSAGE_PRIORITY_HIGH content=Check sibling process.\n</SYSTEM_MESSAGE>`,
+      }),
+    ])
+    expect(timerFired.bgTasks).toBeUndefined()
+
+    // Compact transcript.jsonl SYSTEM_MESSAGE truncated right after sender= still clears bgTasks.
+    const truncatedSys = parseAgyTail([
+      ...baseLines,
+      step({
+        step_index: 4,
+        type: 'SYSTEM_MESSAGE',
+        source: 'SYSTEM',
+        truncated_fields: ['content'],
+        content: `The following is a <SYSTEM_MESSAGE> not actually sent by the user.\n\n<SYSTEM_MESSAGE>\n[Message] timestamp=2026-11-24T09:02:00Z sender=${SID}/task-2 priori`,
+      }),
+    ])
+    expect(truncatedSys.bgTasks).toBeUndefined()
 
     // Completion SYSTEM_MESSAGE clears it.
     const finished = parseAgyTail([
@@ -214,13 +249,22 @@ describe('Antigravity transcript background task parsing (#676)', () => {
       }),
     ]
 
-    // Daemon task-2 is ignored; non-daemon task-3 stays tracked.
-    expect(parseAgyTail(lines).bgTasks).toEqual([
+    // Daemon task-2 is ignored from bgTasks and tracked in daemonBgTasks; non-daemon task-3 stays tracked.
+    const daemonAndWork = parseAgyTail(lines)
+    expect(daemonAndWork.bgTasks).toEqual([
       {
         id: `${SID}/task-3`,
         stepIndex: 3,
         startedAt: Date.parse('2026-11-24T09:00:03Z'),
         detail: 'Build bundle',
+      },
+    ])
+    expect(daemonAndWork.daemonBgTasks).toEqual([
+      {
+        id: `${SID}/task-2`,
+        stepIndex: 2,
+        startedAt: Date.parse('2026-11-24T09:00:02Z'),
+        detail: 'Dev server',
       },
     ])
 
@@ -243,7 +287,7 @@ describe('Antigravity transcript background task parsing (#676)', () => {
     ])
     expect(emptyList.bgTasks).toBeUndefined()
 
-    // manage_task list JSON reconciles task list and drops unlisted task-3.
+    // manage_task list JSON reconciles task list, extracts stepIndex from taskId, and drops unlisted task-3.
     const reconciled = parseAgyTail([
       ...lines,
       step({
@@ -258,16 +302,96 @@ describe('Antigravity transcript background task parsing (#676)', () => {
     expect(reconciled.bgTasks).toEqual([
       {
         id: `${SID}/task-9`,
-        stepIndex: null,
+        stepIndex: 9,
         startedAt: Date.parse('2026-11-24T09:05:00Z'),
         detail: 'Export PDF',
       },
     ])
   })
+
+  test('pairs IsDaemon by call_id or command description when results arrive out of order, and keeps SYSTEM_MESSAGE tool order', () => {
+    // Out-of-order parallel tool calls with explicit call_id:
+    const outOfOrderById = parseAgyTail([
+      step({
+        step_index: 1,
+        type: 'PLANNER_RESPONSE',
+        created_at: '2026-11-24T09:00:01Z',
+        tool_calls: [
+          { call_id: 'c-daemon', name: 'run_command', args: { CommandLine: '"bun dev"', IsDaemon: true } },
+          { call_id: 'c-work', name: 'run_command', args: { CommandLine: '"bun test"', toolSummary: '"Run tests"' } },
+        ],
+      }),
+      // Result for c-work arrives first!
+      step({
+        step_index: 2,
+        call_id: 'c-work',
+        type: 'GENERIC',
+        status: 'RUNNING',
+        created_at: '2026-11-24T09:00:02Z',
+        content: `Tool is running as a background task with task id: ${SID}/task-2\nTask Description: bun test`,
+      }),
+      step({
+        step_index: 3,
+        call_id: 'c-daemon',
+        type: 'GENERIC',
+        status: 'RUNNING',
+        created_at: '2026-11-24T09:00:03Z',
+        content: `Tool is running as a background task with task id: ${SID}/task-3\nTask Description: bun dev`,
+      }),
+    ])
+    expect(outOfOrderById.bgTasks?.map(t => t.id)).toEqual([`${SID}/task-2`])
+    expect(outOfOrderById.daemonBgTasks?.map(t => t.id)).toEqual([`${SID}/task-3`])
+
+    // Out-of-order parallel tool calls without call_id fall back to Task Description matching CommandLine:
+    const outOfOrderByDesc = parseAgyTail([
+      step({
+        step_index: 1,
+        type: 'PLANNER_RESPONSE',
+        created_at: '2026-11-24T09:00:01Z',
+        tool_calls: [
+          { name: 'run_command', args: { CommandLine: '"bun dev"', IsDaemon: true } },
+          { name: 'run_command', args: { CommandLine: '"bun test"', toolSummary: '"Run tests"' } },
+        ],
+      }),
+      step({
+        step_index: 2,
+        type: 'GENERIC',
+        status: 'RUNNING',
+        created_at: '2026-11-24T09:00:02Z',
+        content: `Tool is running as a background task with task id: ${SID}/task-2\nTask Description: bun test`,
+      }),
+      step({
+        step_index: 3,
+        type: 'GENERIC',
+        status: 'RUNNING',
+        created_at: '2026-11-24T09:00:03Z',
+        content: `Tool is running as a background task with task id: ${SID}/task-3\nTask Description: bun dev`,
+      }),
+    ])
+    expect(outOfOrderByDesc.bgTasks?.map(t => t.id)).toEqual([`${SID}/task-2`])
+    expect(outOfOrderByDesc.daemonBgTasks?.map(t => t.id)).toEqual([`${SID}/task-3`])
+
+    // SYSTEM_MESSAGE preserves pending-tool resolution order (matches origin/main).
+    const withSysMsg = parseAgyTail([
+      step({
+        step_index: 1,
+        type: 'PLANNER_RESPONSE',
+        tool_calls: [{ name: 'read_file', args: { Path: '"/tmp/a.ts"' } }],
+      }),
+      step({
+        step_index: 2,
+        type: 'SYSTEM_MESSAGE',
+        source: 'SYSTEM',
+        status: 'DONE',
+        content: '<SYSTEM_MESSAGE>\nReminder\n</SYSTEM_MESSAGE>',
+      }),
+    ])
+    expect(withSysMsg.tool?.pending).toBe(false)
+  })
 })
 
 describe('agyFooterTasks screen footer parser (#676)', () => {
-  test('reads running task counts only below the input box rule', () => {
+  test('reads exact status-bar task(s) token only below a complete input box rule and ignores prose', () => {
     const runningAnsi = [
       '● Waiting on Chrome screenshot run',
       '',
@@ -281,45 +405,48 @@ describe('agyFooterTasks screen footer parser (#676)', () => {
     const pluralScreen = ['Done.', RULE, '> ', RULE, '2 background task(s) · ? for shortcuts'].join('\n')
     expect(agyFooterTasks(pluralScreen)).toBe(2)
 
+    // Partial screen without complete RULE -> > -> RULE box returns null (never guesses from bare rules).
     const partialCapture = [RULE, '3 task(s) · ? for shortcuts'].join('\n')
-    expect(agyFooterTasks(partialCapture)).toBe(3)
+    expect(agyFooterTasks(partialCapture)).toBeNull()
 
-    const idleScreen = [
+    // Markdown horizontal rule in agent prose with "1 task(s)" must not match.
+    const proseDivider = ['Summary:', RULE, '1 task(s) completed yesterday', RULE].join('\n')
+    expect(agyFooterTasks(proseDivider)).toBeNull()
+
+    // Prose on subsequent footer line or "tasks" without literal task(s) does not match.
+    const proseFooter = [
       'Earlier message mentioned 4 tasks above the prompt rule.',
       RULE,
       '> ',
       RULE,
       'esc to cancel                                     Orchestrator · Gemini 4 Neon · high',
+      '2 task(s) mentioned on a stray extra line',
     ].join('\n')
-    expect(agyFooterTasks(idleScreen)).toBe(0)
+    expect(agyFooterTasks(proseFooter)).toBe(0)
 
     const dialogScreen = ['Pick one', RULE, '> ', RULE, '↑↓ to navigate · enter to select · esc to close'].join('\n')
     expect(agyFooterTasks(dialogScreen)).toBeNull()
     expect(agyFooterTasks('plain text without rules')).toBeNull()
   })
 
-  test('createAgyFooterTracker preserves since across transient null screen reads and clears on 0 tasks', async () => {
-    const running = ['Wait', RULE, '> ', RULE, '1 task(s)'].join('\n')
+  test('createAgyFooterTracker caches status-bar counts without fabricating start timestamps', async () => {
+    const running = ['Wait', RULE, '> ', RULE, '1 task(s) · esc to cancel'].join('\n')
     const idle = ['Done', RULE, '> ', RULE, '? for shortcuts'].join('\n')
     const screens: (string | null)[] = [running, null, running, idle]
     const tracker = createAgyFooterTracker(async () => screens.shift() ?? null, 1000)
 
     const t0 = 1_700_000_000_000
-    expect(await tracker.check('a1', 'term1', t0)).toEqual({ count: 1, since: t0 })
-    // Cached within pollMs:
-    expect(await tracker.check('a1', 'term1', t0 + 500)).toEqual({ count: 1, since: t0 })
-    // Transient null screen read returns null without wiping since:
+    expect(await tracker.check('a1', 'term1', t0)).toBe(1)
+    expect(await tracker.check('a1', 'term1', t0 + 500)).toBe(1)
     expect(await tracker.check('a1', 'term1', t0 + 1500)).toBeNull()
-    // Next poll sees 1 task(s) again and retains original t0 timestamp:
-    expect(await tracker.check('a1', 'term1', t0 + 3000)).toEqual({ count: 1, since: t0 })
-    // Explicit 0 tasks in footer clears since; subsequent task gets new timestamp:
+    expect(await tracker.check('a1', 'term1', t0 + 3000)).toBe(1)
     expect(await tracker.check('a1', 'term1', t0 + 4500)).toBeNull()
     screens.push(running)
-    expect(await tracker.check('a1', 'term1', t0 + 6000)).toEqual({ count: 1, since: t0 + 6000 })
+    expect(await tracker.check('a1', 'term1', t0 + 6000)).toBe(1)
   })
 
-  test('createAgyFooterTracker.peek returns cached state synchronously and invokes onChange only when count changes', async () => {
-    const running = ['Wait', RULE, '> ', RULE, '1 task(s)'].join('\n')
+  test('createAgyFooterTracker.peek returns cached count synchronously and invokes onChange only when count changes', async () => {
+    const running = ['Wait', RULE, '> ', RULE, '1 task(s) · esc to cancel'].join('\n')
     const idle = ['Done', RULE, '> ', RULE, '? for shortcuts'].join('\n')
     let current: string | null = idle
     const tracker = createAgyFooterTracker(async () => current, 1000)
@@ -339,7 +466,7 @@ describe('agyFooterTasks screen footer parser (#676)', () => {
     expect(tracker.peek('a1', 'term1', t0 + 1500, onChange)).toBeNull()
     await Bun.sleep(10)
     expect(changes).toBe(1)
-    expect(tracker.peek('a1', 'term1', t0 + 1600, onChange)).toEqual({ count: 1, since: t0 + 1500 })
+    expect(tracker.peek('a1', 'term1', t0 + 1600, onChange)).toBe(1)
   })
 })
 
@@ -394,37 +521,40 @@ describe('nodePart and ListAgents with bgTasks (#676)', () => {
   })
 
   test('formatAgentLines notes stuck background tasks while leaving normal sessions unchanged', () => {
-    const lines = formatAgentLines([
-      {
-        key: SID,
-        name: 'atlas',
-        names: ['atlas'],
-        session: SID,
-        agent: 'agy',
-        device: null,
-        pane: 'w1:p1',
-        cwd: '/work',
-        sleeping: false,
-        status: 'working',
-        day: false,
-        activity: Date.now(),
-        bgTasks: { count: 1, since: 1000, detail: 'Chrome', stuckMin: 30, stuck: true },
-      },
-      {
-        key: '030bc85e-c173-4999-b250-c85a4d5595bd',
-        name: 'cleo',
-        names: ['cleo'],
-        session: '030bc85e-c173-4999-b250-c85a4d5595bd',
-        agent: 'claude',
-        device: null,
-        pane: 'w1:p2',
-        cwd: '/work',
-        sleeping: false,
-        status: 'done',
-        day: false,
-        activity: Date.now(),
-      },
-    ])
+    const lines = formatAgentLines(
+      [
+        {
+          key: SID,
+          name: 'atlas',
+          names: ['atlas'],
+          session: SID,
+          agent: 'agy',
+          device: null,
+          pane: 'w1:p1',
+          cwd: '/work',
+          sleeping: false,
+          status: 'working',
+          day: false,
+          activity: 2_000_000,
+          bgTasks: { count: 1, since: 1000, detail: 'Chrome', stuckMin: 30, stuck: true },
+        },
+        {
+          key: '030bc85e-c173-4999-b250-c85a4d5595bd',
+          name: 'cleo',
+          names: ['cleo'],
+          session: '030bc85e-c173-4999-b250-c85a4d5595bd',
+          agent: 'claude',
+          device: null,
+          pane: 'w1:p2',
+          cwd: '/work',
+          sleeping: false,
+          status: 'done',
+          day: false,
+          activity: 2_000_000,
+        },
+      ],
+      { now: 2_000_000 },
+    )
     expect(lines[0]).toContain('background task may be stuck')
     expect(lines[1]).toBe('cleo [030bc85e]  ·  claude  ·  done')
   })

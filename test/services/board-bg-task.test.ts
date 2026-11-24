@@ -16,6 +16,7 @@ const S_AGY_FOOTER = '44444444-4444-4444-8444-444444444444'
 const S_AGY_SLEEP = '55555555-5555-4555-8555-555555555555'
 const S_CLAUDE = '66666666-6666-4666-8666-666666666666'
 const S_CODEX = '77777777-7777-4777-8777-777777777777'
+const S_AGY_DAEMON = '88888888-8888-4888-8888-888888888888'
 
 const RULE = '─'.repeat(50)
 const SCREEN_WITH_TASK = ['● Waiting on task', '', RULE, '> ', RULE, '1 task(s) · esc to cancel'].join('\n')
@@ -27,14 +28,16 @@ function writeAgyTranscript(root: string, id: string, lines: Record<string, unkn
   writeFileSync(join(dir, 'transcript.jsonl'), `${lines.map(l => JSON.stringify(l)).join('\n')}\n`)
 }
 
-function writeConvStepsDb(root: string, id: string, rows: { idx: number; status: number }[]): void {
+function writeConvStepsDb(root: string, id: string, rows: { idx: number; status: number; stepType?: number }[]): void {
   const dir = join(root, 'conversations')
   mkdirSync(dir, { recursive: true })
   const db = new Database(join(dir, `${id}.db`))
   try {
-    db.exec('CREATE TABLE steps (idx integer PRIMARY KEY, status integer NOT NULL DEFAULT 0)')
-    const ins = db.query('INSERT INTO steps (idx, status) VALUES (?, ?)')
-    for (const r of rows) ins.run(r.idx, r.status)
+    db.exec(
+      'CREATE TABLE steps (idx integer, step_type integer NOT NULL DEFAULT 0, status integer NOT NULL DEFAULT 0, has_subtrajectory numeric NOT NULL DEFAULT false, metadata blob, error_details blob, permissions blob, task_details blob, render_info blob, step_payload blob, step_format integer NOT NULL DEFAULT 0, PRIMARY KEY (idx))',
+    )
+    const ins = db.query('INSERT INTO steps (idx, step_type, status) VALUES (?, ?, ?)')
+    for (const r of rows) ins.run(r.idx, r.stepType ?? 132, r.status)
   } finally {
     db.close(false)
   }
@@ -69,22 +72,27 @@ describe('board background task detection and stuck threshold (#676)', () => {
     mkdirSync(join(box.dir, 'pi-sessions'), { recursive: true })
     writeFileSync(piSession, `${JSON.stringify({ type: 'session', cwd })}\n`)
 
-    // 1) Active agy task running 12 min (not stuck under default 30 min) even though planner ended turn.
+    // 1) Active agy task running 12 min (not stuck under default 30 min) confirmed via real DB status=2.
     writeAgyTranscript(agyRoot, S_AGY_FRESH, [
       {
         step_index: 0,
+        source: 'USER',
         type: 'USER_INPUT',
+        status: 'DONE',
         created_at: ts12m,
         content: '<USER_REQUEST>\nBuild bundle\n</USER_REQUEST>',
       },
       {
         step_index: 1,
+        source: 'MODEL',
         type: 'PLANNER_RESPONSE',
+        status: 'DONE',
         created_at: ts12m,
         tool_calls: [{ name: 'run_command', args: { CommandLine: '"bun run build"', toolSummary: '"Build bundle"' } }],
       },
       {
         step_index: 2,
+        source: 'MODEL',
         type: 'GENERIC',
         status: 'RUNNING',
         created_at: ts12m,
@@ -92,24 +100,34 @@ describe('board background task detection and stuck threshold (#676)', () => {
       },
       {
         step_index: 3,
+        source: 'MODEL',
         type: 'PLANNER_RESPONSE',
         status: 'DONE',
         created_at: ts12m,
         content: 'Waiting on build task.',
       },
     ])
+    writeConvStepsDb(agyRoot, S_AGY_FRESH, [
+      { idx: 0, stepType: 15, status: 3 },
+      { idx: 2, stepType: 132, status: 2 },
+      { idx: 3, stepType: 15, status: 3 },
+    ])
 
-    // 2) Stuck agy task running 45 min (past default 30 min) while herdr says done.
+    // 2) Stuck agy task running 45 min (past default 30 min) confirmed via DB status=2 while herdr says done.
     writeAgyTranscript(agyRoot, S_AGY_STUCK, [
       {
         step_index: 0,
+        source: 'USER',
         type: 'USER_INPUT',
+        status: 'DONE',
         created_at: ts45m,
         content: '<USER_REQUEST>\nCapture screenshots\n</USER_REQUEST>',
       },
       {
         step_index: 1,
+        source: 'MODEL',
         type: 'PLANNER_RESPONSE',
+        status: 'DONE',
         created_at: ts45m,
         tool_calls: [
           { name: 'run_command', args: { CommandLine: '"node chrome.js"', toolSummary: '"Chrome screenshot run"' } },
@@ -117,6 +135,7 @@ describe('board background task detection and stuck threshold (#676)', () => {
       },
       {
         step_index: 2,
+        source: 'MODEL',
         type: 'GENERIC',
         status: 'RUNNING',
         created_at: ts45m,
@@ -124,23 +143,32 @@ describe('board background task detection and stuck threshold (#676)', () => {
       },
       {
         step_index: 3,
+        source: 'MODEL',
         type: 'PLANNER_RESPONSE',
         status: 'DONE',
         created_at: ts45m,
         content: 'Waiting on Chrome run.',
       },
     ])
+    writeConvStepsDb(agyRoot, S_AGY_STUCK, [
+      { idx: 0, stepType: 15, status: 3 },
+      { idx: 2, stepType: 132, status: 2 },
+      { idx: 3, stepType: 15, status: 3 },
+    ])
 
     // 3) Stale transcript RUNNING entry whose conversations/<id>.db step is already DONE (status = 3).
     writeAgyTranscript(agyRoot, S_AGY_DB_DONE, [
       {
         step_index: 0,
+        source: 'USER',
         type: 'USER_INPUT',
+        status: 'DONE',
         created_at: ts45m,
         content: '<USER_REQUEST>\nRun quick script\n</USER_REQUEST>',
       },
       {
         step_index: 2,
+        source: 'MODEL',
         type: 'GENERIC',
         status: 'RUNNING',
         created_at: ts45m,
@@ -153,11 +181,44 @@ describe('board background task detection and stuck threshold (#676)', () => {
     writeAgyTranscript(agyRoot, S_AGY_FOOTER, [
       {
         step_index: 0,
+        source: 'USER',
         type: 'USER_INPUT',
+        status: 'DONE',
         created_at: ts12m,
         content: '<USER_REQUEST>\nCheck footer\n</USER_REQUEST>',
       },
     ])
+
+    // 4b) agy pane running only an IsDaemon: true task (DB status=2) + "1 task(s)" footer -> must stay done.
+    writeAgyTranscript(agyRoot, S_AGY_DAEMON, [
+      {
+        step_index: 0,
+        source: 'USER',
+        type: 'USER_INPUT',
+        status: 'DONE',
+        created_at: ts45m,
+        content: '<USER_REQUEST>\nStart dev server\n</USER_REQUEST>',
+      },
+      {
+        step_index: 1,
+        source: 'MODEL',
+        type: 'PLANNER_RESPONSE',
+        status: 'DONE',
+        created_at: ts45m,
+        tool_calls: [
+          { name: 'run_command', args: { CommandLine: '"bun dev"', IsDaemon: 'true', toolSummary: '"Dev server"' } },
+        ],
+      },
+      {
+        step_index: 2,
+        source: 'MODEL',
+        type: 'GENERIC',
+        status: 'RUNNING',
+        created_at: ts45m,
+        content: `Created At: ${ts45m}\nTool is running as a background task with task id: ${S_AGY_DAEMON}/task-2\nTask Description: bun dev`,
+      },
+    ])
+    writeConvStepsDb(agyRoot, S_AGY_DAEMON, [{ idx: 2, stepType: 132, status: 2 }])
 
     // 5) Sleeping agy session: must stay sleeping without bgTasks even if its transcript had a task.
     writeAgyTranscript(agyRoot, S_AGY_SLEEP, [
@@ -232,6 +293,15 @@ describe('board background task detection and stuck threshold (#676)', () => {
           label: 'Atlas agy',
         },
         {
+          pane_id: 'a5',
+          workspace_id: 'w1',
+          agent: 'agy',
+          agent_status: 'done',
+          agent_session: { value: S_AGY_DAEMON },
+          cwd,
+          label: 'Daemon agy',
+        },
+        {
           pane_id: 'c1',
           workspace_id: 'w1',
           agent: 'claude',
@@ -273,6 +343,7 @@ describe('board background task detection and stuck threshold (#676)', () => {
       'api snapshot': { result: { snapshot } },
       'agent read a3': { text: SCREEN_IDLE },
       'agent read a4': { text: SCREEN_WITH_TASK },
+      'agent read a5': { text: SCREEN_WITH_TASK },
     })
 
     const cfgDir = join(box.env.APPDATA as string, 'herdr', 'plugins', 'config', 'agent-board')
@@ -325,13 +396,19 @@ describe('board background task detection and stuck threshold (#676)', () => {
     expect(dbDone).toMatchObject({ status: 'done', column: 'done' })
     expect(dbDone?.bgTasks).toBeUndefined()
 
-    // Footer-only detection promotes done -> working.
+    // Footer-only detection promotes done -> working without fabricating a start time.
     const footer = items.find(i => i.key === S_AGY_FOOTER)
     expect(footer).toMatchObject({
       status: 'working',
       column: 'work',
-      bgTasks: { count: 1, detail: '', stuckMin: 30 },
+      bgTasks: { count: 1, since: null, detail: '', stuckMin: 30 },
     })
+    expect(footer?.bgTasks?.stuck).toBeUndefined()
+
+    // Daemon-only session whose footer says "1 task(s)" stays done (daemon subtracted from footer count).
+    const daemon = items.find(i => i.key === S_AGY_DAEMON)
+    expect(daemon).toMatchObject({ status: 'done', column: 'done' })
+    expect(daemon?.bgTasks).toBeUndefined()
   })
 
   test('leaves Claude, pane-only, Codex, pi, and sleeping sessions untouched with zero footer probes', async () => {
@@ -398,26 +475,112 @@ describe('board background task detection and stuck threshold (#676)', () => {
   })
 })
 
-describe('agy sleep refuses active background tasks (#676)', () => {
+describe('agy filterLiveBgTasks fail-closed and sleep guard (#676)', () => {
   const dirs: string[] = []
   afterEach(() => {
     for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true })
   })
 
-  test('putAgyToSleep refuses when transcript or footer shows running background tasks', async () => {
+  test('filterLiveBgTasks fails closed on missing/corrupt/null/non-2 DB states and confirms status 2', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agy-bg-failclosed-'))
+    dirs.push(dir)
+    const nowIso = new Date().toISOString()
+    const writeSample = (id: string, stepIdx = 4) => {
+      writeAgyTranscript(dir, id, [
+        {
+          step_index: 0,
+          source: 'USER',
+          type: 'USER_INPUT',
+          status: 'DONE',
+          created_at: nowIso,
+          content: '<USER_REQUEST>\ngo\n</USER_REQUEST>',
+        },
+        {
+          step_index: stepIdx,
+          source: 'MODEL',
+          type: 'GENERIC',
+          status: 'RUNNING',
+          created_at: nowIso,
+          content: `Created At: ${nowIso}\nTool is running as a background task with task id: ${id}/task-${stepIdx}`,
+        },
+      ])
+    }
+
+    const sMissingDb = 'aaaaaaaa-0000-4000-8000-000000000001'
+    const sMissingRow = 'aaaaaaaa-0000-4000-8000-000000000002'
+    const sCorruptDb = 'aaaaaaaa-0000-4000-8000-000000000003'
+    const sNullStep = 'aaaaaaaa-0000-4000-8000-000000000004'
+    const sStatus8 = 'aaaaaaaa-0000-4000-8000-000000000005'
+    const sStatus6 = 'aaaaaaaa-0000-4000-8000-000000000006'
+    const sStatus2 = 'aaaaaaaa-0000-4000-8000-000000000007'
+
+    writeSample(sMissingDb)
+    writeSample(sMissingRow)
+    writeConvStepsDb(dir, sMissingRow, [{ idx: 99, status: 2 }])
+
+    writeSample(sCorruptDb)
+    mkdirSync(join(dir, 'conversations'), { recursive: true })
+    writeFileSync(join(dir, 'conversations', `${sCorruptDb}.db`), 'not sqlite')
+
+    // Entry without numeric step_index in transcript or taskId -> stepIndex === null -> fail closed.
+    writeAgyTranscript(dir, sNullStep, [
+      {
+        source: 'MODEL',
+        type: 'GENERIC',
+        status: 'RUNNING',
+        created_at: nowIso,
+        content: `Tool is running as a background task with task id: ${sNullStep}/opaque`,
+      },
+    ])
+    writeConvStepsDb(dir, sNullStep, [{ idx: 4, status: 2 }])
+
+    writeSample(sStatus8)
+    writeConvStepsDb(dir, sStatus8, [{ idx: 4, stepType: 15, status: 8 }])
+
+    writeSample(sStatus6)
+    writeConvStepsDb(dir, sStatus6, [{ idx: 4, stepType: 132, status: 6 }])
+
+    writeSample(sStatus2)
+    writeConvStepsDb(dir, sStatus2, [{ idx: 4, stepType: 132, status: 2 }])
+
+    const agy = createAgyHome(dir)
+    for (const bad of [sMissingDb, sMissingRow, sCorruptDb, sNullStep, sStatus8, sStatus6]) {
+      expect(agy.transcriptInfo(bad)?.bgTasks).toBeUndefined()
+      expect(agy.hasRunningBgTask(bad)).toBe(false)
+    }
+    expect(agy.transcriptInfo(sStatus2)?.bgTasks?.map(t => t.id)).toEqual([`${sStatus2}/task-4`])
+    expect(agy.hasRunningBgTask(sStatus2)).toBe(true)
+  })
+
+  test('putAgyToSleep refuses only DB-confirmed non-daemon background tasks and never blocks on footer alone', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'agy-bg-sleep-'))
     dirs.push(dir)
     const nowIso = new Date().toISOString()
     writeAgyTranscript(dir, S_AGY_FRESH, [
-      { step_index: 0, type: 'USER_INPUT', created_at: nowIso, content: '<USER_REQUEST>\ngo\n</USER_REQUEST>' },
+      {
+        step_index: 0,
+        source: 'USER',
+        type: 'USER_INPUT',
+        status: 'DONE',
+        created_at: nowIso,
+        content: '<USER_REQUEST>\ngo\n</USER_REQUEST>',
+      },
       {
         step_index: 1,
+        source: 'MODEL',
         type: 'GENERIC',
         status: 'RUNNING',
         created_at: nowIso,
         content: `Tool is running as a background task with task id: ${S_AGY_FRESH}/task-1`,
       },
     ])
+
+    // Without DB confirmation, hasRunningBgTask is false (fail closed) and sleep is NOT blocked.
+    const agyNoDb = createAgyHome(dir)
+    expect(agyNoDb.hasRunningBgTask(S_AGY_FRESH)).toBe(false)
+
+    // With DB status = 2, hasRunningBgTask is true and sleep IS refused.
+    writeConvStepsDb(dir, S_AGY_FRESH, [{ idx: 1, stepType: 132, status: 2 }])
     const agy = createAgyHome(dir)
     expect(agy.hasRunningBgTask(S_AGY_FRESH)).toBe(true)
 
@@ -433,7 +596,7 @@ describe('agy sleep refuses active background tasks (#676)', () => {
     const io = fakeWakeHerdr({ panes: [pane], inputBoxes: { 'w1:p1': SCREEN_IDLE } })
     const marks = { going() {}, stayed() {} }
 
-    const fromTranscript = await putAgyToSleep(
+    const fromConfirmedDb = await putAgyToSleep(
       {
         herdr: io,
         agyProcess: async () => ({ pid: 10, argv: ['agy'] }),
@@ -449,11 +612,13 @@ describe('agy sleep refuses active background tasks (#676)', () => {
       marks,
       { boardOnPath: true },
     )
-    expect(fromTranscript.ok).toBe(false)
+    expect(fromConfirmedDb.ok).toBe(false)
+    if (!fromConfirmedDb.ok) expect(fromConfirmedDb.error).toContain('background tasks are still running')
 
-    // Even without transcript tasks, footer "1 task(s)" blocks sleep.
-    const ioFooter = fakeWakeHerdr({ panes: [pane], inputBoxes: { 'w1:p1': SCREEN_WITH_TASK } })
-    const fromFooter = await putAgyToSleep(
+    // Footer "1 task(s)" without DB-confirmed non-daemon task does NOT block sleep (avoids trapping daemons).
+    const ioFooter = fakeWakeHerdr({ panes: [{ ...pane }], inputBoxes: { 'w1:p1': SCREEN_WITH_TASK } })
+    let fakeNow = 1_700_000_000_000
+    const fromFooterOnly = await putAgyToSleep(
       {
         herdr: ioFooter,
         agyProcess: async () => ({ pid: 10, argv: ['agy'] }),
@@ -467,9 +632,15 @@ describe('agy sleep refuses active background tasks (#676)', () => {
       },
       { pane: 'w1:p1', session: S_AGY_FRESH, name: 'Atlas' },
       marks,
-      { boardOnPath: true },
+      {
+        boardOnPath: true,
+        now: () => fakeNow,
+        sleep: async ms => {
+          fakeNow += ms
+        },
+      },
     )
-    expect(fromFooter.ok).toBe(false)
-    if (!fromFooter.ok) expect(fromFooter.error).toContain('background tasks are still running')
+    expect(fromFooterOnly.ok).toBe(false)
+    if (!fromFooterOnly.ok) expect(fromFooterOnly.error).not.toContain('background tasks are still running')
   })
 })

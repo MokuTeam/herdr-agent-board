@@ -238,3 +238,42 @@ test('#639 the moved card is weighed against targets only; one device’s cards 
     keys([card(A, 'L', { activity: 5 }), card(`@server-2:${A}`, 'L', { device: 'server-2', activity: 5 })]),
   ).toHaveLength(2)
 })
+
+test('#676 targetsOf, agentViewsOf, and formatAgentLines propagate bgTasks and respect explicit now', () => {
+  const t0 = 1_700_000_000_000
+  const freshBg = { count: 1, since: t0, detail: 'Build bundle', stuckMin: 30 }
+  const disabledBg = { count: 1, since: t0, detail: 'Long dev server', stuckMin: 0 }
+  const targets = targetsOf([
+    card(A, 'Anna', { agent: 'agy', status: 'working', bgTasks: freshBg }),
+    card(B, 'Ben', { agent: 'agy', status: 'working', bgTasks: disabledBg }),
+    card(C, 'Cleo', { agent: 'claude', status: 'done', bgTasks: { count: 0, since: null, detail: '', stuckMin: 30 } }),
+  ])
+
+  expect(targets.map(t => t.bgTasks)).toEqual([freshBg, disabledBg, undefined])
+  expect(agentViewsOf(targets)).toMatchObject([
+    { key: A, bgTasks: freshBg },
+    { key: B, bgTasks: disabledBg },
+    { key: C },
+  ])
+  expect('bgTasks' in (agentViewsOf(targets)[2] as object)).toBe(false)
+
+  // Before threshold: neither Anna nor Ben is flagged.
+  expect(formatAgentLines(targets, { now: t0 + 10 * 60_000 })).toEqual([
+    'Anna [aaaaaaaa]  ·  agy  ·  working',
+    'Ben [bbbbbbbb]  ·  agy  ·  working',
+    'Cleo [cccccccc]  ·  claude  ·  done',
+  ])
+
+  // Past 30 min: only Anna (stuckMin: 30) is flagged; Ben (stuckMin: 0) is not.
+  expect(formatAgentLines(targets, { now: t0 + 45 * 60_000 })).toEqual([
+    'Anna [aaaaaaaa]  ·  agy  ·  working  ·  background task may be stuck',
+    'Ben [bbbbbbbb]  ·  agy  ·  working',
+    'Cleo [cccccccc]  ·  claude  ·  done',
+  ])
+
+  // When now is omitted, explicit stuck: true is still respected without reading wall-clock time.
+  const preFlagged = targetsOf([
+    card(A, 'Anna', { agent: 'agy', status: 'working', bgTasks: { ...freshBg, stuck: true } }),
+  ])
+  expect(formatAgentLines(preFlagged)).toEqual(['Anna [aaaaaaaa]  ·  agy  ·  working  ·  background task may be stuck'])
+})
