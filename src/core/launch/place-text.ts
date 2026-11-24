@@ -5,12 +5,25 @@ import type { Blocker, Refusal, Unfit } from '../placement.ts'
 import type { PortableWhy } from '../portable.ts'
 import type { Translator } from '../types.ts'
 
-/** A device as the launch card names it: `local` is this computer. */
-export const deviceName = (id: string, t: Translator): string => (id === 'local' ? t('place.local') : id)
+/** Device titles keyed by device id, or the payload's device rows. */
+export type DeviceTitles = Readonly<Record<string, string>> | readonly { id: string; title: string }[]
+
+function titleOf(id: string, titles?: DeviceTitles): string {
+  if (!titles) return ''
+  if (Array.isArray(titles)) return titles.find(d => d.id === id)?.title ?? ''
+  return Object.hasOwn(titles, id) ? ((titles as Readonly<Record<string, string>>)[id] ?? '') : ''
+}
+
+/** A device as the launch card names it: `local` is this computer unless given a title of its own. */
+export const deviceName = (id: string, t: Translator, titles?: DeviceTitles): string => {
+  const custom = titleOf(id, titles)
+  if (id === 'local') return custom && custom !== 'local' ? custom : t('place.local')
+  return custom || id
+}
 
 /** What keeps a device from taking a start now (core/placement.ts Blocker), in words. */
-export function blockerText(b: Blocker, t: Translator): string {
-  const device = deviceName(b.device, t)
+export function blockerText(b: Blocker, t: Translator, titles?: DeviceTitles): string {
+  const device = deviceName(b.device, t, titles)
   switch (b.kind) {
     case 'sessions':
       return t('place.blocker.sessions', { device, busy: b.busy, max: b.max })
@@ -36,8 +49,8 @@ function homeFix(why: PortableWhy, t: Translator): string {
   return t(`place.homeFix.${why.kind}`)
 }
 
-function unfitText(u: Unfit, t: Translator): string {
-  const device = deviceName(u.device, t)
+function unfitText(u: Unfit, t: Translator, titles?: DeviceTitles): string {
+  const device = deviceName(u.device, t, titles)
   switch (u.kind) {
     case 'tags':
       return t('place.unfit.tags', { device, tags: u.missing.join(', ') })
@@ -54,17 +67,17 @@ function unfitText(u: Unfit, t: Translator): string {
   }
 }
 
-const pinText = (pin: { device: string } | { tag: string }, t: Translator): string =>
-  'device' in pin ? deviceName(pin.device, t) : pin.tag
+const pinText = (pin: { device: string } | { tag: string }, t: Translator, titles?: DeviceTitles): string =>
+  'device' in pin ? deviceName(pin.device, t, titles) : pin.tag
 
 /** Why no device could ever take a start (core/placement.ts Refusal), in words. */
-export function refusalText(r: Refusal, t: Translator): string {
-  if (r.kind === 'no-device') return t('place.refuse.no-device', { pin: r.pin ? pinText(r.pin, t) : '' })
+export function refusalText(r: Refusal, t: Translator, titles?: DeviceTitles): string {
+  if (r.kind === 'no-device') return t('place.refuse.no-device', { pin: r.pin ? pinText(r.pin, t, titles) : '' })
   if (r.kind === 'unfit') {
-    const list = r.devices.map(u => unfitText(u, t)).join('; ')
+    const list = r.devices.map(u => unfitText(u, t, titles)).join('; ')
     if (r.home)
       return t('place.refuse.home', {
-        origin: deviceName(r.devices[0]?.device ?? 'local', t),
+        origin: deviceName(r.devices[0]?.device ?? 'local', t, titles),
         why: homeText(r.home, t),
         list,
         fix: homeFix(r.home, t),
@@ -72,8 +85,8 @@ export function refusalText(r: Refusal, t: Translator): string {
     return t('place.refuse.unfit', { list })
   }
   return t('place.refuse.pinned-away', {
-    origin: deviceName(r.origin, t),
+    origin: deviceName(r.origin, t, titles),
     why: homeText(r.home, t),
-    pin: pinText(r.pin, t),
+    pin: pinText(r.pin, t, titles),
   })
 }

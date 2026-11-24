@@ -4,7 +4,7 @@
 import { nodeKey, parseNodeKey } from '../nodes.ts'
 import { isPiItem, piSessionId } from '../pi.ts'
 import type { Item, LaunchView, Translator } from '../types.ts'
-import { refusalText } from './place-text.ts'
+import { deviceName, refusalText } from './place-text.ts'
 import type { SpawnOptions } from './spawn-args.ts'
 
 /**
@@ -115,10 +115,24 @@ export function queuedLine(l: Pick<LaunchView, 'id' | 'place'>, name: string): s
   return `queued=${l.id} name=${name} waiting=${why}`
 }
 
-/** What the board's payload (its items and launches) says of the start. */
-export function outcomeOf(payload: { items?: unknown; launches?: unknown }, f: Followed, t: Translator): Outcome {
+/** What the board's payload (its items, launches and devices) says of the start. */
+export function outcomeOf(
+  payload: { items?: unknown; launches?: unknown; devices?: unknown },
+  f: Followed,
+  t: Translator,
+): Outcome {
   const items = Array.isArray(payload.items) ? (payload.items as Item[]) : []
   const launches = Array.isArray(payload.launches) ? (payload.launches as LaunchView[]) : []
+  const devices = Array.isArray(payload.devices)
+    ? payload.devices.flatMap(d =>
+        typeof d === 'object' &&
+        d !== null &&
+        typeof (d as { id?: unknown }).id === 'string' &&
+        typeof (d as { title?: unknown }).title === 'string'
+          ? [{ id: (d as { id: string }).id, title: (d as { title: string }).title }]
+          : [],
+      )
+    : undefined
   const own = launches.find(l => l.id === f.id && !l.device)
   const seen = f.seen || !!own
   const session = f.session
@@ -130,7 +144,7 @@ export function outcomeOf(payload: { items?: unknown; launches?: unknown }, f: F
     if (own.state === 'queued') return { kind: 'printed', line: queuedLine(own, f.name) }
     if (own.state === 'failed') {
       const why = own.place?.refuse
-        ? refusalText(own.place.refuse, t)
+        ? refusalText(own.place.refuse, t, devices)
         : own.place?.queueFull
           ? t('place.queueFull')
           : own.error
@@ -144,13 +158,14 @@ export function outcomeOf(payload: { items?: unknown; launches?: unknown }, f: F
   }
   if (device && session) {
     const key = nodeKey(device, session)
+    const label = deviceName(device, t, devices)
     const theirs = launches.find(l => l.device === device && l.id === key)
     if (theirs?.state === 'failed')
-      return { kind: 'failed', error: `on ${device}: ${theirs.error || 'the start failed: see its card on the board'}` }
+      return { kind: 'failed', error: `on ${label}: ${theirs.error || 'the start failed: see its card on the board'}` }
     if (theirs && DIALOG.has(theirs.state))
       return {
         kind: 'failed',
-        error: `Claude on ${device} waits for a dialog (folder trust?). Answer it on its card on the board, which finishes the start.`,
+        error: `Claude on ${label} waits for a dialog (folder trust?). Answer it on its card on the board, which finishes the start.`,
       }
     const item = items.find(i => i.device === device && ofSession(i, session))
     if (item && (!theirs || theirs.state === 'done'))

@@ -311,3 +311,26 @@ test('onChange: a payload or a state change of any link, and a link that goes, n
   expect(heard.length).toBe(4)
   await links.close()
 })
+
+test('renaming a device updates view() immediately, keeps its link open, and notifies onChange (#601)', async () => {
+  const c = countingClock()
+  const r = recorder()
+  const cfg = { nodes: { id: 'laptop', devices: { 'server-1': direct(1001) } } } as unknown as Config
+  const links = createNodeLinks({ cfg, log: () => {}, makeLink: r.makeLink, clock: c.clock, network: () => 'net' })
+  await settle()
+  const heard: string[] = []
+  links.onChange(id => heard.push(id))
+
+  cfg.nodes = { id: 'laptop', devices: { 'server-1': { ...direct(1001), title: 'Atlas Box' } } }
+  // Even before configChanged() finishes syncNow(), view() reads the live title.
+  expect(links.view().devices.map(d => [d.id, d.title])).toEqual([
+    ['server-1', 'Atlas Box'],
+    ['local', 'local'],
+  ])
+  links.configChanged()
+  await settle()
+  expect(r.made).toHaveLength(1)
+  expect(r.made[0]?.closed).toBe(false)
+  expect(heard).toEqual(['server-1'])
+  await links.close()
+})

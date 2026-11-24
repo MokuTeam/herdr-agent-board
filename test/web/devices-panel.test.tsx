@@ -4,16 +4,19 @@
 // device online, one not reachable, one refused for its version, this computer) at a desktop's and a
 // phone's width. Without `devices` in the payload (a board without `nodes`) the panel holds Add a
 // server alone (#509, test/web/add-server.test.tsx).
-import { afterEach, describe, expect, test } from 'bun:test'
-import type { ReactElement } from 'react'
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test'
+import { JSDOM } from 'jsdom'
+import { act, type ReactElement } from 'react'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { BoardDevice, BoardPayload } from '../../src/core/payload.ts'
 import { DevicesPanel } from '../../web/src/components/devices/DevicesPanel.tsx'
 import { offersDevices } from '../../web/src/hooks/useSettingsMenu.ts'
+import { I18nProvider } from '../../web/src/i18n/I18nProvider.tsx'
 import {
   deviceOptions,
   deviceRows,
   deviceTitle,
+  deviceTitleEdited,
   lanesAfter,
   laneTicks,
   linkWords,
@@ -24,7 +27,7 @@ import {
   updateLine,
 } from '../../web/src/models/devices.ts'
 import { settingPicked, settingsMenu } from '../../web/src/models/settings-menu.ts'
-import type { Board } from '../../web/src/state/BoardProvider.tsx'
+import { type Board, BoardContext } from '../../web/src/state/BoardProvider.tsx'
 import { PanelProvider } from '../../web/src/state/PanelProvider.tsx'
 import { board, payload, renderInBoard } from './support/board.tsx'
 import { type FakeElement, FakeWorld } from './support/fake-dom.ts'
@@ -676,5 +679,299 @@ describe('what an agent on the device cannot do for git (#609)', () => {
   test('a node of an older board, this computer: nothing said', () => {
     expect(deviceRows([device('server-1', { status: status('server-1', 1) })], NOW, t)[0]?.git).toEqual([])
     expect(deviceRows([device('local', { status: gitStatus(['bash'], false, []) })], NOW, t)[0]?.git).toEqual([])
+  })
+})
+
+describe('rename a device (#601)', () => {
+  const ru = translator('ru')
+
+  test('deviceTitleEdited, rawTitle/defaultTitle, and title refusals', () => {
+    expect(deviceTitleEdited('server-1', '', 'Atlas Box')).toBe('Atlas Box')
+    expect(deviceTitleEdited('server-1', 'Atlas Box', '  Atlas Box  ')).toBeNull()
+    expect(deviceTitleEdited('server-1', 'Atlas Box', '   ')).toBe('')
+    expect(deviceTitleEdited('server-1', 'Atlas Box', 'server-1')).toBe('')
+    expect(deviceTitleEdited('server-1', '', 'server-1')).toBeNull()
+    expect(deviceTitleEdited('local', '', 'Work Laptop')).toBe('Work Laptop')
+    expect(deviceTitleEdited('local', 'Work Laptop', '')).toBe('')
+    expect(deviceTitleEdited('local', '', '')).toBeNull()
+
+    const rows = deviceRows([device('server-1', { title: 'Server 1' }), device('local')], NOW, t)
+    expect(rows[0]).toMatchObject({ title: 'Server 1', rawTitle: 'Server 1', defaultTitle: 'server-1' })
+    expect(rows[1]).toMatchObject({ title: 'This computer', rawTitle: '', defaultTitle: 'This computer' })
+
+    expect(refusedText(400, 'title', t)).toBe('Not saved: Name does not check out')
+    expect(refusedText(400, 'title', ru)).toBe('Не сохранено: Название не подходит')
+  })
+
+  describe('interactive inline rename in DevicesPanel', () => {
+    const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
+      url: 'http://localhost/',
+    })
+    const g = globalThis as Record<string, unknown>
+    const DOM_KEYS = [
+      'window',
+      'document',
+      'navigator',
+      'HTMLElement',
+      'Element',
+      'Node',
+      'Event',
+      'MouseEvent',
+      'KeyboardEvent',
+      'FocusEvent',
+      'HTMLInputElement',
+      'MutationObserver',
+      'getComputedStyle',
+      'devicePixelRatio',
+      'ResizeObserver',
+      'requestAnimationFrame',
+      'cancelAnimationFrame',
+      'addEventListener',
+      'removeEventListener',
+      'matchMedia',
+    ] as const
+    const saved = new Map<string, PropertyDescriptor | undefined>()
+    let createRoot: typeof import('react-dom/client').createRoot
+
+    beforeAll(async () => {
+      const win = dom.window as unknown as Record<string, unknown>
+      for (const k of [...DOM_KEYS, 'IS_REACT_ACT_ENVIRONMENT']) saved.set(k, Object.getOwnPropertyDescriptor(g, k))
+      for (const k of DOM_KEYS) {
+        if (k in win) Object.defineProperty(g, k, { value: win[k], configurable: true, writable: true })
+      }
+      g.IS_REACT_ACT_ENVIRONMENT = true
+      Object.defineProperty(g, 'devicePixelRatio', { value: 1, configurable: true, writable: true })
+      Object.defineProperty(g, 'ResizeObserver', {
+        value: class {
+          observe() {}
+          disconnect() {}
+        },
+        configurable: true,
+      })
+      Object.defineProperty(g, 'requestAnimationFrame', { value: () => 0, configurable: true })
+      Object.defineProperty(g, 'cancelAnimationFrame', { value: () => {}, configurable: true })
+      Object.defineProperty(g, 'addEventListener', {
+        value: dom.window.addEventListener.bind(dom.window),
+        configurable: true,
+      })
+      Object.defineProperty(g, 'removeEventListener', {
+        value: dom.window.removeEventListener.bind(dom.window),
+        configurable: true,
+      })
+      Object.defineProperty(g, 'matchMedia', {
+        value: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+        configurable: true,
+      })
+      ;({ createRoot } = await import('react-dom/client'))
+    })
+
+    afterAll(() => {
+      restoreFetch()
+      for (const [k, d] of saved) {
+        if (d) Object.defineProperty(g, k, d)
+        else delete g[k]
+      }
+    })
+
+    const setVal = (input: HTMLInputElement, val: string) => {
+      Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value')?.set?.call(input, val)
+      input.dispatchEvent(new dom.window.Event('input', { bubbles: true }))
+    }
+
+    test('click to rename node and local, clear back to default, Escape cancels, refusal reverts', async () => {
+      const calls = answers(
+        [200, { settings: SETTINGS }], // initial mount GET /api/nodes
+        [200, { ok: true, settings: SETTINGS }],
+        [200, { ok: true, settings: SETTINGS }],
+        [200, { ok: true, settings: SETTINGS }],
+        [400, { error: 'title' }],
+        [200, { settings: SETTINGS }], // refresh() after 400
+      )
+      const host = dom.window.document.createElement('div')
+      dom.window.document.body.appendChild(host)
+      const root = createRoot(host)
+      const closed: number[] = []
+      const localToasts: [string, boolean | undefined][] = []
+      await act(async () => {
+        root.render(
+          <I18nProvider lang="en">
+            <BoardContext.Provider
+              value={board({
+                data: full(),
+                now: NOW,
+                toast: (msg, bad) => void localToasts.push([msg, bad]),
+              })}
+            >
+              <PanelProvider viewport={() => VP}>
+                <DevicesPanel open onClose={() => closed.push(1)} initial={SETTINGS} />
+              </PanelProvider>
+            </BoardContext.Provider>
+          </I18nProvider>,
+        )
+      })
+
+      // 1. Click node title -> input opens with current title -> Enter saves.
+      const row = (id: string) => host.querySelector(`[data-id="${id}"]`) as HTMLElement
+      await act(async () => {
+        row('server-1')
+          .querySelector('button.devices-title')
+          ?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+      let input = row('server-1').querySelector('input.devices-title-input') as HTMLInputElement
+      expect(input).toBeTruthy()
+      expect(input.value).toBe('Server 1')
+      await act(async () => {
+        setVal(input, 'Atlas Box')
+      })
+      await act(async () => {
+        input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      })
+      expect(row('server-1').querySelector('button.devices-title')?.textContent).toBe('Atlas Box')
+      expect(dom.window.document.activeElement).toBe(row('server-1').querySelector('button.devices-title'))
+
+      // 2. Click local title -> input opens empty with placeholder "This computer" -> blur saves.
+      await act(async () => {
+        row('local')
+          .querySelector('button.devices-title')
+          ?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+      input = row('local').querySelector('input.devices-title-input') as HTMLInputElement
+      expect(input.value).toBe('')
+      expect(input.placeholder).toBe('This computer')
+      await act(async () => {
+        setVal(input, 'Work Laptop')
+      })
+      await act(async () => {
+        input.dispatchEvent(new dom.window.FocusEvent('focusout', { bubbles: true }))
+      })
+      expect(row('local').querySelector('button.devices-title')?.textContent).toBe('Work Laptop')
+
+      // 3. Clearing title sends '' and reverts display to default.
+      await act(async () => {
+        row('server-1')
+          .querySelector('button.devices-title')
+          ?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+      input = row('server-1').querySelector('input.devices-title-input') as HTMLInputElement
+      await act(async () => {
+        setVal(input, '')
+      })
+      await act(async () => {
+        input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      })
+      expect(row('server-1').querySelector('button.devices-title')?.textContent).toBe('server-1')
+
+      // 4. Escape cancels without posting or closing the panel.
+      await act(async () => {
+        row('server-2')
+          .querySelector('button.devices-title')
+          ?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+      input = row('server-2').querySelector('input.devices-title-input') as HTMLInputElement
+      await act(async () => {
+        setVal(input, 'Temp Name')
+      })
+      await act(async () => {
+        input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      })
+      expect(row('server-2').querySelector('button.devices-title')?.textContent).toBe('server-2')
+      expect(dom.window.document.activeElement).toBe(row('server-2').querySelector('button.devices-title'))
+      expect(closed).toEqual([])
+
+      // 5. Server refusal (400 { error: 'title' }) shows toast and reverts display.
+      await act(async () => {
+        row('server-2')
+          .querySelector('button.devices-title')
+          ?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+      input = row('server-2').querySelector('input.devices-title-input') as HTMLInputElement
+      await act(async () => {
+        setVal(input, 'Bad\u0007Name')
+      })
+      await act(async () => {
+        input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      })
+      await act(async () => {
+        await settled()
+      })
+      expect(posted(calls)).toEqual([
+        { op: 'set', id: 'server-1', title: 'Atlas Box' },
+        { op: 'set', id: 'local', title: 'Work Laptop' },
+        { op: 'set', id: 'server-1', title: '' },
+        { op: 'set', id: 'server-2', title: 'Bad\u0007Name' },
+      ])
+      expect(localToasts).toEqual([['Not saved: Name does not check out', true]])
+      expect(row('server-2').querySelector('button.devices-title')?.textContent).toBe('server-2')
+
+      await act(async () => root.unmount())
+      host.remove()
+    })
+
+    test('disabled when canEdit is false: title button is disabled and does not enter edit mode', async () => {
+      answers([200, { settings: SETTINGS }])
+      const host = dom.window.document.createElement('div')
+      dom.window.document.body.appendChild(host)
+      const root = createRoot(host)
+      await act(async () => {
+        root.render(
+          <I18nProvider lang="en">
+            <BoardContext.Provider value={board({ data: full(), canEdit: false, now: NOW })}>
+              <PanelProvider viewport={() => VP}>
+                <DevicesPanel open onClose={() => {}} initial={SETTINGS} />
+              </PanelProvider>
+            </BoardContext.Provider>
+          </I18nProvider>,
+        )
+      })
+      const btn = host.querySelector('[data-id="server-1"] button.devices-title') as HTMLButtonElement
+      expect(btn.disabled).toBe(true)
+      await act(async () => {
+        btn.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+      expect(host.querySelector('input.devices-title-input')).toBeNull()
+      await act(async () => root.unmount())
+      host.remove()
+    })
+
+    test('pending title is cleared once payload updates and does not resurrect after an external revert', async () => {
+      answers([200, { settings: SETTINGS }], [200, { ok: true, settings: SETTINGS }], [200, { settings: SETTINGS }])
+      const host = dom.window.document.createElement('div')
+      dom.window.document.body.appendChild(host)
+      const root = createRoot(host)
+      const renderWith = async (devices: BoardDevice[]) => {
+        await act(async () => {
+          root.render(
+            <I18nProvider lang="en">
+              <BoardContext.Provider value={board({ data: payload({ devices, categories: CATEGORIES }), now: NOW })}>
+                <PanelProvider viewport={() => VP}>
+                  <DevicesPanel open onClose={() => {}} initial={SETTINGS} />
+                </PanelProvider>
+              </BoardContext.Provider>
+            </I18nProvider>,
+          )
+        })
+      }
+      await renderWith([device('server-1', { title: 'Server 1' }), device('local')])
+      const btn = () => host.querySelector('[data-id="server-1"] button.devices-title')
+      await act(async () => {
+        btn()?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+      const input = host.querySelector('[data-id="server-1"] input.devices-title-input') as HTMLInputElement
+      await act(async () => {
+        setVal(input, 'Atlas Box')
+      })
+      await act(async () => {
+        input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+      })
+      expect(btn()?.textContent).toBe('Atlas Box')
+      // Payload catches up with the rename, then externally reverts to "Server 1".
+      await renderWith([device('server-1', { title: 'Atlas Box' }), device('local')])
+      expect(btn()?.textContent).toBe('Atlas Box')
+      await renderWith([device('server-1', { title: 'Server 1' }), device('local')])
+      expect(btn()?.textContent).toBe('Server 1')
+
+      await act(async () => root.unmount())
+      host.remove()
+    })
   })
 })

@@ -169,6 +169,13 @@ export function App() {
   // Time (#233), while the board has it on: its panel, out of the toolbar's button or a lane's day total.
   const [timeOpen, setTimeOpen] = useState(false)
   const [timeClient, setTimeClient] = useState<string | null>(null)
+  // Token spend (#636): mounted at its first opening, so setups that never open it pay zero cost.
+  const [spendOpen, setSpendOpen] = useState(false)
+  const [spendMounted, setSpendMounted] = useState(false)
+  const toggleSpend = () => {
+    setSpendMounted(true)
+    setSpendOpen(was => !was)
+  }
   // Settings → Team… (#231), local page with the payload's teamRev: mounted at its first opening.
   const [team, setTeam] = useState(false)
   const [teamMounted, setTeamMounted] = useState(false)
@@ -349,11 +356,13 @@ export function App() {
                 ? 'schedule'
                 : timeOpen
                   ? 'time'
-                  : categories
-                    ? 'categories'
-                    : archive.panel.open
-                      ? 'archive'
-                      : 'board'
+                  : spendOpen
+                    ? 'spend'
+                    : categories
+                      ? 'categories'
+                      : archive.panel.open
+                        ? 'archive'
+                        : 'board'
 
   return (
     <>
@@ -376,6 +385,7 @@ export function App() {
             setTimeOpen(was => !was)
           },
         })}
+        onSpend={toggleSpend}
         onCategories={() => (categories ? setCategories(false) : openCategories())}
         onArchive={archive.togglePanel}
         onSettings={() => setSettingsOpen(was => !was)}
@@ -473,6 +483,7 @@ export function App() {
           threads: { open: threads.shown, onClose: () => threads.setShown(false), menu: menus.menu },
         })}
         time={{ open: timeOpen, onClose: () => setTimeOpen(false), client: timeClient, onClient: setTimeClient }}
+        {...(spendMounted ? { spend: { open: spendOpen, onClose: () => setSpendOpen(false) } } : {})}
         settings={{
           open: settingsOpen,
           onClose: () => setSettingsOpen(false),

@@ -306,6 +306,7 @@ const CLASSIFIED: Record<string, [method: string, raw: string, door: 'door' | 'r
   'POST /api/time': [['POST', '/api/time', 'refused']],
   'GET /api/time-settings': [['GET', '/api/time-settings', 'refused']],
   'POST /api/time-settings': [['POST', '/api/time-settings', 'refused']],
+  'GET /api/spend': [['GET', '/api/spend', 'refused']],
   'POST /api/calendar-reminders': [['POST', '/api/calendar-reminders', 'refused']],
   'GET /api/calendar': [['GET', '/api/calendar', 'refused']],
   'POST /api/calendar': [['POST', '/api/calendar', 'refused']],

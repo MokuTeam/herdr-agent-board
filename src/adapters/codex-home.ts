@@ -13,6 +13,8 @@ import { isRecord } from './json-store.ts'
 export interface CodexHome {
   /** The folder in the rollout header, rather than the enclosing shell's folder. */
   cwdOf(session: string): Promise<string | null>
+  /** Path to the rollout file for `session`, or null when not found. */
+  transcriptPath(session: string | null): string | null
   transcriptInfo(session: string | null): TranscriptInfo | null
   sessionThread(session: string, limit?: number): SessionThread
 }
@@ -156,6 +158,7 @@ export function createCodexHome(root = codexRoot()): CodexHome {
   }
 
   return {
+    transcriptPath: session => locate(session)?.file ?? null,
     transcriptInfo,
     sessionThread,
     async cwdOf(session) {

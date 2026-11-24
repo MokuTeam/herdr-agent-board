@@ -721,19 +721,19 @@ export interface DeviceUpdate {
 
 // ---------------------------------------------------------------- the panel's edits (#510)
 
-/** The thresholds and switches the Devices panel sets per device (`nodes.devices.<id>`). */
-const DEVICE_SETTINGS = ['paused', 'drain', 'giveSecrets', 'maxSessions', 'minFreeMemMb', 'maxLoad'] as const
+/** The thresholds, switches and title the Devices panel sets per device (`nodes.devices.<id>`). */
+const DEVICE_SETTINGS = ['title', 'paused', 'drain', 'giveSecrets', 'maxSessions', 'minFreeMemMb', 'maxLoad'] as const
 type DeviceSetting = (typeof DEVICE_SETTINGS)[number]
 
 /**
  * One change of Settings, Devices (design 12), as `POST /api/nodes` carries it: the order, a
- * device's switches and thresholds (a threshold set to null is written as null: no limit, which
- * the board's own figures never replace), the lanes that may leave this computer, and what a start does when every device is
- * full.
+ * device's title, switches and thresholds (a threshold set to null is written as null: no limit, which
+ * the board's own figures never replace; an empty or null title clears it back to the default), the
+ * lanes that may leave this computer, and what a start does when every device is full.
  */
 export type NodesEdit =
   | { op: 'order'; ids: string[] }
-  | { op: 'set'; id: string; values: Partial<Record<DeviceSetting, boolean | number | null>> }
+  | { op: 'set'; id: string; values: Partial<Record<DeviceSetting, string | boolean | number | null>> }
   | { op: 'lanes'; lanes: 'all' | string[]; shown?: string[] }
   | { op: 'whenFull'; whenFull: 'local' | 'wait' }
 
@@ -786,16 +786,18 @@ export function nodesEditOf(body: Record<string, unknown>): NodesEdit | { error:
       ? { op: 'whenFull', whenFull: body.whenFull }
       : { error: 'whenFull' }
   if (typeof body.id !== 'string' || !DEVICE_ID.test(body.id)) return { error: 'id' }
-  const values: Partial<Record<DeviceSetting, boolean | number | null>> = {}
+  const values: Partial<Record<DeviceSetting, string | boolean | number | null>> = {}
   for (const key of DEVICE_SETTINGS) {
     if (!Object.hasOwn(body, key)) continue
     const v = body[key]
     const fits =
-      key === 'paused' || key === 'drain' || key === 'giveSecrets'
-        ? typeof v === 'boolean'
-        : v === null || typeof v === 'number'
+      key === 'title'
+        ? v === null || typeof v === 'string'
+        : key === 'paused' || key === 'drain' || key === 'giveSecrets'
+          ? typeof v === 'boolean'
+          : v === null || typeof v === 'number'
     if (!fits) return { error: key }
-    values[key] = v as boolean | number | null
+    values[key] = v as string | boolean | number | null
   }
   if (Object.keys(values).length === 0) return { error: 'values' }
   // This computer is never paused: a start by hand runs here when every device is full (8.1 step 5).
@@ -827,6 +829,7 @@ export function applyNodesEdit(
   else if (edit.op === 'lanes')
     next.lanes = edit.lanes === 'all' ? 'all' : [...new Set(edit.lanes.map(l => l.trim().toLowerCase()))]
   else {
+    const hadDevices = next.devices !== undefined
     if (next.devices === undefined && edit.id === LOCAL) next.devices = {}
     if (!isObject(next.devices)) return { error: 'id' }
     const devices = next.devices
@@ -837,9 +840,18 @@ export function applyNodesEdit(
     const entry = devices[edit.id]
     if (!isObject(entry)) return { error: 'id' }
     // Secrets on is the default: written as the key gone, as an owner who never touched it has it.
+    // An empty title or the device's own id goes back to the default too.
     for (const [key, v] of Object.entries(edit.values))
-      if (key === 'giveSecrets' && v === true) delete entry[key]
+      if (key === 'title') {
+        const trimmed = v === null ? '' : (v as string).trim()
+        if (trimmed === '' || trimmed === edit.id) delete entry.title
+        else entry.title = trimmed
+      } else if (key === 'giveSecrets' && v === true) delete entry[key]
       else entry[key] = v
+    if (edit.id === LOCAL && Object.keys(entry).length === 0) {
+      delete devices[LOCAL]
+      if (!hadDevices && Object.keys(devices).length === 0) delete next.devices
+    }
   }
   const was = nodesConfig(nodes, hostName)
   // The panel lists the usable devices (nodesConfig's order) and sends each of them once: anything

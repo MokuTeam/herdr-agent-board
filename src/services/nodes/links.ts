@@ -189,7 +189,9 @@ export function createNodeLinks(o: NodeLinksOptions): NodeLinks {
     for (const [id, held] of [...links]) {
       const device = wanted.get(id)
       if (device && JSON.stringify(device.link) === held.key) {
+        const renamed = held.device.title !== device.title
         held.device = device
+        if (renamed) changed(id)
         continue
       }
       links.delete(id)
@@ -234,7 +236,14 @@ export function createNodeLinks(o: NodeLinksOptions): NodeLinks {
           : {}
       const devices = cfg.order.flatMap((id): DeviceView[] => {
         const held = links.get(id)
-        if (held) return [{ ...held.link.view(), title: held.device.title, ...revoked(id, cfg.devices[id]) }]
+        if (held)
+          return [
+            {
+              ...held.link.view(),
+              title: cfg.devices[id]?.title ?? held.device.title,
+              ...revoked(id, cfg.devices[id]),
+            },
+          ]
         const device = cfg.devices[id]
         if (!device) return []
         return [

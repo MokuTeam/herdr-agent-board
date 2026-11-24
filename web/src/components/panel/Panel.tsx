@@ -28,6 +28,7 @@ export type PanelKind =
   | 'updates'
   | 'housekeeping'
   | 'time'
+  | 'spend'
   | 'timeSettings'
   | 'calendar'
   | 'calendarSettings'
@@ -54,6 +55,7 @@ const KINDS: Record<PanelKind, { label: string; closeId?: string }> = {
   updates: { label: 'selfUpdate.title' },
   housekeeping: { label: 'hk.title' },
   time: { label: 'time.title' },
+  spend: { label: 'spend.title' },
   timeSettings: { label: 'time.set.title' },
   calendar: { label: 'cal.title' },
   calendarSettings: { label: 'cal.set.title' },

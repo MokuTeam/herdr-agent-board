@@ -220,3 +220,72 @@ test('a queued start waits under "waiting on someone else" with what it waits on
     'On this computer: its lane does not leave this computer',
   )
 })
+
+test('renamed device titles appear on launch cards, blockers, refusals and turned lists (#601)', () => {
+  const devices = [
+    { id: 'local', title: 'Work Laptop' },
+    { id: 'server-1', title: 'Atlas Box' },
+    { id: 'server-2', title: 'Beta Box' },
+  ]
+  expect(stepText(launch({ step: 'cloning', place: { device: 'server-1' } }), en, '', devices)).toBe(
+    'Cloning on Atlas Box…',
+  )
+  expect(stepText(launch({ place: { device: 'local' } }), en, '', devices)).toBe('Starting on Work Laptop…')
+  expect(blockerText({ device: 'server-1', kind: 'sessions', busy: 3, max: 3 }, en, devices)).toBe(
+    'Atlas Box has 3 of 3 sessions',
+  )
+  expect(blockerText({ device: 'local', kind: 'offline' }, ru, devices)).toBe('Work Laptop недоступен')
+  expect(
+    refusalText(
+      {
+        kind: 'unfit',
+        devices: [
+          { device: 'server-1', kind: 'paused' },
+          { device: 'local', kind: 'tags', missing: ['gpu'] },
+        ],
+      },
+      en,
+      devices,
+    ),
+  ).toBe('No device can take it: Atlas Box is paused; Work Laptop lacks the tags gpu')
+  expect(
+    refusalText(
+      {
+        kind: 'unfit',
+        devices: [{ device: 'local', kind: 'draining' }],
+        home: { kind: 'unpushed' },
+      },
+      en,
+      devices,
+    ),
+  ).toBe(
+    'Cannot leave Work Laptop (the branch is not at its remote branch), and Work Laptop is draining. Push the branch.',
+  )
+  expect(
+    refusalText(
+      { kind: 'pinned-away', pin: { device: 'server-1' }, origin: 'local', home: { kind: 'changes' } },
+      en,
+      devices,
+    ),
+  ).toBe('It runs only on Work Laptop (the folder has changes that are not committed), and “Where” says Atlas Box')
+
+  const queued = launch({
+    state: 'queued',
+    place: {
+      wait: { device: 'local', kind: 'sessions', busy: 2, max: 2 },
+      turned: [{ device: 'server-2', error: 'full' }],
+    },
+  })
+  const queuedHtml = renderToStaticMarkup(<LaunchNote launch={queued} look={{ ...look, devices: devices as never }} />)
+  expect(queuedHtml).toContain('Waiting for room: Work Laptop has 2 of 2 sessions')
+  expect(queuedHtml).toContain('Beta Box: no room')
+
+  const refused = launch({
+    state: 'failed',
+    place: { refuse: { kind: 'unfit', devices: [{ device: 'server-1', kind: 'paused' }] } },
+  })
+  const refusedHtml = renderToStaticMarkup(
+    <LaunchNote launch={refused} look={{ ...look, devices: devices as never }} />,
+  )
+  expect(refusedHtml).toContain('No device can take it: Atlas Box is paused')
+})

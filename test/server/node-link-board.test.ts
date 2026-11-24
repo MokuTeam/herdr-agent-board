@@ -74,6 +74,52 @@ describe('a master and its node', () => {
     expect(node.proxy.peak()).toBe(1)
   }, 60_000)
 
+  test('POST /api/nodes renames a node and local immediately in GET /api/nodes and board nodes (#601)', async () => {
+    const pair = await nodePair()
+    const [node] = pair.nodes
+    if (!node) throw new Error('no node')
+    await pair.waitDevice('server-1', d => d.link?.state === 'online', 15_000)
+    writeConfig(pair.master.box, {
+      port: portOf(pair.master.url),
+      nodes: {
+        id: 'laptop',
+        devices: { 'server-1': { link: { kind: 'direct', url: `http://127.0.0.1:${node.proxy.port}` } } },
+      },
+    })
+    const post = async (body: Record<string, unknown>) =>
+      fetch(`${pair.master.url}/api/nodes`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-board': '1' },
+        body: JSON.stringify(body),
+      })
+    expect((await post({ op: 'set', id: 'server-1', title: 'Atlas Box' })).status).toBe(200)
+    expect((await post({ op: 'set', id: 'local', title: 'Work Laptop' })).status).toBe(200)
+
+    const running = await board(pair.master.box, ['nodes'])
+    expect(running.code).toBe(0)
+    const runningLines = running.stdout.trim().split('\n')
+    expect(runningLines[1]).toMatch(/^server-1 "Atlas Box" · direct · online/)
+    expect(runningLines[2]).toBe('local "Work Laptop" · this computer')
+
+    // Offline `board nodes` (pointing at an unused port) also prints custom titles from config.json.
+    const rawCfg = JSON.parse(readFileSync(configPath(pair.master.box), 'utf8')) as Record<string, unknown>
+    writeConfig(pair.master.box, { ...rawCfg, port: 9 })
+    const offline = await board(pair.master.box, ['nodes'])
+    expect(offline.code).toBe(0)
+    const offlineLines = offline.stdout.trim().split('\n')
+    expect(offlineLines[1]).toBe('server-1 "Atlas Box" · direct')
+    expect(offlineLines[2]).toBe('local "Work Laptop" · this computer')
+
+    // Clearing back to default removes the custom titles from both views.
+    writeConfig(pair.master.box, { ...rawCfg, port: portOf(pair.master.url) })
+    expect((await post({ op: 'set', id: 'server-1', title: '' })).status).toBe(200)
+    expect((await post({ op: 'set', id: 'local', title: '' })).status).toBe(200)
+    const reset = await board(pair.master.box, ['nodes'])
+    const resetLines = reset.stdout.trim().split('\n')
+    expect(resetLines[1]).toMatch(/^server-1 · direct · online/)
+    expect(resetLines[2]).toBe('local · this computer')
+  }, 60_000)
+
   test('board nodes token: read from stdin, stored 0600 and never echoed; the link tries again at once', async () => {
     const pair = await nodePair({ tokens: false })
     const [node] = pair.nodes

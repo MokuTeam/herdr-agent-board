@@ -192,3 +192,45 @@ test('a node without these routes is said to need an update; the source called o
   expect(r?.why).toBe('server-1 runs a board without device moves: update it first')
   expect(w.asked).toEqual(['pack', 'abort'])
 })
+
+test('refusals use the device title when renamed (#601)', async () => {
+  const customNodes = {
+    ...NODES,
+    devices: {
+      'server-1': { id: 'server-1', title: 'Atlas Box', link: { kind: 'direct', url: 'http://x' }, profiles: {} },
+      local: { id: 'local', title: 'Work Laptop', link: null, profiles: {} },
+    },
+  } as unknown as NodesConfig
+  const offline = await moveToDevice(
+    {
+      nodes: () => customNodes,
+      link: () => ({
+        state: () => ({ state: 'offline', since: 0 }) as unknown as LinkStatus,
+        fetch: async () => ok({}),
+      }),
+      out: {} as MoveOut,
+      in: {} as MoveIn,
+      items: () => [{ key: S, session: S, name: 'Atlas', agent: 'claude' } as Item],
+      rekeyThreads: () => {},
+      log: () => {},
+    },
+    [S],
+    'server-1',
+  )
+  expect(offline[0]).toMatchObject({ result: 'refused', why: 'Atlas Box is not reachable now' })
+
+  const already = await moveToDevice(
+    {
+      nodes: () => customNodes,
+      link: () => null,
+      out: {} as MoveOut,
+      in: {} as MoveIn,
+      items: () => [{ key: S, session: S, name: 'Atlas', agent: 'claude' } as Item],
+      rekeyThreads: () => {},
+      log: () => {},
+    },
+    [S],
+    'local',
+  )
+  expect(already[0]).toMatchObject({ result: 'refused', why: 'it is on Work Laptop already' })
+})

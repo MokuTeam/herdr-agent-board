@@ -169,3 +169,75 @@ describe('giveSecrets (#604)', () => {
     expect(nodesEditOf({ op: 'set', id: 'local', giveSecrets: false })).toEqual({ error: 'giveSecrets' })
   })
 })
+
+describe('title (#601)', () => {
+  const devices = (nodes: Record<string, unknown>) => nodes.devices as Record<string, Record<string, unknown>>
+
+  test('nodesEditOf accepts string or null for a node and local, and refuses other types', () => {
+    expect(nodesEditOf({ op: 'set', id: 'server-1', title: 'Atlas Box' })).toEqual({
+      op: 'set',
+      id: 'server-1',
+      values: { title: 'Atlas Box' },
+    })
+    expect(nodesEditOf({ op: 'set', id: 'local', title: '' })).toEqual({
+      op: 'set',
+      id: 'local',
+      values: { title: '' },
+    })
+    expect(nodesEditOf({ op: 'set', id: 'local', title: null })).toEqual({
+      op: 'set',
+      id: 'local',
+      values: { title: null },
+    })
+    expect(nodesEditOf({ op: 'set', id: 'server-1', title: 42 })).toEqual({ error: 'title' })
+    expect(nodesEditOf({ op: 'set', id: 'server-1', title: true })).toEqual({ error: 'title' })
+  })
+
+  test('renames a node or local (with spaces, non-ASCII, %), keeping id, order and link intact', () => {
+    const base = section()
+    const { r, nodes } = applied({ op: 'set', id: 'server-1', title: '  Сервер 100%  ' }, base)
+    expect(r).toEqual({ changed: true })
+    expect(nodes.order).toEqual(['server-1', 'local'])
+    expect(devices(nodes)['server-1']).toEqual({
+      link: { kind: 'direct', url: 'http://127.0.0.1:12430' },
+      maxSessions: 3,
+      title: 'Сервер 100%',
+    })
+    expect(nodesConfig(nodes, 'laptop')?.devices['server-1']?.title).toBe('Сервер 100%')
+
+    const loc = applied({ op: 'set', id: 'local', title: ' Work Laptop ' }, { id: 'laptop' })
+    expect(loc.r).toEqual({ changed: true })
+    expect(devices(loc.nodes).local).toEqual({ title: 'Work Laptop' })
+    expect(nodesConfig(loc.nodes, 'laptop')?.devices.local?.title).toBe('Work Laptop')
+  })
+
+  test('empty, whitespace, null, or own id deletes title and returns to default', () => {
+    const base = section()
+    devices(base)['server-1'] = { ...devices(base)['server-1'], title: 'Atlas Box' }
+    expect(applied({ op: 'set', id: 'server-1', title: '   ' }, base).r).toEqual({ changed: true })
+    expect('title' in (devices(base)['server-1'] ?? {})).toBe(false)
+    expect(nodesConfig(base, 'laptop')?.devices['server-1']?.title).toBe('server-1')
+
+    devices(base)['server-1'] = { ...devices(base)['server-1'], title: 'Atlas Box' }
+    expect(applied({ op: 'set', id: 'server-1', title: 'server-1' }, base).r).toEqual({ changed: true })
+    expect('title' in (devices(base)['server-1'] ?? {})).toBe(false)
+
+    // Clearing local's only key leaves no empty local entry (and creates no devices section from bare).
+    const untouched: Record<string, unknown> = { id: 'laptop' }
+    expect(applied({ op: 'set', id: 'local', title: '' }, untouched).r).toEqual({ changed: false })
+    expect(untouched).toEqual({ id: 'laptop' })
+    const bare: Record<string, unknown> = { id: 'laptop' }
+    expect(applied({ op: 'set', id: 'local', title: 'Desk' }, bare).r).toEqual({ changed: true })
+    expect(applied({ op: 'set', id: 'local', title: '' }, bare).r).toEqual({ changed: true })
+    expect(bare).toEqual({ id: 'laptop', devices: {} })
+    expect(applied({ op: 'set', id: 'local', title: null }, bare).r).toEqual({ changed: false })
+  })
+
+  test('unchanged title returns changed: false; invalid or unknown device is refused without writing', () => {
+    const base = section()
+    expect(applied({ op: 'set', id: 'server-1', title: '' }, base).r).toEqual({ changed: false })
+    expect(applied({ op: 'set', id: 'server-1', title: 'x'.repeat(201) }, base).r).toEqual({ error: 'title' })
+    expect(applied({ op: 'set', id: 'server-1', title: 'bad\u001bname' }, base).r).toEqual({ error: 'title' })
+    expect(applied({ op: 'set', id: 'server-9', title: 'Ghost' }, base).r).toEqual({ error: 'id' })
+  })
+})

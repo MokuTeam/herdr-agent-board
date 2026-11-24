@@ -183,6 +183,7 @@ import { sessionRoutes } from './routes/session.ts'
 import { categoriesRoute, featureSettingsRoute, profilesRoute, settingsRoute } from './routes/settings.ts'
 import { setupRoute } from './routes/setup.ts'
 import { sleepRoute } from './routes/sleep.ts'
+import { spendRoutes } from './routes/spend.ts'
 import { staticRoute } from './routes/static.ts'
 import { teamRoutes } from './routes/team.ts'
 import { teamNotifyRoutes, teamReveal } from './routes/team-notify.ts'
@@ -1075,6 +1076,8 @@ export async function startServer({
     ...secretsRoutes({ refresh }),
     // Time entries by day and client, as billed (#233): read only, the remote page too.
     ...timeRoutes(cfg),
+    // Token spend by lane and local day (#636): read only, the remote page too.
+    ...spendRoutes({ cfg, deps, items: board.items }),
     // The calendar (#328): every source's events in a window, Sync, the board's own events; Settings → Calendar here only.
     ...calendarRoutes(cfg, calendar, { reminders, events, shown: eventsShown }),
     // Settings → Backup… (#233): the passphrase, the targets, the server's setup; this computer only.
@@ -1583,7 +1586,20 @@ export async function startServer({
       bundleSync,
       {
         config: () => nodesConfig(cfg.nodes),
-        edit: editNodes,
+        edit: change => {
+          let snapshot: Record<string, unknown> | null = null
+          const r = editNodes(nodes => {
+            const changed = change(nodes)
+            if (changed) snapshot = structuredClone(nodes)
+            return changed
+          })
+          if (r.ok && snapshot) {
+            cfg.nodes = snapshot
+            linksFollow()
+            board.publish()
+          }
+          return r
+        },
         seen: () => readLanesSeen(),
         keepSeen: ids => writeLanesSeen(ids),
         ownStatus: () => ownStatus.answer(),

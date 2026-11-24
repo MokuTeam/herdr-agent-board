@@ -29,6 +29,7 @@ import { ProfilesPanel, type ProfilesPanelProps } from './profiles/ProfilesPanel
 import { SchedulePanel, type SchedulePanelProps } from './schedule/SchedulePanel.tsx'
 import { SettingsPanel, type SettingsPanelProps } from './settings/SettingsPanel.tsx'
 import { Sheet, type SheetSlots } from './sheet/Sheet.tsx'
+import { SpendPanel, type SpendPanelProps } from './spend/SpendPanel.tsx'
 import { TeamPanel, type TeamPanelProps } from './team/TeamPanel.tsx'
 import { ThreadsPanel, type ThreadsPanelProps } from './threads/ThreadsPanel.tsx'
 import { TimePanel, type TimePanelProps } from './time/TimePanel.tsx'
@@ -70,6 +71,8 @@ export interface SidePanelsProps {
   housekeeping?: HousekeepingPanelProps
   /** Time (#233): drawn while the board has time tracking on. */
   time?: TimePanelProps
+  /** Token spend (#636): mounted on first opening. */
+  spend?: SpendPanelProps
   /** Settings → Time tracking… (#237); drawn when given (the page gives it once opened, on the local board only). */
   timeSettings?: TimeSettingsPanelProps
   /** The calendar (#328): drawn while the board has it on. */
@@ -105,6 +108,7 @@ export function SidePanels({
   updates,
   housekeeping,
   time,
+  spend,
   timeSettings,
   calendar,
   calendarSettings,
@@ -133,6 +137,7 @@ export function SidePanels({
       {updates && <UpdatesPanel {...updates} />}
       {housekeeping && <HousekeepingPanel {...housekeeping} />}
       {time && data?.time && <TimePanel {...time} />}
+      {spend && <SpendPanel {...spend} />}
       {timeSettings && <TimeSettingsPanel {...timeSettings} />}
       {calendar && data?.calendar && <CalendarPanel {...calendar} />}
       {calendarSettings && <CalendarSettingsPanel {...calendarSettings} />}

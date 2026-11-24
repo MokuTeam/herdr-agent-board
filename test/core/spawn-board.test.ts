@@ -153,3 +153,45 @@ test('pi on a node: its card under its file, or its launch done there before the
   }
   expect(outcomeOf(done, f, en)).toMatchObject({ kind: 'printed', line: expect.stringContaining('pane=@server-1:p5 ') })
 })
+
+test('outcomeOf uses renamed device titles in refusals and failure lines while keeping device ids in machine lines (#601)', () => {
+  const key = `@server-1:${SID}`
+  const devices = [
+    { id: 'local', title: 'Work Laptop' },
+    { id: 'server-1', title: 'Atlas Box' },
+  ]
+  const refused = {
+    items: [],
+    launches: [
+      launch({
+        state: 'failed',
+        place: {
+          refuse: { kind: 'pinned-away', pin: { device: 'server-1' }, origin: 'local', home: { kind: 'changes' } },
+        },
+      }),
+    ],
+    devices,
+  }
+  expect(outcomeOf(refused, followed, en)).toEqual({
+    kind: 'failed',
+    error: 'It runs only on Work Laptop (the folder has changes that are not committed), and “Where” says Atlas Box',
+  })
+  const nodeFailed = {
+    items: [{ key, session: SID, pane: 'p4', device: 'server-1' }],
+    launches: [launch({ id: key, device: 'server-1', state: 'failed', error: 'no herdr' })],
+    devices,
+  }
+  expect(outcomeOf(nodeFailed, { ...followed, device: 'server-1' }, en)).toEqual({
+    kind: 'failed',
+    error: 'on Atlas Box: no herdr',
+  })
+  const done = {
+    items: [{ key, session: SID, pane: 'p4', device: 'server-1' }],
+    launches: [launch({ id: key, device: 'server-1', state: 'done' })],
+    devices,
+  }
+  expect(outcomeOf(done, { ...followed, device: 'server-1' }, en)).toEqual({
+    kind: 'printed',
+    line: `pane=@server-1:p4 name=Acme agent=${key} device=server-1 session=${SID}`,
+  })
+})

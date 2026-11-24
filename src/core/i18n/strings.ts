@@ -28,6 +28,7 @@ import { SECRET_STRINGS } from './secret-strings.ts'
 import { SERVER_STRINGS } from './server-strings.ts'
 import { SETUP_STRINGS } from './setup-strings.ts'
 import { SLASH_STRINGS } from './slash-strings.ts'
+import { SPEND_STRINGS } from './spend-strings.ts'
 import { TEAM_STRINGS } from './team-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
 import { THREAD_STRINGS } from './thread-strings.ts'
@@ -1576,3 +1577,5 @@ for (const code of Object.keys(COMPACT_STRINGS) as Lang[]) Object.assign(STRINGS
 for (const code of Object.keys(DESIGN_STRINGS) as Lang[]) Object.assign(STRINGS[code], DESIGN_STRINGS[code])
 // And continue after restart (#633).
 for (const code of Object.keys(TURN_RESUME_STRINGS) as Lang[]) Object.assign(STRINGS[code], TURN_RESUME_STRINGS[code])
+// And token spend (#636).
+for (const code of Object.keys(SPEND_STRINGS) as Lang[]) Object.assign(STRINGS[code], SPEND_STRINGS[code])

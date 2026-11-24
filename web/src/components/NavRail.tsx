@@ -18,6 +18,7 @@ import {
   DecisionsIcon,
   GearIcon,
   SidebarIcon,
+  SpendIcon,
   TagIcon,
   TasksIcon,
   TeamIcon,
@@ -34,6 +35,7 @@ export type RailPlace =
   | 'calendar'
   | 'schedule'
   | 'time'
+  | 'spend'
   | 'categories'
   | 'archive'
   | 'settings'
@@ -52,6 +54,7 @@ export interface NavRailProps {
   onCalendar?: (() => void) | undefined
   onSchedule(): void
   onTime?: (() => void) | undefined
+  onSpend?: (() => void) | undefined
   onCategories(): void
   onArchive(): void
   onSettings(): void
@@ -110,6 +113,7 @@ export function NavRail({
   onCalendar,
   onSchedule,
   onTime,
+  onSpend,
   onCategories,
   onArchive,
   onSettings,
@@ -294,6 +298,17 @@ export function NavRail({
               expanded={expanded || drawerOpen}
               title={t('time.openHint')}
               onClick={pick(onTime)}
+            />
+          )}
+          {onSpend && (
+            <RailItem
+              id="spend-open"
+              icon={<SpendIcon />}
+              label={t('spend.open')}
+              active={activePlace === 'spend'}
+              expanded={expanded || drawerOpen}
+              title={t('spend.openHint')}
+              onClick={pick(onSpend)}
             />
           )}
           <RailItem
