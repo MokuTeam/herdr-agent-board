@@ -8,6 +8,7 @@ import { teamBadge } from '../models/team.ts'
 import { openMine, proposedCount } from '../models/todos.ts'
 import { scheduleBadge } from '../models/toolbar.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
+import { BrandMark } from './BrandMark.tsx'
 import { classNames } from './class-names.ts'
 import {
   AlarmIcon,
@@ -17,7 +18,6 @@ import {
   CloseIcon,
   DecisionsIcon,
   GearIcon,
-  SidebarIcon,
   SpendIcon,
   TagIcon,
   TasksIcon,
@@ -178,9 +178,9 @@ export function NavRail({
             onClick={onToggleExpand}
           >
             <span className="rail-icon">
-              <SidebarIcon />
+              <BrandMark size={18} />
             </span>
-            <span className="rail-label rail-brand">{t('tb.title')}</span>
+            <span className="rail-label rail-brand">MokuBoard</span>
           </button>
           <button type="button" className="rail-drawer-close" aria-label={t('nav.closeMenu')} onClick={onCloseDrawer}>
             <CloseIcon />

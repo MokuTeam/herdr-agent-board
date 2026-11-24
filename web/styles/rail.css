@@ -120,9 +120,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.rail-toggle-btn .rail-icon {
+  color: var(--label);
+}
 .rail-brand {
   color: var(--label);
   font-weight: 600;
+  letter-spacing: -0.015em;
 }
 .rail-count {
   flex: none;

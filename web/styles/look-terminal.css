@@ -90,6 +90,7 @@
   --gray: var(--t-dim);
   --red: var(--t-red);
   --accent: var(--t-accent);
+  --brand-accent: var(--t-purple);
   --teal: var(--t-cyan);
   --pink: var(--t-red);
   --yellow: var(--t-amber);

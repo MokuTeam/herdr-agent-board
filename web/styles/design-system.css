@@ -25,6 +25,7 @@
   --accent: #2558d9;
   --accent-hover: #1d47b5;
   --accent-soft: rgba(37, 88, 217, 0.1);
+  --brand-accent: #7b2fff;
 
   --green: #1f8a4c;
   --orange: #c86a08;
@@ -69,6 +70,7 @@
     --accent: #5c8df6;
     --accent-hover: #7ba3f8;
     --accent-soft: rgba(92, 141, 246, 0.16);
+    --brand-accent: #b06fff;
 
     --green: #3fb96d;
     --orange: #eb9434;
@@ -105,6 +107,7 @@
   --accent: #5c8df6;
   --accent-hover: #7ba3f8;
   --accent-soft: rgba(92, 141, 246, 0.16);
+  --brand-accent: #b06fff;
 
   --green: #3fb96d;
   --orange: #eb9434;
@@ -123,6 +126,12 @@ svg {
   width: 15px;
   height: 15px;
   stroke-width: 1.5;
+}
+
+/* MokuBoard brand mark (#705): geometric fills, explicit size from component */
+svg.brand-mark {
+  stroke: none;
+  flex: none;
 }
 
 /* Crisp hairline cards and restrained attention emphasis */
