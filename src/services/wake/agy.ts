@@ -15,7 +15,7 @@ import { herdrText } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { cliWakeHerdr, type WakeHerdr } from '../../adapters/wake-herdr.ts'
 import { AGY_AGENT } from '../../core/agy.ts'
-import { agyDraft } from '../../core/dialogs/agy-dialogs.ts'
+import { agyDraft, agyFooterTasks } from '../../core/dialogs/agy-dialogs.ts'
 import { stillTyped } from '../../core/launch/spawn-args.ts'
 import {
   type AgySleeper,
@@ -140,9 +140,11 @@ export async function putAgyToSleep(
     const cur = await ops.herdr.pane(pane)
     if (cur?.agent !== AGY_AGENT || cur.agent_session?.value !== session) return no(`no running session named ${pane}`)
     if (cur.agent_status !== 'idle' && cur.agent_status !== 'done') return no(`${name} is not idle`)
-    if (ops.hasRunningHelpers(session)) return no(`${name} is not idle (subagents are still running)`)
-    if (agyDraft(await ops.herdr.inputBox(pane)) !== '')
-      return no(`${name} did not go to sleep (busy, or text in its input box)`)
+    if (ops.hasRunningHelpers(session))
+      return no(`${name} is not idle (subagents or background tasks are still running)`)
+    const screen = await ops.herdr.inputBox(pane)
+    if ((agyFooterTasks(screen) ?? 0) > 0) return no(`${name} is not idle (background tasks are still running)`)
+    if (agyDraft(screen) !== '') return no(`${name} did not go to sleep (busy, or text in its input box)`)
     const proc = await ops.agyProcess(pane).catch(() => null)
     const argv = proc?.argv ?? []
     if (argv.length) {
@@ -289,7 +291,7 @@ export function defaultAgyOps(herdr: WakeHerdr = cliWakeHerdr, agy: AgyHome = cr
     herdr,
     agyProcess: pane => agyProcessIn(pane),
     hasConversation: session => agy.hasConversation(session),
-    hasRunningHelpers: session => agy.hasRunningSubagent(session),
+    hasRunningHelpers: session => agy.hasRunningSubagent(session) || agy.hasRunningBgTask(session),
     reportSession: (pane, session) => reportAgySession(pane, session, agy.transcriptPath(session)),
   }
 }

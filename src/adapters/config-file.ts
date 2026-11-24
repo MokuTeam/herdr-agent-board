@@ -7,6 +7,7 @@
 import { existsSync, mkdirSync, statSync, watch } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
+import { BG_TASK_STUCK_DEFAULT_MIN, BG_TASK_STUCK_MAX_MIN } from '../core/bg-task.ts'
 import { builtinTitle, DEFAULT_CONFIG, normalizeConfig, validColor } from '../core/categories.ts'
 import { limitText, parseCompactLimit } from '../core/compact.ts'
 import { decisionsConfig } from '../core/decisions.ts'
@@ -204,7 +205,7 @@ export function setTunnelOn(on: boolean): EditResult {
   })
 }
 
-/** Change settings in config.json from the web board: { language, foldWaiting, compactAt, turnResume }. */
+/** Change settings in config.json from the web board: { language, foldWaiting, compactAt, turnResume, bgTaskStuckMin }. */
 export function editSettings(body: unknown): EditResult {
   return editConfig(raw => {
     const language = isRecord(body) ? body.language : undefined
@@ -241,6 +242,23 @@ export function editSettings(body: unknown): EditResult {
         else delete raw.turnResume
       } else {
         raw.turnResume = Object.keys(rest).length ? { ...rest, on: false } : false
+      }
+    }
+    const bgTaskStuckMin = isRecord(body) ? body.bgTaskStuckMin : undefined
+    if (bgTaskStuckMin !== undefined) {
+      if (bgTaskStuckMin === '' || bgTaskStuckMin === null) {
+        delete raw.bgTaskStuckMin
+      } else if (
+        typeof bgTaskStuckMin !== 'number' ||
+        !Number.isInteger(bgTaskStuckMin) ||
+        bgTaskStuckMin < 0 ||
+        bgTaskStuckMin > BG_TASK_STUCK_MAX_MIN
+      ) {
+        return { ok: false, error: t('err.bgTaskStuckMin', { max: BG_TASK_STUCK_MAX_MIN }) }
+      } else if (bgTaskStuckMin === BG_TASK_STUCK_DEFAULT_MIN) {
+        delete raw.bgTaskStuckMin
+      } else {
+        raw.bgTaskStuckMin = bgTaskStuckMin
       }
     }
     return { ok: true }

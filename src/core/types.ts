@@ -1,5 +1,6 @@
 // Types shared across the board. Grows with each ported module.
 
+import type { BgTaskSummary, RunningBgTask } from './bg-task.ts'
 import type { CallView } from './call-agent.ts'
 import type { Checklist } from './checklist.ts'
 import type { CompactView } from './compact.ts'
@@ -282,6 +283,8 @@ export interface Config {
   node?: unknown
   /** Continue mid-turn Claude sessions after a restart (#633): boolean or `{ on?, waitSec?, waitMin? }`. */
   turnResume?: unknown
+  /** Minutes before a running background task is flagged as potentially stuck (#676); default 30, 0 disables. */
+  bgTaskStuckMin?: unknown
   [extra: string]: unknown
 }
 
@@ -325,6 +328,8 @@ export interface TranscriptInfo {
   effort?: string | null
   /** Latest active TodoWrite checklist (#637); absent when none or all completed. */
   checklist?: Checklist
+  /** Active non-daemon background tasks parsed from the transcript (#676); absent when none. */
+  bgTasks?: RunningBgTask[]
   [extra: string]: unknown
 }
 
@@ -424,6 +429,8 @@ export interface Item {
   todos?: Todo[]
   /** Latest active TodoWrite checklist from a Claude transcript (#637); absent when none or all completed. */
   checklist?: Checklist
+  /** Active background tasks keeping the session busy or potentially stuck (#676); absent when none. */
+  bgTasks?: BgTaskSummary
   /** Its open question's options, recommendation and default (#487), while config.json turns decisions on; absent when none. */
   decision?: CardDecision
   /** Its auto-compact (#378, core/compact.ts compactView): absent when neither it nor Settings has a limit. */

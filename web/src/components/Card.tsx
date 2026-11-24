@@ -25,9 +25,11 @@ import { type CallLines as CallView, callLines, inMokupilot } from '../models/ca
 import {
   ago,
   askLine,
+  type CardBgTask,
   type CardChecklist,
   type CardWords,
   cardAge,
+  cardBgTask,
   cardChecklist,
   cardMeter,
   cardWords,
@@ -434,12 +436,28 @@ function RecapLine({ item, words, checklist }: { item: Item; words: CardWords; c
 
 /** What it said last, what it runs, a restart, its helpers and partners, how its start goes. */
 function CardRest({ item, launch }: { item: Item; launch: LaunchSlots | undefined }) {
+  const t = useT()
+  const { now } = useBoardContext()
   const words = cardWords(item)
   const started = launchOf(item)
+  const bgTask = cardBgTask(item, now, t)
   return (
     <>
       {words.said && <div className="said">{words.said}</div>}
-      {item.column === 'work' && <Now tool={item.tool} />}
+      {item.column === 'work' ? (
+        item.tool?.pending ? (
+          <>
+            <Now tool={item.tool} />
+            {bgTask && <BgTaskLine task={bgTask} />}
+          </>
+        ) : bgTask ? (
+          <BgTaskLine task={bgTask} />
+        ) : (
+          <Now tool={item.tool} />
+        )
+      ) : (
+        bgTask && <BgTaskLine task={bgTask} />
+      )}
       <RestartLine item={item} />
       <HelpersChip item={item} />
       <Relations item={item} />
@@ -447,6 +465,17 @@ function CardRest({ item, launch }: { item: Item; launch: LaunchSlots | undefine
       {/* Started from the board and not done starting: how it goes, or why it failed. */}
       {started && launch?.note(started)}
     </>
+  )
+}
+
+/** Active or potentially stuck background task line on a card (#676). */
+function BgTaskLine({ task }: { task: CardBgTask }) {
+  return (
+    <div className={classNames('now bg-task', task.stuck && 'stuck')} title={task.tooltip}>
+      {task.stuck ? <ClockGlyph /> : <SpinGlyph />}
+      <span className="tool">{task.label}</span>
+      {task.detail && <span className="detail">{task.detail}</span>}
+    </div>
   )
 }
 

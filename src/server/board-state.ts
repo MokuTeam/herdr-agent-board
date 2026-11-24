@@ -555,7 +555,13 @@ export function createBoardState({
           log(`profile panes: ${err instanceof Error ? err.message : String(err)}`)
         }
       }
-      items = await collect(deps, { helpers: true, links, seen, ...(observeSessions && { observed: observeSessions }) })
+      items = await collect(deps, {
+        helpers: true,
+        links,
+        seen,
+        onBgChange: () => void refresh(),
+        ...(observeSessions && { observed: observeSessions }),
+      })
       logEdges()
       launches.observe(items)
       journal?.observe(items)

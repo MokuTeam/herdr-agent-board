@@ -15,6 +15,7 @@
 //   signed by the sender, with the name and ref an answer goes to (`replyTo`) and, from another
 //   computer, which one (`fromDevice`). The receiver is told to answer with `board send`
 //   (core/schedule-rules.ts promptOf), which works on every computer of the board.
+import { type BgTaskSummary, bgTaskActive, isBgTaskStuck } from './bg-task.ts'
 import { parseNodeKey } from './node-key.ts'
 import { cleanName, cleanText, MAX_TEXT } from './schedule-rules.ts'
 
@@ -34,6 +35,7 @@ export interface Target {
   status: string
   day: boolean
   activity: number
+  bgTasks?: BgTaskSummary
 }
 
 /** Who sends: the session's key (a node's session's carries the device's prefix) and its name on the board. */
@@ -116,6 +118,7 @@ export function targetsOf(items: unknown): Target[] {
       status: str(i.status),
       day: i.day === true,
       activity: Math.max(num(i.activity), num(i.lastAt)),
+      ...(bgTaskActive(i.bgTasks as BgTaskSummary | undefined) && { bgTasks: i.bgTasks as BgTaskSummary }),
     })
   }
   const kept = all.filter(t => t.sleeping || ((t.pane || t.day) && !all.some(o => replaced(t, o))))
@@ -140,6 +143,7 @@ export interface AgentView {
   sleeping: boolean
   self: boolean
   offline: boolean
+  bgTasks?: BgTaskSummary
 }
 
 /** Structured views of `targets` (live first, then sleepers newest-active first). */
@@ -160,6 +164,7 @@ export function agentViewsOf(
     sleeping: t.sleeping,
     self: !!o.selfKey && t.key === o.selfKey,
     offline: !!t.device && !!o.offline?.has(t.device),
+    ...(t.bgTasks && { bgTasks: t.bgTasks }),
   }))
 }
 
@@ -182,6 +187,7 @@ export function formatAgentLines(
       t.device ? `node ${t.device}` : hasRemote && o.own ? o.own : '',
       t.sleeping ? 'asleep' : t.status || 'live',
       o.selfKey && t.key === o.selfKey ? '(this session)' : '',
+      t.bgTasks && isBgTaskStuck(t.bgTasks, Date.now()) ? 'background task may be stuck' : '',
       t.device && o.offline?.has(t.device) ? 'node offline now: goes out once it is back' : '',
     ]
       .filter(Boolean)

@@ -1,4 +1,5 @@
 // What a card on the board says: its words, its age, the question it waits on, its alarm.
+import { bgTaskActive, bgTaskLabel, isBgTaskStuck } from '../../../src/core/bg-task.ts'
 import { type ChecklistItem, checklistActive } from '../../../src/core/checklist.ts'
 import type { FormQuestion } from '../../../src/core/dialogs/question-form.ts'
 import type { ScheduleEntry } from '../../../src/core/schedule-rules.ts'
@@ -94,6 +95,30 @@ export function cardChecklist(it: Pick<Item, 'agent' | 'checklist'>, t: Translat
     ? t('card.checklistStep', { done, total, current: cleanCurrent })
     : t('card.checklistProgress', { done, total })
   return { done, total, ratio, pct, current: cleanCurrent, items, tooltip, ariaLabel }
+}
+
+export interface CardBgTask {
+  count: number
+  label: string
+  detail: string
+  stuck: boolean
+  tooltip: string
+}
+
+/**
+ * Active background task view for a card (#676): age, count, optional detail, and stuck flag past
+ * the configured threshold. Returns null when no active background tasks are present.
+ */
+export function cardBgTask(it: Pick<Item, 'bgTasks'>, now: number, t: Translator): CardBgTask | null {
+  if (!bgTaskActive(it.bgTasks)) return null
+  const bg = it.bgTasks
+  const stuck = isBgTaskStuck(bg, now)
+  const ageText = bg.since ? ago(bg.since, now, t) : ''
+  const detail = plain(bg.detail)
+  const label = bgTaskLabel(bg, ageText, stuck, t)
+  const hint = stuck && bg.stuckMin > 0 ? t('card.bgTaskStuckHint', { min: bg.stuckMin }) : ''
+  const tooltip = [label, detail, hint].filter(Boolean).join('\n')
+  return { count: bg.count, label, detail, stuck, tooltip }
 }
 
 /** "5 min ago" and the like, against the board's clock `now`; nothing for no time. */

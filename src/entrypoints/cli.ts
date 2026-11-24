@@ -173,6 +173,7 @@ import {
 } from '../adapters/schedule-store.ts'
 import { peekAgySleepers, peekPiSleepers } from '../adapters/wake-files.ts'
 import { AGY_AGENT, isAgyItem } from '../core/agy.ts'
+import { bgTaskActive, bgTaskLabel, isBgTaskStuck } from '../core/bg-task.ts'
 import { COLUMNS, noteOf, statusText } from '../core/board.ts'
 import { withBoardPaths } from '../core/board-paths.ts'
 import { categoryFor, categoryInfo, laneRank } from '../core/categories.ts'
@@ -197,7 +198,7 @@ import { parsePiResume, piResumeArgv, piResumeEnv } from '../core/wake/pi.ts'
 import { keyFor, type TopicSnapshot } from '../core/wake/topics.ts'
 import { type WatchEntry, watchesConfig } from '../core/watches.ts'
 import { type Cron, nextRun, parseCron, parseWhen, shortestGap } from '../core/when.ts'
-import { shortWhen } from '../core/when-format.ts'
+import { shortWhen, span } from '../core/when-format.ts'
 import { checkWake, wakeAnswers, wakeSleepsAgy } from '../services/actions.ts'
 import {
   askArchive,
@@ -1029,13 +1030,24 @@ async function main(): Promise<void> {
     )
     const soonest = new Map<string, number>()
     for (const e of listEntries()) if (!soonest.has(e.key)) soonest.set(e.key, e.next)
+    const now = Date.now()
     for (const i of items) {
       const col = COLUMNS.find(c => c.id === i.column)?.title
       const note = noteOf(i)
       const next = soonest.get(i.key)
       const alarm = next !== undefined ? ` ⏰ ${shortWhen(next, t)}` : ''
+      let bgNote = ''
+      if (bgTaskActive(i.bgTasks)) {
+        const stuck = isBgTaskStuck(i.bgTasks, now)
+        const ageText = i.bgTasks.since
+          ? now - i.bgTasks.since < 60_000
+            ? t('ago.now')
+            : span(now - i.bgTasks.since, t)
+          : ''
+        bgNote = ` [${bgTaskLabel(i.bgTasks, ageText, stuck, t)}]`
+      }
       console.log(
-        `${i.name} [${i.category}] ${col}${i.sleeping ? ` (${statusText('sleeping')})` : ''}${alarm}${note ? `: ${note.slice(0, 80)}` : ''}`,
+        `${i.name} [${i.category}] ${col}${i.sleeping ? ` (${statusText('sleeping')})` : ''}${alarm}${bgNote}${note ? `: ${note.slice(0, 80)}` : ''}`,
       )
     }
     return

@@ -12,6 +12,7 @@
 //   `@<device>:` prefix (core/nodes.ts nodeKey), and each item, launch and entry the device. The
 //   node's own `device` field is never read, so a node cannot make an item claim another device.
 // - Without one: the same check, keys as the node has them. That is what the offline copy keeps.
+import { type BgTaskSummary, MAX_BG_TASK_DETAIL } from './bg-task.ts'
 import { checklistActive, MAX_CHECKLIST_ITEMS, MAX_CHECKLIST_TEXT } from './checklist.ts'
 import { nodeKey, parseNodeKey } from './nodes.ts'
 import { MAX_REPORT, type ScheduleEntry } from './schedule-rules.ts'
@@ -252,6 +253,15 @@ const checklist: Check = (v, k) => {
   if (!got || got.done < 0 || got.total <= 0 || got.done >= got.total || got.items.length === 0) return undefined
   return checklistActive(got as Parameters<typeof checklistActive>[0]) ? got : undefined
 }
+const rawBgTasks = shape(
+  { count: num, since: orNull(num), detail: str(MAX_BG_TASK_DETAIL), stuckMin: num, stuck: yes },
+  ['count', 'since', 'detail', 'stuckMin'],
+)
+const bgTasks: Check = (v, k) => {
+  const got = rawBgTasks(v, k) as BgTaskSummary | undefined
+  if (!got || !Number.isInteger(got.count) || got.count <= 0 || got.stuckMin < 0) return undefined
+  return got
+}
 const secret = shape(
   {
     id: str(LEN.id),
@@ -373,6 +383,7 @@ const ITEM: Record<string, Check> = {
   profileWanted: str(LEN.id),
   todos: list(todo),
   checklist,
+  bgTasks,
   compact,
   secrets: list(secret, 20),
   launch: orNull(launch),

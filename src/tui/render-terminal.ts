@@ -5,6 +5,7 @@
 // accent with › before its name. A session asleep in Idle stays one quiet line. The colors are the
 // terminal's own sixteen, so a terminal theme (Omarchy's included) colors the board too. Keys and
 // clicks work as in the classic board: the click map covers every line of a box.
+import { bgTaskActive, bgTaskLabel, isBgTaskStuck } from '../core/bg-task.ts'
 import { COLUMNS, noteOf } from '../core/board.ts'
 import { categoryInfo } from '../core/categories.ts'
 import { t } from '../core/lang.ts'
@@ -46,11 +47,20 @@ function laneHead(l: Lane, i: number, w: number): string {
 }
 
 /** What the card is at, its third line: the tool at work, or why it needs you. */
-function marker(it: Item): { text: string; color: string } {
-  if (it.column === 'work')
+function marker(it: Item, now: number): { text: string; color: string } {
+  if (it.column === 'work') {
+    if (bgTaskActive(it.bgTasks) && (!it.tool?.pending || isBgTaskStuck(it.bgTasks, now))) {
+      const stuck = isBgTaskStuck(it.bgTasks, now)
+      const label = bgTaskLabel(it.bgTasks, age(it.bgTasks.since, now), stuck, t)
+      return {
+        text: `▶ ${label}${it.bgTasks.detail ? ` ${it.bgTasks.detail}` : ''}`,
+        color: stuck ? 'yellow' : 'green',
+      }
+    }
     return it.tool?.pending
       ? { text: `▶ ${it.tool.label ?? it.tool.name}${it.tool.detail ? ` ${it.tool.detail}` : ''}`, color: 'green' }
       : { text: `▶ ${t('card.thinking')}`, color: 'green' }
+  }
   if (it.column === 'me') {
     const why =
       it.attention === 'decision'
@@ -107,7 +117,7 @@ export function cardBox(state: TuiState, it: Item, w: number, isSel: boolean): s
   const first = `${glyph} ${paint(fit(name, nameW), 'bold')} ${shownTag}${paint(right, busy ? 'yellow' : 'gray')}`
   const note = noteOf(it)
   const noteColor = it.column === 'ext' ? 'magenta' : it.column === 'me' ? null : 'gray'
-  const mark = marker(it)
+  const mark = marker(it, state.now)
   return [
     paint(`╭${'─'.repeat(w - 2)}╮`, ...edge),
     row(first),

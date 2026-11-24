@@ -285,6 +285,9 @@
 :root[data-look="terminal"] .card .task-label { font-size: inherit; font-weight: 400; }
 :root[data-look="terminal"] .card .task { margin-top: 2px; font-size: 12.5px; line-height: 1.45; }
 :root[data-look="terminal"] .now { gap: 1ch; margin-top: 3px; font-size: 12px; }
+:root[data-look="terminal"] .now.bg-task.stuck { padding: 0; border-radius: 0; background: none; }
+:root[data-look="terminal"] .now.bg-task.stuck svg,
+:root[data-look="terminal"] .now.bg-task.stuck .tool { color: var(--t-amber); }
 :root[data-look="terminal"] .card-meter { margin-top: 2px; font-size: 12px; line-height: 1.45; }
 :root[data-look="terminal"] .now .tool { font-weight: 700; }
 :root[data-look="terminal"] .ask { margin-top: 3px; padding: 0; border: 0; border-radius: 0; background: none; font-size: 12.5px; line-height: 1.45; }

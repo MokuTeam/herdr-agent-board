@@ -7,6 +7,7 @@
 // is open or folded as the sheet's density says (#345, models/sheet-density.ts). Before a session was
 // ever open, the empty places of the page.
 import { Fragment, type KeyboardEvent, type MouseEvent, useRef } from 'react'
+import { bgTaskActive } from '../../../../src/core/bg-task.ts'
 import type { SessionSpend } from '../../../../src/core/spend.ts'
 import type { Item } from '../../../../src/core/types.ts'
 import { useCollapse } from '../../hooks/useCollapse.ts'
@@ -157,7 +158,14 @@ export function SheetHead({
   const reminders = schedules.filter(e => e.key === item.key).length
   const linked = linkedSessions(item, key => !!data?.items.some(i => i.key === key))
   const checklist = cardChecklist(item, t)
-  const fields = card.open || !!item.doing || !!item.wait || reminders > 0 || linked.length > 0 || !!checklist
+  const fields =
+    card.open ||
+    !!item.doing ||
+    !!item.wait ||
+    reminders > 0 ||
+    linked.length > 0 ||
+    !!checklist ||
+    bgTaskActive(item.bgTasks)
   // On a phone (session-head.css) the fields fold into the line that matters most, and that line
   // opens them as the pencil does elsewhere, the empty ones to fill included; with nothing to show
   // it reads as the pencil's own words.

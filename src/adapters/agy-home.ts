@@ -9,11 +9,14 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isAgySession, parseAgyConversation, parseAgyTail } from '../core/agy.ts'
+import type { RunningBgTask } from '../core/bg-task.ts'
+import { agyFooterTasks } from '../core/dialogs/agy-dialogs.ts'
 import { type Helper, type HelperDetail, type Helpers, publicHelper } from '../core/helpers.ts'
 import { sameDir } from '../core/launch/names.ts'
 import type { ConversationTurn } from '../core/transcript.ts'
 import type { TranscriptInfo } from '../core/types.ts'
 import { type HistoryHit, type HistoryResult, readTail, type SessionThread } from './claude-home.ts'
+import { herdrText } from './herdr.ts'
 
 export interface AgyHome {
   readonly root: string
@@ -27,6 +30,8 @@ export interface AgyHome {
   rootSession(session: string | null): string | null
   /** Whether any descendant subagent of `session` is currently running (not killed). */
   hasRunningSubagent(session: string | null): boolean
+  /** Whether any non-daemon background task of `session` is still running. */
+  hasRunningBgTask(session: string | null): boolean
   sessionHelpers(session: string | null): Helpers
   helperDetail(session: string | null, helperId: string): HelperDetail<ConversationTurn> | null
   searchHistory(cwd: string, query: string | null, excludeSession?: string | null): Promise<HistoryResult>
@@ -89,9 +94,72 @@ export function defaultAgyRoot(env: Record<string, string | undefined> = process
 
 export function createAgyHome(root = defaultAgyRoot()): AgyHome {
   const tailCache = new Map<string, { mtimeMs: number; size: number; info: TranscriptInfo }>()
+  const stepStatusCache = new Map<string, { stamp: string; statuses: Map<number, number>; queried: Set<number> }>()
   let dbStamp = ''
   const summaries = new Map<string, SummaryRow>()
   const childrenByParent = new Map<string, SummaryRow[]>()
+
+  function convDbPath(session: string): string | null {
+    const direct = join(root, 'conversations', `${session}.db`)
+    if (statOf(direct)?.isFile()) return direct
+    const lower = session.toLowerCase()
+    if (lower !== session) {
+      const low = join(root, 'conversations', `${lower}.db`)
+      if (statOf(low)?.isFile()) return low
+    }
+    return null
+  }
+
+  /**
+   * Cross-check running transcript background tasks against `conversations/<id>.db`'s `steps`
+   * table (status 2 = RUNNING, 3 = DONE, 6 = CANCELED). Keeps tasks when the DB or row is absent
+   * or unreadable; drops tasks whose DB step already settled.
+   */
+  function filterLiveBgTasks(session: string, tasks: readonly RunningBgTask[]): RunningBgTask[] {
+    if (tasks.length === 0) return []
+    const stepIndices = [
+      ...new Set(
+        tasks.map(t => t.stepIndex).filter((n): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0),
+      ),
+    ]
+    if (stepIndices.length === 0) return [...tasks]
+    const dbPath = convDbPath(session)
+    if (!dbPath) return [...tasks]
+    const mainSt = statOf(dbPath)
+    if (!mainSt?.isFile()) return [...tasks]
+    const walSt = statOf(`${dbPath}-wal`)
+    const stamp = `${mainSt.mtimeMs}:${mainSt.size}|${walSt?.mtimeMs ?? 0}:${walSt?.size ?? 0}`
+    let entry = stepStatusCache.get(dbPath)
+    if (!entry || entry.stamp !== stamp) {
+      entry = { stamp, statuses: new Map<number, number>(), queried: new Set<number>() }
+      stepStatusCache.set(dbPath, entry)
+    }
+    const missing = stepIndices.filter(idx => !entry.queried.has(idx))
+    if (missing.length > 0) {
+      let db: Database | null = null
+      try {
+        db = new Database(dbPath, { readonly: true })
+        const placeholders = missing.map(() => '?').join(',')
+        const rows = db.query(`SELECT idx, status FROM steps WHERE idx IN (${placeholders})`).all(...missing) as {
+          idx: number
+          status: number
+        }[]
+        for (const idx of missing) entry.queried.add(idx)
+        for (const r of rows) entry.statuses.set(r.idx, r.status)
+      } catch {
+        return [...tasks]
+      } finally {
+        try {
+          db?.close(false)
+        } catch {}
+      }
+    }
+    return tasks.filter(t => {
+      if (typeof t.stepIndex !== 'number' || !Number.isInteger(t.stepIndex) || t.stepIndex < 0) return true
+      const status = entry.statuses.get(t.stepIndex)
+      return status === undefined || status === 2
+    })
+  }
 
   function transcriptFile(session: string): string {
     return join(root, 'brain', session, '.system_generated', 'logs', 'transcript.jsonl')
@@ -223,7 +291,7 @@ export function createAgyHome(root = defaultAgyRoot()): AgyHome {
     let info: TranscriptInfo = {}
     for (const bytes of CARD_WINDOWS) {
       info = parseAgyTail(readTail(file, st.size, bytes).split('\n'))
-      if ((info.prompt && info.lastText) || bytes >= st.size) break
+      if ((info.prompt && info.lastText && !info.bgTasks?.length) || bytes >= st.size) break
     }
     if (!info.prompt && hit?.info.prompt && st.size >= hit.size) info.prompt = hit.info.prompt
     info.activity = st.mtimeMs
@@ -252,10 +320,24 @@ export function createAgyHome(root = defaultAgyRoot()): AgyHome {
     }
     try {
       const info = readTailInfo(file, st)
-      return title && !info.title ? { ...info, title } : info
+      let next = info
+      if (info.bgTasks?.length) {
+        const liveBg = filterLiveBgTasks(session, info.bgTasks)
+        if (liveBg.length === 0) {
+          const { bgTasks: _dropped, ...rest } = info
+          next = rest
+        } else if (liveBg.length !== info.bgTasks.length) {
+          next = { ...info, bgTasks: liveBg }
+        }
+      }
+      return title && !next.title ? { ...next, title } : next
     } catch {
       return null
     }
+  }
+
+  function hasRunningBgTask(session: string | null): boolean {
+    return (transcriptInfo(session)?.bgTasks?.length ?? 0) > 0
   }
 
   function sessionThread(session: string, limit = 40): SessionThread {
@@ -392,8 +474,70 @@ export function createAgyHome(root = defaultAgyRoot()): AgyHome {
     sessionCwd,
     rootSession,
     hasRunningSubagent,
+    hasRunningBgTask,
     sessionHelpers,
     helperDetail,
     searchHistory,
+  }
+}
+
+export interface AgyFooterTracker {
+  check(pane: string, terminal: string, now?: number): Promise<{ count: number; since: number } | null>
+  /** Synchronous read of cached footer state; refreshes stale entries in the background without blocking collect(). */
+  peek(pane: string, terminal: string, now?: number, onChange?: () => void): { count: number; since: number } | null
+}
+
+/**
+ * Throttled per-pane tracker for Antigravity CLI's footer task indicator (`N task(s)`), falling
+ * back when a running task is visible on screen without a transcript entry.
+ */
+export function createAgyFooterTracker(
+  readScreen: (pane: string) => Promise<string | null> = pane =>
+    herdrText(['agent', 'read', pane, '--source', 'recent', '--lines', '12', '--ansi'], 3_000).catch(() => null),
+  pollMs = 15_000,
+): AgyFooterTracker {
+  const cache = new Map<string, { at: number; count: number; since: number | null }>()
+  const inFlight = new Set<string>()
+  async function check(
+    pane: string,
+    terminal: string,
+    now = Date.now(),
+  ): Promise<{ count: number; since: number } | null> {
+    const key = `${pane}|${terminal}`
+    const hit = cache.get(key)
+    if (hit && now - hit.at < pollMs) {
+      return hit.count > 0 && hit.since != null ? { count: hit.count, since: hit.since } : null
+    }
+    const screen = await readScreen(pane).catch(() => null)
+    const count = screen === null ? null : agyFooterTasks(screen)
+    const prevSince = hit?.since ?? null
+    if (count !== null && count > 0) {
+      const since = hit?.since != null ? hit.since : now
+      cache.set(key, { at: now, count, since })
+      return { count, since }
+    }
+    cache.set(key, { at: now, count: 0, since: count === null ? prevSince : null })
+    return null
+  }
+  return {
+    check,
+    peek(pane, terminal, now = Date.now(), onChange) {
+      const key = `${pane}|${terminal}`
+      const hit = cache.get(key)
+      const prevCount = hit?.count ?? 0
+      if ((!hit || now - hit.at >= pollMs) && !inFlight.has(key)) {
+        inFlight.add(key)
+        void check(pane, terminal, now).then(
+          res => {
+            inFlight.delete(key)
+            if ((res?.count ?? 0) !== prevCount) onChange?.()
+          },
+          () => {
+            inFlight.delete(key)
+          },
+        )
+      }
+      return hit && hit.count > 0 && hit.since != null ? { count: hit.count, since: hit.since } : null
+    },
   }
 }
