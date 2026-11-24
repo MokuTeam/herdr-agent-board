@@ -141,6 +141,7 @@
 //                            keys in board.db, schedule, watches and legacy move marks when the master
 //                            changes devices (#696)
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
+import { randomUUID } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -186,11 +187,22 @@ import { translator } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
 import { agyCommand } from '../core/launch/agents.ts'
 import { parseMoveAny } from '../core/move-device.ts'
+import { isKeptCall } from '../core/node-uplink.ts'
+import { nodeConfig } from '../core/nodes.ts'
 import { isPiSessionFile, piSessionId } from '../core/pi.ts'
 import { isPresenceState, type PresenceState, presenceConfig, presenceLine } from '../core/presence.ts'
 import { type ProfileSet, profileSet, resolveProfileDir, sessionProfile } from '../core/profiles.ts'
 import { deskSteps, type RemoteView, remoteConfig } from '../core/remote.ts'
 import { parseResume, projectFolderName, resumeDir, resumePlan, resumeProfileId, withNodeEnv } from '../core/resume.ts'
+import {
+  clip,
+  formatEveryOk,
+  formatRemindOk,
+  fromNow,
+  parseEveryRest,
+  parseRemindRest,
+  stamp,
+} from '../core/schedule-cli.ts'
 import { MAX_REPORT, promptOf, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
 import { findTodo, numberTodos, sortTodos, type Todo, todoKey, todosConfig, todosOf } from '../core/todos.ts'
 import { boardPorts, publicOrigin, type TestStep, tunnelChecks, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
@@ -200,7 +212,6 @@ import { wakeConfig } from '../core/wake/config.ts'
 import { parsePiResume, piResumeArgv, piResumeEnv } from '../core/wake/pi.ts'
 import { keyFor, type TopicSnapshot } from '../core/wake/topics.ts'
 import { type WatchEntry, watchesConfig } from '../core/watches.ts'
-import { type Cron, nextRun, parseCron, parseWhen, shortestGap } from '../core/when.ts'
 import { shortWhen, span } from '../core/when-format.ts'
 import { checkWake, wakeAnswers, wakeSleepsAgy } from '../services/actions.ts'
 import {
@@ -224,7 +235,6 @@ import { compactCli } from './compact-cli.ts'
 import type { ThreadCmdContext } from './thread-cli.ts'
 
 const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] | decisions [--done] [--json] | done [text] | clear | favorite [off] | list | agents [--json] | cats | remind <when> "<text>" [--idle] | send <name|key> "<text>" | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | move <id|name|pane>... --device <id|local> [--dry-run] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | doctor | update | housekeeping [--dry-run | status] [--json] | presence [here | away | call] | journal [--since <when> | --away] [--json] | spend [--day <d>] [--lane <id>] [--json] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | resume --agy <conversation id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp [--agents] | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>] | db rekey --from <old> --to <new> [--dry-run] [--json]] [--session <id|name|pane>]`
-const MIN_REPEAT_MS = 5 * 60_000
 /** The commands that print a help of their own for `--help` (#305). */
 const OWN_HELP: ReadonlySet<string> = new Set(['thread', 'time', 'cal', 'spend'])
 
@@ -256,7 +266,6 @@ function usageOf(command: string): string {
   const own = alternatives.filter(a => a.split(' ')[0] === command)
   return own.length ? own.map(a => `usage: board ${a}`).join('\n') : usage
 }
-const WHEN_HELP = 'in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time)'
 
 // Everything after the first `--` is the command's own words, as they are (#404): neither the
 // board's flags below nor --help are read there. Started by the sh shim under Git Bash
@@ -299,7 +308,6 @@ if (pi >= 0) {
   piSessionFile = args[pi + 1] ?? ''
   args.splice(pi, 2)
 }
-const modeText = (): string => (idle ? ', when the session is free' : '')
 // `board -- x` is no command, as before: not the bare `board`.
 const [cmd = dashes < 0 ? 'show' : '--', ...flagWords] = args
 /** The command's words, the `--` kept for the parsers that read it themselves (thread, time, cal). */
@@ -307,10 +315,6 @@ const rest = dashes < 0 ? flagWords : [...flagWords, ...argv.slice(dashes)]
 /** The same without that `--`: what this file's commands take as their words and text. */
 const words = dashes < 0 ? flagWords : [...flagWords, ...argv.slice(dashes + 1)]
 const text = words.join(' ').replace(/\s+/g, ' ').trim()
-/** Where remind and every find their time: before a `--`, when there is one. */
-const leading = dashes < 0 ? words : flagWords
-/** How many words the time leaves at least for the text: one, unless a `--` marks where it starts. */
-const spare = dashes < 0 ? 1 : 0
 /** `board <command> --help` or `-h`, a word of its own before any `--` (#305). */
 const helpAsked = flagWords.includes('--help') || flagWords.includes('-h')
 const cfg = loadConfig()
@@ -402,6 +406,16 @@ async function resolveSession({ archived = false }: { archived?: boolean } = {})
 /** The session running this command, { key, name }, or null outside one. */
 function ownSession(): Promise<SessionRef | null> {
   return ownSessionOf({ env: process.env, paneOf, readCard, nameOf: key => liveSessions().get(key)?.session.name })
+}
+
+/** The node session (key and lane) for forwarded commands; called only while `node` is configured. */
+async function nodeCaller(): Promise<{ key: string; lane: string | null } | null> {
+  const s = target ? await resolveSession().catch(() => null) : await ownSession().catch(() => null)
+  if (!s) return null
+  const card = readCard(s.key)
+  const cwd = 'cwd' in s && typeof s.cwd === 'string' && s.cwd ? s.cwd : process.cwd()
+  const lane = (typeof card?.category === 'string' && card.category) || categoryFor(cfg, cwd) || null
+  return { key: s.key, lane }
 }
 
 /**
@@ -597,21 +611,7 @@ async function schedulerNote(): Promise<string> {
 }
 
 // Times for agents: unambiguous, in local time.
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 const pad = (n: number): string => String(n).padStart(2, '0')
-function stamp(ms: number): string {
-  const d = new Date(ms)
-  return `${WEEKDAYS[d.getDay()]} ${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-function fromNow(ms: number, now: number): string {
-  const min = Math.round(Math.abs(ms - now) / 60_000)
-  const d = Math.floor(min / 1440)
-  const h = Math.floor((min % 1440) / 60)
-  const parts = d ? [`${d} d`, h && `${h} h`] : h ? [`${h} h`, min % 60 && `${min % 60} min`] : [`${min} min`]
-  const span = parts.filter(Boolean).join(' ')
-  return ms >= now ? `in ${span}` : `${span} ago`
-}
-const clip = (s: string, n = 60): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 
 /** How far a restart got, for its line; a sleep (no steps) how it waits. */
 function restartState(e: ScheduleEntry): string {
@@ -762,7 +762,18 @@ function todo(key: string): void {
  * switched in its file, so with the board closed too; the board shows a switch at its next look.
  * While config.json has no `presence` it is off, and a switch is refused: no file appears.
  */
-function presence(): void {
+async function presence(): Promise<void> {
+  if (nodeConfig(cfg.node)) {
+    const caller = await nodeCaller()
+    const { forwardNodeCall } = await import('./node-call.ts')
+    process.exitCode = await forwardNodeCall({
+      cmd: cmd === 'away' ? 'away' : 'presence',
+      argv: [...words],
+      session: caller?.key ?? null,
+      port: cfg.port,
+    })
+    return
+  }
   const word = (words[0] ?? '').toLowerCase()
   const state: PresenceState | null =
     cmd === 'away'
@@ -816,59 +827,6 @@ async function strangerOnPort(port: number): Promise<string | null> {
 }
 
 /**
- * `board team draft <name|peer-id> "<text>"`: leaves a draft in the Team panel for the person to
- * send. The name is looked up in the roster the running board has (a name that fits two people, or
- * none, is an error that lists the names); nothing is sent from here.
- */
-async function draftTo(
-  T: typeof import('../core/team.ts'),
-  webPort: number,
-  roster: unknown[],
-  who: string,
-  text: string,
-): Promise<void> {
-  const peers = roster.filter(isRecord).filter(p => typeof p.peer === 'string' && typeof p.name === 'string')
-  const names = peers.map(p => T.printable(String(p.name))).join(', ') || 'nobody yet'
-  const byId = peers.filter(p => p.peer === who)
-  const exact = peers.filter(p => p.name === who)
-  const loose = peers.filter(p => String(p.name).toLowerCase() === who.toLowerCase())
-  const hit = byId.length ? byId : exact.length ? exact : loose
-  if (hit.length > 1)
-    throw new Error(
-      `${T.printable(who)} fits more than one person (${names}): use the peer id from \`board team roster\``,
-    )
-  const target = hit[0]
-  if (!target) throw new Error(`nobody called ${T.printable(who)} on the team. On it: ${names}`)
-  let res: Response
-  try {
-    res = await fetch(`http://127.0.0.1:${webPort}/api/team/draft`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-board': '1' },
-      body: JSON.stringify({ to: target.peer, text }),
-      signal: AbortSignal.timeout(5000),
-    })
-  } catch {
-    throw new Error('the board does not run: open it first (herdr plugin action invoke agent-board.open)')
-  }
-  const reply: unknown = await res.json().catch(() => null)
-  if (!res.ok || !isRecord(reply) || reply.ok !== true) {
-    const why = isRecord(reply) ? String(reply.error ?? res.status) : String(res.status)
-    const text_ =
-      why === 'full'
-        ? 'too many drafts are waiting: send or discard some in the Team panel first'
-        : why === 'text'
-          ? `the text is empty or longer than ${T.MAX_TEXT} characters`
-          : why === 'peer'
-            ? 'that person is not on the team any more'
-            : why
-    throw new Error(`no draft made: ${text_}`)
-  }
-  console.log(
-    `ok · draft for ${T.printable(String(target.name))} is in the Team panel; nothing is sent until a person presses Send`,
-  )
-}
-
-/**
  * `board team join <invite> --hub <url> --name <name>` and `board team roster` (#231). Join makes
  * this board's key (kept only once the hub has said welcome), joins with the invite and writes
  * `team` into config.json; the running board connects within seconds. --name is read off the
@@ -876,6 +834,30 @@ async function draftTo(
  * `team` off it says so and touches nothing.
  */
 async function team(): Promise<void> {
+  if (nodeConfig(cfg.node)) {
+    const forwarded = forkName !== undefined ? [rest[0] ?? '', '--name', forkName, ...rest.slice(1)] : [...rest]
+    const op = forwarded[0] ?? ''
+    const more = forwarded.slice(1)
+    const { teamFileArg } = await import('./team-agents-cli.ts')
+    const filePos = teamFileArg(op, more)
+    const files = filePos >= 0 ? [resolve(more[filePos] as string)] : []
+    const cut = more.indexOf('--')
+    const flags = cut < 0 ? more : more.slice(0, cut)
+    const kept = isKeptCall('team', forwarded)
+    const caller = await nodeCaller()
+    const { forwardNodeCall } = await import('./node-call.ts')
+    process.exitCode = await forwardNodeCall({
+      cmd: 'team',
+      argv: forwarded,
+      session: caller?.key ?? null,
+      lane: caller?.lane ?? null,
+      files,
+      ...(kept && { id: randomUUID() }),
+      port: cfg.port,
+      json: flags.includes('--json'),
+    })
+    return
+  }
   const [op, ...more] = rest
   // Loaded here: no other command of the board command pays for the peer network.
   const T = await import('../core/team.ts')
@@ -985,25 +967,12 @@ async function team(): Promise<void> {
     })
     return console.log(line)
   }
-  const me = isRecord(view.me) ? view.me : {}
-  console.log(
-    T.printable(
-      `${String(view.hub)} · ${String(view.state)} · you: ${String(me.name ?? '')} ${String(me.fingerprint ?? '')}`,
-    ),
-  )
-  if (op === 'draft') return draftTo(T, webPort, view.roster, more[0] ?? '', more[1] ?? '')
-  if (!view.roster.length) return console.log('nobody else on the team yet')
-  const now = Date.now()
-  for (const p of view.roster) {
-    if (!isRecord(p)) continue
-    const seen = p.online
-      ? 'online'
-      : typeof p.lastSeen === 'number'
-        ? `last seen ${fromNow(p.lastSeen, now)}`
-        : 'not seen yet'
-    const flag = p.pin === 'changed' ? '  KEY CHANGED: trust it in the board' : ''
-    console.log(T.printable(`${p.online ? '●' : '○'} ${String(p.name)}  ${String(p.fingerprint)}  ${seen}${flag}`))
+  if (op === 'draft') {
+    const A = await import('./team-agents-cli.ts')
+    return console.log(await A.teamDraftTo(webPort, view.roster, more[0] ?? '', more[1] ?? ''))
   }
+  const A = await import('./team-agents-cli.ts')
+  for (const l of A.teamRosterLines(view)) console.log(l)
 }
 
 async function main(): Promise<void> {
@@ -1019,11 +988,33 @@ async function main(): Promise<void> {
   }
 
   if (cmd === 'cats') {
+    if (nodeConfig(cfg.node)) {
+      const caller = await nodeCaller()
+      const { forwardNodeCall } = await import('./node-call.ts')
+      process.exitCode = await forwardNodeCall({
+        cmd: 'cats',
+        argv: [],
+        session: caller?.key ?? null,
+        port: cfg.port,
+      })
+      return
+    }
     const known = cfg.categories.map(c => `${c.id} (${categoryInfo(cfg, c.id).title})`).join(', ')
     return console.log(`${known}. A new id makes a new lane. Config: ${configFile()}`)
   }
 
   if (cmd === 'list') {
+    if (nodeConfig(cfg.node)) {
+      const caller = await nodeCaller()
+      const { forwardNodeCall } = await import('./node-call.ts')
+      process.exitCode = await forwardNodeCall({
+        cmd: 'list',
+        argv: [],
+        session: caller?.key ?? null,
+        port: cfg.port,
+      })
+      return
+    }
     const items = await collect(deps)
     const order = new Map(COLUMNS.map((c, i) => [c.id, i]))
     items.sort(
@@ -1192,6 +1183,17 @@ async function main(): Promise<void> {
       return console.log(
         `ok · removed watch ${watch.id}${watch.name ? ` (${watch.name})` : ''}: ${clip(watch.probe.cmd)}`,
       )
+    if (!e && nodeConfig(cfg.node)) {
+      const caller = await nodeCaller()
+      const { forwardNodeCall } = await import('./node-call.ts')
+      process.exitCode = await forwardNodeCall({
+        cmd: 'unschedule',
+        argv: [words[0]],
+        session: caller?.key ?? null,
+        port: cfg.port,
+      })
+      return
+    }
     if (!e) throw new Error(`no entry "${words[0]}"; see board schedule`)
     return console.log(
       `ok · removed ${e.id} (${e.cron ? `every "${e.cron}"` : stamp(e.next)}${e.name ? `, ${e.name}` : ''}${held ? ', parked in the archive' : ''}): ${clip(e.text)}`,
@@ -1228,8 +1230,52 @@ async function main(): Promise<void> {
   if (cmd === 'journal') return journalCommand()
   if (cmd === 'team') return team()
   if (cmd === 'decisions') {
+    if (nodeConfig(cfg.node)) {
+      const caller = await nodeCaller()
+      const { forwardNodeCall } = await import('./node-call.ts')
+      process.exitCode = await forwardNodeCall({
+        cmd: 'decisions',
+        argv: [...words],
+        session: caller?.key ?? null,
+        port: cfg.port,
+        json: flagWords.includes('--json'),
+      })
+      return
+    }
     if (!decisionsConfig(cfg.decisions)) throw new Error('decisions are off on this board (config.json "decisions")')
     return (await import('./decisions-cli.ts')).decisionsCommand(words, Date.now())
+  }
+
+  // On a node, `remind`/`every` aimed at another session goes to the master over the uplink;
+  // reminders for this session itself stay local on the node.
+  if ((cmd === 'remind' || cmd === 'every') && target !== undefined && nodeConfig(cfg.node)) {
+    const own = await ownSession()
+    const tl = target.toLowerCase()
+    const localItems = await collect(deps).catch((): Item[] => [])
+    const hit = localItems.find(i =>
+      [i.name, i.autoName, i.pane, i.session, i.key].some(v => v && v.toLowerCase() === tl),
+    )
+    const ownPane = process.env.HERDR_PANE_ID
+    const isSelf = own
+      ? tl === own.key.toLowerCase() || (ownPane ? tl === ownPane.toLowerCase() : false) || hit?.key === own.key
+      : Boolean(hit)
+    if (!isSelf) {
+      const argvOut = [
+        '--session',
+        target,
+        ...(idle ? ['--idle'] : []),
+        ...flagWords,
+        ...(dashes < 0 ? [] : argv.slice(dashes)),
+      ]
+      const { forwardNodeCall } = await import('./node-call.ts')
+      process.exitCode = await forwardNodeCall({
+        cmd,
+        argv: argvOut,
+        session: own?.key ?? null,
+        port: cfg.port,
+      })
+      return
+    }
   }
 
   // schedule --move <id>: a parked entry to this session (or --session's, which must be on the board).
@@ -1339,51 +1385,14 @@ async function main(): Promise<void> {
       break
     }
     case 'remind': {
-      // The time is the first one to five words that read as one; the rest is the text.
-      let at: number | null = null
-      let used = 0
-      for (let k = Math.min(5, leading.length - spare); k >= 1 && at === null; k--) {
-        at = parseWhen(leading.slice(0, k).join(' '), now)
-        used = k
-      }
-      const msg = words.slice(used).join(' ').replace(/\s+/g, ' ').trim()
-      if (at === null || !msg) throw new Error(`usage: board remind <when> "<text>"; when: ${WHEN_HELP}`)
-      if (at <= now) throw new Error(`${stamp(at)} is in the past`)
-      if (at > now + 5 * 366 * 86_400_000) throw new Error(`${stamp(at)} is more than five years ahead`)
+      const { at, text: msg } = parseRemindRest(rest, now, { idle })
       const e = addEntry({ ...(await entryFor(s)), ...mode(), text: msg, at, next: at, by: 'agent' })
-      return console.log(
-        `ok · reminder ${e.id} ${stamp(at)} (${fromNow(at, now)}${modeText()}): ${clip(msg)} · cancel: board unschedule ${e.id}${await schedulerNote()}`,
-      )
+      return console.log(formatRemindOk(e.id, at, now, idle, msg, await schedulerNote()))
     }
     case 'every': {
-      // The cron in one quoted word, or its five fields as they are (PowerShell leaves * alone).
-      let expr = leading[0] ?? ''
-      let used = 1
-      if (!/\s/.test(expr) && !expr.startsWith('@') && leading.length >= 5 + spare) {
-        expr = leading.slice(0, 5).join(' ')
-        used = 5
-      }
-      let cron: Cron
-      try {
-        cron = parseCron(expr)
-      } catch (err) {
-        throw new Error(
-          `${messageOf(err)}. usage: board every "<minute hour day month weekday>" "<text>", e.g. board every "0 9 * * 1-5" "check the inbox"; quote the schedule`,
-        )
-      }
-      const msg = words.slice(used).join(' ').replace(/\s+/g, ' ').trim()
-      if (!msg) throw new Error('usage: board every "<cron>" "<text>"')
-      const next = nextRun(cron, now)
-      if (next === null) throw new Error(`"${cron.expr}" never runs`)
-      // Every run is a turn of the session, waking it if need be.
-      if (shortestGap(cron, now) < MIN_REPEAT_MS)
-        throw new Error(
-          `"${cron.expr}" runs more often than every ${MIN_REPEAT_MS / 60_000} minutes; for a one-off wait use board remind`,
-        )
+      const { cron, next, text: msg } = parseEveryRest(rest, now, { idle })
       const e = addEntry({ ...(await entryFor(s)), ...mode(), text: msg, cron: cron.expr, next, by: 'agent' })
-      return console.log(
-        `ok · every ${e.id} "${cron.expr}", next ${stamp(next)} (${fromNow(next, now)}${modeText()}): ${clip(msg)} · cancel: board unschedule ${e.id}${await schedulerNote()}`,
-      )
+      return console.log(formatEveryOk(e.id, cron.expr, next, now, idle, msg, await schedulerNote()))
     }
     case 'restart':
       return restart(s)
@@ -2642,20 +2651,45 @@ async function timeCommand(): Promise<void> {
 
 async function spendCommand(): Promise<void> {
   const { spendCmd } = await import('./spend-cli.ts')
-  process.exitCode = await spendCmd(rest, { cfg, deps })
+  const actor = nodeConfig(cfg.node) ? ((await nodeCaller()) ?? 'user') : undefined
+  process.exitCode = await spendCmd(rest, { cfg, deps, ...(actor && { actor }) })
 }
 
 /** `board journal …` (#489, entrypoints/journal-cli.ts): what changed on the board since the owner left. */
 async function journalCommand(): Promise<void> {
+  if (nodeConfig(cfg.node)) {
+    const caller = await nodeCaller()
+    const { forwardNodeCall } = await import('./node-call.ts')
+    const flags = rest.includes('--') ? rest.slice(0, rest.indexOf('--')) : rest
+    process.exitCode = await forwardNodeCall({
+      cmd: 'journal',
+      argv: [...rest],
+      session: caller?.key ?? null,
+      port: cfg.port,
+      json: flags.includes('--json'),
+    })
+    return
+  }
   const { journalCmd } = await import('./journal-cli.ts')
   process.exitCode = journalCmd(rest, { cfg })
 }
 
 /** `board cal …` (#328, entrypoints/cal-cli.ts): the owner's calendar, changed as the session that runs it. */
 async function calCommand(): Promise<void> {
-  const own = await ownSession()
+  const isNode = nodeConfig(cfg.node) !== null
+  const own = isNode && target ? await resolveSession().catch(() => null) : await ownSession()
+  const lane =
+    isNode && own
+      ? (typeof readCard(own.key)?.category === 'string' && (readCard(own.key)?.category as string)) ||
+        categoryFor(cfg, ('cwd' in own && typeof own.cwd === 'string' && own.cwd) || process.cwd()) ||
+        null
+      : null
   const { calCmd } = await import('./cal-cli.ts')
-  process.exitCode = await calCmd(rest, { cfg, actor: own ? { key: own.key, name: own.name ?? '' } : 'user' })
+  process.exitCode = await calCmd(rest, {
+    cfg,
+    actor: own ? { key: own.key, name: own.name ?? '' } : 'user',
+    ...(isNode && { lane }),
+  })
 }
 
 /**

@@ -25,7 +25,7 @@ import { knobMs } from '../../adapters/pacing.ts'
 import {
   fileTooBig,
   isCallId,
-  KEPT_SUBS,
+  isKeptCall,
   type UplinkCall,
   type UplinkResult,
   type UplinkSelf,
@@ -170,7 +170,7 @@ export function createNodeUplink(o: NodeUplinkOptions): NodeUplink {
       }
     }
     // Kept or not by what the command is, not by what the caller says.
-    const keep = (cmd === 'thread' || cmd === 'threads') && KEPT_SUBS.has(argv[0] ?? '')
+    const keep = isKeptCall(cmd, argv)
     if (!keep && !clients.size) return { status: 200, body: { state: 'unreachable' } satisfies CallAnswer }
     const id = given ?? randomUUID()
     // The same call again (a command that tried twice): it waits for the one already kept.

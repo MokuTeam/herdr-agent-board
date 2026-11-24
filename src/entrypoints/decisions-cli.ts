@@ -84,18 +84,22 @@ export function withdrawDecision(key: string, now: number): void {
 const age = (ms: number): string => (ms < 60_000 ? 'just now' : `${durationWords(ms)} ago`)
 
 /** `board decisions [--done] [--json]`: the queue, or the last ones closed. */
-export function decisionsCommand(words: readonly string[], now: number): void {
+export function decisionsCommand(
+  words: readonly string[],
+  now: number,
+  out: (line: string) => void = console.log,
+): void {
   const json = words.includes('--json')
   const unknown = words.filter(w => w !== '--json' && w !== '--done')
   if (unknown.length) throw new DecisionError('usage', 'usage: board decisions [--done] [--json]')
   if (words.includes('--done')) {
     const rows = decisionsDone({ limit: 20 })
     if (json) {
-      console.log(JSON.stringify({ ok: true, done: rows }))
+      out(JSON.stringify({ ok: true, done: rows }))
       return
     }
     if (!rows.length) {
-      console.log('no decisions closed yet')
+      out('no decisions closed yet')
       return
     }
     for (const r of rows) {
@@ -106,7 +110,7 @@ export function decisionsCommand(words: readonly string[], now: number): void {
             ? `the owner (${r.via})`
             : `withdrawn (${r.via})`
       const answer = r.answer ? `"${r.answer}"` : '-'
-      console.log(
+      out(
         `${r.id} · ${r.name || r.session.slice(0, 8)} · ${r.question} · ${answer} · ${who} · ${age(now - (r.answeredAt ?? now))}`,
       )
     }
@@ -114,11 +118,11 @@ export function decisionsCommand(words: readonly string[], now: number): void {
   }
   const items = decisionsFromCards(allCards())
   if (json) {
-    console.log(JSON.stringify({ ok: true, items }))
+    out(JSON.stringify({ ok: true, items }))
     return
   }
   if (!items.length) {
-    console.log('nothing waits on the owner')
+    out('nothing waits on the owner')
     return
   }
   for (const d of items) {
@@ -130,6 +134,6 @@ export function decisionsCommand(words: readonly string[], now: number): void {
           ? ' · held'
           : ''
     const asked = d.askedAt !== null ? ` · asked ${age(now - d.askedAt)}` : ''
-    console.log(`${d.who} · ${d.question}${opts ? ` · ${opts}` : ''}${asked}${when}`)
+    out(`${d.who} · ${d.question}${opts ? ` · ${opts}` : ''}${asked}${when}`)
   }
 }

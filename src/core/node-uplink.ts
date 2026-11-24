@@ -10,8 +10,26 @@
 import { hasUnprintable } from './team.ts'
 import { FILE_MAX_BYTES, FILES_MAX } from './work-threads.ts'
 
-/** The commands a master takes from a node: `board thread` (stage 1, 10 item 6), `board send` (#619), `board agents` (#628) and `board time` (#644). */
-export const UPLINK_COMMANDS: ReadonlySet<string> = new Set(['thread', 'threads', 'send', 'agents', 'time'])
+/** The commands a master takes from a node: `board thread` (stage 1, 10 item 6), `board send` (#619), `board agents` (#628), `board time` (#644), and shared-state commands (#698). */
+export const UPLINK_COMMANDS: ReadonlySet<string> = new Set([
+  'thread',
+  'threads',
+  'send',
+  'agents',
+  'time',
+  'cal',
+  'team',
+  'decisions',
+  'journal',
+  'presence',
+  'away',
+  'spend',
+  'cats',
+  'list',
+  'remind',
+  'every',
+  'unschedule',
+])
 
 /** The exit code of a call the master does not take, whatever the node sent. */
 export const UPLINK_REFUSED = 126
@@ -37,6 +55,66 @@ export const TIME_WRITE_SUBS: ReadonlySet<string> = new Set([
   'unpost',
   'import',
 ])
+
+/**
+ * The mutating subcommands of `board cal` (#698): not kept offline, remembered by call id on the
+ * master so a retry after a stream hiccup never writes twice.
+ */
+export const CAL_WRITE_SUBS: ReadonlySet<string> = new Set(['add', 'edit', 'rm', 'push'])
+
+/**
+ * Subcommands of `board team` that are always refused from a node (#698).
+ */
+export const TEAM_NOT_FROM_NODE: Readonly<Record<string, string>> = {
+  join: "board team join sets up this board's team identity: run it on the board's computer, not from a node",
+  watch: 'board team watch streams continuously: use board team inbox from a node',
+}
+
+/**
+ * Whether a `board team` call is refused from a node, and why (#698).
+ */
+export function teamRefusal(argv: readonly string[]): string | null {
+  const sub = argv[0] ?? ''
+  if (Object.hasOwn(TEAM_NOT_FROM_NODE, sub)) return TEAM_NOT_FROM_NODE[sub] ?? null
+  if (sub === 'listen' && (argv[1] ?? '') !== 'off')
+    return 'board team listen is for the owner to confirm: not from a node'
+  if (sub === 'loop' && argv.length >= 3)
+    return 'board team loop changes an agent switch for the owner to confirm: not from a node'
+  return null
+}
+
+/**
+ * Whether a call is kept in the node's outbox when the master is unreachable (#508, #698).
+ */
+export function isKeptCall(cmd: string, argv: readonly string[]): boolean {
+  if (cmd === 'thread' || cmd === 'threads') return KEPT_SUBS.has(argv[0] ?? '')
+  return cmd === 'team' && (argv[0] ?? '') === 'draft'
+}
+
+const TEAM_WRITE_SUBS: ReadonlySet<string> = new Set(['draft', 'post', 'reply', 'assign', 'release', 'listen'])
+
+/**
+ * Whether a call's result is remembered by call id on the master so a retry never writes twice (#508, #644, #698).
+ */
+export function isRememberedCall(cmd: string, argv: readonly string[]): boolean {
+  if (isKeptCall(cmd, argv)) return true
+  const sub = argv[0] ?? ''
+  if (cmd === 'thread' || cmd === 'threads') return sub === 'verdict'
+  if (cmd === 'send' || cmd === 'away' || cmd === 'remind' || cmd === 'every' || cmd === 'unschedule') return true
+  if (cmd === 'time') return TIME_WRITE_SUBS.has(sub)
+  if (cmd === 'cal') return CAL_WRITE_SUBS.has(sub)
+  if (cmd === 'team') {
+    if (TEAM_WRITE_SUBS.has(sub)) return true
+    if (sub === 'thread') {
+      const cut = argv.indexOf('--')
+      const flags = cut < 0 ? argv.slice(1) : argv.slice(1, cut)
+      return flags.includes('--read')
+    }
+    return false
+  }
+  if (cmd === 'presence') return argv.length > 0
+  return false
+}
 
 /**
  * What the master does not run for a node's session, and why: `open` raises the master's own

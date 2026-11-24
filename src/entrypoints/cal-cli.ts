@@ -19,6 +19,7 @@
 //   board cal push --source <id> [--file <events.json>] [--from <t> --to <t>]
 //                                                  a push source's events (JSON on stdin without --file)
 import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { readCopy } from '../adapters/calendar-cache.ts'
 import { McpClient } from '../adapters/calendar-fetch.ts'
 import {
@@ -45,6 +46,7 @@ import { nodeConfig } from '../core/nodes.ts'
 import { addDays, dateIn, isDate, localZone, parseWhen } from '../core/time.ts'
 import type { Config } from '../core/types.ts'
 import { calendarOf, pushEvents, readEvents, sourceViews, syncSource, withCalendarDb } from '../services/calendar.ts'
+import { forwardNodeCall, type NodeCall, type NodeCallAnswer } from './node-call.ts'
 
 export const CAL_USAGE = `board cal list [--day <d> | --from <t> --to <t> | --days <n>] [--source <id>]... [--cancelled] [--json]
 board cal sources [--json]
@@ -106,10 +108,29 @@ function parseArgs(rest: readonly string[]): Args {
   return { words, one: f => values.get(f)?.at(-1), all: f => values.get(f) ?? [], has: f => bare.has(f) }
 }
 
+/**
+ * Where `board cal push`'s `--file <path>` value sits among `rest` (the arguments after `push`),
+ * before any lone `--`; `-1` if none.
+ */
+export function calPushFileArg(rest: readonly string[]): number {
+  let found = -1
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] as string
+    if (a === '--') break
+    if (!FLAGS_WITH_VALUE.has(a)) continue
+    if (i + 1 >= rest.length) break
+    if (a === '--file') found = i + 1
+    i++
+  }
+  return found
+}
+
 export interface CalCmdContext {
-  /** `node`: this board is a node, where the calendar is not (#508). */
-  cfg: Pick<Config, 'calendar' | 'node'>
+  /** `node`: this board is a node, where the calendar is not (#508, #698). */
+  cfg: Pick<Config, 'calendar' | 'node' | 'port'>
   actor: CalActor
+  lane?: string | null
+  call?: (body: NodeCall) => Promise<NodeCallAnswer>
   out?: (line: string) => void
   err?: (line: string) => void
   /** Standard input's text, for push without --file. */
@@ -266,12 +287,31 @@ export async function calCmd(rest: readonly string[], ctx: CalCmdContext): Promi
     out(CAL_USAGE)
     return 0
   }
-  // On a node (#508, docs/design/nodes 10 item 6): the calendar is the master's.
+  // On a node (#698): the calendar lives on the master; route over the uplink, never opening a local DB.
   if (nodeConfig(ctx.cfg.node)) {
-    const message = "board cal is not available on a node yet: it runs on the board's computer"
-    if (json) out(JSON.stringify({ ok: false, error: 'node', message }))
-    else errOut(message)
-    return 1
+    let files: string[] = []
+    if (cmd === 'push') {
+      const pos = calPushFileArg(more)
+      if (pos < 0) {
+        const message = 'board cal push from a node needs --file <events.json> (stdin is not forwarded)'
+        if (json) out(JSON.stringify({ ok: false, error: 'file_required', message }))
+        else errOut(message)
+        return 1
+      }
+      files = [resolve(more[pos] as string)]
+    }
+    return await forwardNodeCall({
+      cmd: 'cal',
+      argv: [...rest],
+      session: typeof ctx.actor === 'string' ? null : ctx.actor.key,
+      lane: ctx.lane ?? null,
+      files,
+      port: ctx.cfg.port,
+      json,
+      call: ctx.call,
+      out,
+      err: errOut,
+    })
   }
   try {
     const c = calendarOf(ctx.cfg)

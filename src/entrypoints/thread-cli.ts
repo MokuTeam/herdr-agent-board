@@ -85,6 +85,10 @@ import {
   watch,
 } from '../services/work-threads.ts'
 import { giveVerdict, type SelfAnswer, verdictGate } from '../services/work-verify.ts'
+import { callBoard, type NodeCall, type NodeCallAnswer } from './node-call.ts'
+
+export type { NodeCall, NodeCallAnswer }
+export { callBoard }
 
 export const THREAD_USAGE = `board thread new [--lane <id>] [--parent <key>] [--to <session>] [--doing] "<title>"
 board thread post <key> [--status next|doing|waiting|owner|done|dropped] [--summary "<line>"] [--waiting "<on what>"]
@@ -300,33 +304,6 @@ export interface ThreadCmdContext {
   cases?: CaseResolvers
 }
 
-/** A command on a node as it goes to the node's board (services/node/uplink.ts call). */
-export interface NodeCall {
-  /** A write that can wait carries an id of its own: the same call tried again is one call. */
-  id?: string
-  /** `send`: `board send` (#619); `agents`: `board agents` (#628); `time`: `board time` (#644); none is kept offline. */
-  cmd: 'thread' | 'send' | 'agents' | 'time'
-  argv: string[]
-  session: string
-  lane: string | null
-  /** The files' paths, in the order their `--file` comes in `argv`. */
-  files: string[]
-  /** For `board thread verdict` (#675): the pane's session as this node's herdr confirmed it. */
-  self?: SelfAnswer
-}
-
-/** What the node's board answered (services/node/uplink.ts CallAnswer); null when it did not. */
-export type NodeCallAnswer =
-  | { state: 'answered'; code: number; out: string[]; err: string[] }
-  | { state: 'kept'; id: string }
-  | { state: 'unreachable' }
-  | null
-
-/** How long the command waits for its board: the board's own wait (20 s, 10 s for a read) and room. */
-const CALL_WAIT_MS = 40_000
-/** `board agents` is a read the caller waits on (ListAgents): a hanging board falls back to the local list soon. */
-const AGENTS_WAIT_MS = 5_000
-
 /**
  * Where the files of `board thread <sub> <rest>` are among `rest`: the value of each `--file`
  * of a post or a done, as parseArgs reads them (a value of another flag and text after a lone `--`
@@ -510,30 +487,6 @@ async function forward(
   }
   return fail('unreachable', "the board's computer is not reachable")
 }
-
-/** `POST /api/node/call` on this computer's board; null when no board answers there. */
-export const callBoard =
-  (port: unknown) =>
-  async (body: NodeCall): Promise<NodeCallAnswer> => {
-    try {
-      const res = await fetch(`http://127.0.0.1:${typeof port === 'number' ? port : 12422}/api/node/call`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-board': '1' },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(body.cmd === 'agents' ? AGENTS_WAIT_MS : CALL_WAIT_MS),
-      })
-      if (!res.ok) {
-        await res.body?.cancel()
-        return { state: 'answered', code: 1, out: [], err: [`the board on this computer answered HTTP ${res.status}`] }
-      }
-      return (await res.json()) as NodeCallAnswer
-    } catch (err) {
-      // The board took the call and never answered: it may be kept there, so this is no "not sent".
-      if (err instanceof Error && err.name === 'TimeoutError')
-        return { state: 'answered', code: 1, out: [], err: ['the board on this computer did not answer in time'] }
-      return null
-    }
-  }
 
 /** `line` with the session id of every verifier running now replaced, but the reader's own. */
 function hideVerifiers(db: BoardDb, line: string, self: string): string {

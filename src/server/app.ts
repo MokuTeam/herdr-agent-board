@@ -650,10 +650,13 @@ export async function startServer({
       board.publish()
     },
   })
+  // The master's devices in the payload (#500): made with the links below, the first time
+  // config.json has `nodes`; until then the board's payload is what it was without them.
+  let nodeAggregate: NodeAggregate | null = null
   const teamRouter = createTeamRouter({
     team,
     cfg,
-    items: () => board.items(),
+    items: () => (nodeAggregate ? [...board.items(), ...(nodeAggregate.part()?.items ?? [])] : board.items()),
     schedule: noticeSchedule,
     log,
   })
@@ -842,9 +845,6 @@ export async function startServer({
     streamDriven,
     onChange: () => board.publish(),
   })
-  // The master's devices in the payload (#500): made with the links below, the first time
-  // config.json has `nodes`; until then the board's payload is what it was without them.
-  let nodeAggregate: NodeAggregate | null = null
   // A session moved to or from another device (#616): this board's two halves, made the first time a
   // move needs them (on a master's move, or a node's door); a board that never moves one runs none of it.
   let moveHalves: { out: MoveOut; in: MoveIn } | null = null
@@ -1555,7 +1555,7 @@ export async function startServer({
       },
     })
     routes.unshift(nodeProxy.route)
-    // Calls from the nodes' sessions (#508): `board thread` there, run here as that session.
+    // Calls from the nodes' sessions (#508, #698): forwarded commands run here as that session.
     uplinkRunner = createUplinkRunner({
       links: nodeLinks,
       find: board.findAny,
@@ -1567,6 +1567,9 @@ export async function startServer({
       caseItems: () => caseItems(board.items(), aggregate.part()),
       cfg,
       log,
+      webPort: () => Number(server.port) || Number(cfg.port) || 12422,
+      deps,
+      setPresence: (state, from) => presence.set(state, from),
     })
     const placer = createPlacer({
       cfg,

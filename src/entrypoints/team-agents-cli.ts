@@ -10,7 +10,8 @@
 import { statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { isRecord } from '../adapters/json-store.ts'
-import { isMessageId, printable } from '../core/team.ts'
+import { fromNow } from '../core/schedule-cli.ts'
+import { isMessageId, MAX_TEXT, printable } from '../core/team.ts'
 import {
   DEFAULT_LIMITS,
   heldWhy,
@@ -66,6 +67,80 @@ const peersOf = (roster: unknown[]): { peer: string; name: string }[] =>
     .filter(isRecord)
     .filter(p => typeof p.peer === 'string' && typeof p.name === 'string')
     .map(p => ({ peer: String(p.peer), name: String(p.name) }))
+
+/**
+ * Where `board team post|reply`'s `--file <path>` value sits among `args` (after the subcommand),
+ * before any lone `--`; `-1` if none.
+ */
+export function teamFileArg(op: string, args: readonly string[]): number {
+  if (op !== 'post' && op !== 'reply') return -1
+  const valueFlags = op === 'post' ? new Set(['--new', '--link', '--file']) : new Set(['--to', '--file'])
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] ?? ''
+    if (a === '--') break
+    if (!valueFlags.has(a)) continue
+    if (i + 1 >= args.length) break
+    if (a === '--file') return i + 1
+    i++
+  }
+  return -1
+}
+
+/** Lines printed for `board team roster` from `GET /api/team`. */
+export function teamRosterLines(view: Record<string, unknown>, now = Date.now()): string[] {
+  const me = isRecord(view.me) ? view.me : {}
+  const lines = [
+    printable(
+      `${String(view.hub)} · ${String(view.state)} · you: ${String(me.name ?? '')} ${String(me.fingerprint ?? '')}`,
+    ),
+  ]
+  const roster = Array.isArray(view.roster) ? view.roster : []
+  if (!roster.length) {
+    lines.push('nobody else on the team yet')
+    return lines
+  }
+  for (const p of roster) {
+    if (!isRecord(p)) continue
+    const seen = p.online
+      ? 'online'
+      : typeof p.lastSeen === 'number'
+        ? `last seen ${fromNow(p.lastSeen, now)}`
+        : 'not seen yet'
+    const flag = p.pin === 'changed' ? '  KEY CHANGED: trust it in the board' : ''
+    lines.push(printable(`${p.online ? '●' : '○'} ${String(p.name)}  ${String(p.fingerprint)}  ${seen}${flag}`))
+  }
+  return lines
+}
+
+/** `board team draft <name|peer-id> "<text>"`: leaves a draft in the Team panel; returns its status line. */
+export async function teamDraftTo(webPort: number, roster: unknown[], who: string, text: string): Promise<string> {
+  const peers = peersOf(roster)
+  const names = peers.map(p => printable(p.name)).join(', ') || 'nobody yet'
+  const byId = peers.filter(p => p.peer === who)
+  const exact = peers.filter(p => p.name === who)
+  const loose = peers.filter(p => p.name.toLowerCase() === who.toLowerCase())
+  const hit = byId.length ? byId : exact.length ? exact : loose
+  if (hit.length > 1)
+    throw new Error(
+      `${printable(who)} fits more than one person (${names}): use the peer id from \`board team roster\``,
+    )
+  const target = hit[0]
+  if (!target) throw new Error(`nobody called ${printable(who)} on the team. On it: ${names}`)
+  const { status, reply } = await call(webPort, '/api/team/draft', { to: target.peer, text })
+  if (status < 200 || status >= 300 || !isRecord(reply) || reply.ok !== true) {
+    const why = isRecord(reply) ? String(reply.error ?? status) : String(status)
+    const detail =
+      why === 'full'
+        ? 'too many drafts are waiting: send or discard some in the Team panel first'
+        : why === 'text'
+          ? `the text is empty or longer than ${MAX_TEXT} characters`
+          : why === 'peer'
+            ? 'that person is not on the team any more'
+            : why
+    throw new Error(`no draft made: ${detail}`)
+  }
+  return `ok · draft for ${printable(target.name)} is in the Team panel; nothing is sent until a person presses Send`
+}
 
 async function threadKeyOf(ctx: Ctx, word: string): Promise<string> {
   const { reply } = await call(ctx.webPort, '/api/team/threads')

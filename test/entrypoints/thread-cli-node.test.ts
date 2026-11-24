@@ -9,7 +9,8 @@ import { resolve } from 'node:path'
 import { dbFile } from '../../src/adapters/db.ts'
 import { stateDir } from '../../src/adapters/paths.ts'
 import type { Party } from '../../src/core/work-threads.ts'
-import { calCmd } from '../../src/entrypoints/cal-cli.ts'
+import { calCmd, calPushFileArg } from '../../src/entrypoints/cal-cli.ts'
+import { spendCmd } from '../../src/entrypoints/spend-cli.ts'
 import {
   fileArgs,
   type NodeCall,
@@ -182,28 +183,174 @@ test('fileArgs: the value of each --file of a post or a done, as the command rea
   expect(fileArgs('import', ['tasks.json'])).toEqual([])
 })
 
-test('board cal on a node says it is not here yet, in one line, and fails', async () => {
+test('board cal on a node forwards over the uplink, checks session, carries push --file, and leaves non-node unchanged (#698)', async () => {
   isolatedHome()
-  const out: string[] = []
-  const err: string[] = []
-  const cal = await calCmd(['list'], {
-    cfg: { node: NODE },
-    actor: 'user',
-    out: l => out.push(l),
-    err: l => err.push(l),
-  })
-  expect([cal, out, err]).toEqual([
-    1,
-    [],
-    ["board cal is not available on a node yet: it runs on the board's computer"],
+  const runCal = async (
+    args: string[],
+    o: {
+      cfg?: Record<string, unknown>
+      actor?: { key: string; name: string } | 'user'
+      lane?: string | null
+      answer?: NodeCallAnswer
+    } = {},
+  ) => {
+    const calls: NodeCall[] = []
+    const out: string[] = []
+    const err: string[] = []
+    const code = await calCmd(args, {
+      cfg: (o.cfg ?? { node: NODE, port: 12422 }) as never,
+      actor: o.actor ?? { key: me.key, name: me.name },
+      lane: o.lane === undefined ? 'atlas' : o.lane,
+      out: l => out.push(l),
+      err: l => err.push(l),
+      call: async body => {
+        calls.push(body)
+        return o.answer === undefined ? { state: 'answered', code: 0, out: ['ok'], err: [] } : o.answer
+      },
+    })
+    return { code, out, err, calls }
+  }
+
+  // Forwarding a read and a write even when calendar is off on the node.
+  const listed = await runCal(['list', '--day', 'today'])
+  expect(listed).toMatchObject({ code: 0, out: ['ok'], err: [] })
+  expect(listed.calls).toEqual([
+    { cmd: 'cal', argv: ['list', '--day', 'today'], session: me.key, lane: 'atlas', files: [] },
   ])
   expect(nothingWritten()).toBe(true)
-  // Without node, as before: off says off.
-  const off: string[] = []
-  const offErr: string[] = []
-  const calOff = await calCmd(['list'], { cfg: {}, actor: 'user', out: l => off.push(l), err: l => offErr.push(l) })
+
+  // Push requires --file on a node (stdin is not forwarded) and resolves the file path.
+  expect(calPushFileArg(['--source', 'work', '--file', 'events.json'])).toBe(3)
+  expect(calPushFileArg(['--source', 'work', '--', '--file'])).toBe(-1)
+  const pushNoFile = await runCal(['push', '--source', 'work', '--json'])
+  expect(pushNoFile.code).toBe(1)
+  expect(pushNoFile.calls).toEqual([])
+  expect(JSON.parse(pushNoFile.out[0] ?? '{}')).toEqual({
+    ok: false,
+    error: 'file_required',
+    message: 'board cal push from a node needs --file <events.json> (stdin is not forwarded)',
+  })
+
+  const pushed = await runCal(['push', '--source', 'work', '--file', 'events 100%.json'])
+  expect(pushed.code).toBe(0)
+  expect(pushed.calls[0]?.files).toEqual([resolve('events 100%.json')])
+
+  // Older master (126), unreachable master, stopped board, and non-session caller fail cleanly.
+  const older = await runCal(['list', '--json'], {
+    answer: {
+      state: 'answered',
+      code: 126,
+      out: [],
+      err: ["board cal is not taken from a node: run it on the board's computer"],
+    },
+  })
+  expect(older.code).toBe(1)
+  expect(JSON.parse(older.out[0] ?? '{}')).toEqual({
+    ok: false,
+    error: 'master_outdated',
+    message: "board cal is not supported by the board's computer yet: update the master board to a newer version",
+  })
+
+  const unreach = await runCal(['list'], { answer: { state: 'unreachable' } })
+  expect(unreach).toMatchObject({ code: 1, err: ["the board's computer is not reachable"] })
+
+  const asUser = await runCal(['list'], { actor: 'user' })
+  expect(asUser.calls).toEqual([])
+  expect(asUser).toMatchObject({
+    code: 1,
+    err: ["run it from a session: on a node, board cal goes to the board's computer as a session's"],
+  })
+
+  // Help stays local even on a node.
+  const help = await runCal(['--help'])
+  expect(help.code).toBe(0)
+  expect(help.calls).toEqual([])
+  expect(help.out.join('\n')).toContain('board cal list')
+
+  // Without `node`, board cal runs locally with zero fetch calls.
+  const fetched: string[] = []
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    fetched.push(String(url))
+    return new Response('{}')
+  }) as typeof fetch
+  const calOff = await calCmd(['list'], { cfg: {}, actor: 'user', out: () => {}, err: () => {} })
   expect(calOff).toBe(1)
-  expect(offErr.join('\n')).not.toContain('node')
+  expect(fetched).toEqual([])
+})
+
+test('board spend on a node forwards over the uplink, keeps --help local, and leaves non-node unchanged (#698)', async () => {
+  isolatedHome()
+  const runSpend = async (
+    args: string[],
+    o: { cfg?: Record<string, unknown>; actor?: { key: string; name?: string } | 'user'; answer?: NodeCallAnswer } = {},
+  ) => {
+    const calls: NodeCall[] = []
+    const out: string[] = []
+    const err: string[] = []
+    const code = await spendCmd(args, {
+      cfg: (o.cfg ?? { node: NODE, port: 12422 }) as never,
+      deps: {
+        profiles: () => ({ inheritedDir: '', inherited: null, list: [] }),
+        homes: {} as never,
+        codex: {} as never,
+      },
+      actor: o.actor ?? { key: me.key, name: me.name },
+      out: l => out.push(l),
+      err: l => err.push(l),
+      call: async body => {
+        calls.push(body)
+        return o.answer === undefined ? { state: 'answered', code: 0, out: ['spend · 2026-11-24'], err: [] } : o.answer
+      },
+    })
+    return { code, out, err, calls }
+  }
+
+  const ok = await runSpend(['--day', 'today', '--lane', 'atlas', '--json'])
+  expect(ok).toMatchObject({ code: 0, out: ['spend · 2026-11-24'], err: [] })
+  expect(ok.calls).toEqual([
+    { cmd: 'spend', argv: ['--day', 'today', '--lane', 'atlas', '--json'], session: me.key, lane: null, files: [] },
+  ])
+
+  const help = await runSpend(['--help'])
+  expect(help.code).toBe(0)
+  expect(help.calls).toEqual([])
+  expect(help.out.join('\n')).toContain('usage: board spend')
+
+  const asUser = await runSpend(['--json'], { actor: 'user' })
+  expect(asUser.code).toBe(1)
+  expect(JSON.parse(asUser.out[0] ?? '{}')).toEqual({
+    ok: false,
+    error: 'no_session',
+    message: "run it from a session: on a node, board spend goes to the board's computer as a session's",
+  })
+
+  const older = await runSpend(['--day', 'today'], {
+    answer: { state: 'answered', code: 126, out: [], err: ['board spend is not taken from a node'] },
+  })
+  expect(older.code).toBe(1)
+  expect(older.err[0]).toContain('update the master')
+
+  // Without `node`, spend runs locally with zero fetch calls.
+  const fetched: string[] = []
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    fetched.push(String(url))
+    return new Response('{}')
+  }) as typeof fetch
+  const localOut: string[] = []
+  const localCode = await spendCmd(['--day', '2026-11-20'], {
+    cfg: { language: 'en', categories: [], placement: 'workspace', workspace: 'Board', refreshSec: 2 } as never,
+    deps: {
+      profiles: () => ({ inheritedDir: '', inherited: null, list: [] }),
+      homes: { liveSessions: () => new Map() } as never,
+      codex: { sessions: () => [] } as never,
+    },
+    codexRoots: [],
+    piRoots: [],
+    out: l => localOut.push(l),
+  })
+  expect(localCode).toBe(0)
+  expect(localOut[0]).toContain('no token spend')
+  expect(fetched).toEqual([])
 })
 
 test('board time on a node forwards all subcommands over the uplink, checks session, and explains older masters (#644)', async () => {

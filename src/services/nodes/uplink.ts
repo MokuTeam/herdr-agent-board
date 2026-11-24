@@ -2,11 +2,11 @@
 // (services/nodes/links.ts) the master holds the node's `GET /api/node/uplink` open, takes each call
 // its sessions made and posts the result back (services/node/uplink.ts is the node's side).
 //
-// - Only `board thread`, `board send` (#619), `board agents` (#628) and `board time` (#644)
-//   (core/node-uplink.ts UPLINK_COMMANDS); anything else is answered with 126 and a line, whatever
+// - Only allowlisted shared-state and cross-session commands (#508, #619, #628, #644, #698;
+//   core/node-uplink.ts UPLINK_COMMANDS); anything else is answered with 126 and a line, whatever
 //   the node sends. Only a session's: a call with no session would be the owner's, and nothing an
-//   owner does comes up a link (#224). Neither `open` (the master's own window) nor `share` (the
-//   owner confirms it) is run for a node.
+//   owner does comes up a link (#224). Owner-only subcommands (such as `thread open`, `thread share`,
+//   `thread import`, `team join`, `team watch`, `team listen`, `team loop <peer> <n>`) are refused.
 // - Run in this process by each command's own entry (entrypoints/thread-cli.ts threadCmd,
 //   entrypoints/time-cli.ts timeCmd, core/agent-send.ts), as the node's session: its prefixed key
 //   (core/nodes.ts nodeKey) and the lane its card has in the aggregate, whatever lane the node says;
@@ -26,32 +26,54 @@ import { createHash } from 'node:crypto'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
+import { isRecord } from '../../adapters/json-store.ts'
 import { createDeviceStore, type DeviceStore } from '../../adapters/node-store.ts'
 import { pace } from '../../adapters/pacing.ts'
+import { currentPresence, setPresence } from '../../adapters/presence-store.ts'
+import { addEntry, getEntry, listEntries, removeEntry } from '../../adapters/schedule-store.ts'
+import { bgTaskActive, bgTaskLabel, isBgTaskStuck } from '../../core/bg-task.ts'
+import { COLUMNS, noteOf, statusText } from '../../core/board.ts'
+import { categoryInfo, laneRank } from '../../core/categories.ts'
+import { DecisionError, decisionsConfig } from '../../core/decisions.ts'
 import { takeEvents } from '../../core/event-stream.ts'
+import { t } from '../../core/lang.ts'
 import {
   fileTooBig,
   isCallId,
-  KEPT_SUBS,
+  isRememberedCall,
   NOT_FROM_NODE,
   RESULT_LINE_MAX,
   RESULT_LINES_MAX,
   refused,
-  TIME_WRITE_SUBS,
+  teamRefusal,
   UPLINK_COMMANDS,
   type UplinkCall,
   type UplinkFile,
   type UplinkResult,
   uplinkCallOf,
 } from '../../core/node-uplink.ts'
-import { nodeKey, nodesConfig } from '../../core/nodes.ts'
+import { nodeKey, nodesConfig, parseNodeKey } from '../../core/nodes.ts'
+import {
+  isPresenceState,
+  type Presence,
+  type PresenceSource,
+  type PresenceState,
+  presenceConfig,
+  presenceLine,
+} from '../../core/presence.ts'
+import { clip, formatEveryOk, formatRemindOk, parseEveryRest, parseRemindRest, stamp } from '../../core/schedule-cli.ts'
+import { teamConfig } from '../../core/team.ts'
 import type { Actor } from '../../core/time.ts'
 import type { Config, Item } from '../../core/types.ts'
 import { safeName } from '../../core/upload-name.ts'
+import { shortWhen, span } from '../../core/when-format.ts'
 import { FILE_MAX_BYTES, FILES_MAX, type Party, threadsConfig } from '../../core/work-threads.ts'
+import type { CalCmdContext } from '../../entrypoints/cal-cli.ts'
+import type { SpendCmdContext } from '../../entrypoints/spend-cli.ts'
 import type { ThreadCmdContext } from '../../entrypoints/thread-cli.ts'
 import type { TimeCmdContext } from '../../entrypoints/time-cli.ts'
 import type { Known } from '../case-sessions.ts'
+import type { Deps } from '../deps.ts'
 import type { NodeLinks } from './links.ts'
 
 export interface UplinkRunner {
@@ -74,10 +96,29 @@ export interface UplinkRunnerOptions {
   cfg: Config
   log(text: string): void
   store?: DeviceStore
+  /** The running web board's port, for team and shared-thread calls. */
+  webPort?: () => number
+  /** Master dependencies for `board spend`. */
+  deps?: Pick<Deps, 'profiles' | 'homes' | 'codex'>
+  /** Live presence setter from the running board's PresenceService. */
+  setPresence?: (state: PresenceState, from: PresenceSource) => { presence: Presence; changed: boolean }
   /** Tests: the command's entry (entrypoints/thread-cli.ts threadCmd by default). */
   run?: (argv: readonly string[], ctx: ThreadCmdContext) => Promise<number>
   /** Tests: `board time`'s entry (entrypoints/time-cli.ts timeCmd by default). */
   runTime?: (argv: readonly string[], ctx: TimeCmdContext) => Promise<number>
+  /** Tests: `board cal`'s entry (entrypoints/cal-cli.ts calCmd by default). */
+  runCal?: (argv: readonly string[], ctx: CalCmdContext) => Promise<number>
+  /** Tests: `board spend`'s entry (entrypoints/spend-cli.ts spendCmd by default). */
+  runSpend?: (argv: readonly string[], ctx: SpendCmdContext) => Promise<number>
+  /** Tests: `board team`'s entry. */
+  runTeam?: (argv: readonly string[], ctx: { key: string; name: string; lane: string | null }) => Promise<UplinkResult>
+  /** Tests: `board decisions`'s entry. */
+  runDecisions?: (words: readonly string[], now: number, out: (line: string) => void) => void
+  /** Tests: `board journal`'s entry. */
+  runJournal?: (
+    args: readonly string[],
+    ctx: { cfg: Config; out: (l: string) => void; err: (l: string) => void },
+  ) => number
 }
 
 /** A stream that ended is asked for again after this long (paced), while the link is online. */
@@ -231,13 +272,9 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
 
   async function handle(id: string, call: UplinkCall): Promise<void> {
     // Only a write is kept on the node and so sent again: only a write's result is remembered.
-    // `board send` (#619) and `board time` writes (#644) are not kept on the node, but their result
-    // is remembered here: the node sends a call again on every stream while its command waits, and
-    // a write must not run twice.
-    const kept = (call.cmd === 'thread' || call.cmd === 'threads') && KEPT_SUBS.has(call.argv[0] ?? '')
-    const verdict = (call.cmd === 'thread' || call.cmd === 'threads') && call.argv[0] === 'verdict'
-    const remembered =
-      kept || verdict || call.cmd === 'send' || (call.cmd === 'time' && TIME_WRITE_SUBS.has(call.argv[0] ?? ''))
+    // Non-kept writes (`send`, `time`/`cal`/`team`/`presence`/`remind`/`every`/`unschedule`) are
+    // remembered here by call id so a retry after a stream hiccup never writes twice.
+    const remembered = isRememberedCall(call.cmd, call.argv)
     let result = remembered ? store.seenCall(id, call.id) : null
     if (!result) {
       const ran = await runCall(id, call)
@@ -323,30 +360,115 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     return path
   }
 
+  /** The web port of this master board. */
+  const webPort = (): number => o.webPort?.() || Number(o.cfg.port) || 12422
+
+  /** Resolve a node session's prefixed key, card, lane and display name, or null when invalid. */
+  function sessionOf(
+    id: string,
+    session: string,
+  ): { key: string; item: Item | undefined; lane: string | null; name: string } | null {
+    let key: string
+    try {
+      key = nodeKey(id, session)
+    } catch {
+      return null
+    }
+    const item = o.find(key)
+    const lane = item?.category || null
+    const name = item?.name || item?.autoName || session.slice(0, 8)
+    return { key, item, lane, name }
+  }
+
+  /** Items visible to node `id`: master items and that node's own items, never another node's. */
+  const visibleItems = (id: string): Item[] =>
+    o.items().filter(i => {
+      const p = parseNodeKey(i.key)
+      return !p || p.device === id
+    })
+
+  /** Resolve a session visible to node `id` by key, unprefixed node session key, session, pane, or name. */
+  function findVisibleSession(id: string, word: string): Item {
+    const w = word.toLowerCase()
+    const vis = visibleItems(id)
+    const matches = (i: Item, fields: readonly ('key' | 'session' | 'pane' | 'name' | 'autoName')[]): boolean =>
+      fields.some(f => {
+        const v = i[f]
+        return typeof v === 'string' && v.toLowerCase() === w
+      }) ||
+      (fields.includes('key') && parseNodeKey(i.key)?.key.toLowerCase() === w)
+    let hits = vis.filter(i => matches(i, ['key', 'session', 'pane']))
+    if (!hits.length) hits = vis.filter(i => matches(i, ['name', 'autoName']))
+    if (hits.length > 1)
+      throw new Error(
+        `"${word}" names ${hits.length} sessions (${hits.map(i => i.pane || i.key).join(', ')}): give its pane or key`,
+      )
+    const [hit] = hits
+    if (!hit) throw new Error(`no session "${word}" on the board`)
+    return hit
+  }
+
+  /** Pull file 0 of a call into `folder` and rewrite `argv[pos]`; returns `'ok'`, an error result, or null on link drop. */
+  async function pullArgFile(
+    id: string,
+    call: UplinkCall,
+    argv: string[],
+    pos: number,
+    folder: string,
+  ): Promise<'ok' | UplinkResult | null> {
+    const f = call.files.find(x => x.n === 0)
+    if (!f) return failed(`${argv[pos]}: the node did not send it`)
+    const big = fileTooBig(f.name, f.size)
+    if (big) return failed(big)
+    const path = await pull(id, call.id, f, join(folder, '0'))
+    if (path === null) return null
+    if (typeof path !== 'string') return failed(path.error)
+    argv[pos] = path
+    return 'ok'
+  }
+
   /** The call run, or null when a file it names could not be had for now. */
   async function runCall(id: string, call: UplinkCall): Promise<UplinkResult | null> {
     if (!UPLINK_COMMANDS.has(call.cmd))
-      return refused(
-        `board ${said(call.cmd)} is not taken from a node: only board thread, board send, board agents and board time`,
-      )
-    if (!call.session)
-      return refused("only a session's board thread, board send, board agents or board time is taken from a node")
-    if (call.cmd === 'send') return sendFrom(id, call)
-    if (call.cmd === 'agents') return agentsFrom(id, call)
-    if (call.cmd === 'time') return timeFrom(id, call)
+      return refused(`board ${said(call.cmd)} is not taken from a node: run it on the board's computer`)
+    if (!call.session) return refused("only a session's command is taken from a node")
+    switch (call.cmd) {
+      case 'send':
+        return sendFrom(id, call)
+      case 'agents':
+        return agentsFrom(id, call)
+      case 'time':
+        return timeFrom(id, call)
+      case 'cal':
+        return calFrom(id, call)
+      case 'team':
+        return teamFrom(id, call)
+      case 'decisions':
+        return decisionsFrom(id, call)
+      case 'journal':
+        return journalFrom(id, call)
+      case 'presence':
+      case 'away':
+        return presenceFrom(id, call)
+      case 'spend':
+        return spendFrom(id, call)
+      case 'cats':
+        return catsFrom(id, call)
+      case 'list':
+        return listFrom(id, call)
+      case 'remind':
+      case 'every':
+        return scheduleWriteFrom(id, call)
+      case 'unschedule':
+        return unscheduleFrom(id, call)
+    }
     const sub = call.argv[0] ?? 'help'
     const not = Object.hasOwn(NOT_FROM_NODE, sub) ? NOT_FROM_NODE[sub] : undefined
     if (not) return refused(not)
-    let key: string
-    try {
-      key = nodeKey(id, call.session)
-    } catch {
-      return refused('not a session of the node')
-    }
-    const item = o.find(key)
-    // The card's lane, whatever the node says; the node's word only for a session with no card here.
-    const lane = item?.category || call.lane || null
-    const name = item?.name || item?.autoName || call.session.slice(0, 8)
+    const who = sessionOf(id, call.session)
+    if (!who) return refused('not a session of the node')
+    const { key, name } = who
+    const lane = who.lane || call.lane || null
     const folder = join(store.dir(id), 'uplink', call.id)
     try {
       const { fileArgs, threadCmd } = await import('../../entrypoints/thread-cli.ts')
@@ -493,15 +615,8 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
       if ((argv[0] ?? 'list') === 'import') {
         const pos = timeImportFileArg(argv.slice(1))
         if (pos >= 0) {
-          const argIdx = pos + 1
-          const f = call.files.find(x => x.n === 0)
-          if (!f) return failed(`${argv[argIdx]}: the node did not send it`)
-          const big = fileTooBig(f.name, f.size)
-          if (big) return failed(big)
-          const path = await pull(id, call.id, f, join(folder, '0'))
-          if (path === null) return null
-          if (typeof path !== 'string') return failed(path.error)
-          argv[argIdx] = path
+          const pulled = await pullArgFile(id, call, argv, pos + 1, folder)
+          if (pulled !== 'ok') return pulled
         }
       }
       const code = await (o.runTime ?? timeCmd)(argv, {
@@ -516,6 +631,326 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
       return { code: 1, out, err: messageOf(err).split('\n') }
     } finally {
       rmSync(folder, { recursive: true, force: true })
+    }
+  }
+
+  /** `board cal …` in a session of the node (#698): runs against the master's calendar DB and config. */
+  async function calFrom(id: string, call: UplinkCall): Promise<UplinkResult | null> {
+    const who = sessionOf(id, call.session)
+    if (!who) return refused('not a session of the node')
+    const { node: _node, ...masterCfg } = o.cfg
+    const folder = join(store.dir(id), 'uplink', call.id)
+    const out: string[] = []
+    const err: string[] = []
+    try {
+      const { calCmd, calPushFileArg } = await import('../../entrypoints/cal-cli.ts')
+      const argv = [...call.argv]
+      if ((argv[0] ?? 'list') === 'push') {
+        const pos = calPushFileArg(argv.slice(1))
+        if (pos < 0) return refused('board cal push from a node needs --file <events.json>')
+        const pulled = await pullArgFile(id, call, argv, pos + 1, folder)
+        if (pulled !== 'ok') return pulled
+      }
+      const code = await (o.runCal ?? calCmd)(argv, {
+        cfg: masterCfg as Config,
+        actor: { key: who.key, name: who.name },
+        out: l => out.push(...l.split('\n')),
+        err: l => err.push(...l.split('\n')),
+      })
+      return { code, out, err }
+    } catch (e) {
+      return { code: 1, out, err: [...err, ...messageOf(e).split('\n')] }
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  }
+
+  /** `board team …` in a session of the node (#698): runs against the master's team service; refuses owner-setup/stream ops. */
+  async function teamFrom(id: string, call: UplinkCall): Promise<UplinkResult | null> {
+    const who = sessionOf(id, call.session)
+    if (!who) return refused('not a session of the node')
+    const why = teamRefusal(call.argv)
+    if (why) return refused(why)
+    const [op = '', ...more] = call.argv
+    const agentOp = ['post', 'reply', 'thread', 'drafts', 'assign', 'release', 'listen', 'loop'].includes(op)
+    const inboxOp = op === 'inbox'
+    const folder = join(store.dir(id), 'uplink', call.id)
+    try {
+      const { AGENT_USAGE, teamAgents, teamDraftTo, teamFileArg, teamRosterLines } = await import(
+        '../../entrypoints/team-agents-cli.ts'
+      )
+      if (op === 'draft' ? more.length !== 2 : !agentOp && !inboxOp && (op !== 'roster' || more.length))
+        return failed(`usage: ${AGENT_USAGE}`)
+      const argv = [...call.argv]
+      if (op === 'post' || op === 'reply') {
+        const filePos = teamFileArg(op, argv.slice(1))
+        if (filePos >= 0) {
+          const pulled = await pullArgFile(id, call, argv, filePos + 1, folder)
+          if (pulled !== 'ok') return pulled
+        }
+      }
+      if (o.runTeam) return await o.runTeam(argv, { key: who.key, name: who.name, lane: who.lane })
+      if (!teamConfig(o.cfg.team))
+        return {
+          code: 0,
+          out: [
+            'team is off (no "team" in config.json; `board team join <invite> --hub <url> --name <name>` turns it on)',
+          ],
+          err: [],
+        }
+      const port = webPort()
+      let res: Response
+      try {
+        res = await fetch(`http://127.0.0.1:${port}/api/team`, { signal: AbortSignal.timeout(3000) })
+      } catch {
+        return failed('the board does not run: open it first (herdr plugin action invoke agent-board.open)')
+      }
+      const view: unknown = await res.json().catch(() => undefined)
+      if (!isRecord(view) || !Array.isArray(view.roster)) return failed('the board does not run the team: restart it')
+      if (op === 'roster') return { code: 0, out: teamRosterLines(view), err: [] }
+      if (op === 'draft') {
+        const line = await teamDraftTo(port, view.roster, argv[1] ?? '', argv[2] ?? '')
+        return { code: 0, out: [line], err: [] }
+      }
+      if (inboxOp) {
+        const { teamInbox } = await import('../../entrypoints/team-inbox-cli.ts')
+        const out = await teamInbox(argv.slice(1), { webPort: port, roster: view.roster })
+        return { code: 0, out: out.split('\n'), err: [] }
+      }
+      const line = await teamAgents(op, argv.slice(1), {
+        webPort: port,
+        roster: view.roster,
+        self: async () => ({ key: who.key, ...(who.name && { name: who.name }) }),
+        find: async word => {
+          const item = findVisibleSession(id, word)
+          return { key: item.key, ...(item.name && { name: item.name }) }
+        },
+      })
+      return { code: 0, out: line.split('\n'), err: [] }
+    } catch (e) {
+      return failed(messageOf(e))
+    } finally {
+      rmSync(folder, { recursive: true, force: true })
+    }
+  }
+
+  /** `board decisions [--done] [--json]` in a session of the node (#698). */
+  async function decisionsFrom(id: string, call: UplinkCall): Promise<UplinkResult> {
+    if (!sessionOf(id, call.session)) return refused('not a session of the node')
+    const json = call.argv.includes('--json')
+    if (!decisionsConfig(o.cfg.decisions)) {
+      const msg = 'decisions are off on this board (config.json "decisions")'
+      return json ? { code: 1, out: [JSON.stringify({ ok: false, error: 'off', message: msg })], err: [] } : failed(msg)
+    }
+    const out: string[] = []
+    try {
+      const { decisionsCommand } = await import('../../entrypoints/decisions-cli.ts')
+      ;(o.runDecisions ?? decisionsCommand)(call.argv, Date.now(), l => out.push(...l.split('\n')))
+      return { code: 0, out, err: [] }
+    } catch (e) {
+      const msg = messageOf(e)
+      if (json)
+        return {
+          code: 1,
+          out: [JSON.stringify({ ok: false, error: e instanceof DecisionError ? e.code : 'failed', message: msg })],
+          err: [],
+        }
+      return failed(msg)
+    }
+  }
+
+  /** `board journal …` in a session of the node (#698). */
+  async function journalFrom(id: string, call: UplinkCall): Promise<UplinkResult> {
+    if (!sessionOf(id, call.session)) return refused('not a session of the node')
+    const { node: _node, ...masterCfg } = o.cfg
+    const out: string[] = []
+    const err: string[] = []
+    try {
+      const { journalCmd } = await import('../../entrypoints/journal-cli.ts')
+      const code = (o.runJournal ?? journalCmd)(call.argv, {
+        cfg: masterCfg as Config,
+        out: l => out.push(...l.split('\n')),
+        err: l => err.push(...l.split('\n')),
+      })
+      return { code, out, err }
+    } catch (e) {
+      return { code: 1, out, err: [...err, ...messageOf(e).split('\n')] }
+    }
+  }
+
+  /** `board presence [here|away|call]` and `board away [on|off]` in a session of the node (#698). */
+  async function presenceFrom(id: string, call: UplinkCall): Promise<UplinkResult> {
+    if (!sessionOf(id, call.session)) return refused('not a session of the node')
+    const word = (call.argv[0] ?? '').toLowerCase()
+    const state: PresenceState | null =
+      call.cmd === 'away'
+        ? word === '' || word === 'on'
+          ? 'away'
+          : word === 'off'
+            ? 'here'
+            : null
+        : word === ''
+          ? null
+          : isPresenceState(word)
+            ? word
+            : null
+    if (call.argv.length > 1 || (word && !state))
+      return failed(call.cmd === 'away' ? 'usage: board away [on|off]' : 'usage: board presence [here|away|call]')
+    if (!presenceConfig(o.cfg.presence)) {
+      if (!state)
+        return {
+          code: 0,
+          out: ['presence is off (no "presence" in config.json; Settings → Presence turns it on)'],
+          err: [],
+        }
+      return failed(t('err.presenceOff'))
+    }
+    if (!state) return { code: 0, out: [presenceLine(currentPresence())], err: [] }
+    const { presence: p, changed } = (o.setPresence ?? ((st, fr) => setPresence(st, 'user', fr)))(state, 'agent')
+    return { code: 0, out: [`ok · ${changed ? '' : 'already '}${p.state}`], err: [] }
+  }
+
+  /** `board spend …` in a session of the node (#698). */
+  async function spendFrom(id: string, call: UplinkCall): Promise<UplinkResult> {
+    if (!sessionOf(id, call.session)) return refused('not a session of the node')
+    const { node: _node, ...masterCfg } = o.cfg
+    const out: string[] = []
+    const err: string[] = []
+    try {
+      const [{ spendCmd }, { defaultDeps }] = await Promise.all([
+        import('../../entrypoints/spend-cli.ts'),
+        import('../deps.ts'),
+      ])
+      const code = await (o.runSpend ?? spendCmd)(call.argv, {
+        cfg: masterCfg as Config,
+        deps: o.deps ?? defaultDeps(masterCfg as Config),
+        items: visibleItems(id),
+        out: l => out.push(...l.split('\n')),
+        err: l => err.push(...l.split('\n')),
+      })
+      return { code, out, err }
+    } catch (e) {
+      return { code: 1, out, err: [...err, ...messageOf(e).split('\n')] }
+    }
+  }
+
+  /** `board cats` in a session of the node (#698): master categories without leaking master filesystem paths. */
+  function catsFrom(id: string, call: UplinkCall): UplinkResult {
+    if (!sessionOf(id, call.session)) return refused('not a session of the node')
+    const known = o.cfg.categories.map(c => `${c.id} (${categoryInfo(o.cfg, c.id).title})`).join(', ')
+    return { code: 0, out: [`${known}. A new id makes a new lane.`], err: [] }
+  }
+
+  /** `board list` in a session of the node (#698): master sessions and this node's own, never another node's. */
+  function listFrom(id: string, call: UplinkCall): UplinkResult {
+    if (!sessionOf(id, call.session)) return refused('not a session of the node')
+    const items = visibleItems(id)
+    const order = new Map(COLUMNS.map((c, i) => [c.id, i]))
+    items.sort(
+      (a, b) =>
+        laneRank(o.cfg, a.category) - laneRank(o.cfg, b.category) ||
+        a.category.localeCompare(b.category) ||
+        (order.get(a.column) ?? 0) - (order.get(b.column) ?? 0),
+    )
+    const soonest = new Map<string, number>()
+    for (const e of listEntries()) if (!soonest.has(e.key)) soonest.set(e.key, e.next)
+    const now = Date.now()
+    const out = items.map(i => {
+      const col = COLUMNS.find(c => c.id === i.column)?.title
+      const note = noteOf(i)
+      const next = soonest.get(i.key)
+      const alarm = next !== undefined ? ` ⏰ ${shortWhen(next, t)}` : ''
+      let bgNote = ''
+      if (bgTaskActive(i.bgTasks)) {
+        const stuck = isBgTaskStuck(i.bgTasks, now)
+        const ageText = i.bgTasks.since
+          ? now - i.bgTasks.since < 60_000
+            ? t('ago.now')
+            : span(now - i.bgTasks.since, t)
+          : ''
+        bgNote = ` [${bgTaskLabel(i.bgTasks, ageText, stuck, t)}]`
+      }
+      return `${i.name} [${i.category}] ${col}${i.sleeping ? ` (${statusText('sleeping')})` : ''}${alarm}${bgNote}${note ? `: ${note.slice(0, 80)}` : ''}`
+    })
+    return { code: 0, out, err: [] }
+  }
+
+  /** `board remind` / `board every` aimed at another session from a node (#698). */
+  function scheduleWriteFrom(id: string, call: UplinkCall): UplinkResult {
+    const who = sessionOf(id, call.session)
+    if (!who) return refused('not a session of the node')
+    const dashes = call.argv.indexOf('--')
+    const before = dashes < 0 ? [...call.argv] : call.argv.slice(0, dashes)
+    const si = before.indexOf('--session')
+    const targetWord = si >= 0 ? before[si + 1] : undefined
+    if (si < 0 || !targetWord) return refused(`board ${call.cmd} from a node requires --session <target>`)
+    const cleanBefore = before.filter((_, i) => i !== si && i !== si + 1)
+    const restArgv = dashes < 0 ? cleanBefore : [...cleanBefore, ...call.argv.slice(dashes)]
+    try {
+      const targetItem = findVisibleSession(id, targetWord)
+      const now = Date.now()
+      const isMasterTarget = !parseNodeKey(targetItem.key)
+      const from = targetItem.key !== who.key ? { key: who.key, name: who.name } : undefined
+      if (call.cmd === 'remind') {
+        const parsed = parseRemindRest(restArgv, now)
+        const e = addEntry({
+          key: targetItem.key,
+          name: targetItem.name || targetItem.autoName || '',
+          ...(isMasterTarget && targetItem.pane && { pane: targetItem.pane }),
+          ...(isMasterTarget && targetItem.cwd && { cwd: targetItem.cwd }),
+          ...(parsed.idle && { idle: true }),
+          ...(from && { from }),
+          text: parsed.text,
+          at: parsed.at,
+          next: parsed.at,
+          by: 'agent',
+        })
+        return { code: 0, out: [formatRemindOk(e.id, parsed.at, now, parsed.idle, parsed.text)], err: [] }
+      }
+      const parsed = parseEveryRest(restArgv, now)
+      const e = addEntry({
+        key: targetItem.key,
+        name: targetItem.name || targetItem.autoName || '',
+        ...(isMasterTarget && targetItem.pane && { pane: targetItem.pane }),
+        ...(isMasterTarget && targetItem.cwd && { cwd: targetItem.cwd }),
+        ...(parsed.idle && { idle: true }),
+        ...(from && { from }),
+        text: parsed.text,
+        cron: parsed.cron.expr,
+        next: parsed.next,
+        by: 'agent',
+      })
+      return {
+        code: 0,
+        out: [formatEveryOk(e.id, parsed.cron.expr, parsed.next, now, parsed.idle, parsed.text)],
+        err: [],
+      }
+    } catch (e) {
+      return failed(messageOf(e))
+    }
+  }
+
+  /** `board unschedule <id>` from a node (#698): removes an entry belonging to or created by the calling node session. */
+  function unscheduleFrom(id: string, call: UplinkCall): UplinkResult {
+    const who = sessionOf(id, call.session)
+    if (!who) return refused('not a session of the node')
+    const raw = call.argv[0] ?? ''
+    if (!raw) return failed('usage: board unschedule <id>')
+    if (raw.toLowerCase() === 'all')
+      return refused("board unschedule all is for this session's local schedule on the node")
+    const entryId = raw.toLowerCase()
+    const existing = getEntry(entryId)
+    if (!existing) return failed(`no entry "${raw}"; see board schedule`)
+    if (existing.key !== who.key && existing.from?.key !== who.key)
+      return refused("cannot unschedule another session's entry from a node")
+    const removed = removeEntry(entryId)
+    if (!removed) return failed(`no entry "${raw}"; see board schedule`)
+    return {
+      code: 0,
+      out: [
+        `ok · removed ${removed.id} (${removed.cron ? `every "${removed.cron}"` : stamp(removed.next)}${removed.name ? `, ${removed.name}` : ''}): ${clip(removed.text)}`,
+      ],
+      err: [],
     }
   }
 
@@ -536,7 +971,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
 
   /** An entry of a shared thread, sent by this board as `board thread` on this computer has it sent (#394). */
   async function sendOut(thread: string, entry: string): Promise<{ out: string; why?: string } | null> {
-    const port = Number(o.cfg.port) || 12422
+    const port = webPort()
     try {
       const res = await fetch(`http://127.0.0.1:${port}/api/threads/${encodeURIComponent(thread)}`, {
         method: 'POST',

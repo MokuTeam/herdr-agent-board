@@ -2,10 +2,15 @@
 // by field on both sides, a file by its number and name only, never a path.
 import { describe, expect, test } from 'bun:test'
 import {
+  CAL_WRITE_SUBS,
   fileTooBig,
+  isKeptCall,
+  isRememberedCall,
   KEPT_SUBS,
   NOT_FROM_NODE,
+  TEAM_NOT_FROM_NODE,
   TIME_WRITE_SUBS,
+  teamRefusal,
   UPLINK_COMMANDS,
   uplinkCallOf,
   uplinkResultOf,
@@ -66,10 +71,50 @@ test('a result: an exit code and lines', () => {
 })
 
 test('what the master takes, what a node keeps, and what is never run for a node', () => {
-  expect([...UPLINK_COMMANDS]).toEqual(['thread', 'threads', 'send', 'agents', 'time'])
+  expect([...UPLINK_COMMANDS]).toEqual([
+    'thread',
+    'threads',
+    'send',
+    'agents',
+    'time',
+    'cal',
+    'team',
+    'decisions',
+    'journal',
+    'presence',
+    'away',
+    'spend',
+    'cats',
+    'list',
+    'remind',
+    'every',
+    'unschedule',
+  ])
   expect([...KEPT_SUBS].sort()).toEqual(['ask', 'done', 'new', 'post', 'set', 'unwatch', 'watch'])
   expect([...TIME_WRITE_SUBS].sort()).toEqual(['add', 'edit', 'import', 'move', 'post', 'restore', 'rm', 'unpost'])
+  expect([...CAL_WRITE_SUBS].sort()).toEqual(['add', 'edit', 'push', 'rm'])
   expect(Object.keys(NOT_FROM_NODE).sort()).toEqual(['import', 'open', 'share'])
+  expect(Object.keys(TEAM_NOT_FROM_NODE).sort()).toEqual(['join', 'watch'])
+  expect(teamRefusal(['join', 'x'])).toContain('board team join')
+  expect(teamRefusal(['watch'])).toContain('board team watch')
+  expect(teamRefusal(['listen'])).toContain('owner to confirm')
+  expect(teamRefusal(['listen', 'off'])).toBeNull()
+  expect(teamRefusal(['loop', 'anna'])).toBeNull()
+  expect(teamRefusal(['loop', 'anna', '5'])).toContain('owner to confirm')
+  expect(isKeptCall('thread', ['post', 'k'])).toBe(true)
+  expect(isKeptCall('team', ['draft', 'anna', 'hi'])).toBe(true)
+  expect(isKeptCall('team', ['post', 'anna', 'hi'])).toBe(false)
+  expect(isRememberedCall('cal', ['add'])).toBe(true)
+  expect(isRememberedCall('cal', ['list'])).toBe(false)
+  expect(isRememberedCall('team', ['thread', 'k', '--read'])).toBe(true)
+  expect(isRememberedCall('team', ['thread', 'k'])).toBe(false)
+  expect(isRememberedCall('team', ['thread', 'k', '--', '--read'])).toBe(false)
+  expect(isRememberedCall('presence', ['away'])).toBe(true)
+  expect(isRememberedCall('presence', [])).toBe(false)
+  expect(isRememberedCall('away', [])).toBe(true)
+  expect(isRememberedCall('remind', ['--session', 'x', 'in 5m', 'hi'])).toBe(true)
+  expect(isRememberedCall('every', ['--session', 'x', '0 * * * *', 'hi'])).toBe(true)
+  expect(isRememberedCall('unschedule', ['abc123'])).toBe(true)
   expect(fileTooBig('r.md', 5 * 1024 * 1024)).toBeNull()
   expect(fileTooBig('r.md', 5 * 1024 * 1024 + 1)).toBe('r.md: 6 MB; 5 MB at most on a local thread')
 })

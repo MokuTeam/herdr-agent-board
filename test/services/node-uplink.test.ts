@@ -3,19 +3,22 @@
 // together are in test/server/node-uplink.test.ts.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createOutbox } from '../../src/adapters/node-outbox.ts'
 import { createDeviceStore } from '../../src/adapters/node-store.ts'
-import { listEntries } from '../../src/adapters/schedule-store.ts'
+import { stateDir } from '../../src/adapters/paths.ts'
+import { addEntry, listEntries } from '../../src/adapters/schedule-store.ts'
 import { RESULT_LINE_MAX, type UplinkResult } from '../../src/core/node-uplink.ts'
 import type { LinkStatus } from '../../src/core/nodes.ts'
 import type { Item } from '../../src/core/types.ts'
+import type { CalCmdContext } from '../../src/entrypoints/cal-cli.ts'
 import type { ThreadCmdContext } from '../../src/entrypoints/thread-cli.ts'
 import type { TimeCmdContext } from '../../src/entrypoints/time-cli.ts'
 import { createNodeUplink } from '../../src/services/node/uplink.ts'
 import type { Link } from '../../src/services/nodes/link.ts'
 import { createUplinkRunner } from '../../src/services/nodes/uplink.ts'
+import { boardOwnFile } from '../../src/services/team-router.ts'
 import { isolatedHome } from '../support/env.ts'
 import { until } from '../support/sandbox.ts'
 
@@ -63,11 +66,26 @@ describe("the node's side", () => {
     })
     expect(Date.now() - started).toBeLessThan(100)
     expect(outbox.list()).toEqual([])
-    // board send (#619) is never kept, whatever it is sent to: a card named like a thread write too.
+    // board send (#619) and cal/presence (#698) are never kept; team draft IS kept (#698).
     expect(await up.call({ cmd: 'send', argv: ['post', 'x'], session: 's-1', lane: null })).toEqual({
       status: 200,
       body: { state: 'unreachable' },
     })
+    expect(await up.call({ cmd: 'cal', argv: ['add'], session: 's-1', lane: null })).toEqual({
+      status: 200,
+      body: { state: 'unreachable' },
+    })
+    expect(outbox.list()).toEqual([])
+    const keptDraft = await up.call({
+      id: 'draft-1',
+      cmd: 'team',
+      argv: ['draft', 'anna', 'hello'],
+      session: 's-1',
+      lane: null,
+    })
+    expect(keptDraft).toEqual({ status: 200, body: { state: 'kept', id: 'draft-1' } })
+    expect(outbox.list().map(c => c.id)).toEqual(['draft-1'])
+    up.answer('draft-1', { code: 0, out: ['ok'], err: [] })
     expect(outbox.list()).toEqual([])
 
     const file = join(dir, 'r.md')
@@ -368,7 +386,7 @@ describe("the master's side", () => {
     const dir = isolatedHome()
     const bytes = Buffer.from('real')
     const sent = [
-      { id: 'r-1', cmd: 'cal', argv: ['list'], session: 's-1', lane: null },
+      { id: 'r-1', cmd: 'backup', argv: ['status'], session: 's-1', lane: null },
       { id: 'r-2', cmd: 'thread', argv: ['post', 'k', 'x'], session: '', lane: null },
       { id: 'r-3', cmd: 'thread', argv: ['share', 'k', 'team'], session: 's-1', lane: null },
       { id: 'r-4', cmd: 'thread', argv: ['open', 'k'], session: 's-1', lane: null },
@@ -390,6 +408,8 @@ describe("the master's side", () => {
         files: [{ n: 0, name: 'b.md', size: 6 * 1024 * 1024, sha256: sha('x') }],
       },
       { id: 'r-8', cmd: 'thread', argv: ['post', 'k', '--file', '/x/c.md'], session: 's-1', lane: null },
+      { id: 'r-9', cmd: 'db', argv: ['restore'], session: 's-1', lane: null },
+      { id: 'r-10', cmd: 'nodes', argv: ['status'], session: 's-1', lane: null },
     ]
     const posted = new Map<string, UplinkResult>()
     const fetched: string[] = []
@@ -423,12 +443,12 @@ describe("the master's side", () => {
       'r-1': {
         code: 126,
         out: [],
-        err: ['board cal is not taken from a node: only board thread, board send, board agents and board time'],
+        err: ["board backup is not taken from a node: run it on the board's computer"],
       },
       'r-2': {
         code: 126,
         out: [],
-        err: ["only a session's board thread, board send, board agents or board time is taken from a node"],
+        err: ["only a session's command is taken from a node"],
       },
       'r-3': { code: 126, out: [], err: ['board thread share is for the owner to confirm: not from a node'] },
       'r-4': { code: 126, out: [], err: ['board thread open opens the board on its own computer: not from a node'] },
@@ -436,6 +456,8 @@ describe("the master's side", () => {
       'r-6': { code: 1, out: [], err: ['a.md: not the file the node named'] },
       'r-7': { code: 1, out: [], err: ['b.md: 6 MB; 5 MB at most on a local thread'] },
       'r-8': { code: 1, out: [], err: ['/x/c.md: the node did not send it'] },
+      'r-9': { code: 126, out: [], err: ["board db is not taken from a node: run it on the board's computer"] },
+      'r-10': { code: 126, out: [], err: ["board nodes is not taken from a node: run it on the board's computer"] },
     })
     // The file too large is never asked for.
     expect(fetched).toEqual(['/api/node/uplink/r-6/file/0'])
@@ -865,5 +887,356 @@ describe("the master's side", () => {
     await runner.close()
     expect(store.seenCall('server-1', 'b-1')).toBeNull()
     expect(store.seenCall('server-1', 'a-1')).toEqual({ code: 0, out: [], err: [] })
+  })
+
+  test('#698 board cal from a node deduplicates writes, pulls push --file, and refuses push without --file', async () => {
+    const dir = isolatedHome()
+    const store = createDeviceStore({ dir: join(dir, 'nodes') })
+    const eventsJson = Buffer.from('[{"title":"Standup"}]')
+    const sent = [
+      {
+        id: 'c-1',
+        cmd: 'cal',
+        argv: ['add', '--title', 'Sync', '--start', '10:00', '--minutes', '30'],
+        session: 's-1',
+        lane: null,
+      },
+      {
+        id: 'c-1',
+        cmd: 'cal',
+        argv: ['add', '--title', 'Sync', '--start', '10:00', '--minutes', '30'],
+        session: 's-1',
+        lane: null,
+      },
+      { id: 'c-2', cmd: 'cal', argv: ['list'], session: 's-1', lane: null },
+      {
+        id: 'c-3',
+        cmd: 'cal',
+        argv: ['push', '--source', 'work', '--file', '/n/events.json'],
+        session: 's-1',
+        lane: null,
+        files: [{ n: 0, name: 'events.json', size: eventsJson.length, sha256: sha(eventsJson) }],
+      },
+      { id: 'c-4', cmd: 'cal', argv: ['push', '--source', 'work'], session: 's-1', lane: null },
+    ]
+    const posted: [string, UplinkResult][] = []
+    const link = standIn((path, init) => {
+      if (path === '/api/node/uplink') return streamOf(sent, init.signal)
+      if (path === '/api/node/uplink/c-3/file/0') return new Response(eventsJson)
+      posted.push([path.split('/').pop() as string, JSON.parse(String(init.body)) as UplinkResult])
+      return new Response('{}')
+    })
+    const card = { key: '@server-1:s-1', category: 'atlas', name: 'worker' } as Item
+    const ran: { argv: string[]; ctx: CalCmdContext; fileText?: string }[] = []
+    const runner = createUplinkRunner({
+      links: link.links,
+      find: key => (key === card.key ? card : undefined),
+      items: () => [card],
+      cfg: { calendar: true, node: { id: 'server-1', port: 12430 } } as never,
+      log: () => {},
+      store,
+      runCal: async (argv, ctx) => {
+        const fileText = argv[0] === 'push' ? readFileSync(argv[4] as string, 'utf8') : undefined
+        ran.push({ argv: [...argv], ctx, ...(fileText !== undefined && { fileText }) })
+        ctx.out?.(`cal ${argv[0]}`)
+        return 0
+      },
+    })
+    link.changed('online')
+    await until(() => posted.length === sent.length, 5000)
+    await runner.close()
+
+    expect(ran.map(r => r.argv[0])).toEqual(['add', 'list', 'push'])
+    expect(ran[0]?.ctx.actor).toEqual({ key: '@server-1:s-1', name: 'worker' })
+    expect(ran[0]?.ctx.cfg.node).toBeUndefined()
+    expect(ran[2]?.fileText).toBe('[{"title":"Standup"}]')
+    expect(ran[2]?.argv[4]?.startsWith(join(dir, 'nodes', 'server-1', 'uplink', 'c-3'))).toBe(true)
+    expect(readdirSync(join(dir, 'nodes', 'server-1', 'uplink'))).toEqual([])
+    const answers = (id: string) => posted.filter(([p]) => p === id).map(([, r]) => r)
+    expect(answers('c-1')).toEqual([
+      { code: 0, out: ['cal add'], err: [] },
+      { code: 0, out: ['cal add'], err: [] },
+    ])
+    expect(answers('c-4')).toEqual([
+      { code: 126, out: [], err: ['board cal push from a node needs --file <events.json>'] },
+    ])
+    expect(store.seenCall('server-1', 'c-1')).toEqual({ code: 0, out: ['cal add'], err: [] })
+    expect(store.seenCall('server-1', 'c-2')).toBeNull()
+  })
+
+  test('#698 board team refuses join/watch/listen/loop-set, pulls post --file, deduplicates writes, and allows uplink files in boardOwnFile', async () => {
+    const dir = isolatedHome()
+    // Verify boardOwnFile allows nodes/<id>/uplink/<callId>/file.txt and blocks nodes/<id>/token.
+    const uplinkCopy = join(stateDir(), 'nodes', 'server-1', 'uplink', 'tm-1', 'note.txt')
+    const tokenFile = join(stateDir(), 'nodes', 'server-1', 'token')
+    mkdirSync(join(uplinkCopy, '..'), { recursive: true })
+    writeFileSync(uplinkCopy, 'safe text')
+    writeFileSync(tokenFile, 'secret')
+    expect(boardOwnFile(uplinkCopy)).toBe(false)
+    expect(boardOwnFile(tokenFile)).toBe(true)
+
+    const store = createDeviceStore({ dir: join(dir, 'nodes') })
+    const note = Buffer.from('hello team')
+    const sent = [
+      {
+        id: 't-join',
+        cmd: 'team',
+        argv: ['join', 'inv', '--hub', 'ws://h:7443', '--name', 'n'],
+        session: 's-1',
+        lane: null,
+      },
+      { id: 't-watch', cmd: 'team', argv: ['watch'], session: 's-1', lane: null },
+      { id: 't-listen', cmd: 'team', argv: ['listen'], session: 's-1', lane: null },
+      { id: 't-loop-set', cmd: 'team', argv: ['loop', 'anna', '5'], session: 's-1', lane: null },
+      { id: 't-loop-read', cmd: 'team', argv: ['loop', 'anna'], session: 's-1', lane: null },
+      { id: 't-listen-off', cmd: 'team', argv: ['listen', 'off'], session: 's-1', lane: null },
+      { id: 't-draft', cmd: 'team', argv: ['draft', 'anna', 'hi'], session: 's-1', lane: null },
+      { id: 't-draft', cmd: 'team', argv: ['draft', 'anna', 'hi'], session: 's-1', lane: null },
+      {
+        id: 't-post',
+        cmd: 'team',
+        argv: ['post', 'anna', '--file', '/n/note.txt', 'see file'],
+        session: 's-1',
+        lane: null,
+        files: [{ n: 0, name: 'note.txt', size: note.length, sha256: sha(note) }],
+      },
+      { id: 't-read', cmd: 'team', argv: ['thread', 'anna', '--read'], session: 's-1', lane: null },
+      { id: 't-thread', cmd: 'team', argv: ['thread', 'anna'], session: 's-1', lane: null },
+    ]
+    const posted: [string, UplinkResult][] = []
+    const link = standIn((path, init) => {
+      if (path === '/api/node/uplink') return streamOf(sent, init.signal)
+      if (path === '/api/node/uplink/t-post/file/0') return new Response(note)
+      posted.push([path.split('/').pop() as string, JSON.parse(String(init.body)) as UplinkResult])
+      return new Response('{}')
+    })
+    const card = { key: '@server-1:s-1', category: 'atlas', name: 'worker' } as Item
+    const ran: { argv: string[]; fileText?: string }[] = []
+    const runner = createUplinkRunner({
+      links: link.links,
+      find: key => (key === card.key ? card : undefined),
+      items: () => [card],
+      cfg: { team: { hub: 'ws://127.0.0.1:1', name: 'master' } } as never,
+      log: () => {},
+      store,
+      runTeam: async argv => {
+        const fileText = argv[0] === 'post' ? readFileSync(argv[3] as string, 'utf8') : undefined
+        ran.push({ argv: [...argv], ...(fileText !== undefined && { fileText }) })
+        return { code: 0, out: [`team ${argv[0]}`], err: [] }
+      },
+    })
+    link.changed('online')
+    await until(() => posted.length === sent.length, 5000)
+    await runner.close()
+
+    const byId = (id: string) => posted.filter(([p]) => p === id).map(([, r]) => r)
+    expect(byId('t-join')[0]?.code).toBe(126)
+    expect(byId('t-watch')[0]?.code).toBe(126)
+    expect(byId('t-listen')[0]?.code).toBe(126)
+    expect(byId('t-loop-set')[0]?.code).toBe(126)
+    expect(ran.map(r => r.argv[0])).toEqual(['loop', 'listen', 'draft', 'post', 'thread', 'thread'])
+    expect(ran.find(r => r.argv[0] === 'post')?.fileText).toBe('hello team')
+    expect(store.seenCall('server-1', 't-draft')).toEqual({ code: 0, out: ['team draft'], err: [] })
+    expect(store.seenCall('server-1', 't-read')).toEqual({ code: 0, out: ['team thread'], err: [] })
+    expect(store.seenCall('server-1', 't-thread')).toBeNull()
+  })
+
+  test('#698 decisions, journal, presence/away, spend, cats, list, remind/every, and unschedule enforce trust boundary and dedup writes', async () => {
+    const dir = isolatedHome()
+    const store = createDeviceStore({ dir: join(dir, 'nodes') })
+    const mine = {
+      key: '@server-1:s-1',
+      session: 's-1',
+      name: 'NodeOne',
+      category: 'atlas',
+      column: 'work',
+      status: 'working',
+    } as Item
+    const masterItem = {
+      key: '11111111-1111-4111-8111-111111111111',
+      session: '11111111-1111-4111-8111-111111111111',
+      name: 'MasterSession',
+      pane: 'w1:p1',
+      cwd: '/srv/master',
+      category: 'personal',
+      column: 'idle',
+      status: 'idle',
+    } as Item
+    const otherNode = {
+      key: '@server-2:22222222-2222-4222-8222-222222222222',
+      session: '22222222-2222-4222-8222-222222222222',
+      name: 'HiddenPeer',
+      device: 'server-2',
+      pane: 'w9:p9',
+      category: 'other',
+      column: 'work',
+      status: 'working',
+    } as Item
+    const otherEntry = addEntry({
+      key: masterItem.key,
+      name: 'MasterSession',
+      text: 'owners reminder',
+      at: Date.now() + 600_000,
+      next: Date.now() + 600_000,
+      by: 'agent',
+    })
+    const items = [mine, masterItem, otherNode]
+
+    const sent = [
+      { id: 'd-1', cmd: 'decisions', argv: ['--done', '--json'], session: 's-1', lane: null },
+      { id: 'j-1', cmd: 'journal', argv: ['--since', '1h', '--json'], session: 's-1', lane: null },
+      { id: 'p-read', cmd: 'presence', argv: [], session: 's-1', lane: null },
+      { id: 'p-set', cmd: 'presence', argv: ['away'], session: 's-1', lane: null },
+      { id: 'p-set', cmd: 'presence', argv: ['away'], session: 's-1', lane: null },
+      { id: 'p-bad', cmd: 'away', argv: ['bogus'], session: 's-1', lane: null },
+      { id: 'sp-1', cmd: 'spend', argv: ['--day', 'today', '--json'], session: 's-1', lane: null },
+      { id: 'ct-1', cmd: 'cats', argv: [], session: 's-1', lane: null },
+      { id: 'ls-1', cmd: 'list', argv: [], session: 's-1', lane: null },
+      { id: 'rm-no-target', cmd: 'remind', argv: ['in', '10m', 'ping'], session: 's-1', lane: null },
+      {
+        id: 'rm-other-node',
+        cmd: 'remind',
+        argv: ['--session', 'HiddenPeer', 'in', '10m', 'ping'],
+        session: 's-1',
+        lane: null,
+      },
+      {
+        id: 'rm-ok',
+        cmd: 'remind',
+        argv: ['--session', 'MasterSession', '--idle', 'in', '10m', 'ping master'],
+        session: 's-1',
+        lane: null,
+      },
+      {
+        id: 'rm-ok',
+        cmd: 'remind',
+        argv: ['--session', 'MasterSession', '--idle', 'in', '10m', 'ping master'],
+        session: 's-1',
+        lane: null,
+      },
+      {
+        id: 'ev-ok',
+        cmd: 'every',
+        argv: ['--session', 'MasterSession', '0 9 * * 1-5', 'daily check'],
+        session: 's-1',
+        lane: null,
+      },
+      { id: 'un-other', cmd: 'unschedule', argv: [otherEntry.id], session: 's-1', lane: null },
+      { id: 'un-all', cmd: 'unschedule', argv: ['all'], session: 's-1', lane: null },
+    ]
+    const posted: [string, UplinkResult][] = []
+    const link = standIn((path, init) => {
+      if (path === '/api/node/uplink') return streamOf(sent, init.signal)
+      posted.push([path.split('/').pop() as string, JSON.parse(String(init.body)) as UplinkResult])
+      return new Response('{}')
+    })
+
+    let presenceSetCalls = 0
+    let spendItems: readonly Item[] = []
+    const runner = createUplinkRunner({
+      links: link.links,
+      find: key => items.find(i => i.key === key),
+      items: () => items,
+      cfg: {
+        decisions: true,
+        journal: true,
+        presence: true,
+        categories: [
+          { id: 'atlas', title: 'Atlas', color: 'cyan', paths: [] },
+          { id: 'personal', title: 'Personal', color: 'green', paths: [] },
+        ],
+        node: { id: 'server-1', port: 12430 },
+      } as never,
+      log: () => {},
+      store,
+      setPresence: state => {
+        presenceSetCalls++
+        return { presence: { state, since: 1, by: 'user', via: 'agent' }, changed: true }
+      },
+      runDecisions: (words, _now, out) => {
+        out(`dec ${words.join(' ')}`)
+      },
+      runJournal: (args, ctx) => {
+        ctx.out(`journal ${args.join(' ')}`)
+        return 0
+      },
+      runSpend: async (args, ctx) => {
+        spendItems = ctx.items ?? []
+        ctx.out?.(`spend ${args.join(' ')}`)
+        return 0
+      },
+    })
+    link.changed('online')
+    await until(() => posted.length === sent.length, 5000)
+    await runner.close()
+
+    const byId = (id: string) => posted.filter(([p]) => p === id).map(([, r]) => r)
+    expect(byId('d-1')[0]).toEqual({ code: 0, out: ['dec --done --json'], err: [] })
+    expect(byId('j-1')[0]).toEqual({ code: 0, out: ['journal --since 1h --json'], err: [] })
+    expect(byId('p-read')[0]?.code).toBe(0)
+    expect(byId('p-set')).toEqual([
+      { code: 0, out: ['ok · away'], err: [] },
+      { code: 0, out: ['ok · away'], err: [] },
+    ])
+    expect(presenceSetCalls).toBe(1)
+    expect(byId('p-bad')[0]).toEqual({ code: 1, out: [], err: ['usage: board away [on|off]'] })
+    expect(byId('sp-1')[0]).toEqual({ code: 0, out: ['spend --day today --json'], err: [] })
+    expect(spendItems.map(i => i.key)).toEqual([mine.key, masterItem.key])
+    expect(byId('ct-1')[0]).toEqual({
+      code: 0,
+      out: ['atlas (Atlas), personal (Personal). A new id makes a new lane.'],
+      err: [],
+    })
+    const listText = byId('ls-1')[0]?.out.join('\n') ?? ''
+    expect(listText).toContain('NodeOne')
+    expect(listText).toContain('MasterSession')
+    expect(listText).not.toContain('HiddenPeer')
+
+    expect(byId('rm-no-target')[0]?.code).toBe(126)
+    expect(byId('rm-other-node')[0]).toEqual({ code: 1, out: [], err: ['no session "HiddenPeer" on the board'] })
+    expect(byId('rm-ok')).toHaveLength(2)
+    expect(byId('rm-ok')[0]).toEqual(byId('rm-ok')[1])
+    expect(byId('rm-ok')[0]?.out[0]).toContain('when the session is free')
+    expect(byId('ev-ok')[0]?.out[0]).toContain('every ')
+
+    // Master schedule has otherEntry + 1 remind + 1 every (rm-ok ran once).
+    const created = listEntries().filter(e => e.from?.key === '@server-1:s-1')
+    expect(created).toHaveLength(2)
+    expect(created.find(e => e.text === 'ping master')).toMatchObject({
+      key: masterItem.key,
+      pane: 'w1:p1',
+      cwd: '/srv/master',
+      idle: true,
+      from: { key: '@server-1:s-1', name: 'NodeOne' },
+    })
+    expect(byId('un-other')[0]?.code).toBe(126)
+    expect(byId('un-all')[0]?.code).toBe(126)
+
+    // Caller can unschedule its own created entry over the uplink.
+    const createdId = created[0]?.id as string
+    const posted2: UplinkResult[] = []
+    const link2 = standIn((path, init) => {
+      if (path === '/api/node/uplink')
+        return streamOf(
+          [{ id: 'un-mine', cmd: 'unschedule', argv: [createdId], session: 's-1', lane: null }],
+          init.signal,
+        )
+      posted2.push(JSON.parse(String(init.body)) as UplinkResult)
+      return new Response('{}')
+    })
+    const runner2 = createUplinkRunner({
+      links: link2.links,
+      find: key => items.find(i => i.key === key),
+      items: () => items,
+      cfg: {} as never,
+      log: () => {},
+      store,
+    })
+    link2.changed('online')
+    await until(() => posted2.length === 1, 5000)
+    await runner2.close()
+    expect(posted2[0]?.code).toBe(0)
+    expect(posted2[0]?.out[0]).toContain(`ok · removed ${createdId}`)
+    expect(listEntries().some(e => e.id === createdId)).toBe(false)
   })
 })

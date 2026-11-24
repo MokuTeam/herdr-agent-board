@@ -140,6 +140,13 @@ export function boardOwnFile(path: string): boolean {
     return !!d && (file === d || file.startsWith(d.endsWith(sep) ? d : d + sep))
   }
   if (inside(uploadsDir()) || inside(join(stateDir(), 'thread-files'))) return false
+  // Files pulled from a node for a single uplink call live under nodes/<device>/uplink/<callId>/;
+  // every other file under nodes/ (tokens, link keys, snapshots) remains off-limits.
+  const nodesRoot = realOf(join(stateDir(), 'nodes'))
+  if (nodesRoot) {
+    const prefix = nodesRoot.endsWith(sep) ? nodesRoot : nodesRoot + sep
+    if (file.startsWith(prefix) && /^[^/\\]+[/\\]uplink[/\\][^/\\]+[/\\]/.test(file.slice(prefix.length))) return false
+  }
   return inside(stateDir()) || inside(configDir())
 }
 
