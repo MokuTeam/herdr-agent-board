@@ -389,6 +389,7 @@ export function createNodePilotBridge(deps: NodePilotBridgeDeps): NodePilotBridg
         const ok = await active.write(payload, signal)
         if (!ok) {
           activeStreams.delete(streamId)
+          active.abort()
           return { status: 404, body: { ok: false, error: 'stream closed' } }
         }
       }
