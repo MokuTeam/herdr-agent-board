@@ -4,7 +4,10 @@ import {
   bearerOf,
   deskSteps,
   desktopOnly,
+  isOwnerAdminDevice,
+  isOwnerAdminRoute,
   isOwnerLogin,
+  isStrongTunnelLogin,
   localOnly,
   ownerTeam,
   remoteConfig,
@@ -15,17 +18,27 @@ import {
 const PWA_OFF = { on: false, https: 443, port: null }
 
 test('remote is off unless config.json turns it on', () => {
-  expect(remoteConfig(undefined)).toEqual({ on: false, port: null, allow: [], pwa: PWA_OFF })
-  expect(remoteConfig(false)).toEqual({ on: false, port: null, allow: [], pwa: PWA_OFF })
-  expect(remoteConfig('yes')).toEqual({ on: false, port: null, allow: [], pwa: PWA_OFF })
-  expect(remoteConfig({ on: 'true' })).toEqual({ on: false, port: null, allow: [], pwa: PWA_OFF })
-  expect(remoteConfig(true)).toEqual({ on: true, port: null, allow: [], pwa: PWA_OFF })
+  expect(remoteConfig(undefined)).toEqual({ on: false, port: null, allow: [], pwa: PWA_OFF, ownerAdmin: false })
+  expect(remoteConfig(false)).toEqual({ on: false, port: null, allow: [], pwa: PWA_OFF, ownerAdmin: false })
+  expect(remoteConfig('yes')).toEqual({ on: false, port: null, allow: [], pwa: PWA_OFF, ownerAdmin: false })
+  expect(remoteConfig({ on: 'true' })).toEqual({ on: false, port: null, allow: [], pwa: PWA_OFF, ownerAdmin: false })
+  expect(remoteConfig(true)).toEqual({ on: true, port: null, allow: [], pwa: PWA_OFF, ownerAdmin: false })
   expect(remoteConfig({ on: true, port: 12500, allow: [' Anna@Example.com ', 'anna@example.com', '', 3] })).toEqual({
     on: true,
     port: 12500,
     allow: ['anna@example.com'],
     pwa: PWA_OFF,
+    ownerAdmin: false,
   })
+  expect(remoteConfig({ ownerAdmin: true })).toEqual({
+    on: false,
+    port: null,
+    allow: [],
+    pwa: PWA_OFF,
+    ownerAdmin: true,
+  })
+  expect(remoteConfig({ on: true, ownerAdmin: true }).ownerAdmin).toBe(true)
+  expect(remoteConfig({ on: true, ownerAdmin: 'true' }).ownerAdmin).toBe(false)
   expect(remoteConfig({ on: true, port: 70000 }).port).toBeNull()
   expect(remoteConfig({ on: true, port: 1.5 }).port).toBeNull()
 })
@@ -85,6 +98,9 @@ test("the remote mode's, Remote access's, wake's, the backup's and Settings → 
     // which process the board is and its install folder (#356)
     '/api/process',
     '/api/process/',
+    // master device management and setup (#694)
+    '/api/nodes',
+    '/api/nodes/setup',
   ])
     expect(localOnly(path)).toBe(true)
   for (const path of [
@@ -98,6 +114,7 @@ test("the remote mode's, Remote access's, wake's, the backup's and Settings → 
     '/api/time',
     '/api/links/logs',
     '/api/processes',
+    '/api/nodez',
   ])
     expect(localOnly(path)).toBe(false)
   expect(localOnly('/api/login/password')).toBe(false)
@@ -196,4 +213,45 @@ test("the owner's own logins may read and write the team away from the computer,
   expect(isOwnerLogin('friend@example.com', 'me@example.com')).toBe(false)
   expect(isOwnerLogin(null, 'me@example.com')).toBe(false)
   expect(isOwnerLogin('me@example.com', null)).toBe(false)
+})
+
+test('ownerAdmin helpers classify strong logins, non-desk owner devices, and audited admin routes (#694)', () => {
+  expect(isOwnerAdminDevice({}, 'Me@Example.com', 'me@example.com')).toBe(true)
+  expect(isOwnerAdminDevice({ desk: false }, 'me@example.com', 'me@example.com')).toBe(true)
+  expect(isOwnerAdminDevice({ desk: true }, 'me@example.com', 'me@example.com')).toBe(false)
+  expect(isOwnerAdminDevice({}, 'anna@example.com', 'me@example.com')).toBe(false)
+  expect(isOwnerAdminDevice({}, 'me@example.com', null)).toBe(false)
+
+  expect(isStrongTunnelLogin({ method: 'passkey' }, true)).toBe(true)
+  expect(isStrongTunnelLogin({ method: 'passkey' }, false)).toBe(true)
+  expect(isStrongTunnelLogin({ method: 'password' }, true)).toBe(true)
+  expect(isStrongTunnelLogin({ method: 'password' }, false)).toBe(false)
+  expect(isStrongTunnelLogin({ method: 'other' }, true)).toBe(false)
+  expect(isStrongTunnelLogin(null, true)).toBe(false)
+
+  for (const path of [
+    '/api/access',
+    '/api/remote',
+    '/api/wake',
+    '/api/backup',
+    '/api/time-settings',
+    '/api/calendar-settings',
+    '/api/threads-settings',
+    '/api/feature-settings',
+    '/api/self-update',
+    '/api/housekeeping',
+    '/api/process',
+    '/api/nodes',
+    '/api/nodes/setup',
+    '/api/team/agents',
+    '/api/team/trust',
+  ]) {
+    expect([path, isOwnerAdminRoute(path, path, true)]).toEqual([path, true])
+  }
+  expect(isOwnerAdminRoute('/api/%61ccess', '/api/access', true)).toBe(true)
+  expect(isOwnerAdminRoute('/api/links/log', '/api/links/log', true)).toBe(false)
+  expect(isOwnerAdminRoute('/api/team/send', '/api/team/send', true)).toBe(false)
+  expect(isOwnerAdminRoute('/api/team/send', '/api/team/send', false)).toBe(true)
+  expect(isOwnerAdminRoute('/api/threads', '/api/threads', true)).toBe(false)
+  expect(isOwnerAdminRoute('/api/board', '/api/board', true)).toBe(false)
 })

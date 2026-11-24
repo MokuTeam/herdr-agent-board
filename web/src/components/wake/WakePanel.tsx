@@ -11,7 +11,7 @@
 import type { Switched, WakeSettingsView, WakeView } from '../../../../src/core/wake/view.ts'
 import { useWake, type WakeActions } from '../../hooks/useWake.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
-import { remotePage } from '../../models/remote-page.ts'
+import { adminHere } from '../../models/remote-page.ts'
 import {
   excludeEdited,
   hookNotes,
@@ -38,7 +38,7 @@ export interface WakePanelProps {
 export function WakePanel({ open, onClose }: WakePanelProps) {
   const t = useT()
   const { data, canEdit, now } = useBoardContext()
-  const phone = remotePage()
+  const phone = !adminHere()
   const wake = useWake(open && !phone)
   const { view, settings } = withPending(isWakeView(data?.wake) ? data.wake : undefined, wake.settings, wake.pending)
   if (!view) return null

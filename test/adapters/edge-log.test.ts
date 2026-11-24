@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createEdgeLog, type EdgeItem } from '../../src/adapters/edge-log.ts'
 import { createLinks, type FoundEvent } from '../../src/adapters/links.ts'
+import type { LinkEdge } from '../../src/core/links.ts'
 import { type Line, line, T0 } from '../support/helper-fixtures.ts'
 
 const temp = () => {
@@ -47,12 +48,14 @@ test('#280: every event once, across restarts, a crash between the writes and a 
     { key: 'm', session: 's-m', name: 'Master one', pane: 'w:p1', transcript: file },
     { key: 'pane-w:p2', session: null, name: 'Кейс 42', pane: 'w:p2', pipe: 'uds:/tmp/c' },
   ]
-  const kinds = (log = createEdgeLog({ dir: logDir })) => log.read(0).edges.map(e => e.kind)
+  const readLinks = (l = createEdgeLog({ dir: logDir })) => l.read(0).edges as LinkEdge[]
+  const kinds = () => readLinks().map(e => e.kind)
 
   const log = createEdgeLog({ dir: logDir })
   await readAll([file], log.add)
   assert.equal(log.flush(items), 4)
-  const { edges, next } = log.read(0)
+  const { edges: rawEdges, next } = log.read(0)
+  const edges = rawEdges as LinkEdge[]
   assert.deepEqual(
     edges.map(e => [e.seq, e.kind, e.session, e.sessionName, e.toKey, e.toName]),
     [
@@ -132,12 +135,25 @@ test('#280: segments by size, read on across them, none removed', () => {
   later.add('C:\\t\\s.jsonl', [at(20)])
   later.flush([])
   assert.deepEqual(
-    later.read(12).edges.map(e => [e.seq, e.offset]),
+    (later.read(12).edges as LinkEdge[]).map(e => [e.seq, e.offset]),
     [[13, 2000]],
   )
   // A line read already, or an older one, is not added again.
   later.add('C:\\t\\s.jsonl', [at(20), at(3)])
   assert.equal(later.flush([]), 0)
+  // A line after a restart keeps seq moving.
+  const admin = later.record({
+    kind: 'admin',
+    at: 3000,
+    method: 'POST',
+    path: '/api/remote',
+    status: 200,
+    via: 'tunnel',
+    who: 'passkey:l1 (Safari on Mac)',
+    from: '203.0.113.9',
+  })
+  assert.equal(admin.seq, 14)
+  assert.equal(createEdgeLog({ dir }).read(13).edges[0]?.seq, 14)
 })
 
 test("#280: a fork's copied events are its source's, not logged as the fork's", () => {
@@ -155,10 +171,57 @@ test("#280: a fork's copied events are its source's, not logged as the fork's", 
   ]
   assert.equal(log.flush(items), 2)
   assert.deepEqual(
-    log.read(0).edges.map(e => [e.kind, e.at, e.toKey]),
+    (log.read(0).edges as LinkEdge[]).map(e => [e.kind, e.at, e.toKey]),
     [
       ['fork', 5, 'm'],
       ['sent', 50, null],
+    ],
+  )
+})
+
+test('#694: record() appends admin edges with monotonic seq across restarts without altering marks.json', () => {
+  const dir = temp()
+  const log = createEdgeLog({ dir })
+  const first = log.record({
+    kind: 'admin',
+    at: 1000,
+    method: 'GET',
+    path: '/api/access',
+    status: 200,
+    via: 'tunnel',
+    who: 'password:abc123',
+    from: '203.0.113.9',
+  })
+  assert.equal(first.seq, 1)
+  const second = log.record({
+    kind: 'admin',
+    at: 2000,
+    method: 'POST',
+    path: '/api/backup',
+    status: 200,
+    via: 'serve',
+    who: 'me@example.com (ipad, d1)',
+    from: '100.78.86.80',
+  })
+  assert.equal(second.seq, 2)
+  const reopened = createEdgeLog({ dir })
+  const third = reopened.record({
+    kind: 'admin',
+    at: 3000,
+    method: 'GET',
+    path: '/api/nodes',
+    status: 200,
+    via: 'tailnet',
+    who: 'me@example.com (phone, d2)',
+    from: '100.78.86.81',
+  })
+  assert.equal(third.seq, 3)
+  assert.deepEqual(
+    reopened.read(0).edges.map(e => [e.seq, e.kind]),
+    [
+      [1, 'admin'],
+      [2, 'admin'],
+      [3, 'admin'],
     ],
   )
 })

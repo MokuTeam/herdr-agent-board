@@ -329,11 +329,11 @@ export interface EventSource {
 }
 
 /**
- * A line of the edge log (adapters/edge-log.ts): an event as the board read it, with the session
- * it is from and the one at its other end, by their session ids, keys and names at that moment
- * (null when the board had none). A message's text is left out.
+ * A transcript line of the edge log (adapters/edge-log.ts): an event as the board read it, with the
+ * session it is from and the one at its other end, by their session ids, keys and names at that
+ * moment (null when the board had none). A message's text is left out.
  */
-export type Edge = (LinkEvent extends infer E ? (E extends LinkEvent ? Omit<E, 'text'> : never) : never) & {
+export type LinkEdge = (LinkEvent extends infer E ? (E extends LinkEvent ? Omit<E, 'text'> : never) : never) & {
   seq: number
   session: string
   key: string | null
@@ -346,6 +346,24 @@ export type Edge = (LinkEvent extends infer E ? (E extends LinkEvent ? Omit<E, '
   uuid: string
 }
 
+/**
+ * A remote admin action recorded in the edge log when `remote.ownerAdmin` is on (#694): who and
+ * from where, without request bodies or secrets.
+ */
+export interface AdminEdge {
+  seq: number
+  kind: 'admin'
+  at: number
+  method: string
+  path: string
+  status: number
+  via: 'tunnel' | 'tailnet' | 'serve'
+  who: string
+  from: string
+}
+
+export type Edge = LinkEdge | AdminEdge
+
 /** The edge log's line for an event of `item` (null: no session on the board reads that transcript now). */
 export function edgeOf(
   ev: LinkEvent,
@@ -353,7 +371,7 @@ export function edgeOf(
   item: Pick<LinkItem, 'key' | 'name' | 'session'> | null,
   other: Pick<LinkItem, 'key' | 'name' | 'session'> | null,
   seq = 0,
-): Edge {
+): LinkEdge {
   const { text: _text, ...fields } = ev as LinkEvent & { text?: string }
   return {
     seq,
@@ -367,5 +385,5 @@ export function edgeOf(
     transcript: src.transcript,
     offset: src.offset,
     uuid: src.uuid,
-  } as Edge
+  } as LinkEdge
 }

@@ -156,4 +156,35 @@ describe('Phones panel', () => {
     const devices = [{ ...(REMOTE.devices[0] as RemoteView['devices'][number]), kind: 'browser' as const }]
     expect(text(render({ ...REMOTE, devices }))).toContain('Agent board app · pixelbrowser')
   })
+
+  test('on an authorised owner-admin remote session (#694): all admin controls are enabled', () => {
+    const doc = Object.getOwnPropertyDescriptor(globalThis, 'document')
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: {
+        documentElement: {
+          hasAttribute: (name: string) => name === 'data-remote' || name === 'data-owner-admin',
+        },
+      },
+    })
+    try {
+      const nodes = render(REMOTE)
+      const all = text([byId(nodes, 'phones-sheet')])
+      expect(all).not.toContain('board remote approve r1')
+      const buttons = findAll(nodes, el => el.tag === 'button' && hasClass(el, 'button'))
+      expect(buttons.map(b => text(b.children))).toEqual([
+        'Approve',
+        'Deny',
+        'Set up the HTTPS address',
+        'Unpair',
+        'Turn off phones',
+      ])
+      expect(
+        buttons.filter(b => text(b.children) !== 'Set up the HTTPS address').every(b => !b.attrs.has('disabled')),
+      ).toBe(true)
+    } finally {
+      if (doc) Object.defineProperty(globalThis, 'document', doc)
+      else Reflect.deleteProperty(globalThis, 'document')
+    }
+  })
 })

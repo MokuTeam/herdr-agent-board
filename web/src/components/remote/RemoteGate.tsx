@@ -91,6 +91,7 @@ export function gateFlow(deps: { follow(lang: string): void; credentials?: Login
     document.documentElement.toggleAttribute?.('data-desk', h.desk)
     document.documentElement.toggleAttribute?.('data-team', h.team)
     document.documentElement.toggleAttribute?.('data-threads', h.threads === true)
+    document.documentElement.toggleAttribute?.('data-owner-admin', h.ownerAdmin === true)
     if (h.device) document.documentElement.setAttribute?.('data-device', h.device)
     else document.documentElement.removeAttribute?.('data-device')
     view.set({ gate: gateOf(h), hello: h })

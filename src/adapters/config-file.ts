@@ -144,6 +144,21 @@ export function setRemoteOn(on: boolean): EditResult {
 }
 
 /**
+ * Turn headless master owner-admin access (core/remote.ts `remote.ownerAdmin`, #694) on or off in
+ * config.json, keeping the rest of `remote`. Off omits the key so default configs stay clean.
+ */
+export function setRemoteOwnerAdmin(on: boolean): EditResult {
+  return editConfig(raw => {
+    const remote: Raw = isRecord(raw.remote) ? { ...raw.remote } : raw.remote === true ? { on: true } : {}
+    if (on) remote.ownerAdmin = true
+    else delete remote.ownerAdmin
+    if (Object.keys(remote).length) raw.remote = remote
+    else delete raw.remote
+    return { ok: true }
+  })
+}
+
+/**
  * Turn the board in a phone's browser (core/pwa.ts) on or off in config.json, keeping the other
  * fields of `remote.pwa`. On turns the remote mode on too; off leaves it as it is.
  */

@@ -30,9 +30,12 @@ export function remoteRefusal(
   desk = false,
   teamOwner = false,
   owner = false,
+  ownerAdmin = false,
 ): Response | null {
   const focus = desk && deskFocus(raw) && deskFocus(path)
   if (!focus && (desktopOnly(raw) || desktopOnly(path))) return json(403, { error: 'desktop' })
+  // Headless master (#694): owner's own strong login with remote.ownerAdmin on may use localOnly admin routes.
+  if (ownerAdmin) return null
   const pairing = desk && raw === '/api/remote' && path === '/api/remote'
   // The owner's own login, with the team on, reads and writes the team as on the computer (#355).
   const team = teamOwner && ownerTeam(raw) && ownerTeam(path)

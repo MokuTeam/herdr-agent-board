@@ -24,6 +24,7 @@ import { LANGUAGES } from '../core/i18n/translator.ts'
 import { lang, t } from '../core/lang.ts'
 import { claudeProgram, commandText } from '../core/launch/spawn-args.ts'
 import type { Limits } from '../core/limits.ts'
+import type { AdminEdge } from '../core/links.ts'
 import { familyTitle } from '../core/model-check.ts'
 import { dropMovedCards } from '../core/node-items.ts'
 import { LOCAL, nodesConfig, parseNodeKey } from '../core/nodes.ts'
@@ -79,6 +80,8 @@ export interface BoardState {
   refresh(): Promise<void>
   /** The edge log's lines after number `since` (adapters/edge-log.ts). */
   edges: EdgeLog['read']
+  /** Record a remote admin action (#694) into the edge log. */
+  recordAdmin(entry: Omit<AdminEdge, 'seq'>): void
 }
 
 interface Options {
@@ -611,5 +614,12 @@ export function createBoardState({
     publish,
     refresh,
     edges: (since, limit) => edgeLog.read(since, limit),
+    recordAdmin(entry) {
+      try {
+        edgeLog.record(entry)
+      } catch (err) {
+        log(`edge log: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    },
   }
 }

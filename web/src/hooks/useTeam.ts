@@ -18,7 +18,7 @@ import { useEffect, useState } from 'react'
 import type { Translator } from '../../../src/core/types.ts'
 import { ApiError, api, errorText } from '../api/client.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
-import { remotePage } from '../models/remote-page.ts'
+import { adminHere } from '../models/remote-page.ts'
 import {
   type AgentsChange,
   type AgentsView,
@@ -143,7 +143,7 @@ export function teamSource(deps: TeamDeps): TeamSource {
   let unreadTotal = 0
   let waitingTotal = 0
   const visible = deps.visible ?? inFront
-  const remote = deps.remote ?? remotePage
+  const remote = deps.remote ?? (() => !adminHere())
   // Only the latest fetch is drawn: an older one may come back after it.
   let asked = 0
 

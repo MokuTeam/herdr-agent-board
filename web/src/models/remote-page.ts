@@ -27,6 +27,16 @@ export const teamPage = (): boolean =>
 export const threadsPage = (): boolean =>
   typeof document !== 'undefined' && document.documentElement.hasAttribute('data-threads')
 
+/**
+ * The owner's own strong login on a headless master (`remote.ownerAdmin: true`, #694; RemoteGate
+ * marks the page `data-owner-admin`): admin panels work from this remote page too.
+ */
+export const ownerAdminPage = (): boolean =>
+  typeof document !== 'undefined' && document.documentElement.hasAttribute('data-owner-admin')
+
+/** Whether admin panels and settings are unlocked on this page (local board, or authorised remote owner-admin). */
+export const adminHere = (): boolean => !remotePage() || ownerAdminPage()
+
 /** This browser's id among the paired devices (hello's device; RemoteGate sets `data-device`): what `board remote desk <id>` takes. */
 export const deviceId = (): string | null =>
   (typeof document !== 'undefined' && document.documentElement.getAttribute?.('data-device')) || null
@@ -96,6 +106,8 @@ export interface PhoneHello {
   team: boolean
   /** The same, with threads on (#392); absent otherwise, as hello was. */
   threads?: true
+  /** Headless master admin mode (#694); absent otherwise. */
+  ownerAdmin?: true
 }
 
 export function helloOf(value: unknown): PhoneHello | null {
@@ -113,6 +125,7 @@ export function helloOf(value: unknown): PhoneHello | null {
     signedIn: v.signedIn === true,
     team: v.team === true,
     ...(v.threads === true && { threads: true as const }),
+    ...(v.ownerAdmin === true && { ownerAdmin: true as const }),
   }
 }
 

@@ -7,7 +7,7 @@
 // written twice. One flush writes into one segment.
 import { appendFileSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { type Edge, edgeOf, ends, isOwn, type LinkItem } from '../core/links.ts'
+import { type AdminEdge, type Edge, edgeOf, ends, isOwn, type LinkItem } from '../core/links.ts'
 import { isRecord, readJson, replaceFile } from './json-store.ts'
 import type { FoundEvent } from './links.ts'
 import { stateDir } from './paths.ts'
@@ -29,6 +29,8 @@ export interface EdgeLog {
   add(path: string, found: readonly FoundEvent[]): void
   /** Write the events added since, each with its session and the one at its other end among `items`. How many. */
   flush(items: readonly EdgeItem[]): number
+  /** Record a remote admin action (#694) into the edge log, numbered next after `seq`. */
+  record(entry: Omit<AdminEdge, 'seq'>): AdminEdge
   /** The lines after number `since`, at most `limit`, and the number to ask after next time. */
   read(since: number, limit?: number): { edges: Edge[]; next: number }
 }
@@ -83,11 +85,24 @@ export function createEdgeLog({
       seq = last - 1
       for (const e of lines(last)) {
         seq = Math.max(seq, e.seq)
-        if (typeof e.transcript === 'string' && typeof e.offset === 'number')
+        if ('transcript' in e && typeof e.transcript === 'string' && typeof e.offset === 'number')
           marks[e.transcript] = Math.max(marks[e.transcript] ?? 0, e.offset + 1)
       }
     }
     for (const [path, mark] of Object.entries(marks)) if (typeof mark === 'number') upto.set(path, mark)
+  }
+
+  function appendLines(out: string[]): void {
+    if (!out.length) return
+    mkdirSync(dir, { recursive: true })
+    const last = segments().at(-1)
+    let size = 0
+    try {
+      size = last === undefined ? 0 : statSync(join(dir, segmentName(last))).size
+    } catch {}
+    const text = `${out.join('\n')}\n`
+    const file = last === undefined || (size && size + Buffer.byteLength(text) > segmentBytes) ? seq + 1 : last
+    appendFileSync(join(dir, segmentName(file)), text, { mode: 0o600 })
   }
 
   return {
@@ -116,23 +131,21 @@ export function createEdgeLog({
           out.push(JSON.stringify(edgeOf(event, source, item, end(item ?? { key: '' }, event), ++n)))
         }
       }
-      if (out.length) {
-        mkdirSync(dir, { recursive: true })
-        const last = segments().at(-1)
-        let size = 0
-        try {
-          size = last === undefined ? 0 : statSync(join(dir, segmentName(last))).size
-        } catch {}
-        const text = `${out.join('\n')}\n`
-        const file = last === undefined || (size && size + Buffer.byteLength(text) > segmentBytes) ? seq + 1 : last
-        appendFileSync(join(dir, segmentName(file)), text, { mode: 0o600 })
-      }
+      appendLines(out)
       seq = n
       pending = []
       Object.assign(marks, done)
       mkdirSync(dir, { recursive: true })
       replaceFile(marksFile, JSON.stringify({ version: 1, marks } satisfies Marks))
       return out.length
+    },
+
+    record(entry) {
+      load()
+      const next: AdminEdge = { ...entry, seq: seq + 1 }
+      appendLines([JSON.stringify(next)])
+      seq = next.seq
+      return next
     },
 
     read(since, limit = READ_LIMIT) {

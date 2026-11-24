@@ -22,7 +22,7 @@ import { CARD_TEXT_KEY, cardTextNow, setCardText } from '../models/card-text.ts'
 import { LOOK_KEY, lookNow, setLook } from '../models/look.ts'
 import { type Dock, isDock } from '../models/panel-layout.ts'
 import { offersProfiles } from '../models/profiles.ts'
-import { keptAuth, remotePage, UNPAIRED } from '../models/remote-page.ts'
+import { adminHere, keptAuth, ownerAdminPage, remotePage, UNPAIRED } from '../models/remote-page.ts'
 import {
   type FeatureSwitch,
   featuresNow,
@@ -158,10 +158,11 @@ export type FeatureSetting =
 export type PresenceSetting = { on: false } | { on: true; mode?: PresenceMode; idleMinutes?: number }
 
 /**
- * Whether Settings offers Devices…: on this computer's own page, with or without `nodes` (a board
- * adds its first server there, #509); never on a remote page.
+ * Whether Settings offers Devices…: on this computer's own page, or on an authorised remote
+ * owner-admin session (#694), with or without `nodes` (a board adds its first server there, #509);
+ * never on any other remote page.
  */
-export const offersDevices = (remote: boolean): boolean => !remote
+export const offersDevices = (remote: boolean, ownerAdmin = false): boolean => !remote || ownerAdmin
 
 /** The menu out of the gear (`keyboard`: opened from the keyboard, the first item lit). */
 export function settingsMenuFrom(deps: SettingsDeps): (button: HTMLElement, keyboard: boolean) => void {
@@ -466,7 +467,7 @@ export function useSettingsMenu(
   const [expanded, setExpanded] = useState(false)
   const localFeatures = () => {
     const data = latest.current.board.data
-    return data && !remotePage() ? featuresNow(data) : undefined
+    return data && adminHere() ? featuresNow(data) : undefined
   }
   const [gear] = useState(() => {
     const open = settingsMenuFrom({
@@ -533,21 +534,21 @@ export function useSettingsMenu(
       openPhones: () => latest.current.openPhones(),
       mokupilot: () => offersMokupilot(latest.current.board.data),
       openMokupilot: () => latest.current.openMokupilot(),
-      access: () => !remotePage(),
+      access: () => adminHere(),
       openAccess: () => latest.current.openAccess(),
-      backup: () => !remotePage(),
+      backup: () => adminHere(),
       openBackup: () => latest.current.openBackup(),
-      updates: () => !remotePage(),
+      updates: () => adminHere(),
       openUpdates: () => latest.current.openUpdates(),
-      housekeeping: () => !remotePage(),
+      housekeeping: () => adminHere(),
       openHousekeeping: () => latest.current.openHousekeeping(),
-      timeSettings: () => !remotePage(),
+      timeSettings: () => adminHere(),
       openTimeSettings: () => latest.current.openTimeSettings(),
-      calendarSettings: () => !remotePage(),
+      calendarSettings: () => adminHere(),
       openCalendarSettings: () => latest.current.openCalendarSettings(),
       team: () => offersTeam(latest.current.board.data),
       openTeam: () => latest.current.openTeam(),
-      devices: () => offersDevices(remotePage()),
+      devices: () => offersDevices(remotePage(), ownerAdminPage()),
       openDevices: () => latest.current.openDevices(),
       signOut: () => remotePage() && keptAuth() === 'login',
       endLogin: () => {
@@ -579,14 +580,14 @@ export function useSettingsMenu(
         if (!board.canEdit) return board.toast(t('live.off'), true)
         api.post('/api/todos', { op: 'settings', mode }).catch(err => board.toast(errorText(err, t), true))
       },
-      // Threads (#410), on the local board's page: off without the payload's line.
+      // Threads (#410), on the local board's page or remote owner-admin: off without the payload's line.
       threads: () => {
         const data = latest.current.board.data
-        return data && !remotePage() ? threadsNow(data).mode : undefined
+        return data && adminHere() ? threadsNow(data).mode : undefined
       },
       threadsShare: () => {
         const data = latest.current.board.data
-        return data && !remotePage() ? threadsNow(data).share : undefined
+        return data && adminHere() ? threadsNow(data).share : undefined
       },
       chooseThreads: body => {
         const { t, board } = latest.current

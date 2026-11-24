@@ -14,6 +14,12 @@ export interface RemoteConfig {
   allow: string[]
   /** The board in a phone's browser, over HTTPS through `tailscale serve` (core/pwa.ts). */
   pwa: PwaConfig
+  /**
+   * Headless master (#694): when true, the owner's own strong login (tunnel password+TOTP or
+   * passkey; or Tailscale non-desk device of the computer's own login) may use localOnly admin
+   * routes over remote listeners. Off by default.
+   */
+  ownerAdmin: boolean
 }
 
 export interface PwaConfig {
@@ -36,15 +42,21 @@ function pwaConfig(value: unknown): PwaConfig {
   return { on: p.on === true, https: isPort(p.https) ? p.https : 443, port: isPort(p.port) ? p.port : null }
 }
 
-/** config.json's `remote`: `true`, or `{ on, port, allow, pwa }`; anything else is off. */
+/** config.json's `remote`: `true`, or `{ on, port, allow, pwa, ownerAdmin }`; anything else is off. */
 export function remoteConfig(value: unknown): RemoteConfig {
-  if (value === true) return { on: true, port: null, allow: [], pwa: PWA_OFF }
-  if (!value || typeof value !== 'object') return { on: false, port: null, allow: [], pwa: PWA_OFF }
+  if (value === true) return { on: true, port: null, allow: [], pwa: PWA_OFF, ownerAdmin: false }
+  if (!value || typeof value !== 'object') return { on: false, port: null, allow: [], pwa: PWA_OFF, ownerAdmin: false }
   const r = value as Record<string, unknown>
   const allow = Array.isArray(r.allow)
     ? [...new Set(r.allow.filter(a => typeof a === 'string' && a.trim()).map(a => String(a).trim().toLowerCase()))]
     : []
-  return { on: r.on === true, port: isPort(r.port) ? r.port : null, allow, pwa: pwaConfig(r.pwa) }
+  return {
+    on: r.on === true,
+    port: isPort(r.port) ? r.port : null,
+    allow,
+    pwa: pwaConfig(r.pwa),
+    ownerAdmin: r.ownerAdmin === true,
+  }
 }
 
 /**
@@ -109,7 +121,7 @@ export const DESK_REMOTE_OPS: ReadonlySet<unknown> = new Set(['approve', 'deny',
  * Refused on every remote listener, in both spellings of a path.
  */
 export const localOnly = (path: string): boolean =>
-  /^\/api\/(remote|access|wake|backup|time-settings|calendar-settings|links\/log|team|process|threads|threads-settings|feature-settings|self-update|mokupilot\/node-call|housekeeping)(\/|$)/.test(
+  /^\/api\/(remote|access|wake|backup|time-settings|calendar-settings|links\/log|team|process|threads|threads-settings|feature-settings|self-update|mokupilot\/node-call|housekeeping|nodes)(\/|$)/.test(
     path,
   )
 
@@ -138,6 +150,30 @@ export const ownerTeam = (path: string): boolean => OWNER_TEAM.test(path)
 /** The Tailscale login is the owner's own (the computer's), not one `remote.allow` lets in. */
 export const isOwnerLogin = (login: string | null, owner: string | null): boolean =>
   !!login && !!owner && login.toLowerCase() === owner.toLowerCase()
+
+/** Whether a paired Tailscale device belongs to the owner's own login and is not marked as a desk. */
+export const isOwnerAdminDevice = (
+  device: { desk?: boolean | undefined },
+  login: string | null,
+  owner: string | null,
+): boolean => !device.desk && isOwnerLogin(login, owner)
+
+/** Whether a tunnel login is one of the owner's own strong sign-ins (passkey, or password + TOTP while configured). */
+export const isStrongTunnelLogin = (login: { method?: unknown } | null | undefined, accessReady: boolean): boolean =>
+  login?.method === 'passkey' || (login?.method === 'password' && accessReady)
+
+/**
+ * Whether a request reaches an admin route unlocked by `remote.ownerAdmin` (#694) and should be
+ * recorded in the edge log. Excludes routes already open to the owner (`ownerTeam`, `ownerThreads`)
+ * and `GET/POST /api/links/log` itself (preventing a self-amplifying audit loop).
+ */
+export function isOwnerAdminRoute(raw: string, path: string, teamOn: boolean): boolean {
+  if (!(localOnly(raw) || localOnly(path))) return false
+  if (raw === '/api/links/log' || path === '/api/links/log') return false
+  if (teamOn && ownerTeam(raw) && ownerTeam(path)) return false
+  if (ownerThreads(raw) && ownerThreads(path)) return false
+  return true
+}
 
 /**
  * What pairs: the app, or the board in a phone's browser (core/pwa.ts). A phone can have both,
@@ -192,6 +228,8 @@ export interface RemoteView {
   devices: Omit<RemoteDevice, 'tokenHash'>[]
   /** The board in a phone's browser (core/pwa.ts). */
   pwa: PwaView
+  /** Headless master admin mode (#694); omitted when false. */
+  ownerAdmin?: true
 }
 
 export interface PwaView {
