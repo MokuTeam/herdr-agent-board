@@ -53,6 +53,27 @@ export const RELAY_MAX_KEYS = 256
 /** Valid enrolled key file stem (node id / socket key name). */
 export const RELAY_KEY_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/
 
+/**
+ * Strips an optional trailing `.sock` from `socket` and validates it against RELAY_KEY_NAME.
+ * Returns null if invalid (prevents path traversal or ssh option injection).
+ */
+export function relaySocketStem(socket: string): string | null {
+  if (typeof socket !== 'string') return null
+  const stem = socket.endsWith('.sock') ? socket.slice(0, -'.sock'.length) : socket
+  return RELAY_KEY_NAME.test(stem) ? stem : null
+}
+
+/**
+ * Full server-side socket path `<socketsDir>/<stem>.sock`, or null when `socket` is not a valid
+ * relay socket name. Pure helper shared by node dialer and master forward.
+ */
+export function relaySocketPath(socket: string, socketsDir = RELAY_SOCKETS_DIR): string | null {
+  const stem = relaySocketStem(socket)
+  if (!stem) return null
+  const dir = socketsDir.replace(/\/+$/, '') || '/'
+  return `${dir}/${stem}.sock`
+}
+
 const KEY_PREFIXES: Readonly<Record<string, string>> = {
   'ssh-ed25519': 'AAAAC3NzaC1lZDI1NTE5',
   'ssh-rsa': 'AAAAB3NzaC1yc2E',

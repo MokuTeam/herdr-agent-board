@@ -171,7 +171,7 @@ const MASK = '••••'
 /** How often the link is looked at while the master waits for it. */
 const LINK_LOOK_MS = 250
 /** A link refused for one of these does not heal by waiting. */
-const FATAL: readonly LinkReason[] = ['host-key', 'key', 'api', 'device', 'not-built']
+const FATAL: readonly LinkReason[] = ['host-key', 'cert', 'key', 'api', 'device', 'not-built']
 /** Look's plan before Apply makes the link key: its words do not depend on the key. */
 const NO_KEY_YET = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAgentBoardLinkKeyIsMadeAtApply0000000000 agent-board link'
 const NO_HASH_YET = '0'.repeat(64)

@@ -20,6 +20,7 @@ import { join } from 'node:path'
 import { UPLINK_SEEN_MAX, type UplinkResult, uplinkResultOf } from '../core/node-uplink.ts'
 import { DEVICE_ID } from '../core/nodes.ts'
 import { hasUnprintable } from '../core/team.ts'
+import { isValidCertPem } from './door-cert.ts'
 import { isRecord, readJson, replaceFile, updateJson } from './json-store.ts'
 import { pace } from './pacing.ts'
 import { stateDir } from './paths.ts'
@@ -43,6 +44,15 @@ export const MASTER_NAME_MAX = 64
 
 /** The node's own folder in the board's state folder. */
 export const nodeDir = (): string => join(stateDir(), 'node')
+
+/** The node's relay dial private key (`<state>/node/relay-key`), known_hosts, and pid record (`relay-pid.json`). */
+export const nodeRelayKeyPath = (dir = nodeDir()): string => join(dir, 'relay-key')
+export const nodeRelayKnownHostsPath = (dir = nodeDir()): string => join(dir, 'relay-known-hosts')
+export function nodeRelayKnownHostsReady(dir = nodeDir()): string {
+  mkdirSync(dir, { recursive: true })
+  return nodeRelayKnownHostsPath(dir)
+}
+export const nodeRelayPidFile = (dir = nodeDir()): string => join(dir, 'relay-pid.json')
 
 const VIAS: ReadonlySet<unknown> = new Set(['hand', 'claim', 'install'])
 const isMaster = (m: unknown): m is MasterRecord =>
@@ -250,8 +260,16 @@ export interface DeviceStore {
   setToken(id: string, token: string): void
   /** The ssh link's private key, made by `board nodes key`; its public half beside it with `.pub`. */
   keyPath(id: string): string
+  /** The master's relay private key (`<nodes>/relay/<kind>-key`). */
+  relayKeyPath(kind: 'master' | 'enrol'): string
   /** The pid record of the device's link ssh (adapters/ssh.ts PidRecord). */
   pidFile(id: string): string
+  /** The device's pinned door certificate path (`<nodes>/<id>/door-cert.pem`). */
+  certPath(id: string): string
+  /** The device's pinned door certificate PEM, or null when missing, unreadable, or invalid. */
+  cert(id: string): string | null
+  /** Stores the device's pinned door certificate PEM, mode 0600, whole or not at all. */
+  setCert(id: string, pem: string): void
   /**
    * The device's offline copy (`snapshot.json`, #500): when its last payload came and its part of
    * the master's payload as checked then (core/node-items.ts). null: none, unreadable, or not one.
@@ -326,7 +344,23 @@ export function createDeviceStore({ dir = nodesDir() }: { dir?: string } = {}): 
       replaceFile(join(at, 'token'), `${token}\n`, undefined, 0o600)
     },
     keyPath: id => join(folder(id), 'link-key'),
+    relayKeyPath: kind => relayKeyPath(kind, dir),
     pidFile: id => join(folder(id), 'ssh-pid.json'),
+    certPath: id => join(folder(id), 'door-cert.pem'),
+    cert(id) {
+      try {
+        const pem = readFileSync(join(folder(id), 'door-cert.pem'), 'utf8').trim()
+        return isValidCertPem(pem) ? `${pem}\n` : null
+      } catch {
+        return null
+      }
+    },
+    setCert(id, pem) {
+      if (!isValidCertPem(pem)) throw new Error('not a valid X.509 certificate')
+      const at = folder(id)
+      mkdirSync(at, { recursive: true })
+      replaceFile(join(at, 'door-cert.pem'), `${pem.trim()}\n`, undefined, 0o600)
+    },
     snapshot(id) {
       try {
         const value: unknown = JSON.parse(readFileSync(join(folder(id), 'snapshot.json'), 'utf8'))
@@ -373,7 +407,7 @@ export function createDeviceStore({ dir = nodesDir() }: { dir?: string } = {}): 
     },
     dropCredentials(id) {
       const at = folder(id)
-      for (const name of ['token', 'link-key', 'link-key.pub']) rmSync(join(at, name), { force: true })
+      for (const name of ['token', 'link-key', 'link-key.pub', 'door-cert.pem']) rmSync(join(at, name), { force: true })
     },
   }
 }

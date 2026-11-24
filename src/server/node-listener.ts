@@ -17,6 +17,7 @@
 // with the web board's guards. A master's open event streams end, with the event a phone's do, the moment
 // it is forgotten.
 
+import { type DoorCert, ensureDoorCert } from '../adapters/door-cert.ts'
 import type { MasterRecord, NodeStore } from '../adapters/node-store.ts'
 import { RateLimiter } from '../core/access.ts'
 import { doorRoute, loopbackHost, NODE_API } from '../core/node-door.ts'
@@ -39,6 +40,12 @@ export interface NodeListenerOptions {
   /** The door's own routes (server/routes/node.ts): its status and a start from the master. */
   doorRoutes: Route[]
   log: (text: string) => void
+  /** Provides/persists the door's TLS cert and key when `node.tls` is true (default: ensureDoorCert). */
+  doorCert?: (nodeId: string) => DoorCert
+  /** Extra fields merged into `/api/hello`'s `node` object (e.g. join proof in #513). */
+  helloExtra?: (node: NodeConfig, certFingerprint: string | null) => Record<string, unknown>
+  /** Called whenever the door starts listening, moves, or closes. */
+  onChange?: () => void
 }
 
 export interface NodeListener {
@@ -69,6 +76,8 @@ export const doorMaster = (req: Request): MasterRecord | null => callers.get(req
 export function createNodeListener(o: NodeListenerOptions): NodeListener {
   let server: Server | null = null
   let bound: number | null = null
+  let boundTls: boolean | null = null
+  let boundCertFp: string | null = null
   let node: NodeConfig | null = null
   let error: string | null = null
   let closed = false
@@ -90,8 +99,19 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
     try {
       url = new URL(req.url)
       const raw = url.pathname
-      if (req.method === 'GET' && raw === '/api/hello')
-        return json(200, { ...o.hello(), node: { api: NODE_API, id: here.id, claimed: o.store.list().length > 0 } })
+      if (req.method === 'GET' && raw === '/api/hello') {
+        const extra = o.helloExtra ? o.helloExtra(here, boundCertFp) : {}
+        return json(200, {
+          ...o.hello(),
+          node: {
+            api: NODE_API,
+            id: here.id,
+            claimed: o.store.list().length > 0,
+            ...(boundTls && boundCertFp ? { cert: boundCertFp } : {}),
+            ...extra,
+          },
+        })
+      }
       const token = bearerOf(req.headers.get('authorization'))
       master = token ? o.store.verify(token) : null
       if (!master) {
@@ -124,11 +144,18 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
     const s = server
     server = null
     bound = null
-    if (s) await s.stop(true)
+    boundTls = null
+    boundCertFp = null
+    if (s) {
+      await s.stop(true)
+      o.onChange?.()
+    }
   }
 
-  function listen(port: number): void {
+  function listen(port: number, tlsOn: boolean, id: string): void {
     try {
+      // Only load or generate a door certificate when `node.tls` is true.
+      const pair = tlsOn ? (o.doorCert ?? (n => ensureDoorCert(n)))(id) : null
       // Not development, no idle timeout, no port reuse: as the web board's own server (app.ts).
       server = Bun.serve({
         hostname: '127.0.0.1',
@@ -136,11 +163,15 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
         idleTimeout: 0,
         development: false,
         reusePort: false,
+        ...(pair ? { tls: { cert: pair.cert, key: pair.key } } : {}),
         fetch: answer,
       })
       bound = port
+      boundTls = tlsOn
+      boundCertFp = pair?.fingerprint ?? null
       error = null
-      o.log(`node door: listening on 127.0.0.1:${port} as ${node?.id ?? ''}`)
+      o.log(`node door: listening on 127.0.0.1:${port} as ${id}${tlsOn ? ' (tls)' : ''}`)
+      o.onChange?.()
     } catch (err) {
       const next = `Cannot listen on 127.0.0.1:${port}: ${messageOf(err)}`
       if (next !== error) o.log(`node door: ${next}`)
@@ -162,10 +193,10 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
         error = null
         return
       }
-      if (!server || bound !== node.port) {
+      if (!server || bound !== node.port || boundTls !== node.tls) {
         // Nothing awaited on the way to the first listen: it listens once sync() has had its turn.
         if (server) await stop()
-        listen(node.port)
+        listen(node.port, node.tls, node.id)
       }
       // A port another program holds is tried again, while `node` asks for the door.
       if (!server && !closed) retry = setTimeout(() => void sync(), RETRY_MS)

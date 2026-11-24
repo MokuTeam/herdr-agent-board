@@ -1,8 +1,9 @@
 // One device's link from the master (#499, docs/design/nodes 4.2, 5, 6.5): the master dials, the
 // node's door (server/node-listener.ts) answers. Through a pipe that differs by the link's kind:
 // `direct` is the door's own URL (tests, a forward the owner keeps up himself), `ssh` a local
-// forward this link keeps up (adapters/node-ssh.ts); `relay` and `tailnet` are not built yet and
-// are refused so. The link only receives: the node's payload stream and its status.
+// forward this link keeps up (adapters/node-ssh.ts), and `relay` a local forward to the relay
+// server's unix socket with pinned TLS (services/nodes/relay.ts); `tailnet` is not built yet and
+// is refused so. The link only receives: the node's payload stream and its status.
 //
 // - fetch(): a request to the node with its bearer token, X-Board: 1 on writes and no Origin; over
 //   ssh with the door's own Host, which it checks. Only while the door was found to be this
@@ -19,6 +20,7 @@
 //   included: the door locks out a caller after five wrong tokens a minute.
 // - status(): `GET /api/node/status` every 30 s while the stream is open, and when asked, each
 //   within 1.5 s.
+import { isCertError } from '../../adapters/door-cert.ts'
 import type { PidRecord, SshChild } from '../../adapters/ssh.ts'
 import { takeEvents } from '../../core/event-stream.ts'
 import { NODE_API } from '../../core/node-door.ts'
@@ -58,15 +60,27 @@ export interface SshPipeDeps {
   portTaken(line: string): boolean
 }
 
+/** What the relay pipe runs (services/nodes/relay.ts): an ssh -L to the relay socket plus TLS pinning. */
+export interface RelayPipeDeps extends SshPipeDeps {
+  /** The device's pinned door certificate PEM, or null if none is pinned yet. */
+  pinnedCert(): string | null
+  /** Builds the Bun TLS options pinning `certPem` (adapters/door-cert.ts pinnedTls). */
+  tlsFor(certPem: string): NonNullable<BunFetchRequestInit['tls']>
+  /** False when the configured socket name does not pass validation. */
+  socketValid?: boolean
+}
+
 export interface LinkDeps {
   /** The token the node gave this master, read at each try; null: none stored. */
   token(): string | null
   clock: Clock
   log(text: string): void
-  fetch?: (url: string, init: RequestInit) => Promise<Response>
+  fetch?: (url: string, init: BunFetchRequestInit) => Promise<Response>
   random?: () => number
   /** For a link of kind ssh. */
   ssh?: SshPipeDeps
+  /** For a link of kind relay. */
+  relay?: RelayPipeDeps
   /** This board's own commit (adapters/git.ts headCommit), to say whether the node runs the same; '' unknown. */
   commit?: () => string
 }
@@ -136,9 +150,9 @@ const offline = (): Response =>
     headers: { 'content-type': 'application/json' },
   })
 
-/** What a pipe's open() gives: the door's base URL (and the Host it checks), or why not. */
+/** What a pipe's open() gives: the door's base URL (and the Host it checks, plus TLS pinning for relay), or why not. */
 type Opened =
-  | { ok: true; base: string; host?: string }
+  | { ok: true; base: string; host?: string; tls?: BunFetchRequestInit['tls'] }
   | { ok: false; refused?: { reason: LinkReason; detail: string }; error: string }
 type Door = Extract<Opened, { ok: true }>
 
@@ -171,15 +185,19 @@ const notBuilt = (kind: string): Pipe => ({
 const worthKeeping = (line: string): boolean => !line.startsWith('debug')
 
 /**
- * The ssh local forward, kept while the link wants it: started on open() unless it is up; ended on
- * reset(). Never two: a recorded ssh a board before left is ended first, none starts while it may
- * still run, and none after close(). Its record is cleared when it ends.
+ * Shared ssh local-forward pipe for both direct `ssh` and `relay` links: started on open() unless
+ * up; ended on reset(). Never two: a recorded ssh a board before left is ended first, none starts
+ * while it may still run, and none after close(). Its record is cleared when it ends.
  */
-function sshPipe(
-  link: Extract<LinkConfig, { kind: 'ssh' }>,
+function forwardPipe(
   d: SshPipeDeps,
   clock: Clock,
   log: (t: string) => void,
+  o: {
+    makeDoor: (port: number) => Opened
+    missingKeyDetail: string
+    preCheck?: () => Opened | null
+  },
 ): Pipe {
   let held: { child: SshChild; port: number; up: boolean; asked: boolean } | null = null
   let fresh = false
@@ -193,7 +211,6 @@ function sshPipe(
       log(`the pid record: ${messageOf(err)}`)
     }
   }
-  const door = (port: number): Door => ({ ok: true, base: `http://127.0.0.1:${port}`, host: `127.0.0.1:${link.port}` })
   const stopped: Opened = { ok: false, error: 'the link is closing' }
 
   function reset(): Promise<void> {
@@ -213,10 +230,11 @@ function sshPipe(
 
   async function open(): Promise<Opened> {
     if (closed) return stopped
-    if (held?.up) return door(held.port)
+    const refused = o.preCheck?.()
+    if (refused) return refused
+    if (held?.up) return o.makeDoor(held.port)
     await reset()
-    if (!d.keyExists())
-      return { ok: false, refused: { reason: 'key', detail: 'no link key yet: board nodes key <id>' }, error: '' }
+    if (!d.keyExists()) return { ok: false, refused: { reason: 'key', detail: o.missingKeyDetail }, error: '' }
     const stray = d.stray.read()
     if (stray) {
       const gone = await d.stray.end(stray).catch(() => false)
@@ -238,11 +256,11 @@ function sshPipe(
     const lines: string[] = []
     return new Promise<Opened>(resolve => {
       let done = false
-      const finish = (o: Opened): void => {
+      const finish = (res: Opened): void => {
         if (done) return
         done = true
         clock.clearTimeout(deadline)
-        resolve(o)
+        resolve(res)
       }
       const deadline = clock.setTimeout(() => {
         if (held === h) void reset()
@@ -253,7 +271,7 @@ function sshPipe(
         if (d.up(line, port)) {
           h.up = true
           log('ssh forward up')
-          finish(door(port))
+          finish(o.makeDoor(port))
           return
         }
         if (d.portTaken(line)) fresh = true
@@ -293,12 +311,49 @@ function sshPipe(
   }
 }
 
+function sshPipe(
+  link: Extract<LinkConfig, { kind: 'ssh' }>,
+  d: SshPipeDeps,
+  clock: Clock,
+  log: (t: string) => void,
+): Pipe {
+  return forwardPipe(d, clock, log, {
+    makeDoor: port => ({ ok: true, base: `http://127.0.0.1:${port}`, host: `127.0.0.1:${link.port}` }),
+    missingKeyDetail: 'no link key yet: board nodes key <id>',
+  })
+}
+
+function relayPipe(d: RelayPipeDeps, clock: Clock, log: (t: string) => void): Pipe {
+  const door = (port: number): Opened => {
+    const cert = d.pinnedCert()
+    if (!cert) return { ok: false, refused: { reason: 'cert', detail: 'no pinned door certificate' }, error: '' }
+    try {
+      return { ok: true, base: `https://127.0.0.1:${port}`, host: '127.0.0.1', tls: d.tlsFor(cert) }
+    } catch {
+      return { ok: false, refused: { reason: 'cert', detail: 'invalid pinned door certificate' }, error: '' }
+    }
+  }
+  return forwardPipe(d, clock, log, {
+    makeDoor: door,
+    missingKeyDetail: 'no relay master key yet: set up the relay first',
+    preCheck: () => {
+      if (d.socketValid === false)
+        return { ok: false, refused: { reason: 'ssh', detail: 'invalid relay socket name' }, error: '' }
+      if (!d.pinnedCert())
+        return { ok: false, refused: { reason: 'cert', detail: 'no pinned door certificate' }, error: '' }
+      return null
+    },
+  })
+}
+
 function pipeFor(device: DeviceConfig, deps: LinkDeps): Pipe {
   const link = device.link
   if (!link) return notBuilt('local')
   if (link.kind === 'direct') return directPipe(link.url)
   if (link.kind === 'ssh' && deps.ssh)
     return sshPipe(link, deps.ssh, deps.clock, t => deps.log(`node ${device.id}: ${t}`))
+  if (link.kind === 'relay' && deps.relay)
+    return relayPipe(deps.relay, deps.clock, t => deps.log(`node ${device.id}: ${t}`))
   return notBuilt(link.kind)
 }
 
@@ -400,7 +455,16 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
   }
 
   function call(o: Door, path: string, init: RequestInit, token: string | null): Promise<Response> {
-    return ask(`${o.base}${path}`, { ...init, headers: headers(init, token, o) })
+    return ask(`${o.base}${path}`, { ...init, headers: headers(init, token, o), ...(o.tls && { tls: o.tls }) })
+  }
+
+  /** Drops an active stream and marks the link refused for a door certificate mismatch. */
+  function refuseCert(): void {
+    if (stream && !stream.drop) {
+      stream.drop = 'refused'
+      stream.ac.abort()
+    }
+    refuse('cert', 'the door answered with another certificate')
   }
 
   async function askStatus(): Promise<NodeStatus | null> {
@@ -414,7 +478,8 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
       if (got) nodeStatus = got
       tellStatus(got)
       return got
-    } catch {
+    } catch (err) {
+      if (o.tls && isCertError(err)) refuseCert()
       return null
     }
   }
@@ -525,6 +590,7 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
       hello = res.ok ? await res.json() : null
       if (!res.ok) return later(`hello: HTTP ${res.status}`)
     } catch (err) {
+      if (o.tls && isCertError(err)) return refuse('cert', 'the door answered with another certificate')
       return later(`hello: ${messageOf(err)}`)
     }
     const node = isObject(hello) ? hello.node : undefined
@@ -544,6 +610,7 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
     } catch (err) {
       stream = null
       if (held.drop) return afterDrop(held.drop)
+      if (o.tls && isCertError(err)) return refuse('cert', 'the door answered with another certificate')
       return later(`the stream: ${messageOf(err)}`)
     }
     if (res.status === 401 || res.status === 429) {
@@ -623,7 +690,12 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
       if (!path.startsWith('/')) throw new Error(`a path from the door's root: ${JSON.stringify(path)}`)
       const o = door
       if (!o || closed || status.state === 'refused') return offline()
-      return call(o, path, init ?? {}, deps.token())
+      try {
+        return await call(o, path, init ?? {}, deps.token())
+      } catch (err) {
+        if (o.tls && isCertError(err)) refuseCert()
+        throw err
+      }
     },
     status: askStatus,
     state: () => ({ ...status }),

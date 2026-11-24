@@ -93,21 +93,25 @@ export interface SupervisorDeps {
   random?: () => number
   onChange(): void
   log(text: string): void
-  /** The nonces the probe answers, shared with the tunnel listener. */
-  probes: Probes
+  /** Prefix in log lines ('tunnel' by default; 'relay dial' for the node relay supervisor). */
+  label?: string
+  /** Factor applied to retry/backoff/reset timers (1 in production, < 1 in paced tests). */
+  pace?: number
+  /** The nonces the probe answers, shared with the tunnel listener (optional when used for node relay). */
+  probes?: Probes
   /**
    * The board's probe through the domain (adapters/probe.ts); with a port, on that public port
    * (a Test that finds the public port, "Do it myself").
    */
-  probe(nonce: string, port?: number): Promise<ProbeResult>
+  probe?(nonce: string, port?: number): Promise<ProbeResult>
   /** Test's line: the tunnel's, forwarded to `target`; null when the settings do not check out. */
-  testPlan(target: number): TunnelPlan | null
+  testPlan?(target: number): TunnelPlan | null
   /** The key exists and ssh would take it (its rights, no passphrase). */
   checkKey(): Promise<{ ok: true } | { ok: false; error: string; hint: TunnelHint | null }>
   /** The ssh binary; null: none found. */
   sshFound(): string | null
   /** Test's probe-only listener (server/tunnel-probe.ts). */
-  openProbeListener(nonce: string): Promise<{ port: number; close(): void }>
+  openProbeListener?(nonce: string): Promise<{ port: number; close(): void }>
   /** How long after the forward is up the first probe goes: PROBE_FIRST_MS unless given. */
   probeFirstMs?: number
 }
@@ -223,6 +227,8 @@ interface Held {
 
 export function createSupervisor(d: SupervisorDeps): Supervisor {
   const { clock } = d
+  const label = d.label ?? 'tunnel'
+  const pace = d.pace ?? 1
   let status: TunnelStatus = { state: 'off', since: clock.now() }
   let held: Held | null = null
   /** The plan last started: a retry waits out its backoff unless the line changed since. */
@@ -256,14 +262,14 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
 
   /** One at a time, a failure logged, never thrown. */
   function serially(job: () => Promise<void>): Promise<void> {
-    return exclusive(() => job().catch(err => d.log(`tunnel: ${messageOf(err)}`)))
+    return exclusive(() => job().catch(err => d.log(`${label}: ${messageOf(err)}`)))
   }
 
   function record(r: PidRecord | null): void {
     try {
       d.stray.write(r)
     } catch (err) {
-      d.log(`tunnel: the pid record: ${messageOf(err)}`)
+      d.log(`${label}: the pid record: ${messageOf(err)}`)
     }
   }
 
@@ -283,7 +289,7 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
 
   /** ssh again at once, whatever runs or waits now. */
   function restart(why: string): void {
-    d.log(`tunnel: ${why}: starting ssh again`)
+    d.log(`${label}: ${why}: starting ssh again`)
     void serially(() => step(true))
   }
 
@@ -317,6 +323,7 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
 
   /** d.probe, a throw read as no answer. */
   async function probeDomain(nonce: string, port?: number): Promise<ProbeResult> {
+    if (!d.probe) return { ok: false, kind: 'network', detail: 'probe unavailable' }
     try {
       return await (port === undefined ? d.probe(nonce) : d.probe(nonce, port))
     } catch (err) {
@@ -350,6 +357,7 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
 
   /** The probe through the domain in `ms`, while `h` holds the forward. */
   function probeIn(h: Held, ms: number): void {
+    if (!d.probe || !d.probes) return
     probeOff()
     probeTimer = clock.setTimeout(() => {
       probeTimer = null
@@ -363,9 +371,10 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
    * restarted over it (a failure on the PC's own side would drop the tablet's streams each time).
    */
   async function probeNow(h: Held): Promise<void> {
+    if (!d.probe || !d.probes) return
     const r = await probeDomain(d.probes.issue())
     if (held !== h || h.asked || status.state !== 'connected') return
-    if (!r.ok) d.log(`tunnel: the probe through the domain did not reach this board: ${r.detail}`)
+    if (!r.ok) d.log(`${label}: the probe through the domain did not reach this board: ${r.detail}`)
     set({ ...status, probe: { ok: r.ok, at: clock.now(), detail: r.ok ? '' : r.detail } })
     probeIn(h, PROBE_EVERY_MS)
   }
@@ -379,14 +388,14 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
     const r = d.stray.read()
     if (!r) return null
     const gone = await d.stray.end(r).catch((err: unknown) => {
-      d.log(`tunnel: ending the recorded pid ${r.pid}: ${messageOf(err)}`)
+      d.log(`${label}: ending the recorded pid ${r.pid}: ${messageOf(err)}`)
       return false
     })
     if (!gone) {
-      d.log(`tunnel: the ssh a board before left (pid ${r.pid}) may still run: its record kept`)
+      d.log(`${label}: the ssh a board before left (pid ${r.pid}) may still run: its record kept`)
       return r
     }
-    d.log(`tunnel: no ssh a board before left runs any more (pid ${r.pid})`)
+    d.log(`${label}: no ssh a board before left runs any more (pid ${r.pid})`)
     record(null)
     return null
   }
@@ -409,7 +418,7 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
     const stray = await endStray()
     if (stray) {
       // Never two: no ssh while that one may still run; tried again after the backoff.
-      d.log('tunnel: no ssh started')
+      d.log(`${label}: no ssh started`)
       return later(strayError(stray), null)
     }
     const child = d.spawn(plan.bin, plan.args)
@@ -417,7 +426,7 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
     held = h
     const now = clock.now()
     if (child.pid > 0) record({ pid: child.pid, forward: plan.forward, at: now })
-    d.log(`tunnel: ssh started (pid ${child.pid})`)
+    d.log(`${label}: ssh started (pid ${child.pid})`)
     set({ state: 'connecting', since: now })
     child.onLine(line => heard(h, line))
     void child.exited.then(r => exited(h, r))
@@ -427,7 +436,7 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
     if (h.asked || held !== h) return
     if (h.connectedAt === null && forwardAccepted(line, h.plan.conf.socket)) {
       h.connectedAt = clock.now()
-      d.log('tunnel: connected')
+      d.log(`${label}: connected`)
       set({ state: 'connected', since: h.connectedAt })
       probeIn(h, d.probeFirstMs ?? PROBE_FIRST_MS)
       return
@@ -443,9 +452,9 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
     record(null)
     if (closed) return
     const now = clock.now()
-    if (h.connectedAt !== null && now - h.connectedAt >= UP_RESETS_MS) attempt = 1
+    if (h.connectedAt !== null && now - h.connectedAt >= Math.round(UP_RESETS_MS * pace)) attempt = 1
     const { error, hint } = exitError(h.plan.bin, h.lines, r)
-    d.log(`tunnel: ssh exited (${r.error ?? `code ${String(r.code)}`}): ${error.split('\n').at(-1)}`)
+    d.log(`${label}: ssh exited (${r.error ?? `code ${String(r.code)}`}): ${error.split('\n').at(-1)}`)
     later(error, hint)
   }
 
@@ -453,11 +462,12 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
   function later(error: string, hint: TunnelHint | null): void {
     const now = clock.now()
     if (isLasting(hint)) {
-      set({ state: 'error', since: now, error, hint, nextAt: now + LASTING_RETRY_MS })
-      retryIn(LASTING_RETRY_MS)
+      const wait = Math.round(LASTING_RETRY_MS * pace)
+      set({ state: 'error', since: now, error, hint, nextAt: now + wait })
+      retryIn(wait)
       return
     }
-    const wait = backoffMs(attempt, d.random)
+    const wait = Math.round(backoffMs(attempt, d.random) * pace)
     set({ state: 'reconnecting', since: now, attempt, nextAt: now + wait, error, hint })
     attempt += 1
     retryIn(wait)
@@ -508,7 +518,7 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
 
   /** Steps 2 and 3 while the tunnel is on: its own state, and the probe only while connected. */
   async function tunnelSteps(o: TestOptions | undefined): Promise<TestStep[]> {
-    if (!held || status.state !== 'connected')
+    if (!held || status.state !== 'connected' || !d.probes)
       return [
         testStep('forward', false, status.error ?? `the tunnel is ${status.state}`, status.hint ?? null),
         testStep('domain', null, '', 'notConnected'),
@@ -548,7 +558,7 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
    * when the tunnel has an ssh after all, or the supervisor closed.
    */
   async function ownSteps(o: TestOptions | undefined): Promise<TestStep[] | null> {
-    if (closed || held || d.plan()) return null
+    if (closed || held || d.plan() || !d.probes || !d.openProbeListener || !d.testPlan) return null
     // Before the listener opens: ending a stray may take a while, and the listener's life is short.
     const stray = await endStray()
     if (stray) return [testStep('forward', false, strayError(stray)), notRun('domain')]
@@ -562,7 +572,7 @@ export function createSupervisor(d: SupervisorDeps): Supervisor {
       const child = d.spawn(plan.bin, plan.args)
       testChild = child
       if (child.pid > 0) record({ pid: child.pid, forward: plan.forward, at: clock.now() })
-      d.log(`tunnel: Test connection: ssh started (pid ${child.pid})`)
+      d.log(`${label}: Test connection: ssh started (pid ${child.pid})`)
       try {
         const forward = await forwardStep(child, plan)
         if (!forward.ok) return [forward, notRun('domain')]

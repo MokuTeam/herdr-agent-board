@@ -113,6 +113,7 @@ import { createNodeBundle, nodeBundleDeps } from '../services/node/bundle.ts'
 import { createNodeGit } from '../services/node/git-access.ts'
 import { createNodeLaunch } from '../services/node/launch.ts'
 import { createNodePilotCall, type NodePilotCall } from '../services/node/pilot-call.ts'
+import { createRelayDial, type RelayDial } from '../services/node/relay-dial.ts'
 import { createNodeSecrets } from '../services/node/secrets.ts'
 import { createNodeStatus } from '../services/node/status.ts'
 import { createNodeUpdate, type NodeUpdate } from '../services/node/update.ts'
@@ -1281,6 +1282,7 @@ export async function startServer({
   // first time config.json has `node`, and from then on following it. Without `node` nothing of it
   // exists: no listener, no timer, no file read.
   let door: NodeListener | null = null
+  let relayDial: RelayDial | null = null
   // A node's calls to its master (#508, services/node/uplink.ts): the outbox and its stream on the
   // door, and `POST /api/node/call` for this computer's own `board thread`, on this listener alone.
   let nodeUplink: NodeUplink | null = null
@@ -1290,9 +1292,25 @@ export async function startServer({
   let nodeUpdate = null as NodeUpdate | null
   const nodePlatform = process.env.BOARD_TEST_PLATFORM || process.platform
   let localCallRoutes: Route[] | null = null
+  function relayDialFollows(): void {
+    const n = nodeConfig(cfg.node)
+    if (relayDial) {
+      void relayDial.sync()
+      return
+    }
+    if (!n?.relay) return
+    relayDial = createRelayDial({
+      node: () => nodeConfig(cfg.node),
+      doorPort: () => door?.listening() ?? null,
+      log,
+    })
+    process.on('exit', relayDial.killNow)
+    void relayDial.sync()
+  }
   function doorFollows(): void {
     if (door) {
       door.configChanged()
+      relayDialFollows()
       return
     }
     if (nodeConfig(cfg.node) === null) return
@@ -1436,7 +1454,9 @@ export async function startServer({
         pilotCall: nodePilotCall,
       }),
       log,
+      onChange: () => void relayDial?.sync(),
     })
+    relayDialFollows()
     void door.sync()
   }
 
@@ -1929,6 +1949,10 @@ export async function startServer({
       endLogins()
       process.off('exit', endLogins)
       await tunnel.close()
+      if (relayDial) {
+        await relayDial.close()
+        process.off('exit', relayDial.killNow)
+      }
       await door?.close()
       if (nodePilotCall) {
         nodePilotCall.closeAll()

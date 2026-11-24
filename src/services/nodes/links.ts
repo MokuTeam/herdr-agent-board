@@ -19,12 +19,14 @@ import {
   type DeviceView,
   type LinkConfig,
   LOCAL,
+  type NodesConfig,
   type NodesProblem,
   nodesConfig,
 } from '../../core/nodes.ts'
 import type { Config } from '../../core/types.ts'
 import { type Clock, networkSignature, realClock } from '../tunnel.ts'
 import { createLink, DEAD_MS, type Link, type LinkDeps, type LinkTimes, type SshPipeDeps, STATUS_MS } from './link.ts'
+import { relayPipeDeps } from './relay.ts'
 
 export interface NodeLinks {
   /** config.json changed: the links follow `nodes`. */
@@ -98,17 +100,19 @@ export function sshPipeDeps(id: string, link: Extract<LinkConfig, { kind: 'ssh' 
   }
 }
 
-/** The production link: the device's token and key from the store, ssh as the tunnel runs it. */
+/** The production link: the device's token and key from the store, ssh or relay as the tunnel runs it. */
 function realLink(
   device: DeviceConfig,
   times: LinkTimes,
   store: DeviceStore,
   log: (t: string) => void,
   commit: () => string,
+  relay: NodesConfig['relay'],
 ): Link {
   const link = device.link
   const deps: LinkDeps = { token: () => store.token(device.id), clock: realClock, log, commit }
   if (link?.kind === 'ssh') deps.ssh = sshPipeDeps(device.id, link, store)
+  else if (link?.kind === 'relay' && relay) deps.relay = relayPipeDeps(device.id, link, relay, store)
   return createLink({ device, cfg: times, deps })
 }
 
@@ -132,7 +136,9 @@ export function createNodeLinks(o: NodeLinksOptions): NodeLinks {
     return commit
   }
   const make =
-    o.makeLink ?? ((device: DeviceConfig, times: LinkTimes) => realLink(device, times, store, o.log, ownCommit))
+    o.makeLink ??
+    ((device: DeviceConfig, times: LinkTimes, relay: NodesConfig['relay']) =>
+      realLink(device, times, store, o.log, ownCommit, relay))
   const links = new Map<string, { link: Link; key: string; device: DeviceConfig; off: (() => void)[] }>()
   const changeFns = new Set<(id: string) => void>()
   const changed = (id: string): void => {
@@ -188,7 +194,11 @@ export function createNodeLinks(o: NodeLinksOptions): NodeLinks {
     }
     for (const [id, held] of [...links]) {
       const device = wanted.get(id)
-      if (device && JSON.stringify(device.link) === held.key) {
+      const wantedKey =
+        device?.link?.kind === 'relay'
+          ? JSON.stringify([device.link, cfg?.relay ?? null])
+          : JSON.stringify(device?.link)
+      if (device && wantedKey === held.key) {
         const renamed = held.device.title !== device.title
         held.device = device
         if (renamed) changed(id)
@@ -201,9 +211,11 @@ export function createNodeLinks(o: NodeLinksOptions): NodeLinks {
     }
     for (const [id, device] of wanted) {
       if (links.has(id)) continue
-      const link = make(device, linkTimes())
+      const link = make(device, linkTimes(), cfg?.relay ?? null)
       const off = [link.onPayload(() => changed(id)), link.onState(() => changed(id)), link.onStatus(() => changed(id))]
-      links.set(id, { link, key: JSON.stringify(device.link), device, off })
+      const key =
+        device.link?.kind === 'relay' ? JSON.stringify([device.link, cfg?.relay ?? null]) : JSON.stringify(device.link)
+      links.set(id, { link, key, device, off })
     }
     if (links.size) watchOn()
     else watchOff()
