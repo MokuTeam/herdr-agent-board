@@ -116,9 +116,14 @@ const BLOCK_WHOLE_AWK = `index($0, ENVIRON["B0"]) == 1 { n++ } $0 == ENVIRON["E0
 const BLOCK_EXTRACT_AWK = `index($0, ENVIRON["B0"]) == 1 { s = 1 } s { print } s && $0 == ENVIRON["E0"] { s = 0 }`
 
 /**
- * Read-only Look script as root: OS, ssh version, sudo, tools, relay users, sockets/keys dirs,
+ * Look script as root: OS, ssh version, sudo, tools, relay users, sockets/keys dirs,
  * scripts, master authorized_keys, sshd fence, sshd -t now and candidate check, record, enrolled
  * key count. Ends with `@@end`.
+ *
+ * On socket-activated hosts (e.g. Ubuntu `ssh.socket` before `sshd` has started) `/run/sshd` may
+ * not exist yet and `sshd -t` as root fails with `Missing privilege separation directory:
+ * /run/sshd`; Look temporarily creates `/run/sshd` only when it was absent and removes it with
+ * `rmdir` in its `EXIT` trap so Look leaves the server as it found it.
  */
 export function relayLookScript(i: RelayLookInput = {}): string {
   const hasKeys =
@@ -141,7 +146,8 @@ export function relayLookScript(i: RelayLookInput = {}): string {
     'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH',
     'LC_ALL=C; export LC_ALL',
     'W=$(mktemp -d) || { echo "@@fail could not make a temp folder"; exit 1; }',
-    `trap 'rm -rf "$W"' EXIT`,
+    'made_run_sshd=0',
+    `trap 'if [ "$made_run_sshd" = 1 ]; then rmdir /run/sshd 2>/dev/null || :; fi; rm -rf "$W"' EXIT`,
     `N=${q(RELAY_NODE_USER)}; M=${q(RELAY_MASTER_USER)}`,
     `CONF=${q(SSHD_CONFIG)}; CONFD=${q(SSHD_DIR)}; FENCE=${q(RELAY_FENCE)}`,
     `B0=${q(RELAY_BLOCK_BEGIN)}; E0=${q(RELAY_BLOCK_END)}`,
@@ -182,6 +188,7 @@ export function relayLookScript(i: RelayLookInput = {}): string {
     'else echo "@@fence none"; fi',
     'if whole; then echo "@@block whole"; else echo "@@block torn"; fi',
     'if includes; then echo "@@include yes"; else echo "@@include no"; fi',
+    'if [ ! -d /run/sshd ] && [ "$(id -u)" = 0 ]; then install -d -m 755 /run/sshd && made_run_sshd=1; fi',
     'if sshd -t 2>"$W/t"; then echo "@@sshd-t ok"; else echo "@@sshd-t $(firstLines "$W/t")"; fi',
     'if includes; then candidate "$W/fence"; else strip "$CONF" > "$W/stripped"; withBlock "$W/stripped" > "$W/main"; fi',
     'if ! sshd -t -f "$W/main" 2>"$W/t"; then echo "@@candidate $(firstLines "$W/t")"',

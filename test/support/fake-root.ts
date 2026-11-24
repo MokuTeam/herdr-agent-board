@@ -177,8 +177,10 @@ mode=; file=$FAKE/etc/ssh/sshd_config; conn=
 while [ $# -gt 0 ]; do case $1 in -t) mode=t;; -T) mode=T;; -f) file=$2; shift;; -C) conn=$2; shift;; esac; shift; done
 eff() { cat "$file"; awk 'tolower($1)=="include"{print $2}' "$file" | while read -r g; do for f in $g; do [ -f "$f" ] && cat "$f"; done; done; }
 case $mode in
-t) if eff | grep -q BROKEN; then echo "$file: line 3: Bad configuration option: BROKEN" >&2; exit 255; fi; exit 0;;
-T) user=\${conn#user=}; user=\${user%%,*}
+t) if [ -n "\${REQUIRE_RUN_SSHD:-}" ] && [ ! -d "$FAKE/run/sshd" ]; then echo "Missing privilege separation directory: /run/sshd" >&2; exit 255; fi
+   if eff | grep -q BROKEN; then echo "$file: line 3: Bad configuration option: BROKEN" >&2; exit 255; fi; exit 0;;
+T) if [ -n "\${REQUIRE_RUN_SSHD:-}" ] && [ ! -d "$FAKE/run/sshd" ]; then echo "Missing privilege separation directory: /run/sshd" >&2; exit 255; fi
+   user=\${conn#user=}; user=\${user%%,*}
    echo "port 22"; echo "permitrootlogin without-password"
    fence() { eff | awk '/^Match User agent-board-backup/{on=1;next} /^Match all/{on=0} on{ $1=tolower($1); print }'; }
    if [ "$user" = agent-board-backup ] && eff | grep -q '^Match User agent-board-backup'; then

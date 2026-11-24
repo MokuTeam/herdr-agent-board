@@ -17,7 +17,14 @@ import {
 import { createServer } from 'node:net'
 import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
-import { readRelayRun, relayLookScript, relayPlan, relayRunScript, relayUndoPlan } from '../../src/core/relay-plan.ts'
+import {
+  readRelayLook,
+  readRelayRun,
+  relayLookScript,
+  relayPlan,
+  relayRunScript,
+  relayUndoPlan,
+} from '../../src/core/relay-plan.ts'
 import {
   AUTH_KEYS_DIR,
   RELAY_ENROL_SCRIPT,
@@ -402,6 +409,31 @@ describe.skipIf(!sh)('Apply, idempotency, coexistence and Undo on fake root', ()
     expect(u2.result).toBe('undone')
     expect(existsSync(s2.root.path(`${AUTH_KEYS_DIR}/agent-board-link`))).toBe(true)
   }, 120_000)
+
+  test('Look temporarily creates /run/sshd when absent on socket-activated hosts and removes it on exit', () => {
+    const s = relayServer('include')
+    expect(existsSync(s.root.path('/run/sshd'))).toBe(false)
+
+    // When /run/sshd is absent, Look creates it for sshd -t / -T and removes it via EXIT trap
+    const out1 = s.root.run(relayLookScript({ masterKey: MASTER_KEY, enrolKey: ENROL_KEY }), {
+      REQUIRE_RUN_SSHD: '1',
+    })
+    const facts1 = readRelayLook(out1.lines)
+    expect(facts1?.sshdNow).toBe('ok')
+    expect(facts1?.candidate).toBe('ok')
+    if (facts1) expect(relayPlan(facts1, s.wanted()).ok).toBe(true)
+    expect(existsSync(s.root.path('/run/sshd'))).toBe(false)
+
+    // When /run/sshd already exists, Look leaves it in place
+    mkdirSync(s.root.path('/run/sshd'), { recursive: true })
+    const out2 = s.root.run(relayLookScript({ masterKey: MASTER_KEY, enrolKey: ENROL_KEY }), {
+      REQUIRE_RUN_SSHD: '1',
+    })
+    const facts2 = readRelayLook(out2.lines)
+    expect(facts2?.sshdNow).toBe('ok')
+    expect(facts2?.candidate).toBe('ok')
+    expect(existsSync(s.root.path('/run/sshd'))).toBe(true)
+  })
 })
 
 const sshdBin = ['/usr/sbin/sshd', '/sbin/sshd'].find(p => existsSync(p)) ?? null
