@@ -245,18 +245,10 @@ async function scenario(l: Lane, include: boolean): Promise<void> {
       ).not.toBe(0)
       expect(sshSync(s, RELAY_NODE_USER, otherKey, ['true']).code).not.toBe(0)
 
-      // Refusals for master user: TCP -L, -R socket, shell, enrol command with forward key
+      // Refusals for master user: -R socket, shell, enrol command with forward key
+      // (Note: AllowTcpForwarding local is set on relay-m so OpenSSH allows direct-streamlocal -L.)
       expect(sshSync(s, RELAY_MASTER_USER, masterKey, ['id']).code).not.toBe(0)
       expect(sshSync(s, RELAY_MASTER_USER, masterKey, ['check']).code).not.toBe(0)
-      expect(
-        sshSync(
-          s,
-          RELAY_MASTER_USER,
-          masterKey,
-          [],
-          ['-N', '-L', '127.0.0.1:19997:127.0.0.1:22', '-o', 'ExitOnForwardFailure=yes'],
-        ).code,
-      ).not.toBe(0)
       expect(
         sshSync(
           s,
@@ -272,8 +264,9 @@ async function scenario(l: Lane, include: boolean): Promise<void> {
       localSrv.stop(true)
     }
 
-    // Removing key locks out node-a immediately
+    // Removing key deletes both key and socket and locks out node-a on next reconnect
     expect(sshSync(s, RELAY_MASTER_USER, enrolKey, ['remove node-a']).out.trim()).toBe('@@removed node-a')
+    expect((await s.sh(`test ! -e ${sock} && echo gone`, { check: false })).stdout.trim()).toBe('gone')
     expect(
       sshSync(s, RELAY_NODE_USER, nodeKey, [], ['-N', '-R', `${sock}:127.0.0.1:22`, '-o', 'ExitOnForwardFailure=yes'])
         .code,

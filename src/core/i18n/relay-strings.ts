@@ -10,16 +10,16 @@ export const RELAY_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'relay.stepWhy.users': 'Two fenced users with no password and no sudo: one for nodes behind NAT, one for masters.',
     'relay.step.folders': 'Make the sockets and keys folders',
     'relay.stepWhy.folders':
-      'One 2750 folder for node sockets, and one separate 700 folder for enrolled node public keys.',
+      'One 2770 folder for node sockets, and one separate 700 folder for enrolled node public keys.',
     'relay.step.scripts': 'Install the keys command and enrol script',
     'relay.stepWhy.scripts':
       'AuthorizedKeysCommand reads enrolled node keys; the forced-command script lets the master add or remove them without root.',
     'relay.step.keys': 'Write the master authorized keys',
     'relay.stepWhy.keys':
-      'Two keys for the master user: one restricted to local socket forwarding, one restricted to the enrol script.',
+      'Two keys for the master user: one restricted to forwarding (/bin/false), one restricted to the enrol script.',
     'relay.step.fence': 'Fence both relay users in sshd',
     'relay.stepWhy.fence':
-      'Checked on a copy first so neither user gets a shell or TCP forwarding and other sshd settings stay untouched.',
+      'Checked on a copy first so neither user gets a shell or unrestricted access and other sshd settings stay untouched.',
     'relay.undo.check': 'Check the server',
     'relay.undoWhy.check': 'Root, and sshd as it is.',
     'relay.undo.fence': 'Take the relay fences out of sshd',
@@ -34,7 +34,7 @@ export const RELAY_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'relay.undoWhy.users': 'Only the users created by the relay setup.',
     'relay.plan.users':
       'Two fenced users: {node} (nodes make socket forwards) and {master} (masters open sockets and enrol node keys).',
-    'relay.plan.folders': 'Sockets folder {sockets} (2750) and node public keys folder {keys} (700).',
+    'relay.plan.folders': 'Sockets folder {sockets} (2770) and node public keys folder {keys} (700).',
     'relay.plan.scripts': 'AuthorizedKeysCommand {keysCmd} and forced-command enrol script {enrol}.',
     'relay.plan.fenceFile': 'sshd Match blocks in {path}.',
     'relay.plan.fenceBlock': 'sshd Match blocks at the end of /etc/ssh/sshd_config.',
@@ -81,16 +81,16 @@ export const RELAY_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'Два изолированных пользователя без пароля и sudo: один для узлов за NAT, второй для мастеров.',
     'relay.step.folders': 'Создать папки сокетов и ключей',
     'relay.stepWhy.folders':
-      'Папка 2750 для сокетов узлов и отдельная папка 700 для открытых ключей зарегистрированных узлов.',
+      'Папка 2770 для сокетов узлов и отдельная папка 700 для открытых ключей зарегистрированных узлов.',
     'relay.step.scripts': 'Установить команду ключей и скрипт регистрации',
     'relay.stepWhy.scripts':
       'AuthorizedKeysCommand читает ключи узлов; forced-command скрипт даёт мастеру добавлять и удалять их без root.',
     'relay.step.keys': 'Записать ключи мастера',
     'relay.stepWhy.keys':
-      'Два ключа для пользователя мастера: один только для локального проброса сокетов, второй только для скрипта регистрации.',
+      'Два ключа для пользователя мастера: один для проброса (/bin/false), второй только для скрипта регистрации.',
     'relay.step.fence': 'Ограничить обоих пользователей в sshd',
     'relay.stepWhy.fence':
-      'Сначала проверяется на копии: ни один пользователь не получит шелл или TCP-проброс, прочие настройки sshd не меняются.',
+      'Сначала проверяется на копии: ни один пользователь не получит шелл, прочие настройки sshd не меняются.',
     'relay.undo.check': 'Проверить сервер',
     'relay.undoWhy.check': 'Root и sshd как есть.',
     'relay.undo.fence': 'Убрать правила релея из sshd',
@@ -105,7 +105,7 @@ export const RELAY_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'relay.undoWhy.users': 'Только тех, которых создала установка релея.',
     'relay.plan.users':
       'Два изолированных пользователя: {node} (узлы пробрасывают сокеты) и {master} (мастера открывают сокеты и регистрируют ключи узлов).',
-    'relay.plan.folders': 'Папка сокетов {sockets} (2750) и папка ключей узлов {keys} (700).',
+    'relay.plan.folders': 'Папка сокетов {sockets} (2770) и папка ключей узлов {keys} (700).',
     'relay.plan.scripts': 'AuthorizedKeysCommand {keysCmd} и forced-command скрипт регистрации {enrol}.',
     'relay.plan.fenceFile': 'Блоки Match в sshd в файле {path}.',
     'relay.plan.fenceBlock': 'Блоки Match в sshd в конце /etc/ssh/sshd_config.',

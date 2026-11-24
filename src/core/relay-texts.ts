@@ -1,9 +1,10 @@
 // What the relay setup writes on a server (core/relay-plan.ts, design docs/design/nodes/README.md 20):
 // two fenced system users (agent-board-relay-n for nodes behind NAT making remote socket forwards,
 // agent-board-relay-m for masters opening local socket forwards and running the enrolment command),
-// the sockets folder (2750, owned by n:m), a separate folder for enrolled node public keys (700,
-// owned by m:m so n cannot tamper with it), the AuthorizedKeysCommand script, the forced-command
-// enrol script, the master keys file, and sshd's Match blocks (drop-in or marked block).
+// the sockets folder (2770, owned by n:m so m can unlink a removed node's socket), a separate
+// folder for enrolled node public keys (700, owned by m:m so n cannot tamper with it), the
+// AuthorizedKeysCommand script, the forced-command enrol script, the master keys file, and sshd's
+// Match blocks (drop-in or marked block).
 // Disjoint from the tunnel (/etc/agent-board, /var/lib/boardtunnel), backup (/etc/agent-board-backup),
 // and node (/etc/agent-board-node) paths and markers. Pure, with no node: import.
 
@@ -19,8 +20,9 @@ export const RELAY_MASTER_USER = 'agent-board-relay-m' as const
 export const RELAY_MASTER_COMMENT = 'agent-board relay master'
 
 /**
- * The folder where node sockets live: mode 2750, owned by agent-board-relay-n and group
- * agent-board-relay-m, so the node user creates sockets and the master user opens them.
+ * The folder where node sockets live: mode 2770, owned by agent-board-relay-n and group
+ * agent-board-relay-m, so the node user creates sockets and the master user opens them and
+ * unlinks a removed node's socket via `enrol remove`.
  */
 export const RELAY_SOCKETS_DIR = '/var/lib/agent-board-relay'
 
@@ -119,18 +121,24 @@ export function relayNodeFenceSettings(
 }
 
 /**
- * sshd settings for the master user (agent-board-relay-m): root-owned AuthorizedKeysFile where
- * each key carries its own `restrict` and `command=` (master forward key uses `/bin/false`, enrol
- * key uses `/etc/agent-board-relay/enrol`), local unix socket forwards only, no TCP forwarding, no
- * shell, no TTY.
+ * sshd settings for the master user (agent-board-relay-m): root-owned AuthorizedKeysFile
+ * (with AuthorizedKeysCommand none so no global command adds keys for relay-m) where each key
+ * carries its own `restrict` and `command=` (master forward key uses `/bin/false`, enrol key uses
+ * `/etc/agent-board-relay/enrol`), local streamlocal and local TCP forwarding, no shell, no TTY.
+ *
+ * OpenSSH refuses `direct-streamlocal` under `AllowTcpForwarding no` or any `PermitOpen`, so
+ * `AllowTcpForwarding local` is required for masters to open `-L` forwards to node sockets; the
+ * master forward key (`restrict,port-forwarding,command="/bin/false"`) can therefore also reach
+ * TCP targets and world-connectable unix sockets on the relay host.
  */
 export function relayMasterFenceSettings(masterKeys = RELAY_MASTER_KEYS): (readonly [string, string])[] {
   return [
     ['AuthorizedKeysFile', masterKeys],
+    ['AuthorizedKeysCommand', 'none'],
     ['AuthenticationMethods', 'publickey'],
     ['PasswordAuthentication', 'no'],
     ['KbdInteractiveAuthentication', 'no'],
-    ['AllowTcpForwarding', 'no'],
+    ['AllowTcpForwarding', 'local'],
     ['AllowStreamLocalForwarding', 'local'],
     ['X11Forwarding', 'no'],
     ['AllowAgentForwarding', 'no'],
@@ -236,6 +244,7 @@ export function relayKeysCommand(keysDir = RELAY_KEYS_DIR, nodeUser = RELAY_NODE
 
 export interface EnrolScriptOptions {
   keysDir?: string
+  socketsDir?: string
   maxKeys?: number
 }
 
@@ -245,11 +254,13 @@ export interface EnrolScriptOptions {
  * - `check`: prints `@@ok 1`
  * - `list`: prints enrolled key names (sorted, one per line)
  * - `add <name> <type> <base64> [comment]`: validates name and key strictly, writes `<name>.pub` atomically
- * - `remove <name>`: removes `<name>.pub` if present (`@@removed <name>` or `@@missing <name>`)
+ * - `remove <name>`: removes `<name>.pub` and unlinks `<name>.sock` (`@@removed <name>` or `@@missing <name>`);
+ *   an already-connected node session ends at its next reconnect.
  * Anything else fails with `@@error ...` and exit 1.
  */
 export function relayEnrolScript(opts: EnrolScriptOptions = {}): string {
   const keysDir = opts.keysDir ?? RELAY_KEYS_DIR
+  const socketsDir = opts.socketsDir ?? RELAY_SOCKETS_DIR
   const maxKeys = opts.maxKeys ?? RELAY_MAX_KEYS
   return [
     '#!/bin/sh',
@@ -260,6 +271,7 @@ export function relayEnrolScript(opts: EnrolScriptOptions = {}): string {
     'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH',
     'LC_ALL=C; export LC_ALL',
     `DIR=${shQuote(keysDir)}`,
+    `SOCKETS=${shQuote(socketsDir)}`,
     `MAX_KEYS=${maxKeys}`,
     'fail() { echo "@@error $*" >&2; exit 1; }',
     'validName() {',
@@ -336,9 +348,17 @@ export function relayEnrolScript(opts: EnrolScriptOptions = {}): string {
     '    [ $# -eq 1 ] || fail "usage: remove <name>"',
     '    name=$1',
     '    validName "$name" || fail "invalid key name"',
-    '    if [ -L "$DIR/$name.pub" ]; then fail "refusing symlink"; fi',
+    '    if [ -L "$DIR/$name.pub" ] || [ -L "$SOCKETS/$name.sock" ]; then fail "refusing symlink"; fi',
+    '    had=0',
     '    if [ -f "$DIR/$name.pub" ]; then',
     '      rm -f "$DIR/$name.pub" || fail "could not remove key"',
+    '      had=1',
+    '    fi',
+    '    if [ -S "$SOCKETS/$name.sock" ] || [ -f "$SOCKETS/$name.sock" ]; then',
+    '      rm -f "$SOCKETS/$name.sock" || fail "could not remove socket"',
+    '      had=1',
+    '    fi',
+    '    if [ "$had" = 1 ]; then',
     '      echo "@@removed $name"',
     '    else',
     '      echo "@@missing $name"',

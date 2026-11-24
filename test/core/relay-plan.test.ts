@@ -143,7 +143,8 @@ describe('relay texts & key validation', () => {
     const masterSettings = Object.fromEntries(relayMasterFenceSettings())
     expect(masterSettings).toMatchObject({
       AuthorizedKeysFile: RELAY_MASTER_KEYS,
-      AllowTcpForwarding: 'no',
+      AuthorizedKeysCommand: 'none',
+      AllowTcpForwarding: 'local',
       AllowStreamLocalForwarding: 'local',
       PermitTTY: 'no',
     })

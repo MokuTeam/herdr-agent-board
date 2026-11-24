@@ -141,8 +141,7 @@ export function relayLookScript(i: RelayLookInput = {}): string {
     'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; export PATH',
     'LC_ALL=C; export LC_ALL',
     'W=$(mktemp -d) || { echo "@@fail could not make a temp folder"; exit 1; }',
-    'made_run_sshd=0',
-    `trap 'if [ "$made_run_sshd" = 1 ]; then rmdir /run/sshd 2>/dev/null || :; fi; rm -rf "$W"' EXIT`,
+    `trap 'rm -rf "$W"' EXIT`,
     `N=${q(RELAY_NODE_USER)}; M=${q(RELAY_MASTER_USER)}`,
     `CONF=${q(SSHD_CONFIG)}; CONFD=${q(SSHD_DIR)}; FENCE=${q(RELAY_FENCE)}`,
     `B0=${q(RELAY_BLOCK_BEGIN)}; E0=${q(RELAY_BLOCK_END)}`,
@@ -162,7 +161,7 @@ export function relayLookScript(i: RelayLookInput = {}): string {
     `for c in ${LOOK_TOOLS.join(' ')}; do if command -v "$c" >/dev/null 2>&1; then echo "@@has $c"; fi; done`,
     userCheck(RELAY_NODE_USER, RELAY_NODE_COMMENT, 'node-user'),
     userCheck(RELAY_MASTER_USER, RELAY_MASTER_COMMENT, 'master-user'),
-    dirCheck(RELAY_SOCKETS_DIR, `2750 ${RELAY_NODE_USER} ${RELAY_MASTER_USER}`, 'sockets-dir'),
+    dirCheck(RELAY_SOCKETS_DIR, `2770 ${RELAY_NODE_USER} ${RELAY_MASTER_USER}`, 'sockets-dir'),
     dirCheck(RELAY_KEYS_DIR, `700 ${RELAY_MASTER_USER} ${RELAY_MASTER_USER}`, 'keys-dir'),
     `if [ -d ${q(AUTH_KEYS_DIR)} ]; then echo "@@auth-keys-dir yes"; else echo "@@auth-keys-dir no"; fi`,
     `${emit(relayKeysCommand())} > "$W/keys.want"`,
@@ -183,7 +182,6 @@ export function relayLookScript(i: RelayLookInput = {}): string {
     'else echo "@@fence none"; fi',
     'if whole; then echo "@@block whole"; else echo "@@block torn"; fi',
     'if includes; then echo "@@include yes"; else echo "@@include no"; fi',
-    'if [ ! -d /run/sshd ] && [ "$(id -u)" = 0 ]; then install -d -m 755 /run/sshd && made_run_sshd=1; fi',
     'if sshd -t 2>"$W/t"; then echo "@@sshd-t ok"; else echo "@@sshd-t $(firstLines "$W/t")"; fi',
     'if includes; then candidate "$W/fence"; else strip "$CONF" > "$W/stripped"; withBlock "$W/stripped" > "$W/main"; fi',
     'if ! sshd -t -f "$W/main" 2>"$W/t"; then echo "@@candidate $(firstLines "$W/t")"',
@@ -430,16 +428,17 @@ function prelude(): string[] {
   ]
 }
 
-function applySteps(f: RelayFacts, w: RelayWanted): RelayStep[] {
+function applySteps(_f: RelayFacts, w: RelayWanted, carried: readonly RelayItem[]): RelayStep[] {
   const keysText = relayKeysCommand()
   const enrolText = relayEnrolScript()
   const masterKeysText = relayMasterKeysFile(w.masterKey, w.enrolKey)
   const fenceFileText = relayFenceFile()
   const fenceBlockText = relayFenceMarked()
+  const hasCarried = (kind: RelayItem['kind']): boolean => carried.some(i => i.kind === kind)
 
   const usersHolds = ['ours "$N" "$N_COMMENT"', 'ours "$M" "$M_COMMENT"']
   const foldersHolds = [
-    '[ -d "$SOCKETS" ] && [ ! -L "$SOCKETS" ] && [ "$(stat -c \'%a %U %G\' "$SOCKETS" 2>/dev/null)" = "2750 $N $M" ]',
+    '[ -d "$SOCKETS" ] && [ ! -L "$SOCKETS" ] && [ "$(stat -c \'%a %U %G\' "$SOCKETS" 2>/dev/null)" = "2770 $N $M" ]',
     '[ -d "$KEYSDIR" ] && [ ! -L "$KEYSDIR" ] && [ "$(stat -c \'%a %U %G\' "$KEYSDIR" 2>/dev/null)" = "700 $M $M" ]',
   ]
   const scriptsHolds = [
@@ -473,6 +472,16 @@ function applySteps(f: RelayFacts, w: RelayWanted): RelayStep[] {
         'if getent passwd "$M" >/dev/null && ! ours "$M" "$M_COMMENT"; then echo "a user $M is there that the board did not make"; exit 1; fi',
         'for u in "$N" "$M"; do if ! getent passwd "$u" >/dev/null && getent group "$u" >/dev/null; then echo "a group $u is there without its user"; exit 1; fi; done',
         'for p in "$SOCKETS" "$KEYSDIR" "$KEYS_CMD" "$ENROL" "$MKEYS" "$FENCE"; do if [ -L "$p" ]; then echo "refusing symlink at $p"; exit 1; fi; done',
+        ...(hasCarried('socketsDir')
+          ? []
+          : [
+              'if [ -e "$SOCKETS" ]; then [ -d "$SOCKETS" ] && [ "$(stat -c \'%a %U %G\' "$SOCKETS" 2>/dev/null)" = "2770 $N $M" ] || { echo "$SOCKETS is there with other owner or permissions than the relay expects"; exit 1; }; fi',
+            ]),
+        ...(hasCarried('keysDir')
+          ? []
+          : [
+              'if [ -e "$KEYSDIR" ]; then [ -d "$KEYSDIR" ] && [ "$(stat -c \'%a %U %G\' "$KEYSDIR" 2>/dev/null)" = "700 $M $M" ] || { echo "$KEYSDIR is there with other owner or permissions than the relay expects"; exit 1; }; fi',
+            ]),
       ],
       changes: false,
     }),
@@ -490,14 +499,14 @@ function applySteps(f: RelayFacts, w: RelayWanted): RelayStep[] {
         'if [ -f "$W/made-n" ] && ours "$N" "$N_COMMENT"; then userGone "$N"; fi',
       ],
       record: [
-        ...(f.nodeUser === 'none' ? [{ kind: 'user' as const, name: RELAY_NODE_USER }] : []),
-        ...(f.masterUser === 'none' ? [{ kind: 'user' as const, name: RELAY_MASTER_USER }] : []),
+        { kind: 'user', name: RELAY_NODE_USER },
+        { kind: 'user', name: RELAY_MASTER_USER },
       ],
     }),
     step('folders', 'step', {
       skipIf: foldersHolds,
       commands: [
-        'if [ ! -e "$SOCKETS" ]; then install -d -m 2750 -o "$N" -g "$M" "$SOCKETS"; touch "$W/made-sockets"; else [ -d "$SOCKETS" ] && [ ! -L "$SOCKETS" ] || { echo "$SOCKETS is not a directory"; exit 1; }; stat -c "%a %U %G" "$SOCKETS" > "$W/sockets.old"; chown "$N:$M" "$SOCKETS" && chmod 2750 "$SOCKETS"; touch "$W/changed-sockets"; fi',
+        'if [ ! -e "$SOCKETS" ]; then install -d -m 2770 -o "$N" -g "$M" "$SOCKETS"; touch "$W/made-sockets"; else [ -d "$SOCKETS" ] && [ ! -L "$SOCKETS" ] || { echo "$SOCKETS is not a directory"; exit 1; }; stat -c "%a %U %G" "$SOCKETS" > "$W/sockets.old"; chown "$N:$M" "$SOCKETS" && chmod 2770 "$SOCKETS"; touch "$W/changed-sockets"; fi',
         'if [ ! -e "$KEYSDIR" ]; then install -d -m 700 -o "$M" -g "$M" "$KEYSDIR"; touch "$W/made-keysdir"; else [ -d "$KEYSDIR" ] && [ ! -L "$KEYSDIR" ] || { echo "$KEYSDIR is not a directory"; exit 1; }; stat -c "%a %U %G" "$KEYSDIR" > "$W/keysdir.old"; chown "$M:$M" "$KEYSDIR" && chmod 700 "$KEYSDIR"; touch "$W/changed-keysdir"; fi',
       ],
       check: foldersHolds,
@@ -505,10 +514,7 @@ function applySteps(f: RelayFacts, w: RelayWanted): RelayStep[] {
         'if [ -f "$W/made-sockets" ]; then rm -rf "$SOCKETS"; elif [ -f "$W/changed-sockets" ] && [ -f "$W/sockets.old" ]; then read -r om ou og < "$W/sockets.old"; chown "$ou:$og" "$SOCKETS" 2>/dev/null || :; chmod "$om" "$SOCKETS" 2>/dev/null || :; fi',
         'if [ -f "$W/made-keysdir" ]; then rm -rf "$KEYSDIR"; elif [ -f "$W/changed-keysdir" ] && [ -f "$W/keysdir.old" ]; then read -r om ou og < "$W/keysdir.old"; chown "$ou:$og" "$KEYSDIR" 2>/dev/null || :; chmod "$om" "$KEYSDIR" 2>/dev/null || :; fi',
       ],
-      record: [
-        ...(f.socketsDir === 'none' ? [{ kind: 'socketsDir' as const }] : []),
-        ...(f.keysDir === 'none' ? [{ kind: 'keysDir' as const }] : []),
-      ],
+      record: [{ kind: 'socketsDir' }, { kind: 'keysDir' }],
     }),
     step('scripts', 'step', {
       skipIf: scriptsHolds,
@@ -547,7 +553,7 @@ function applySteps(f: RelayFacts, w: RelayWanted): RelayStep[] {
         'if [ -f "$W/put-mkeys" ]; then if [ -f "$W/mkeys.old" ]; then restore "$W/mkeys.old" "$MKEYS"; else rm -f "$MKEYS"; fi; fi',
         'if [ -f "$W/made-authdir" ]; then rmdir "$AUTHDIR" 2>/dev/null || :; fi',
       ],
-      record: [...(f.authKeysDir ? [] : [{ kind: 'authKeysDir' as const }]), { kind: 'masterKeys' as const }],
+      record: [{ kind: 'authKeysDir' }, { kind: 'masterKeys' }],
     }),
     step('fence', 'step', {
       skipIf: fenceHolds,
@@ -605,6 +611,7 @@ export function relayPlan(f: RelayFacts, w: RelayWanted): { ok: true; plan: Rela
   const why = relayRefusals(f, w)
   if (why.length) return { ok: false, why }
   const rec = f.record === null ? null : relayRecord(f.record)
+  const carried = rec?.items ?? []
   const words: Text[] = [
     ...(f.record !== null ? [{ key: 'relay.setup.already' }] : []),
     { key: 'relay.plan.users', params: { node: RELAY_NODE_USER, master: RELAY_MASTER_USER } },
@@ -616,8 +623,8 @@ export function relayPlan(f: RelayFacts, w: RelayWanted): { ok: true; plan: Rela
     ok: true,
     plan: {
       kind: 'apply',
-      steps: applySteps(f, w),
-      carried: rec?.items ?? [],
+      steps: applySteps(f, w, carried),
+      carried,
       words,
       warnings: [],
     },
@@ -792,7 +799,23 @@ export function relayRunScript(p: RelayPlan, run: { id: string; at: string }): s
   for (const s of p.steps) for (const i of s.record) varOf(i)
   const carriedWord = (i: RelayItem): string => {
     const v = varOf(i)
-    return `${v.name}=${v.carried ? q(JSON.stringify(v.carried)) : "''"}`
+    return `${v.name}="$C${v.name}"`
+  }
+  const recordCond = (i: RelayItem): { absent: string; made: string } | null => {
+    switch (i.kind) {
+      case 'user':
+        return i.name === RELAY_NODE_USER
+          ? { absent: '! getent passwd "$N" >/dev/null', made: 'made-n' }
+          : { absent: '! getent passwd "$M" >/dev/null', made: 'made-m' }
+      case 'socketsDir':
+        return { absent: '[ ! -e "$SOCKETS" ]', made: 'made-sockets' }
+      case 'keysDir':
+        return { absent: '[ ! -e "$KEYSDIR" ]', made: 'made-keysdir' }
+      case 'authKeysDir':
+        return { absent: '[ ! -d "$AUTHDIR" ]', made: 'made-authdir' }
+      default:
+        return null
+    }
   }
   const head = `{"v":1,"run":${JSON.stringify(run.id)},"at":${JSON.stringify(run.at)},"state":"`
   const mid = '","items":['
@@ -815,11 +838,20 @@ export function relayRunScript(p: RelayPlan, run: { id: string; at: string }): s
     'chmod 700 "$W"; export W',
     'trap \'rm -rf "$W"\' EXIT',
     `ETC=${q(RELAY_ETC)}; REC=${q(RELAY_RECORD)}`,
+    `N=${q(RELAY_NODE_USER)}; M=${q(RELAY_MASTER_USER)}`,
+    `SOCKETS=${q(RELAY_SOCKETS_DIR)}; KEYSDIR=${q(RELAY_KEYS_DIR)}; AUTHDIR=${q(AUTH_KEYS_DIR)}`,
     "NL='",
     "'",
     ...verbatim('P', prelude()),
     ...(vars.size
-      ? [[...vars.values()].map(v => `${v.name}=${v.carried ? q(JSON.stringify(v.carried)) : "''"}`).join('; ')]
+      ? [
+          [...vars.values()]
+            .map(v => {
+              const init = v.carried ? q(JSON.stringify(v.carried)) : "''"
+              return `${v.name}=${init}; C${v.name}=${init}`
+            })
+            .join('; '),
+        ]
       : []),
   ]
   p.steps.forEach((s, i) => {
@@ -888,13 +920,24 @@ export function relayRunScript(p: RelayPlan, run: { id: string; at: string }): s
     p.steps.forEach((s, i) => {
       if (i === 0) return
       const k = i + 1
-      const ahead = s.record.map(item => `${varOf(item).name}=${q(JSON.stringify(item))}`)
+      const ahead = s.record.map(item => {
+        const v = varOf(item)
+        const c = recordCond(item)
+        const val = q(JSON.stringify(item))
+        return c ? `if [ -z "$${v.name}" ] && ${c.absent}; then ${v.name}=${val}; fi` : `${v.name}=${val}`
+      })
+      const post = s.record.flatMap(item => {
+        const v = varOf(item)
+        const c = recordCond(item)
+        return c ? [`if [ -z "$C${v.name}" ] && [ ! -f "$W/${c.made}" ]; then ${v.name}=''; fi`] : []
+      })
       out.push(
         `echo '@@step ${s.id} start'`,
         `if ${s.skipIf.length ? `skips "$K${k}"` : 'false'}; then echo '@@step ${s.id} skip'; else`,
         ...(ahead.length ? [`  ${ahead.join('; ')}`, '  rec running || back'] : []),
         `  D${k}=1${s.changes ? '; CHANGED=1' : ''}`,
         `  if does ${s.timeoutS} "$S${k}"; then echo '@@step ${s.id} ok'; else echo '@@step ${s.id} fail'; back; fi`,
+        ...(post.length ? [`  ${post.join('; ')}`] : []),
         ...(ahead.length ? ['  rec running || back'] : []),
         'fi',
         'if [ "$STOP" = 1 ]; then echo "The run was told to stop: what it did is rolled back."; back; fi',
