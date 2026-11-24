@@ -120,6 +120,15 @@ const word = (v: unknown, name: string): string | undefined => {
   return s
 }
 
+/** A session reference for `to`: allows spaces (e.g. "anna [1a2b3c4d]"), rejects flags and control characters. */
+const targetWord = (v: unknown, name: string): string | undefined => {
+  const s = str(v, name)?.trim()
+  if (s === undefined || s === '') return undefined
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: reject control chars in session references
+  if (s.startsWith('-') || /[\x00-\x1f\x7f]/.test(s)) throw new Bad(`${name}: "${s}" is not a ${name}`)
+  return s
+}
+
 const count = (v: unknown, name: string): string | undefined => {
   if (v === undefined || v === null) return undefined
   if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 0) throw new Bad(`${name} must be a whole number`)
@@ -154,7 +163,7 @@ export function writeArgv(a: Record<string, unknown>): string[] {
   const key = word(a.key, 'key')
   const status = str(a.status, 'status')
   if (status !== undefined && !STATUSES.includes(status)) throw new Bad(`status is ${STATUSES.join(', ')}`)
-  const to = word(a.to, 'to')
+  const to = targetWord(a.to, 'to')
   const parent = word(a.parent, 'parent')
   const text = str(a.text, 'text')
   const title = str(a.title, 'title')

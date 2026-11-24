@@ -77,6 +77,7 @@ import type { Deps } from './deps.ts'
 import { moveAsleep, moveTarget } from './move.ts'
 import { currentWakeMode } from './wake/mode.ts'
 import { watchPass } from './watches.ts'
+import { recordOwnerPostFailure } from './work-threads.ts'
 import type { Verifier } from './work-verify.ts'
 
 // A run on its way (waking a session takes up to three minutes) holds its claim this long.
@@ -824,6 +825,9 @@ export function startScheduler({
       ...record(entry, now, entry.cron && drop ? 'dropped' : 'missed', why),
       ...(entry.cron && drop && { n: goneRuns }),
     })
+    if (drop && Array.isArray(entry.ownerPosts) && entry.ownerPosts.length && threadsConfig(cfg.threads)) {
+      if (recordOwnerPostFailure(entry, why, now, log)) onChange()
+    }
   }
 
   /**
@@ -843,7 +847,7 @@ export function startScheduler({
   /**
    * Waiting for an offline node (#695): tried again on the next tick or when the node comes back,
    * the wait not counted and the session not marked gone, so it is never missed nor dropped while
-   * the device is away.
+   * the device is away. Records a held notice once per hold transition for owner thread posts (#693).
    */
   function holdNode(entry: ScheduleEntry, now: number): boolean {
     let became = false
@@ -859,6 +863,9 @@ export function startScheduler({
         claim: undefined,
       }
     })
+    if (became && Array.isArray(entry.ownerPosts) && entry.ownerPosts.length && threadsConfig(cfg.threads)) {
+      if (recordOwnerPostFailure(entry, 'node-offline', now, log)) onChange()
+    }
     return became
   }
 
@@ -867,7 +874,12 @@ export function startScheduler({
    * the node's payload after it returns, #695).
    */
   function endRemote(entry: ScheduleEntry, now: number, why: string): void {
-    if (removeEntry(entry.id, 'missed')) logRun(record(entry, now, 'missed', why))
+    if (removeEntry(entry.id, 'missed')) {
+      logRun(record(entry, now, 'missed', why))
+      if (Array.isArray(entry.ownerPosts) && entry.ownerPosts.length && threadsConfig(cfg.threads)) {
+        if (recordOwnerPostFailure(entry, why, now, log)) onChange()
+      }
+    }
   }
 
   /**

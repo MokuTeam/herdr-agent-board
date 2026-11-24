@@ -678,6 +678,7 @@ class Run {
           ...(reply && { replyTo: findEntry(this.db, head.id, reply).id }),
           ...(a.has('--private') && { private: true }),
           ...(a.all('--accept').length && { accept: a.all('--accept') }),
+          ...(sub === 'post' && this.write.actor.kind === 'owner' && { directOwner: true }),
         })
         const n = w.entry.files?.length ?? 0
         return this.wrote(w, n ? [`${n} ${n === 1 ? 'file' : 'files'}`] : [])

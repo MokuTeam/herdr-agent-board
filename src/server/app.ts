@@ -6,7 +6,7 @@
 // on another site cannot send that without a CORS preflight, which this server never grants, so
 // it cannot type into a session.
 
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { existsSync, type FSWatcher, mkdirSync, readFileSync, watch } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
@@ -1016,6 +1016,10 @@ export async function startServer({
         cfg,
         changed: () => board.publish(),
         async tell(key, text) {
+          if (parseNodeKey(key) && nodeProxy) {
+            const r = await nodeProxy.send(key, text, { requestId: randomUUID(), idle: false, noWake: false })
+            return r.ok ? { ok: true } : { ok: false, error: r.error }
+          }
           const { t } = await import('../core/lang.ts')
           const { collect } = await import('../services/board.ts')
           const { send } = await import('../services/actions.ts')

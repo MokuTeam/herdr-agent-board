@@ -9,6 +9,7 @@ import {
   offlineDevices,
   ownDeviceOf,
   planSend,
+  resolveTarget,
   targetsOf,
 } from '../../src/core/agent-send.ts'
 import { promptOf, type ScheduleEntry } from '../../src/core/schedule-rules.ts'
@@ -319,4 +320,44 @@ test('#676 targetsOf, agentViewsOf, and formatAgentLines propagate bgTasks and r
     card(A, 'Anna', { agent: 'agy', status: 'working', bgTasks: { ...freshBg, stuck: true } }),
   ])
   expect(formatAgentLines(preFlagged)).toEqual(['Anna [aaaaaaaa]  ·  agy  ·  working  ·  background task may be stuck'])
+})
+
+test('#693 resolveTarget matches node sessions by name, ref, @device:id, session id, local pane, and refuses ambiguity like board send', () => {
+  const targets = targetsOf([
+    card(A, 'anna', { pane: 'w1:p1' }),
+    card(`@server-1:${B}`, 'anna', { device: 'server-1', pane: 'w1:p1' }),
+    card(C, 'ben 100% тест', { pane: 'w2:p1' }),
+    card('pane-w3:p1', 'cleo', { session: null, pane: 'w3:p1' }),
+  ])
+  expect(resolveTarget(targets, 'ben 100% тест', 'laptop')).toMatchObject({ target: { key: C, name: 'ben 100% тест' } })
+  expect(resolveTarget(targets, 'w3:p1', 'laptop')).toMatchObject({ target: { key: 'pane-w3:p1', name: 'cleo' } })
+  expect(resolveTarget(targets, 'pane-w3:p1', 'laptop')).toMatchObject({ target: { key: 'pane-w3:p1', name: 'cleo' } })
+  expect(resolveTarget(targets, `@server-1:${B}`, 'laptop')).toMatchObject({
+    target: { key: `@server-1:${B}`, name: 'anna' },
+  })
+  expect(resolveTarget(targets, B, 'laptop')).toMatchObject({ target: { key: `@server-1:${B}`, name: 'anna' } })
+  expect(resolveTarget(targets, 'anna [bbbbbbbb]', 'laptop')).toMatchObject({
+    target: { key: `@server-1:${B}`, name: 'anna' },
+  })
+  const clash = resolveTarget(targets, 'anna', 'laptop')
+  expect(clash).toEqual({
+    ambiguous: true,
+    error:
+      `"anna" fits more than one session (anna [aaaaaaaa] on laptop, anna [bbbbbbbb] on node server-1): ` +
+      'give its name with its ref, or its key',
+  })
+  expect(resolveTarget(targets, 'nobody', 'laptop')).toBeNull()
+})
+
+test('#693 targetsOf includePaneless keeps paneless non-sleeping cards while default targetsOf drops them', () => {
+  const items = [
+    card(A, 'anna', { pane: '' }),
+    card(B, 'ben', { pane: 'w1:p1' }),
+    card(C, 'cleo', { pane: '', sleeping: true }),
+  ]
+  expect(targetsOf(items).map(t => t.key)).toEqual([B, C])
+  expect(targetsOf(items, 'laptop', { includePaneless: true }).map(t => t.key)).toEqual([A, B, C])
+  expect(resolveTarget(targetsOf(items, 'laptop', { includePaneless: true }), 'anna', 'laptop')).toMatchObject({
+    target: { key: A, name: 'anna' },
+  })
 })

@@ -2751,6 +2751,8 @@ async function threadContext(c: typeof cfg = cfg): Promise<ThreadCmdContext> {
   const card = key ? readCard(key) : null
   const cwd = s && typeof s.cwd === 'string' && s.cwd ? s.cwd : process.cwd()
   const lane = key ? (typeof card?.category === 'string' && card.category) || categoryFor(c, cwd) || null : null
+  // Fetched at most once when `nodes` is on, never when `nodes` is off.
+  let boardPayload: Promise<Record<string, unknown> | null> | null = null
   return {
     cfg: c,
     actor: key ? { kind: 'session', key, name } : { kind: 'owner' },
@@ -2768,17 +2770,62 @@ async function threadContext(c: typeof cfg = cfg): Promise<ThreadCmdContext> {
       })
     },
     findSession: async word => {
-      const w = word.toLowerCase()
-      const items = (await sessions()).filter(i =>
-        [i.name, i.autoName, i.pane, i.session, i.key].some(v => v && v.toLowerCase() === w),
-      )
-      if (items.length > 1)
-        throw new Error(
-          `"${word}" names ${items.length} sessions (${items.map(i => i.pane || i.key).join(', ')}): give its pane`,
+      const localFind = async () => {
+        const w = word.toLowerCase()
+        const items = (await sessions()).filter(i =>
+          [i.name, i.autoName, i.pane, i.session, i.key].some(v => v && v.toLowerCase() === w),
         )
-      const [item] = items
-      if (item) return { kind: 'session', key: item.key, name: item.name || item.autoName || item.key.slice(0, 8) }
-      return UUID.test(word) || /^pane-\S+$/.test(word) ? { kind: 'session', key: word, name: word.slice(0, 8) } : null
+        if (items.length > 1)
+          throw new Error(
+            `"${word}" names ${items.length} sessions (${items.map(i => i.pane || i.key).join(', ')}): give its pane`,
+          )
+        const [item] = items
+        if (item)
+          return { kind: 'session' as const, key: item.key, name: item.name || item.autoName || item.key.slice(0, 8) }
+        return UUID.test(word) || /^pane-\S+$/.test(word)
+          ? { kind: 'session' as const, key: word, name: word.slice(0, 8) }
+          : null
+      }
+      if (!c.nodes) return localFind()
+      const { LOCAL, nodesConfig, parseNodeKey } = await import('../core/nodes.ts')
+      const nodesCfg = nodesConfig(c.nodes, (await import('node:os')).hostname())
+      if (!nodesCfg) return localFind()
+      // Master with `nodes` (#693): resolve against the board aggregate (or local + offline node
+      // snapshots when the web board is not running) using the same rules as `board send`, falling
+      // back to paneless non-sleeping local cards that `--to` used to resolve before `nodes`.
+      boardPayload ??= c.web === false ? Promise.resolve(null) : c === cfg ? boardAnswer() : fetchBoard(c.port)
+      const body = await boardPayload
+      const A = await import('../core/agent-send.ts')
+      let own = ''
+      let allItems: unknown[]
+      if (body) {
+        own = A.ownDeviceOf(body)
+        allItems = Array.isArray(body.items) ? body.items : []
+      } else {
+        const { createDeviceStore } = await import('../adapters/node-store.ts')
+        const { nodePart } = await import('../core/node-items.ts')
+        const store = createDeviceStore()
+        const remote = Object.entries(nodesCfg.devices).flatMap(([id, dev]) => {
+          if (id === LOCAL || dev.revoked) return []
+          const snap = store.snapshot(id)
+          return snap ? (nodePart(snap.part, id)?.items ?? []) : []
+        })
+        own = nodesCfg.id
+        allItems = [...(await sessions()), ...remote]
+      }
+      const hit =
+        A.resolveTarget(A.targetsOf(allItems, own), word, own) ??
+        A.resolveTarget(A.targetsOf(allItems, own, { includePaneless: true }), word, own)
+      if (hit && 'error' in hit) {
+        const { ThreadError } = await import('../adapters/work-thread-store.ts')
+        throw new ThreadError('ambiguous', hit.error)
+      }
+      if (hit) return { kind: 'session', key: hit.target.key, name: hit.target.name }
+      if (UUID.test(word) || /^pane-\S+$/.test(word)) return { kind: 'session', key: word, name: word.slice(0, 8) }
+      const at = parseNodeKey(word)
+      if (at && Object.hasOwn(nodesCfg.devices, at.device) && (UUID.test(at.key) || /^pane-\S+$/.test(at.key)))
+        return { kind: 'session', key: word, name: at.key.slice(0, 8) }
+      return null
     },
     sessionByKey: async word => {
       const item = (await sessions()).find(i => i.key === word || i.session === word)

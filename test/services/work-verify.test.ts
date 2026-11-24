@@ -1009,3 +1009,18 @@ for (const how of ['confirm', 'doing'] as const)
     assert.deepEqual(s.archived, [key])
     assert.deepEqual(limits(), [])
   })
+
+test('#693 verify switchedOff writes owner notes without waking or directly scheduling the assignee', async () => {
+  const s = setUp()
+  await verifyThread(s)
+  await s.run(ben, ['watch', 'atlas-1', '--what', 'status'])
+  deliver(ben)
+  await s.run(ben, ['done', 'atlas-1', 'all rows mapped'])
+  deliver(ben)
+
+  const turnedOff = s.verifier().switchedOff()
+  assert.equal(turnedOff, 1)
+  const benEvents = events(ben)
+  expect(benEvents.every(e => e.noWake === true)).toBe(true)
+  expect(benEvents.some(e => e.ownerPosts !== undefined)).toBe(false)
+})

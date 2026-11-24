@@ -86,6 +86,11 @@ export type ScheduleEntry = {
   noWake?: boolean
   /** In the master's payload, an entry of another device's session (#500): its id and key carry the device's prefix. */
   device?: string
+  /**
+   * Owner thread post(s) carried by this event (#693): if delivery fails past the wait, the
+   * scheduler records a private system notice on each named thread so it never passes silently.
+   */
+  ownerPosts?: { thread: string; key: string; target: SessionRef; seq?: number }[]
   [extra: string]: unknown
 }
 

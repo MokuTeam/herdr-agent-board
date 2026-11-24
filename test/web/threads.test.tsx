@@ -446,3 +446,28 @@ test('a state-only entry in the feed: "wrote the state" and its first lines; a s
   expect(html).toContain('<b>atlas-mapper</b> wrote the state: Mapped 217 rows. / Next: prices. / Waits on: anna / …')
   expect(html).toMatch(/<b>atlas-mapper<\/b> changed the head: (<[^>]+>)*mapped(<[^>]+>)* · Done mapping\./)
 })
+
+test('#693 delivery failure system entry on a local thread renders in the feed', () => {
+  const view: ThreadView = {
+    head: row({ key: 'atlas-3', status: 'doing', assignee: mapper }),
+    children: [],
+    entries: [
+      entry(1, { author: master, type: 'system', set: { title: 'Map', status: 'doing', lane: 'atlas' } }),
+      entry(2, {
+        author: { kind: 'owner' },
+        type: 'system',
+        private: true,
+        text: 'Not delivered to anna (on server-1): node offline',
+      }),
+    ],
+    earlier: 0,
+    ask: null,
+  }
+  const feed = feedOf(view.head, view.entries, null)
+  expect(feed.filter(f => f.kind === 'status').map(f => (f.kind === 'status' ? f.did : ''))).toEqual([
+    'created',
+    'said',
+  ])
+  const html = render(<ThreadPane view={view} onOpen={() => {}} onBack={() => {}} />, board(), threads())
+  expect(html).toContain('Not delivered to anna (on server-1): node offline')
+})

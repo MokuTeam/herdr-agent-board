@@ -461,6 +461,7 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
               ...(body.private === true && { private: true }),
               links: strings(body.links, 5),
               files,
+              directOwner: true,
             }),
           }
         }

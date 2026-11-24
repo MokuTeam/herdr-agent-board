@@ -201,6 +201,20 @@ describe('board mcp', () => {
       'out/report.md',
     ])
     expect(writeArgv({ op: 'watch' })).toEqual(['watch', '--mine'])
+    expect(writeArgv({ op: 'new', title: 'Task', to: 'anna [1a2b3c4d]' })).toEqual([
+      'new',
+      '--to',
+      'anna [1a2b3c4d]',
+      '--',
+      'Task',
+    ])
+    expect(writeArgv({ op: 'set', key: 'atlas-2', to: 'Atlas Worker' })).toEqual([
+      'set',
+      'atlas-2',
+      '--assignee',
+      'Atlas Worker',
+    ])
+    expect(() => writeArgv({ op: 'new', title: 'Task', to: '--flag' })).toThrow()
     expect(() => writeArgv({ op: 'post', key: 'atlas 2' })).toThrow()
     expect(() => readArgv({ op: 'show' })).toThrow('show needs key')
   })
