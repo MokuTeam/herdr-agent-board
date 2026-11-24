@@ -9,9 +9,13 @@ import {
   isCodeModeTranscriptLine,
   isSafeCallFileName,
   NO_HOOKS_SETTINGS,
+  parseBridgeRequest,
+  parseBridgeResponse,
+  parseBridgeStreamChunk,
   parseCallFilesRequest,
   parseCheckRequest,
   parseMcpReply,
+  parseOpenRequest,
   parseReportRequest,
   parseStartRequest,
   parseStdinRequest,
@@ -272,7 +276,74 @@ describe('core/pilot-call', () => {
     expect(doorRefusal('POST', '/api/node/pilot-call/report', '/api/node/pilot-call/report')).toBeNull()
     // /api/session/<key>/mokupilot is never exposed on the node door: master runs MokuPilot locally.
     expect(doorRefusal('POST', `/api/session/${SID}/mokupilot`, `/api/session/${SID}/mokupilot`)).not.toBeNull()
+    // Node-to-master pilot-bridge door routes (#700).
+    expect(doorRefusal('GET', '/api/node/pilot-bridge', '/api/node/pilot-bridge')).toBeNull()
+    expect(
+      doorRefusal(
+        'GET',
+        '/api/node/pilot-bridge/req/abcdefgh1234/body',
+        '/api/node/pilot-bridge/req/abcdefgh1234/body',
+      ),
+    ).toBeNull()
+    expect(
+      doorRefusal('POST', '/api/node/pilot-bridge/res/abcdefgh1234', '/api/node/pilot-bridge/res/abcdefgh1234'),
+    ).toBeNull()
+    expect(
+      doorRefusal('POST', '/api/node/pilot-bridge/stream/abcdefgh1234', '/api/node/pilot-bridge/stream/abcdefgh1234'),
+    ).toBeNull()
+    expect(doorRefusal('POST', '/api/node/pilot-bridge', '/api/node/pilot-bridge')).not.toBeNull()
+    expect(
+      doorRefusal('GET', '/api/node/pilot-bridge/res/abcdefgh1234', '/api/node/pilot-bridge/res/abcdefgh1234'),
+    ).not.toBeNull()
     // Master bridge is strictly localOnly (never exposed over tunnel or remote phones).
     expect(localOnly('/api/mokupilot/node-call/abcdefgh1234/start')).toBe(true)
+    expect(localOnly('/api/mokupilot/node-call/open')).toBe(true)
+    expect(localOnly('/api/mokupilot/node-call/sessions')).toBe(true)
+  })
+
+  test('parseOpenRequest, parseBridgeRequest, parseBridgeResponse, and parseBridgeStreamChunk (#700)', () => {
+    expect(parseOpenRequest({ session: SID, cwd: '/srv/atlas' })).toEqual({
+      session: SID,
+      device: '',
+      cwd: '/srv/atlas',
+    })
+    expect(parseOpenRequest({ key: `@server-2:${SID}` })).toEqual({
+      session: SID,
+      device: 'server-2',
+      cwd: '',
+    })
+    expect(parseOpenRequest({ session: `@server-2:${SID}`, device: 'local' })).toEqual({
+      error: 'conflicting device id',
+    })
+    expect(parseOpenRequest({ session: SID, device: 'BAD_DEVICE' })).toEqual({
+      error: 'invalid device id',
+    })
+
+    expect(parseBridgeRequest({ id: 'req12345678', op: 'start', grantId: 'grant12345', body: '{}' })).toEqual({
+      id: 'req12345678',
+      op: 'start',
+      grantId: 'grant12345',
+      body: '{}',
+    })
+    expect(parseBridgeRequest({ id: 'req12345678', op: 'bogus' })).toBeNull()
+    expect(parseBridgeRequest({ id: 'bad', op: 'open' })).toBeNull()
+
+    expect(parseBridgeResponse({ status: 200, contentType: 'application/json', body: '{"ok":true}' })).toEqual({
+      status: 200,
+      contentType: 'application/json',
+      body: '{"ok":true}',
+    })
+    expect(parseBridgeResponse({ status: 99, body: '' })).toBeNull()
+
+    expect(
+      parseBridgeStreamChunk({
+        events: [{ name: 'line', data: '{"line":"ok"}' }],
+        done: true,
+      }),
+    ).toEqual({
+      events: [{ name: 'line', data: '{"line":"ok"}' }],
+      done: true,
+    })
+    expect(parseBridgeStreamChunk({ events: [{ name: 'bad', data: 'x' }] })).toBeNull()
   })
 })

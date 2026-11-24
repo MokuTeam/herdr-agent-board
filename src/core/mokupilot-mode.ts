@@ -100,6 +100,32 @@ export function viewerPlace(viewer: Viewer | null | undefined, own: readonly str
     : { local: false, address: peer, why: 'peer-other' }
 }
 
+/** The viewer's resolved address from `peer` or proxy `x-forwarded-for`, or '' when unknown. */
+export function viewerAddress(viewer: Viewer | null | undefined): string {
+  const peer = plainAddress(viewer?.peer ?? '')
+  if (!peer) return ''
+  const header = viewer?.forwardedFor ?? null
+  if (isLoopback(peer)) {
+    if (header === null || header.trim() === '') return peer
+    return plainAddress(forwardedAddress(header))
+  }
+  return peer
+}
+
+/**
+ * Whether `viewer` resolves to a non-loopback address matching one of `nodeAddresses` (a registered
+ * node machine): only then may link mode return a `mokupilot://` link instead of local refusal guards.
+ */
+export function isRegisteredNodeViewer(viewer: Viewer | null | undefined, nodeAddresses: readonly string[]): boolean {
+  const addr = viewerAddress(viewer)
+  if (!addr || isLoopback(addr)) return false
+  for (const entry of nodeAddresses) {
+    const plain = plainAddress(entry)
+    if (plain && !isLoopback(plain) && plain === addr) return true
+  }
+  return false
+}
+
 export interface Resolved {
   mode: MokupilotMode
   resolved: 'local' | 'link'

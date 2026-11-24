@@ -31,6 +31,7 @@ import {
   type Threshold,
   thresholdTyped,
 } from '../../models/devices.ts'
+import type { HandoverView } from '../../models/master-handover.ts'
 import type { NodeSetupView } from '../../models/node-setup.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
@@ -39,6 +40,7 @@ import { Panel, type PanelBack } from '../panel/Panel.tsx'
 import { Switch } from '../team/Switch.tsx'
 import { AddComputer } from './AddComputer.tsx'
 import { AddServer, LoginLines } from './AddServer.tsx'
+import { MasterHandover } from './MasterHandover.tsx'
 
 export interface DevicesPanelProps {
   open: boolean
@@ -50,6 +52,8 @@ export interface DevicesPanelProps {
   setup?: NodeSetupView
   /** The Add a computer form's view, for a test (components/devices/AddComputer.tsx). */
   computerSetup?: ComputerSetupView
+  /** The Move master role view, for a test (components/devices/MasterHandover.tsx). */
+  handover?: HandoverView
 }
 
 /** How long the panel waits after the devices change before it asks for the next device again. */
@@ -58,7 +62,7 @@ const NEXT_MS = 1000
 /** POST /api/nodes; the settings it answered with, or null when it was refused (a toast says why). */
 type Send = (body: Record<string, unknown>) => Promise<PanelSettings | null>
 
-export function DevicesPanel({ open, onClose, back, initial, setup, computerSetup }: DevicesPanelProps) {
+export function DevicesPanel({ open, onClose, back, initial, setup, computerSetup, handover }: DevicesPanelProps) {
   const t = useT()
   const { data, canEdit, toast, now } = useBoardContext()
   const [settings, setSettings] = useState<PanelSettings | null>(initial ?? null)
@@ -185,6 +189,7 @@ export function DevicesPanel({ open, onClose, back, initial, setup, computerSetu
         </div>
         <AddServer open={open} {...(setup && { initial: setup })} />
         <AddComputer open={open} {...(computerSetup && { initial: computerSetup })} />
+        {master && <MasterHandover open={open} devices={shown} {...(handover && { initial: handover })} />}
         {master && <LanesSection settings={settings} disabled={!canEdit} send={send} />}
         {master && (
           <section className="devices-section">

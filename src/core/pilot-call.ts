@@ -1,7 +1,9 @@
-// MokuPilot call agent running on a remote node (#618): pure validation, CLI argument building,
-// and environment sanitization shared between the node's door endpoints (services/node/pilot-call.ts)
-// and the master's local bridge (services/nodes/pilot-call.ts). No I/O here.
+// MokuPilot call agent running on a remote node (#618) and from a node to a remote master (#700):
+// pure validation, CLI argument building, and environment sanitization shared between the node's
+// door endpoints (services/node/pilot-call.ts, services/node/pilot-bridge.ts) and the master's
+// bridge (services/nodes/pilot-call.ts, services/nodes/pilot-bridge.ts). No I/O here.
 import { stripAnsi } from './dialogs/input-box.ts'
+import { DEVICE_ID, LOCAL, parseNodeKey } from './node-key.ts'
 
 export const PILOT_CALL_ID = /^[A-Za-z0-9_-]{8,64}$/
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -27,6 +29,12 @@ export const MAX_MCP_BODY_BYTES = 4 * 1024 * 1024
 export const MAX_CALL_FILE_BYTES = 20 * 1024 * 1024
 /** Maximum total payload size for a call files upload request (base64 overhead included). */
 export const MAX_CALL_FILES_REQUEST_BYTES = 45 * 1024 * 1024
+/** Inline JSON body limit for node-to-master pilot-bridge SSE requests; larger bodies fetch out-of-band (#700). */
+export const PILOT_BRIDGE_INLINE_BYTES = 64 * 1024
+/** Maximum JSON response body returned across the node-to-master pilot bridge (#700). */
+export const MAX_BRIDGE_RESPONSE_BYTES = 4 * 1024 * 1024
+/** Maximum SSE batch payload posted across the node-to-master pilot bridge (#700). */
+export const MAX_BRIDGE_STREAM_BATCH_BYTES = 8 * 1024 * 1024
 /** Maximum number of MCP tools allowed in one call. */
 const MAX_MCP_TOOLS = 64
 
@@ -85,6 +93,63 @@ export interface PilotCallReportRequest {
   session: string
   report: string
   reportId: string | null
+}
+
+export interface PilotCallOpenRequest {
+  session: string
+  device: string
+  cwd: string
+}
+
+export type PilotBridgeOp =
+  | 'open'
+  | 'sessions'
+  | 'start'
+  | 'events'
+  | 'events-close'
+  | 'stdin'
+  | 'mcp-reply'
+  | 'close'
+  | 'files'
+  | 'report'
+  | 'end'
+
+export interface PilotBridgeRequest {
+  id: string
+  op: PilotBridgeOp
+  grantId?: string
+  runId?: string
+  streamId?: string
+  body?: string
+  hasBody?: boolean
+}
+
+export interface PilotBridgeResponse {
+  status: number
+  contentType: string
+  body: string
+}
+
+export interface PilotBridgeStreamEvent {
+  name: 'line' | 'stderr' | 'mcp' | 'exit'
+  data: string
+}
+
+export interface PilotBridgeStreamChunk {
+  events?: PilotBridgeStreamEvent[]
+  done?: boolean
+  error?: string
+}
+
+export interface PilotSessionSummary {
+  key: string
+  session: string
+  name: string
+  device: string | null
+  cwd: string
+  category: string
+  profile: string | null
+  status: string
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -231,6 +296,111 @@ export function parseReportRequest(raw: unknown): PilotCallReportRequest | { err
     reportId = raw.reportId
   }
   return { session, report, reportId }
+}
+
+const BRIDGE_OPS: ReadonlySet<string> = new Set<PilotBridgeOp>([
+  'open',
+  'sessions',
+  'start',
+  'events',
+  'events-close',
+  'stdin',
+  'mcp-reply',
+  'close',
+  'files',
+  'report',
+  'end',
+])
+const STREAM_EVENT_NAMES: ReadonlySet<string> = new Set<PilotBridgeStreamEvent['name']>([
+  'line',
+  'stderr',
+  'mcp',
+  'exit',
+])
+
+export function parseOpenRequest(raw: unknown): PilotCallOpenRequest | { error: string } {
+  if (!isRecord(raw)) return { error: 'invalid request body' }
+  let session = typeof raw.session === 'string' ? raw.session.trim() : ''
+  let device = typeof raw.device === 'string' ? raw.device.trim() : ''
+  const key = typeof raw.key === 'string' ? raw.key.trim() : ''
+  const keyToParse = key || session
+  const at = keyToParse ? parseNodeKey(keyToParse) : null
+  if (at) {
+    if (device && device !== at.device) return { error: 'conflicting device id' }
+    device = at.device
+    if (!session || session === keyToParse) session = at.key
+  }
+  if (!UUID.test(session)) return { error: 'session must be a UUID' }
+  if (device && device !== LOCAL && !DEVICE_ID.test(device)) return { error: 'invalid device id' }
+  return { session, device, cwd: cleanPath(raw.cwd) }
+}
+
+export function parseBridgeRequest(raw: unknown): PilotBridgeRequest | null {
+  if (!isRecord(raw)) return null
+  const id = typeof raw.id === 'string' ? raw.id.trim() : ''
+  const op = typeof raw.op === 'string' ? raw.op : ''
+  if (!isPilotCallId(id) || !BRIDGE_OPS.has(op)) return null
+  const checkOptId = (v: unknown): string | null | undefined => {
+    if (v === undefined) return undefined
+    if (typeof v !== 'string') return null
+    const trimmed = v.trim()
+    return isPilotCallId(trimmed) ? trimmed : null
+  }
+  const grantId = checkOptId(raw.grantId)
+  const runId = checkOptId(raw.runId)
+  const streamId = checkOptId(raw.streamId)
+  if (grantId === null || runId === null || streamId === null) return null
+  let body: string | undefined
+  if (raw.body !== undefined) {
+    if (typeof raw.body !== 'string' || Buffer.byteLength(raw.body, 'utf8') > PILOT_BRIDGE_INLINE_BYTES * 2) {
+      return null
+    }
+    body = raw.body
+  }
+  if (raw.hasBody !== undefined && typeof raw.hasBody !== 'boolean') return null
+  return {
+    id,
+    op: op as PilotBridgeOp,
+    ...(grantId !== undefined && { grantId }),
+    ...(runId !== undefined && { runId }),
+    ...(streamId !== undefined && { streamId }),
+    ...(body !== undefined && { body }),
+    ...(raw.hasBody === true && { hasBody: true }),
+  }
+}
+
+export function parseBridgeResponse(raw: unknown): PilotBridgeResponse | null {
+  if (!isRecord(raw)) return null
+  const status = raw.status
+  if (!Number.isInteger(status) || (status as number) < 100 || (status as number) > 599) return null
+  const contentType =
+    typeof raw.contentType === 'string' && raw.contentType.trim() && !hasControl(raw.contentType)
+      ? raw.contentType.trim().slice(0, 128)
+      : 'application/json'
+  const body = typeof raw.body === 'string' ? raw.body : ''
+  if (Buffer.byteLength(body, 'utf8') > MAX_BRIDGE_RESPONSE_BYTES) return null
+  return { status: status as number, contentType, body }
+}
+
+export function parseBridgeStreamChunk(raw: unknown): PilotBridgeStreamChunk | null {
+  if (!isRecord(raw)) return null
+  let events: PilotBridgeStreamEvent[] | undefined
+  if (raw.events !== undefined) {
+    if (!Array.isArray(raw.events) || raw.events.length > 2000) return null
+    events = []
+    for (const item of raw.events) {
+      if (!isRecord(item) || typeof item.name !== 'string' || !STREAM_EVENT_NAMES.has(item.name)) return null
+      if (typeof item.data !== 'string') return null
+      events.push({ name: item.name as PilotBridgeStreamEvent['name'], data: item.data })
+    }
+  }
+  if (raw.done !== undefined && typeof raw.done !== 'boolean') return null
+  if (raw.error !== undefined && typeof raw.error !== 'string') return null
+  return {
+    ...(events !== undefined && { events }),
+    ...(raw.done !== undefined && { done: raw.done }),
+    ...(raw.error !== undefined && { error: raw.error.slice(0, 1024) }),
+  }
 }
 
 /** Whether one transcript JSONL line records Code Mode being enabled (`type: "repl-mode"`, `replMode: true`). */

@@ -52,6 +52,8 @@ export interface StatusSources {
    * omits the field (no agy), null reports installed-but-unknown, else the reading.
    */
   agyLimits?: () => BoardAgyLimits | null | undefined
+  /** Non-internal interface addresses of this node (#700). */
+  addresses?: () => readonly string[]
   platform?: string
   arch?: string
   home?: string
@@ -147,6 +149,7 @@ export function createNodeStatus(src: StatusSources): { answer(): Promise<NodeSt
         ...(src.programs && { programs: programsOnce(src.programs) }),
         ...(git && { git }),
         ...(agyLimits !== undefined && { agyLimits }),
+        ...(src.addresses && { addresses: [...src.addresses()].slice(0, 32) }),
         at: (src.now ?? Date.now)(),
       }
     },

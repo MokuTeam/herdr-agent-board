@@ -375,6 +375,11 @@ describe('remote.ownerAdmin enabled on a headless master through the tunnel (#69
     const log2 = (await (await pk.get('/api/links/log')).json()) as { edges: AdminEdge[]; next: number }
     expect(log2.next).toBe(log1.next)
 
+    // Handover orchestration stays local-only even for an ownerAdmin session.
+    expect((await pw.get('/api/nodes/handover')).status).toBe(404)
+    expect((await pk.get('/api/nodes/handover')).status).toBe(404)
+    expect((await pk.post('/api/nodes/handover', { op: 'check', to: 'server-1' })).status).toBe(405)
+
     // Step-up TOTP for remote credential changes (password, totp-confirm, lockout-lift):
     // missing or wrong code is refused; fresh code succeeds; replay of the same code is refused.
     expect((await pk.post('/api/access', { op: 'lockout-lift' })).status).toBe(403)

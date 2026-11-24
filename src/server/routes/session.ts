@@ -71,6 +71,8 @@ export interface SessionApp {
   gate: MessageGate
   /** Sessions with an answer being typed into their dialog. */
   answering: Set<string>
+  /** Registered node addresses, used to allow node viewers to open secondary-profile links (#700). */
+  nodeAddresses?: () => readonly string[]
 }
 
 const changed = (item: Item): Result => ({ ok: false, error: t('err.sessionChanged', { name: item.name }) })
@@ -396,7 +398,12 @@ async function act(
     // A MokuPilot call whose agent is a fork of this session, in the session's own profile; no herdr in it.
     // Here or on the viewer's computer by the mode, and under `auto` by who asks (core/mokupilot-mode.ts).
     case 'mokupilot':
-      return startCall(deps.cfg, item, { profiles: deps.profiles(), viewer, own: ownAddresses })
+      return startCall(deps.cfg, item, {
+        profiles: deps.profiles(),
+        viewer,
+        own: ownAddresses,
+        ...(app.nodeAddresses && { nodeAddresses: app.nodeAddresses }),
+      })
     // A new session in a new tab with a copy of this one's conversation; this one stays as it is.
     case 'fork':
       return app.launches

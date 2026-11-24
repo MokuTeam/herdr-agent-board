@@ -21,6 +21,7 @@ import {
 import { FIELD_NAME, MAX_FIELDS, SINK_ID } from '../../core/secrets.ts'
 import type { BundleSync } from '../../services/nodes/bundle-sync.ts'
 import type { ComputerSetup } from '../../services/nodes/computer-setup.ts'
+import type { MasterHandover } from '../../services/nodes/handover.ts'
 import type { NodeLinks } from '../../services/nodes/links.ts'
 import type { RelaySetup } from '../../services/nodes/relay-setup.ts'
 import type { Revoker } from '../../services/nodes/revoke.ts'
@@ -176,6 +177,61 @@ export function computerSetupRoutes(setup: () => ComputerSetup): Route[] {
                 ? await s.cancel()
                 : { status: 400, body: { ok: false, error: 'op' } }
         return json(a.status, a.body)
+      },
+    },
+  ]
+}
+
+/**
+ * Guided master handover (#697, services/nodes/handover.ts): local board only, lazy, keeping
+ * the shared route table untouched.
+ */
+export function handoverRoutes(handover: () => MasterHandover): Route[] {
+  return [
+    { method: 'GET', path: '/api/nodes/handover', handle: () => json(200, handover().view()) },
+    {
+      method: 'POST',
+      path: '/api/nodes/handover',
+      guard: ['board-header', 'origin'],
+      async handle(_req, ctx) {
+        const body = await ctx.body()
+        const h = handover()
+        if (body.op === 'check') {
+          if (typeof body.to !== 'string' || !body.to) return json(400, { ok: false, error: 'missing target device' })
+          try {
+            const plan = await h.check({
+              to: body.to,
+              ...(typeof body.reverseLink === 'string' && { reverseLink: body.reverseLink }),
+              ...(typeof body.nodePort === 'number' && { nodePort: body.nodePort }),
+              ...(body.allowOfflineNodes === true && { allowOfflineNodes: true }),
+            })
+            return json(200, { ok: true, plan, view: h.view() })
+          } catch (err) {
+            return json(409, { ok: false, error: err instanceof Error ? err.message : String(err), view: h.view() })
+          }
+        }
+        if (body.op === 'run') {
+          if (typeof body.to !== 'string' || !body.to) return json(400, { ok: false, error: 'missing target device' })
+          const res = await h.run({
+            to: body.to,
+            ...(typeof body.reverseLink === 'string' && { reverseLink: body.reverseLink }),
+            ...(typeof body.nodePort === 'number' && { nodePort: body.nodePort }),
+            ...(body.allowOfflineNodes === true && { allowOfflineNodes: true }),
+          })
+          return json(res.ok ? 200 : 409, { ...res, view: h.view() })
+        }
+        if (body.op === 'rollback') {
+          const res = await h.rollback({
+            ...(typeof body.id === 'string' && { id: body.id }),
+            ...(body.localOnly === true && { localOnly: true }),
+            ...(body.discardSinceCommit === true && { discardSinceCommit: true }),
+          })
+          return json(res.ok ? 200 : 409, { ...res, view: h.view() })
+        }
+        if (body.op === 'cancel') {
+          return json(200, { ok: true, view: h.cancel() })
+        }
+        return json(400, { ok: false, error: 'op' })
       },
     },
   ]

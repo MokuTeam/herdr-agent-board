@@ -101,6 +101,7 @@ export interface RemoteListenerOptions {
   page: Route
   remote: Remote
   log: (text: string) => void
+  frozen?: () => boolean
   /** What the page shows changed. */
   onChange: () => void
   /** Extra admin route resolver (e.g. /api/nodes, /api/nodes/setup) used only when `ownerAdmin` is authorised (#694). */
@@ -281,6 +282,9 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
       if (req.method === 'GET' && raw === '/api/peers') return json(200, { peers: await peers() })
       // The board's page is for the computer's own browser; a phone has its app.
       if (!raw.startsWith('/api/') && !raw.startsWith('/uploads/')) return json(404, { error: 'not found' })
+      if (o.frozen?.() && req.method !== 'GET' && req.method !== 'HEAD') {
+        return json(503, { error: 'handover-frozen', message: 'master handover in progress; writes are frozen' })
+      }
       const guards = fromServe ? { ...o.guards, origins: [pwaOrigin], remote: true } : { ...o.guards, remote: true }
       const selected = ownerAdmin ? (o.adminRoutes?.(path) ?? o.routes) : o.routes
       const logAdmin = ownerAdmin && isOwnerAdminRoute(req.method, raw, path, teamConfig(o.cfg.team) !== null)

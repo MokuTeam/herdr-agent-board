@@ -490,3 +490,90 @@ test('under auto at this computer without MokuPilot: the error says it is not in
   }
   useLanguage('en')
 })
+
+test('link mode with non-inherited profile only bypasses refusal for registered node viewers (#700)', async () => {
+  const DEFAULT = { id: 'default', title: 'Default', dir: '/home/u/.claude', color: 'indigo', hidden: false }
+  const WORK = { id: 'work', title: 'Work', dir: '/home/u/.claude-work', color: 'teal', hidden: false }
+  const SET = profileSet([DEFAULT, WORK], DEFAULT.dir)
+  const item = { agent: 'claude', session: ID, cwd: tmpdir(), transcript: null, profile: 'work' }
+  const phone = { viewer: { peer: '127.0.0.1', forwardedFor: '100.64.0.7' }, own: () => ['192.168.1.20'] }
+  const masterWithNode = {
+    mokupilot: { mode: 'auto' as const },
+    nodes: {
+      id: 'laptop',
+      devices: {
+        'server-1': { link: { kind: 'tailnet' as const, address: '100.64.0.12', port: 12430 } },
+        'server-old': { revoked: true, link: { kind: 'tailnet' as const, address: '100.64.0.99', port: 12430 } },
+      },
+    },
+  }
+
+  // Without `nodes`, link mode refuses non-inherited profiles just as before.
+  const plain = await startCall({ mokupilot: { mode: 'auto' } }, item, {
+    platform: 'linux',
+    env: { PATH: '' },
+    profiles: SET,
+    home: '/home/u',
+    ...phone,
+  })
+  assert.equal(plain.ok, false)
+  assert.match(plain.ok ? '' : plain.error, /wrong account/)
+
+  // Even WITH `nodes`, an unregistered remote viewer or revoked node is still refused.
+  for (const viewer of [
+    phone.viewer,
+    { peer: '100.64.0.7', forwardedFor: null },
+    { peer: '100.64.0.99', forwardedFor: '100.64.0.12' },
+    { peer: '127.0.0.1', forwardedFor: '100.64.0.99' },
+  ]) {
+    const refused = await startCall(masterWithNode, item, {
+      platform: 'linux',
+      env: { PATH: '' },
+      profiles: SET,
+      home: '/home/u',
+      viewer,
+      own: phone.own,
+    })
+    assert.equal(refused.ok, false)
+    assert.match(refused.ok ? '' : refused.error, /wrong account/)
+  }
+
+  // A registered node viewer (tailnet/ssh/direct address or node-reported status address) gets the link.
+  for (const viewer of [
+    { peer: '100.64.0.12', forwardedFor: null },
+    { peer: '::ffff:100.64.0.12', forwardedFor: null },
+    { peer: '127.0.0.1', forwardedFor: '100.64.0.12' },
+  ]) {
+    const allowed = await startCall(masterWithNode, item, {
+      platform: 'linux',
+      env: { PATH: '' },
+      profiles: SET,
+      home: '/home/u',
+      viewer,
+      own: phone.own,
+    })
+    assert.equal(allowed.ok, true)
+    if (allowed.ok && allowed.state === 'link') {
+      assert.equal(allowed.url, `mokupilot://call?claude-session=${ID}&cwd=${encodeURIComponent(tmpdir())}`)
+    } else {
+      assert.fail('expected link result')
+    }
+  }
+
+  // Dynamic nodeAddresses callback (e.g. relay nodes reporting interface addresses in status) also works.
+  const viaStatus = await startCall({ mokupilot: { mode: 'link' }, nodes: { id: 'laptop', devices: {} } }, item, {
+    platform: 'linux',
+    env: { PATH: '' },
+    profiles: SET,
+    home: '/home/u',
+    viewer: { peer: '127.0.0.1', forwardedFor: '100.64.0.55' },
+    nodeAddresses: () => ['100.64.0.55'],
+  })
+  assert.deepEqual(viaStatus, {
+    ok: true,
+    state: 'link',
+    url: `mokupilot://call?claude-session=${ID}&cwd=${encodeURIComponent(tmpdir())}`,
+    resolved: 'link',
+    why: 'mode-link',
+  })
+})

@@ -366,6 +366,8 @@ const failureOf = (err: unknown): { error: string; held: boolean } => ({
 export interface Backups {
   /** Runs a backup now, unless one runs (its report then). */
   now(force?: boolean): Promise<RunReport>
+  pause(): void
+  resume(): void
   stop(): void
 }
 
@@ -385,6 +387,7 @@ export function startBackups(o: {
 }): Backups {
   let running: Promise<RunReport> | null = null
   let stopped = false
+  let paused = false
   const run = (force = false): Promise<RunReport> => {
     if (running) return running
     running = backupNow({ cfg: o.cfg(), force })
@@ -397,7 +400,7 @@ export function startBackups(o: {
     return running
   }
   const tick = (): void => {
-    if (stopped || !existsSync(dbFile()) || !activeTargets(cfgOf(o.cfg())).length) return
+    if (stopped || paused || !existsSync(dbFile()) || !activeTargets(cfgOf(o.cfg())).length) return
     void run()
   }
   const first = setTimeout(() => {
@@ -419,6 +422,12 @@ export function startBackups(o: {
   timer.unref?.()
   return {
     now: (force = true) => run(force),
+    pause: () => {
+      paused = true
+    },
+    resume: () => {
+      if (!stopped) paused = false
+    },
     stop: () => {
       stopped = true
       clearTimeout(first)

@@ -82,10 +82,12 @@ test('the fields #287 names are .path-add or .draft-id, so the one rule reaches 
   expect(named('categories/CategoryDraft.tsx', 'className="draft-id"')).toBe(true)
   // and no component draws a bare field with them outside Settings, where a fill would be new
   const users = walk(src).filter(f => /path-add|draft-id/.test(readFileSync(f, 'utf8')))
-  // (and Add a server / Add a computer, forms of Settings, Devices, #509, #513)
+  // (and Add a server / Add a computer / Move master role, forms of Settings, Devices, #509, #513, #697)
   expect(
     users.every(f =>
-      /[\\/](access|backup|profiles|wake|categories)[\\/]|[\\/]devices[\\/](AddServer|AddComputer)\.tsx$/.test(f),
+      /[\\/](access|backup|profiles|wake|categories)[\\/]|[\\/]devices[\\/](AddServer|AddComputer|MasterHandover)\.tsx$/.test(
+        f,
+      ),
     ),
   ).toBe(true)
 })
