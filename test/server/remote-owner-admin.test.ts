@@ -574,13 +574,13 @@ describe('remote.ownerAdmin over Tailscale and CLI (#694)', () => {
     const focusOwner = await callServe(OWNER_IP, OWNER_LOGIN, ownerCookie, '/api/session/s1/focus', 'POST', {})
     expect([focusOwner.status, await focusOwner.json()]).toEqual([403, { error: 'desktop' }])
 
-    // Owner native app over tailnet: admin routes pass (non-desk /api/remote ops and mokupilot node-call mapping too).
+    // Owner native app over tailnet: admin routes pass (non-desk /api/remote ops too), while pilot-call stays local-only.
     expect((await callApp('/api/access')).status).toBe(200)
     expect((await callApp('/api/nodes')).status).toBe(200)
     expect((await callApp('/api/remote')).status).toBe(200)
     expect((await callApp('/api/remote', 'POST', { op: 'deny', id: 'nope' })).status).toBe(404)
     const pilotCallRes = await callApp('/api/mokupilot/node-call/abcdefgh1234/start', 'POST', {})
-    expect([pilotCallRes.status, await pilotCallRes.json()]).toEqual([401, { ok: false, error: 'unauthorized' }])
+    expect([pilotCallRes.status, await pilotCallRes.json()]).toEqual([405, { error: 'method' }])
 
     // Desk (owner's own Tailscale login, marked desk: true): still NO ownerAdmin, ALL localOnly admin routes refused,
     // while deskFocus and DESK_REMOTE_OPS continue working unchanged.
@@ -666,8 +666,10 @@ describe('remote.ownerAdmin fail-closed audit and tagged Tailscale refusal (#694
     expect(board.watches).toBeUndefined()
   }, 30_000)
 
-  test('tagged Tailscale nodes (tagged-*) are refused ownerAdmin even when caller and self share the tagged login', async () => {
-    const box = await shared()
+  const pairTaggedTailscaleBoard = async (
+    box: Awaited<ReturnType<typeof shared>>,
+    opts: { ownerAdmin: boolean; threads?: boolean },
+  ) => {
     const remotePort = await unusedPort()
     const pwaPort = await unusedPort()
     const taggedLogin = 'tagged-devices'
@@ -697,12 +699,13 @@ describe('remote.ownerAdmin fail-closed audit and tagged Tailscale refusal (#694
       box,
       {
         language: 'en',
+        ...(opts.threads !== undefined && { threads: opts.threads }),
         remote: {
           on: true,
           port: remotePort,
           allow: [taggedLogin],
           pwa: { on: true, port: pwaPort },
-          ownerAdmin: true,
+          ownerAdmin: opts.ownerAdmin,
         },
       },
       { TAILSCALE_BIN_PATH: box.env.HERDR_BIN_PATH as string },
@@ -715,13 +718,16 @@ describe('remote.ownerAdmin fail-closed audit and tagged Tailscale refusal (#694
       if (Date.now() > deadline) throw new Error('serve did not start')
       await Bun.sleep(25)
     }
+    const taggedHeaders = {
+      host: NAME,
+      'x-forwarded-for': OWNER_IP,
+      'x-forwarded-proto': 'https',
+      'tailscale-user-login': taggedLogin,
+    }
     const asked = await fetch(`${serveUrl}/api/remote/pair`, {
       method: 'POST',
       headers: {
-        host: NAME,
-        'x-forwarded-for': OWNER_IP,
-        'x-forwarded-proto': 'https',
-        'tailscale-user-login': taggedLogin,
+        ...taggedHeaders,
         'content-type': 'application/json',
         'x-board': '1',
         origin: TAILNET_ORIGIN,
@@ -739,36 +745,27 @@ describe('remote.ownerAdmin fail-closed audit and tagged Tailscale refusal (#694
         })
       ).status,
     ).toBe(200)
-    const poll = await fetch(`${serveUrl}/api/remote/pair/${id}`, {
-      headers: {
-        host: NAME,
-        'x-forwarded-for': OWNER_IP,
-        'x-forwarded-proto': 'https',
-        'tailscale-user-login': taggedLogin,
-      },
-    })
+    const poll = await fetch(`${serveUrl}/api/remote/pair/${id}`, { headers: taggedHeaders })
     const cookie = (poll.headers.get('set-cookie') ?? '').split(';')[0] ?? ''
-    const hello = (await (
-      await fetch(`${serveUrl}/api/hello`, {
-        headers: {
-          host: NAME,
-          'x-forwarded-for': OWNER_IP,
-          'x-forwarded-proto': 'https',
-          'tailscale-user-login': taggedLogin,
-          cookie,
-        },
-      })
-    ).json()) as Record<string, unknown>
+    const serveGet = (path: string) => fetch(`${serveUrl}${path}`, { headers: { ...taggedHeaders, cookie } })
+    return { serveGet }
+  }
+
+  test('tagged Tailscale nodes (tagged-*) are refused ownerAdmin even when caller and self share the tagged login', async () => {
+    const { serveGet } = await pairTaggedTailscaleBoard(await shared(), { ownerAdmin: true })
+    const hello = (await (await serveGet('/api/hello')).json()) as Record<string, unknown>
     expect('ownerAdmin' in hello).toBe(false)
-    const refused = await fetch(`${serveUrl}/api/access`, {
-      headers: {
-        host: NAME,
-        'x-forwarded-for': OWNER_IP,
-        'x-forwarded-proto': 'https',
-        'tailscale-user-login': taggedLogin,
-        cookie,
-      },
-    })
+    const refused = await serveGet('/api/access')
+    expect([refused.status, await refused.json()]).toEqual([403, { error: 'local' }])
+  }, 30_000)
+
+  test('tagged master with remote.ownerAdmin off keeps remote Threads (#392) for owner device', async () => {
+    const { serveGet } = await pairTaggedTailscaleBoard(await shared(), { ownerAdmin: false, threads: true })
+    const hello = (await (await serveGet('/api/hello')).json()) as Record<string, unknown>
+    expect(hello.threads).toBe(true)
+    expect('ownerAdmin' in hello).toBe(false)
+    expect((await serveGet('/api/threads')).status).toBe(200)
+    const refused = await serveGet('/api/access')
     expect([refused.status, await refused.json()]).toEqual([403, { error: 'local' }])
   }, 30_000)
 })

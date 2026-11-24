@@ -223,7 +223,8 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
       if (req.method === 'GET' && raw === '/api/hello') {
         if (!fromServe) return json(200, hello())
         const known = token ? o.remote.verify(token, who) : null
-        const ownerSelf = !!known && isOwnerAdminDevice(known, who.login, owner)
+        const ownerDevice = !!known && !known.desk && isOwnerLogin(who.login, owner)
+        const ownerAdmin = !!known && isOwnerAdminDevice(known, who.login, owner) && rc().ownerAdmin
         return json(200, {
           ...hello(),
           paired: !!known,
@@ -233,9 +234,9 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
           // The Team panel (#355): only for the owner's own phone, while the team is on; else hello is as it was.
           ...(known && teamOwnerOf(known, who) && { team: true }),
           // Threads (#392): the owner's own phone, while threads are on; else hello is as it was.
-          ...(ownerSelf && threadsConfig(o.cfg.threads) && { threads: true }),
+          ...(ownerDevice && threadsConfig(o.cfg.threads) && { threads: true }),
           // Headless master admin (#694): only for the owner's own non-desk browser when ownerAdmin is on.
-          ...(ownerSelf && rc().ownerAdmin && { ownerAdmin: true }),
+          ...(ownerAdmin && { ownerAdmin: true }),
         })
       }
       if (req.method === 'POST' && raw === '/api/remote/pair') {
@@ -268,9 +269,9 @@ export function createRemoteListener(o: RemoteListenerOptions): RemoteListener {
       // computer is refused in both spellings, or an encoded letter (/api/fs/%6Fpen) would get by.
       const path = decoded(raw)
       if (path === null) return json(400, { error: 'path' })
-      const ownerSelf = isOwnerAdminDevice(device, who.login, owner)
-      const ownerAdmin = ownerSelf && rc().ownerAdmin
-      const refused = remoteRefusal(raw, path, !!device.desk, teamOwnerOf(device, who), ownerSelf, ownerAdmin)
+      const ownerDevice = !device.desk && isOwnerLogin(who.login, owner)
+      const ownerAdmin = isOwnerAdminDevice(device, who.login, owner) && rc().ownerAdmin
+      const refused = remoteRefusal(raw, path, !!device.desk, teamOwnerOf(device, who), ownerDevice, ownerAdmin)
       if (refused) return refused
       // Only a desk gets this far with /api/remote unless ownerAdmin is on: the ops a desk may run.
       if (device.desk) {

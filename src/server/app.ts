@@ -443,13 +443,7 @@ export async function startServer({
   // Headless master admin (#694): resolved lazily once board, localNodeRoutes and localSetupRoutes
   // are set up below (never called before start() wires routes and begins listening).
   const remoteAdminRoutes = (path: string): Route[] | null =>
-    path === '/api/nodes' && localNodeRoutes
-      ? localNodeRoutes
-      : path === '/api/nodes/setup'
-        ? localSetupRoutes
-        : path.startsWith('/api/mokupilot/node-call/') && localPilotCallRoutes
-          ? localPilotCallRoutes
-          : null
+    path === '/api/nodes' && localNodeRoutes ? localNodeRoutes : path === '/api/nodes/setup' ? localSetupRoutes : null
   const listener = createRemoteListener({
     cfg,
     webPort: port,
