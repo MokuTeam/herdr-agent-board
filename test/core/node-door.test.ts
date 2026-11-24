@@ -108,6 +108,15 @@ describe('the door takes what 6.2 lists', () => {
       ['POST', '/api/node/pilot-call/files'],
       ['POST', '/api/node/pilot-call/report'],
       ['POST', '/api/node/relay-key'],
+      ['GET', '/api/node/handover/check'],
+      ['POST', '/api/node/handover/prepare'],
+      ['PUT', '/api/node/handover/bundle'],
+      ['POST', '/api/node/handover/apply'],
+      ['POST', '/api/node/handover/verify'],
+      ['POST', '/api/node/handover/commit'],
+      ['POST', '/api/node/handover/rollback'],
+      ['POST', '/api/node/handover/pair'],
+      ['POST', '/api/node/handover/unpair'],
     ])
     // A move to or from another device (#616): a session id, a file's number, a hash; nothing else.
     const sid = '0f8fad5b-d9cb-469f-a165-70867728950e'

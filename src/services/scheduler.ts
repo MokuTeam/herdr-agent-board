@@ -164,6 +164,10 @@ export function startScheduler({
   verify?: Verifier
 }): {
   stop(): void
+  /** Pause scheduled ticks during a master handover (#697). */
+  pause(): void
+  /** Resume scheduled ticks after a paused/rolled-back handover (#697). */
+  resume(): void
   /** A device's link or revocation state changed: try its held entries at once (#695). */
   wakeDevice(device: string): void
   /** `nodes` config changed: try held entries for all held devices at once (#695). */
@@ -188,6 +192,7 @@ export function startScheduler({
   let timer: ReturnType<typeof setTimeout> | undefined
   let ticking = false
   let stopped = false
+  let paused = false
   // Watches (#486, services/watches.ts): their probes, only while config.json's `watches` is on.
   const watches = watchPass({ deps, patience, onChange })
 
@@ -198,7 +203,7 @@ export function startScheduler({
   }
 
   async function tick(): Promise<void> {
-    if (ticking || stopped) return
+    if (ticking || stopped || paused) return
     ticking = true
     try {
       const archived = await closeDue(deps, { log }).catch((err: unknown) => {
@@ -946,6 +951,15 @@ export function startScheduler({
       clearTimeout(timer)
       clearTimeout(watchTimer)
       for (const w of watchers) w.close()
+    },
+    pause() {
+      paused = true
+      clearTimeout(timer)
+    },
+    resume() {
+      if (stopped || !paused) return
+      paused = false
+      plan(0)
     },
     wakeDevice(device) {
       if (stopped || !heldDevices.has(device)) return

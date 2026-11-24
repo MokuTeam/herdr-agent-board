@@ -12,11 +12,12 @@ import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { localAgyLimits } from '../adapters/agy-limits.ts'
 import { allCards } from '../adapters/cards.ts'
-import { editNodes, editNodesAdding, loadConfig, saveFoundProfiles } from '../adapters/config-file.ts'
+import { editNodes, editNodesAdding, loadConfig, readConfigFile, saveFoundProfiles } from '../adapters/config-file.ts'
 import { dbFile } from '../adapters/db.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
 import { archiveCommit, headCommit } from '../adapters/git.ts'
 import { gitTools, masterGit } from '../adapters/git-access.ts'
+import { readHandoverState } from '../adapters/handover-store.ts'
 import { workspaceList } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { activateNodeRelayKey, createNodeJoinStore, stageNodeRelayKey } from '../adapters/node-join-store.ts'
@@ -114,6 +115,7 @@ import { createMoveIn, type MoveIn } from '../services/move-in.ts'
 import { createMoveOut, type MoveOut } from '../services/move-out.ts'
 import { createNodeBundle, nodeBundleDeps } from '../services/node/bundle.ts'
 import { createNodeGit } from '../services/node/git-access.ts'
+import { createNodeHandover } from '../services/node/handover.ts'
 import { createNodeLaunch } from '../services/node/launch.ts'
 import { createNodePilotCall, type NodePilotCall } from '../services/node/pilot-call.ts'
 import { createRelayDial, type RelayDial } from '../services/node/relay-dial.ts'
@@ -131,6 +133,7 @@ import {
   probeComputerDoor,
   readRelayHostKey,
 } from '../services/nodes/computer-setup-io.ts'
+import { createMasterHandover, type MasterHandover } from '../services/nodes/handover.ts'
 import { createNodeLinks, linkTimes, type NodeLinks } from '../services/nodes/links.ts'
 import { moveToDevice } from '../services/nodes/move-device.ts'
 import { createNodePilotCalls, type NodePilotCalls } from '../services/nodes/pilot-call.ts'
@@ -194,7 +197,7 @@ import { mokupilotRoutes } from './routes/mokupilot.ts'
 import { moveRoute } from './routes/move.ts'
 import { nodeCallRoutes, nodeDoorRoutes } from './routes/node.ts'
 import { createNodeProxy, type NodeProxy } from './routes/node-proxy.ts'
-import { computerSetupRoutes, nodeSetupRoutes, nodesRoutes, relaySetupRoutes } from './routes/nodes.ts'
+import { computerSetupRoutes, handoverRoutes, nodeSetupRoutes, nodesRoutes, relaySetupRoutes } from './routes/nodes.ts'
 import { pageLogRoute } from './routes/page-log.ts'
 import { pilotCallRoutes } from './routes/pilot-call.ts'
 import { presenceRoutes } from './routes/presence.ts'
@@ -345,6 +348,7 @@ export async function startServer({
   presenceIntervalMs,
 }: ServerOptions): Promise<BoardServer> {
   const { cfg, log } = deps
+  const initialNoFileCfg = readConfigFile() === null ? structuredClone(cfg) : null
   // Validate before starting a scheduler or changing any state.
   const cards = cardsDir()
   const port = asked ?? Number(cfg.port ?? 12422)
@@ -372,11 +376,13 @@ export async function startServer({
   // The placer (#504): made with the links below, the first time config.json has `nodes`; until then,
   // and whenever `nodes` is off, a start runs here as it always has.
   let nodePlacer: Placer | null = null
+  let handoverFrozen = false
   // Sessions started from the board (services/launch): their progress goes out with the board.
   const launches = createLaunches({
     deps,
     onChange: () => board.publish(),
     placer: () => (nodePlacer && nodesConfig(cfg.nodes) ? nodePlacer : null),
+    frozen: () => handoverFrozen,
   })
   // The board's update of itself from git (#617, services/self-update.ts): checked by the schedule
   // below while config.json's `autoUpdate` is on, or asked (Settings, `board update`). A restart
@@ -468,7 +474,13 @@ export async function startServer({
   // Headless master admin (#694): resolved lazily once board, localNodeRoutes and localSetupRoutes
   // are set up below (never called before start() wires routes and begins listening).
   const remoteAdminRoutes = (path: string): Route[] | null =>
-    path === '/api/nodes' && localNodeRoutes ? localNodeRoutes : path === '/api/nodes/setup' ? localSetupRoutes : null
+    path === '/api/nodes' && localNodeRoutes
+      ? localNodeRoutes
+      : path === '/api/nodes/setup'
+        ? localSetupRoutes
+        : path === '/api/nodes/handover' && hasHandoverRoute()
+          ? localHandoverRoutes
+          : null
   const listener = createRemoteListener({
     cfg,
     webPort: port,
@@ -542,6 +554,7 @@ export async function startServer({
   }
   const supervisor = createSupervisor({
     plan: () => {
+      if (handoverFrozen) return null
       const at = tunnel.listening()
       return at !== null && tunnelConf().on ? lineTo(at) : null
     },
@@ -1252,7 +1265,9 @@ export async function startServer({
                     ? localRelaySetupRoutes
                     : path === '/api/nodes/computer/setup'
                       ? localComputerSetupRoutes
-                      : routes
+                      : path === '/api/nodes/handover' && hasHandoverRoute()
+                        ? localHandoverRoutes
+                        : routes
       return await dispatch(selected, req, url, path, guards, () => peerOf(srv, req))
     } catch (err) {
       // The path only: a query can carry the page's token.
@@ -1415,6 +1430,18 @@ export async function startServer({
     })
     const nodeStore = createNodeStore()
     const nodeJoin = createNodeJoinStore()
+    const nodeHandover = createNodeHandover({
+      cfg,
+      nodeStore,
+      commit: runningCommit,
+      nodeLinks: () => nodeLinks,
+      tunnelStatus: () => supervisor.status(),
+      teamState: () => team.view()?.state ?? 'off',
+      beforeDbReplace,
+      afterDbReplace,
+      reloadConfig: reloadLiveConfig,
+      log,
+    })
     door = createNodeListener({
       cfg,
       routes: ownRoutes,
@@ -1475,6 +1502,7 @@ export async function startServer({
           if (r.rotated) setTimeout(() => void relayDial?.restart(), 50)
           return { status: 200, body: { ok: true, rotated: r.rotated } }
         },
+        handover: nodeHandover,
       }),
       log,
       onChange: () => void relayDial?.sync(),
@@ -1608,6 +1636,21 @@ export async function startServer({
       pause,
     }))
   const localComputerSetupRoutes = computerSetupRoutes(computerSetupInstance)
+  let masterHandover: MasterHandover | null = null
+  const hasHandoverRoute = (): boolean => !!localNodeRoutes || readHandoverState() !== null
+  const localHandoverRoutes = handoverRoutes(
+    () =>
+      (masterHandover ??= createMasterHandover({
+        cfg,
+        links: () => nodeLinks,
+        commit: runningCommit,
+        setFreeze: setHandoverFreeze,
+        beforeDbReplace,
+        afterDbReplace,
+        reloadConfig: reloadLiveConfig,
+        log,
+      })),
+  )
   let nodeUpdater: NodeUpdater | null = null
   let scheduler: ReturnType<typeof startScheduler> | null = null
   function linksFollow(): void {
@@ -1951,6 +1994,74 @@ export async function startServer({
       .catch(err => log(`node: settling the update: ${err instanceof Error ? err.message : String(err)}`))
   }
 
+  function setHandoverFreeze(frozen: boolean): void {
+    handoverFrozen = frozen
+    if (frozen) {
+      scheduler?.pause()
+      backups.pause()
+      team.stop()
+      void supervisor.sync()
+    } else {
+      scheduler?.resume()
+      backups.resume()
+      team.start()
+      void supervisor.sync()
+    }
+  }
+
+  function beforeDbReplace(): void {
+    keepThreadsDb(false)
+    keepTimeDb(false)
+    journal.stop()
+  }
+
+  function afterDbReplace(): void {
+    keepThreadsDb(true)
+    keepTimeDb(true)
+  }
+
+  async function runRefresh(): Promise<void> {
+    listener.configChanged()
+    tunnel.configChanged()
+    const view = viewConfig()
+    if (view !== lastView) {
+      lastView = view
+      accessChanged()
+    }
+    const settings = tunnelSettings()
+    if (settings !== lastSettings) {
+      lastSettings = settings
+      void supervisor.sync()
+    }
+    // Turned on in config.json (by hand, or from the panel): started at once.
+    wake.configChanged()
+    // Presence turned on or off: its sessions marked or unmarked, the board shown again.
+    presence.refresh()
+    // The calendar turned on or off: its timer started or stopped, its reminders' too.
+    calendar.configChanged()
+    reminders.configChanged()
+    workdesk.configChanged()
+    workdeskDialog.configChanged()
+    await configureWorkdeskStream()
+    if (!handoverFrozen) team.refresh()
+    holdLoopback6()
+    doorFollows()
+    linksFollow()
+    watchesFollow()
+    verifyFollow()
+    housekeeping.sync()
+    await board.refresh()
+    ownerTick()
+  }
+
+  async function reloadLiveConfig(): Promise<void> {
+    const next = initialNoFileCfg && readConfigFile() === null ? structuredClone(initialNoFileCfg) : loadConfig()
+    for (const k of Object.keys(cfg)) delete (cfg as unknown as Record<string, unknown>)[k]
+    Object.assign(cfg, next)
+    await runRefresh()
+    await Promise.all([door?.sync(), relayDial?.sync(), nodeLinks?.follow()])
+  }
+
   return {
     port,
     url: `http://127.0.0.1:${port}/`,
@@ -1958,39 +2069,7 @@ export async function startServer({
     // Called when config.json changes, too: the remote mode and the tunnel follow it. The panel
     // fetches its view again when what it reads changed; the tunnel's ssh follows its settings
     // (a new host, say) here, and the listener's port through its onChange.
-    async refresh() {
-      listener.configChanged()
-      tunnel.configChanged()
-      const view = viewConfig()
-      if (view !== lastView) {
-        lastView = view
-        accessChanged()
-      }
-      const settings = tunnelSettings()
-      if (settings !== lastSettings) {
-        lastSettings = settings
-        void supervisor.sync()
-      }
-      // Turned on in config.json (by hand, or from the panel): started at once.
-      wake.configChanged()
-      // Presence turned on or off: its sessions marked or unmarked, the board shown again.
-      presence.refresh()
-      // The calendar turned on or off: its timer started or stopped, its reminders' too.
-      calendar.configChanged()
-      reminders.configChanged()
-      workdesk.configChanged()
-      workdeskDialog.configChanged()
-      await configureWorkdeskStream()
-      team.refresh()
-      holdLoopback6()
-      doorFollows()
-      linksFollow()
-      watchesFollow()
-      verifyFollow()
-      housekeeping.sync()
-      await board.refresh()
-      ownerTick()
-    },
+    refresh: runRefresh,
     async close() {
       clearInterval(poll)
       clearTimeout(selfUpdateResume)

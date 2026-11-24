@@ -100,6 +100,7 @@ const COMMANDS: string[][] = [
   ['mcp'],
   ['backup', 'now'],
   ['db', 'restore'],
+  ['master', 'status'],
   ['time', 'add', '30m', 'review'],
   ['tg-key'],
 ]

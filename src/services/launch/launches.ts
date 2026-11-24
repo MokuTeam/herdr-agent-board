@@ -202,11 +202,14 @@ export function createLaunches({
   deps,
   onChange = () => {},
   placer = () => null,
+  frozen = () => false,
 }: {
   deps: Deps
   onChange?: () => void
   /** The placer while config.json has `nodes` (#504), else null. */
   placer?: () => LaunchPlacer | null
+  /** True while a master handover freeze is active (#697). */
+  frozen?: () => boolean
 }): Launches {
   const launches = new Map<string, Launch>()
   removeLeftoverMessages()
@@ -233,6 +236,9 @@ export function createLaunches({
       codexFork,
     }: StartOptions = {},
   ): Promise<StartResult> {
+    if (frozen()) {
+      return { ok: false, field: 'launcher', error: 'Master handover is in progress; new session starts are paused.' }
+    }
     const categories = new Set([...deps.cfg.categories.map(c => c.id), ...items.map(i => i.category)])
     // Resume, fork, a node's own start from its master and a local verifier (#492) are never placed:
     // they run where they are, a local verifier in the worker's folder on this computer. A node

@@ -15,6 +15,7 @@ import { MAX_CALL_FILES_REQUEST_BYTES, MAX_MCP_BODY_BYTES, MAX_STDIN_LINE_BYTES 
 import type { MoveIn } from '../../services/move-in.ts'
 import type { MoveOut } from '../../services/move-out.ts'
 import type { Answer, NodeBundle } from '../../services/node/bundle.ts'
+import type { NodeHandover } from '../../services/node/handover.ts'
 import type { NodeLaunchAnswer } from '../../services/node/launch.ts'
 import type { NodePilotCall } from '../../services/node/pilot-call.ts'
 import type { NodeSecrets } from '../../services/node/secrets.ts'
@@ -56,6 +57,8 @@ export interface NodeDoorSources {
   pilotCall?: NodePilotCall
   /** `POST /api/node/relay-key` (#513): activates a staged fresh relay dial key after claim. */
   relayKey?(publicKey: string): Promise<Answer>
+  /** `/api/node/handover/...` (#697): guided master handover target and peer-node routes. */
+  handover?: NodeHandover
 }
 
 /** The secrets of one profile's bundle, at most this many bytes of JSON. */
@@ -205,6 +208,91 @@ export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
           },
         ]
       : []),
+    ...(o.handover ? handoverDoorRoutes(o.handover) : []),
+  ]
+}
+
+const HANDOVER_JSON_MAX = 2 * 1024 * 1024
+
+function handoverDoorRoutes(h: NodeHandover): Route[] {
+  return [
+    {
+      method: 'GET',
+      path: '/api/node/handover/check',
+      handle: async (_req, ctx) => answer(await h.check(ctx.url.searchParams.get('masterHost'))),
+    },
+    {
+      method: 'POST',
+      path: '/api/node/handover/prepare',
+      async handle(req) {
+        const body = await jsonUpTo(req, 64 * 1024)
+        if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+        return answer(await h.prepare(body))
+      },
+    },
+    {
+      method: 'PUT',
+      path: '/api/node/handover/bundle',
+      async handle(req) {
+        const id = req.headers.get('x-handover-id') ?? ''
+        const sha = req.headers.get('x-handover-sha256') ?? ''
+        return answer(await h.putBundle(id, sha, req.body))
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/node/handover/apply',
+      async handle(req) {
+        const body = await jsonUpTo(req, HANDOVER_JSON_MAX)
+        if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+        return answer(await h.apply(body))
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/node/handover/verify',
+      async handle(req) {
+        const body = await jsonUpTo(req, 64 * 1024)
+        if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+        return answer(await h.verify(body))
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/node/handover/commit',
+      async handle(req) {
+        const body = await jsonUpTo(req, 64 * 1024)
+        if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+        return answer(await h.commit(body, doorMaster(req)?.id))
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/node/handover/rollback',
+      async handle(req) {
+        const body = await jsonUpTo(req, 64 * 1024)
+        if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+        return answer(await h.rollback(body))
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/node/handover/pair',
+      async handle(req) {
+        const body = await jsonUpTo(req, 64 * 1024)
+        if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+        return answer(await h.pair(body))
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/node/handover/unpair',
+      async handle(req) {
+        const body = await jsonUpTo(req, 64 * 1024)
+        if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+        return answer(await h.unpair(body, doorMaster(req)?.id))
+      },
+    },
   ]
 }
 

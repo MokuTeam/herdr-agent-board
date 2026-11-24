@@ -239,7 +239,7 @@ import { currentWakeMode } from '../services/wake/mode.ts'
 import { compactCli } from './compact-cli.ts'
 import type { ThreadCmdContext } from './thread-cli.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] | decisions [--done] [--json] | done [text] | clear | favorite [off] | list | agents [--json] | cats | remind <when> "<text>" [--idle] | send <name|key> "<text>" | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | move <id|name|pane>... --device <id|local> [--dry-run] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | owner-admin on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | doctor | update | housekeeping [--dry-run | status] [--json] | presence [here | away | call] | journal [--since <when> | --away] [--json] | spend [--day <d>] [--lane <id>] [--json] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | resume --agy <conversation id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp [--agents] | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>] | db rekey --from <old> --to <new> [--dry-run] [--json]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] | decisions [--done] [--json] | done [text] | clear | favorite [off] | list | agents [--json] | cats | remind <when> "<text>" [--idle] | send <name|key> "<text>" | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | move <id|name|pane>... --device <id|local> [--dry-run] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | owner-admin on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | master [handover --to <device> [--dry-run] [--reverse-link <spec>] [--node-port <port>] [--allow-offline-nodes] [--json] | rollback [--id <id>] [--local-only] [--json] | status [--json]] | doctor | update | housekeeping [--dry-run | status] [--json] | presence [here | away | call] | journal [--since <when> | --away] [--json] | spend [--day <d>] [--lane <id>] [--json] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | resume --agy <conversation id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp [--agents] | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>] | db rekey --from <old> --to <new> [--dry-run] [--json]] [--session <id|name|pane>]`
 /** The commands that print a help of their own for `--help` (#305). */
 const OWN_HELP: ReadonlySet<string> = new Set(['thread', 'time', 'cal', 'spend'])
 
@@ -1295,6 +1295,7 @@ async function main(): Promise<void> {
   if (cmd === 'tunnel') return tunnel()
   if (cmd === 'node') return nodeCmd()
   if (cmd === 'nodes') return nodesCmd()
+  if (cmd === 'master') return masterCmd()
   if (cmd === 'backup') return backupCmd()
   if (cmd === 'time') return timeCommand()
   if (cmd === 'spend') return spendCommand()
@@ -2317,6 +2318,130 @@ async function takeOutMaster(
 }
 
 const NO_BOARD = 'the board does not run: open it first (herdr plugin action invoke agent-board.open)'
+
+/** `board master handover | rollback | status` (#697): guided handover of the master role. */
+async function masterCmd(): Promise<void> {
+  const { formatHandoverPlan, formatHandoverResult, MASTER_USAGE, parseMasterCliArgs } = await import(
+    '../core/master-handover.ts'
+  )
+  const parsed = parseMasterCliArgs(flagWords)
+  if (!parsed.ok) throw new Error(parsed.error)
+  const webPort = Number(cfg.port) || 12422
+  const base = `http://127.0.0.1:${webPort}/api/nodes/handover`
+  const cmd = parsed.cmd
+
+  if (cmd.op === 'status') {
+    let view: unknown = null
+    let statusCode: number | null = null
+    try {
+      const res = await fetch(base, { signal: AbortSignal.timeout(5000) })
+      statusCode = res.status
+      view = res.ok ? await res.json() : null
+    } catch {}
+    if (!view) {
+      const { latestHandoverBackupId, readHandoverState } = await import('../adapters/handover-store.ts')
+      const state = readHandoverState()
+      const backup = latestHandoverBackupId()
+      const running = statusCode !== null
+      if (cmd.json) return console.log(JSON.stringify({ running, status: statusCode, state, backup }, null, 2))
+      const prefix = running ? 'board is running (no master handover configured)' : 'board is not running'
+      if (!state && !backup) return console.log(`${prefix}; no handover state recorded`)
+      return console.log(
+        `${prefix} · state: ${state ? `${state.id} (${state.role}, ${state.phase})` : 'none'}${backup ? ` · backup: ${backup}` : ''}`,
+      )
+    }
+    if (cmd.json) return console.log(JSON.stringify(view, null, 2))
+    const v = view as {
+      phase?: string
+      id?: string | null
+      target?: string | null
+      canRollback?: boolean
+      error?: string | null
+      state?: { phase?: string } | null
+    }
+    const phaseText = v.phase && v.phase !== 'idle' ? v.phase : (v.state?.phase ?? 'idle')
+    console.log(
+      `handover ${phaseText}${v.id ? ` (${v.id})` : ''}${v.target ? ` · target ${v.target}` : ''}${v.canRollback ? ' · rollback available' : ''}${v.error ? ` · error: ${v.error}` : ''}`,
+    )
+    return
+  }
+
+  if (cmd.op === 'rollback') {
+    let body: Record<string, unknown> | null = null
+    try {
+      const res = await fetch(base, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-board': '1' },
+        body: JSON.stringify({
+          op: 'rollback',
+          ...(cmd.id && { id: cmd.id }),
+          ...(cmd.localOnly && { localOnly: true }),
+        }),
+        signal: AbortSignal.timeout(120_000),
+      })
+      body = (await res.json().catch(() => null)) as Record<string, unknown> | null
+    } catch {
+      if (!cmd.localOnly) {
+        throw new Error(
+          `the board does not answer on port ${webPort}; pass --local-only for offline local restore\n${MASTER_USAGE}`,
+        )
+      }
+      const { latestHandoverBackupId, readHandoverState, restoreLocalBackup, writeHandoverState } = await import(
+        '../adapters/handover-store.ts'
+      )
+      const state = readHandoverState()
+      const id = cmd.id ?? state?.id ?? latestHandoverBackupId()
+      if (!id) throw new Error('no handover backup found on disk')
+      const res = await restoreLocalBackup(id)
+      if (state && state.id === id) writeHandoverState({ ...state, phase: 'rolled-back', at: Date.now() })
+      const out = { ok: true, id, ...res }
+      if (cmd.json) return console.log(JSON.stringify(out, null, 2))
+      return console.log(
+        `ok · rolled back local state from backup ${id} (${res.restored} restored, ${res.removed} removed)`,
+      )
+    }
+    if (!body) throw new Error('empty response from board')
+    if (cmd.json) console.log(JSON.stringify(body, null, 2))
+    else if (body.ok)
+      console.log(
+        `ok · rolled back handover ${String(body.id ?? '')} (${String(body.restored ?? 0)} restored, ${String(body.removed ?? 0)} removed)`,
+      )
+    else console.log(`failed · rollback: ${String(body.error ?? 'unknown error')}`)
+    if (!body.ok) process.exitCode = 1
+    return
+  }
+
+  const payload = {
+    op: cmd.dryRun ? 'check' : 'run',
+    to: cmd.to,
+    ...(cmd.reverseLink !== undefined && { reverseLink: cmd.reverseLink }),
+    ...(cmd.nodePort !== undefined && { nodePort: cmd.nodePort }),
+    ...(cmd.allowOfflineNodes && { allowOfflineNodes: true }),
+  }
+  const res = await fetch(base, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-board': '1' },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(180_000),
+  }).catch(() => {
+    throw new Error(`the board does not answer on port ${webPort}`)
+  })
+  const data = (await res.json().catch(() => null)) as Record<string, unknown> | null
+  if (!data) throw new Error(`board answered ${res.status}`)
+
+  if (cmd.dryRun) {
+    const plan = data.plan as Parameters<typeof formatHandoverPlan>[0] | undefined
+    if (!plan) throw new Error(String(data.error ?? `board answered ${res.status}`))
+    if (cmd.json) console.log(JSON.stringify(plan, null, 2))
+    else console.log(formatHandoverPlan(plan).join('\n'))
+    if (!plan.ok) process.exitCode = 1
+    return
+  }
+
+  if (cmd.json) console.log(JSON.stringify(data, null, 2))
+  else console.log(formatHandoverResult(data as Parameters<typeof formatHandoverResult>[0]).join('\n'))
+  if (!data.ok) process.exitCode = 1
+}
 
 /**
  * `board nodes [token <id> | key <id> | sync <id> [<profile>]]` (#499): this board as a master. Without an argument: its

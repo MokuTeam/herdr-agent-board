@@ -4849,6 +4849,50 @@ the card. Locks are released on ordinary errors. A writer killed mid-write leave
 behind; a write holds it for milliseconds, so one older than 30 seconds is taken over by the
 next writer. A card write the board itself fails at is retried on its next refresh.
 
+## Moving the master
+
+When a board runs with `nodes` (a master) and has at least one connected node, you can move the
+master role to an online node while every session keeps running where it is, and the old master
+becomes a node of the new master (#697):
+
+```sh
+board master handover --to <device> --dry-run
+board master handover --to <device>
+```
+
+The same flow is available in Settings -> Devices -> "Move master role…".
+
+1. **Preflight checks (`--dry-run`)**: verifies the target device is an online node on the same
+   commit, does not already act as a master, has a working backup target that is not itself (or can
+   inherit the master's remote server backup target), has enough free disk space, and has a valid
+   reverse transport (NAT relay via `nodes.relay` when behind NAT, SSH via `--reverse-link ssh:user@host`,
+   or direct URL in local setups), and lists every category of state that will move. Dry run
+   changes nothing on either device.
+2. **Freeze and backup**: pauses new session launches, the scheduler, backups, the tunnel, and Team
+   on the old master, runs a backup to configured backup targets, and saves full pre-handover
+   backups on both devices.
+3. **Encrypted transfer and rekeying**: seals `board.db`, `thread-files/`, `journal.db`, `access*`
+   (passwords, passkeys, logins), `team*` keys and files, `calendar/secret/` and cache, `tunnel/`
+   config and key, `schedule/` and `owner-watch.json`, and `nodes/` records (including relay keys)
+   in `ABK1` (gzip + AES-256-GCM) and ships them over the existing node link. On the target,
+   session keys across `board.db`, `journal.db`, `schedule/`, and `owner-watch.json` are rekeyed
+   (`local <-> @<device>:`), `nodes` and `node` roles are flipped on both sides, and any third-party
+   nodes are re-paired with fresh tokens.
+4. **Verify and commit (or auto-rollback)**: starts the new master role and verifies that nodes are
+   linked, tunnel and Team connect (when enabled), and threads, time, access, and schedule are
+   readable before closing the old master's master role. If any check fails, both devices roll back
+   automatically from the pre-handover backups.
+
+To restore both devices back to their pre-handover roles and state later, run on the new master:
+
+```sh
+board master rollback
+```
+
+If the old master is unreachable or stopped, `board master rollback --local-only` restores only
+this machine from its local pre-handover backup. `board master status` shows the current handover
+state.
+
 ## Development
 
 [Bun](https://bun.com/docs/installation) 1.4.3 or newer and git on PATH, in a clone with the
