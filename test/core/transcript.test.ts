@@ -650,3 +650,160 @@ test("apiError: the last words are Claude Code's API error message, by its flag,
   const after = parseTranscriptTail([said('API Error: 500', { isApiErrorMessage: true }), said('Done after all.')])
   assert.equal(after.apiError, undefined)
 })
+
+test('checklist: reads latest valid TodoWrite in tail without changing tailComplete (#637)', () => {
+  const todoCall = (
+    id: string,
+    todos: { content: string; status: 'pending' | 'in_progress' | 'completed'; activeForm?: string }[],
+    ts = '2026-11-24T07:00:00.000Z',
+    extra: Record<string, unknown> = {},
+  ) =>
+    line({
+      type: 'assistant',
+      timestamp: ts,
+      ...extra,
+      message: {
+        role: 'assistant',
+        model: 'claude-sonnet-4-6',
+        content: [{ type: 'tool_use', id, name: 'TodoWrite', input: { todos } }],
+      },
+    })
+
+  // Without TodoWrite, no checklist key is present and tailComplete behaves as before.
+  const plain = parseTranscriptTail([
+    line({ type: 'ai-title', aiTitle: 'Plain' }),
+    line({ type: 'last-prompt', lastPrompt: 'hi' }),
+    line({
+      type: 'assistant',
+      timestamp: '2026-11-24T07:05:00.000Z',
+      message: {
+        content: [
+          { type: 'text', text: 'Working' },
+          { type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: 'a.ts' } },
+        ],
+      },
+    }),
+  ])
+  assert.equal(tailComplete(plain), true)
+  assert.equal('checklist' in plain, false)
+
+  // TodoWrite earlier in the window (before tailComplete stops the main loop) is still found.
+  const withEarlierTodo = parseTranscriptTail([
+    todoCall(
+      'tw0',
+      [
+        { content: 'Old step', status: 'in_progress' },
+        { content: 'Next step', status: 'pending' },
+      ],
+      '2026-11-24T06:59:00.000Z',
+    ),
+    todoCall(
+      'tw1',
+      [
+        { content: 'Step 1', status: 'completed' },
+        { content: 'Step 2', status: 'in_progress', activeForm: 'Doing step 2' },
+        { content: 'Step 3', status: 'pending' },
+      ],
+      '2026-11-24T07:00:00.000Z',
+    ),
+    line({
+      type: 'user',
+      timestamp: '2026-11-24T07:00:01.000Z',
+      message: { content: [{ type: 'tool_result', tool_use_id: 'tw1', content: 'ok' }] },
+    }),
+    line({ type: 'ai-title', aiTitle: 'Task' }),
+    line({ type: 'last-prompt', lastPrompt: 'go' }),
+    line({
+      type: 'assistant',
+      timestamp: '2026-11-24T07:05:00.000Z',
+      message: {
+        content: [
+          { type: 'text', text: 'Checking file.' },
+          { type: 'tool_use', id: 'r2', name: 'Read', input: { file_path: 'b.ts' } },
+        ],
+      },
+    }),
+  ])
+  assert.deepEqual(withEarlierTodo.checklist, {
+    done: 1,
+    total: 3,
+    current: 'Doing step 2',
+    items: [
+      { content: 'Step 1', status: 'completed' },
+      { content: 'Step 2', status: 'in_progress', activeForm: 'Doing step 2' },
+      { content: 'Step 3', status: 'pending' },
+    ],
+    at: Date.parse('2026-11-24T07:00:00.000Z'),
+  })
+
+  // Latest all-done TodoWrite hides an older incomplete TodoWrite.
+  const settledDone = parseTranscriptTail([
+    todoCall('tw1', [
+      { content: 'Step 1', status: 'in_progress' },
+      { content: 'Step 2', status: 'pending' },
+    ]),
+    todoCall('tw2', [
+      { content: 'Step 1', status: 'completed' },
+      { content: 'Step 2', status: 'completed' },
+    ]),
+  ])
+  assert.equal('checklist' in settledDone, false)
+
+  // Latest empty TodoWrite hides an older incomplete TodoWrite.
+  const settledEmpty = parseTranscriptTail([
+    todoCall('tw1', [{ content: 'Step 1', status: 'pending' }]),
+    todoCall('tw2', []),
+  ])
+  assert.equal('checklist' in settledEmpty, false)
+
+  // Errored TodoWrite, sidechain TodoWrite, and forkedFrom TodoWrite are ignored.
+  const ignored = parseTranscriptTail([
+    todoCall(
+      'tw-valid',
+      [
+        { content: 'Kept', status: 'completed' },
+        { content: 'Active', status: 'in_progress' },
+      ],
+      '2026-11-24T06:50:00.000Z',
+    ),
+    todoCall('tw-fork', [{ content: 'Forked', status: 'pending' }], '2026-11-24T06:55:00.000Z', {
+      forkedFrom: { sessionId: 'other' },
+    }),
+    todoCall('tw-side', [{ content: 'Sidechain', status: 'pending' }], '2026-11-24T06:56:00.000Z', {
+      isSidechain: true,
+    }),
+    todoCall('tw-err', [{ content: 'Failed call', status: 'pending' }], '2026-11-24T07:00:00.000Z'),
+    line({
+      type: 'user',
+      timestamp: '2026-11-24T07:00:01.000Z',
+      message: {
+        content: [{ type: 'tool_result', tool_use_id: 'tw-err', content: 'Validation failed', is_error: true }],
+      },
+    }),
+  ])
+  assert.equal(ignored.checklist?.current, 'Active')
+
+  // Errored TodoWrite in the post-loop scan is also ignored.
+  const postLoopErr = parseTranscriptTail([
+    todoCall('tw-keep', [{ content: 'Fallback step', status: 'pending' }], '2026-11-24T06:50:00.000Z'),
+    todoCall('tw-bad', [{ content: 'Bad post-loop', status: 'pending' }], '2026-11-24T06:55:00.000Z'),
+    line({
+      type: 'user',
+      timestamp: '2026-11-24T06:56:00.000Z',
+      message: { content: [{ type: 'tool_result', tool_use_id: 'tw-bad', content: 'Error', is_error: true }] },
+    }),
+    line({ type: 'ai-title', aiTitle: 'Done tail' }),
+    line({ type: 'last-prompt', lastPrompt: 'go' }),
+    line({
+      type: 'assistant',
+      timestamp: '2026-11-24T07:05:00.000Z',
+      message: {
+        content: [
+          { type: 'text', text: 'Next' },
+          { type: 'tool_use', id: 'r3', name: 'Read', input: { file_path: 'c.ts' } },
+        ],
+      },
+    }),
+  ])
+  assert.equal(postLoopErr.checklist?.current, 'Fallback step')
+})

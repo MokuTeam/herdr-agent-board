@@ -124,3 +124,28 @@
   .card .ask:not(.qa-card) { border-block-color: Canvas; }
 }
 .card-meter { margin-top: 2px; font-size: 12px; color: var(--label-2); overflow-wrap: anywhere; }
+
+/* A Claude session's active TodoWrite checklist (#637): ratio and current step inline in .what,
+   with a quiet 2px hairline progress bar flush along the card's bottom edge. */
+.card-todo-ratio { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--label-2); }
+.card-todo-sep { color: var(--label-3); font-weight: 400; }
+.card-todo-step { font-weight: 400; color: var(--label-2); }
+.card-todo-track {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2px;
+  border-radius: 0 0 var(--r-md, var(--radius)) var(--r-md, var(--radius));
+  overflow: hidden;
+  background: var(--fill-2);
+  pointer-events: none;
+}
+.card-todo-fill {
+  height: 100%;
+  background: color-mix(in srgb, var(--accent) 55%, transparent);
+  transition: width 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .card-todo-fill { transition: none; }
+}

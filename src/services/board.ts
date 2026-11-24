@@ -417,6 +417,10 @@ export async function collect(
     const rawLost = info.lostAccess
     const floorAt = call ? call.started : typeof card.forkAt === 'number' ? card.forkAt : 0
     const lostAccess = rawLost && (!floorAt || !rawLost.at || rawLost.at >= floorAt) ? rawLost : undefined
+    // Latest active TodoWrite checklist (#637): Claude sessions only, ignoring copied fork/call lines.
+    const rawChecklist = !pi && !codex && !agy && base.agent === 'claude' ? info.checklist : undefined
+    const checklist =
+      rawChecklist && (!floorAt || !rawChecklist.at || rawChecklist.at >= floorAt) ? rawChecklist : undefined
     // A call agent's last words go to the call, its questions too: only its `board ask` asks the user.
     const { lostAccess: _ignored, ...restInfo } = info
     const told: TranscriptInfo = {
@@ -497,6 +501,7 @@ export async function collect(
       auto: columnOf(base.status, { ...card, pin: '' }, told), // where it would be without the pin
       ...(card.favorite === true && { favorite: true }), // the user keeps it in sight
       ...todosField(card), // its tasks (#202), when it has any
+      ...(checklist && { checklist }), // its active TodoWrite checklist (#637), Claude only
       ...(compact && { compact }), // its auto-compact (#378), when there is any
       ...secretsField(cfg, card), // what it asks the user to fill in (#273), when it does
       ...decisionField(cfg, card), // its open question's options and default (#487), while decisions are on

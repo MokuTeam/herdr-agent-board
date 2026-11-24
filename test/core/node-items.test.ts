@@ -236,4 +236,55 @@ describe('nodePart', () => {
       schedules: [],
     })
   })
+
+  test('checklist field passes when active and bounded, and drops when completed or invalid (#637)', () => {
+    const active = {
+      done: 2,
+      total: 5,
+      current: 'Writing tests',
+      items: [
+        { content: 'Parse', status: 'completed' as const },
+        { content: 'Wire', status: 'completed' as const },
+        { content: 'Write tests', status: 'in_progress' as const, activeForm: 'Writing tests' },
+      ],
+      at: 1795210000000,
+    }
+    const oversized = {
+      done: 1,
+      total: 60,
+      current: 'x'.repeat(500),
+      items: Array.from({ length: 70 }, (_, i) => ({
+        content: `${i}-${'y'.repeat(300)}`,
+        status: i === 0 ? 'completed' : 'pending',
+      })),
+    }
+    const completed = {
+      done: 2,
+      total: 2,
+      current: 'Done',
+      items: [
+        { content: 'A', status: 'completed' },
+        { content: 'B', status: 'completed' },
+      ],
+    }
+    const got = nodePart(
+      {
+        items: [
+          item({ key: 'active', checklist: active }),
+          item({ key: 'big', checklist: oversized }),
+          item({ key: 'done', checklist: completed }),
+          item({ key: 'empty', checklist: { done: 0, total: 1, current: 'A', items: [] } }),
+          item({ key: 'bad', checklist: 'not-an-object' }),
+        ],
+      },
+      'server-1',
+    )
+    expect(got?.items[0]?.checklist).toEqual(active)
+    expect(got?.items[1]?.checklist?.current.length).toBe(200)
+    expect(got?.items[1]?.checklist?.items).toHaveLength(50)
+    expect(got?.items[1]?.checklist?.items[0]?.content.length).toBe(200)
+    expect(got?.items[2]?.checklist).toBeUndefined()
+    expect(got?.items[3]?.checklist).toBeUndefined()
+    expect(got?.items[4]?.checklist).toBeUndefined()
+  })
 })

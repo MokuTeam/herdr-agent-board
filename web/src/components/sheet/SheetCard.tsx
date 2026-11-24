@@ -9,7 +9,7 @@ import { type KeyboardEvent, useState } from 'react'
 import type { Item } from '../../../../src/core/types.ts'
 import { useSessionActions } from '../../hooks/useSessionActions.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
-import { plain } from '../../models/card.ts'
+import { cardChecklist, plain } from '../../models/card.ts'
 import {
   compactLabel,
   compactNotePlaceholder,
@@ -91,6 +91,7 @@ export function SheetCard({ item, open, disabled, schedule, onSession }: SheetCa
         </div>
       )}
       <CompactRows item={item} open={open} disabled={disabled} />
+      <ChecklistRow item={item} />
       <Reminders item={item} disabled={disabled} schedule={schedule} />
       <RelationsRow item={item} onSession={key => onSession?.(key)} />
     </div>
@@ -146,6 +147,44 @@ function CompactRows({ item, open, disabled }: Pick<SheetCardProps, 'item' | 'op
         </div>
       )}
     </>
+  )
+}
+
+/** The session's active TodoWrite checklist (#637): count, thin bar, and full ordered list. */
+function ChecklistRow({ item }: { item: Item }) {
+  const t = useT()
+  const checklist = cardChecklist(item, t)
+  if (!checklist) return null
+  const seen = new Map<string, number>()
+  const rows = checklist.items.map(entry => {
+    const count = (seen.get(entry.content) ?? 0) + 1
+    seen.set(entry.content, count)
+    return { entry, key: count === 1 ? entry.content : `${entry.content}#${count}` }
+  })
+  return (
+    <div className="row checklist-row">
+      <span className="row-label">{t('sheet.checklist')}</span>
+      <div className="row-value checklist-detail">
+        <div className="checklist-head">
+          <span className="checklist-ratio">{checklist.ratio}</span>
+          <div className="checklist-bar" aria-hidden="true">
+            <div className="checklist-bar-fill" style={{ width: `${checklist.pct}%` }} />
+          </div>
+        </div>
+        <ul className="checklist-items">
+          {rows.map(({ entry, key }) => (
+            <li key={key} className={`checklist-item ${entry.status}`}>
+              <span className="checklist-mark" aria-hidden="true">
+                {entry.status === 'completed' ? '✓' : entry.status === 'in_progress' ? '●' : '○'}
+              </span>
+              <span className="checklist-text">
+                {entry.status === 'in_progress' && entry.activeForm ? entry.activeForm : entry.content}
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
   )
 }
 

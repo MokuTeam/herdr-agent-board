@@ -1,6 +1,7 @@
 // Types shared across the board. Grows with each ported module.
 
 import type { CallView } from './call-agent.ts'
+import type { Checklist } from './checklist.ts'
 import type { CompactView } from './compact.ts'
 import type { CardDecision } from './decisions.ts'
 import type { FormQuestion } from './dialogs/question-form.ts'
@@ -322,6 +323,8 @@ export interface TranscriptInfo {
   modelAt?: number
   /** The effort its last assistant message was sent with (low, medium, high, xhigh, max). */
   effort?: string | null
+  /** Latest active TodoWrite checklist (#637); absent when none or all completed. */
+  checklist?: Checklist
   [extra: string]: unknown
 }
 
@@ -419,6 +422,8 @@ export interface Item {
   claudeRoot?: string | null
   /** Its tasks from its card (#202), while config.json turns them on; absent when none. */
   todos?: Todo[]
+  /** Latest active TodoWrite checklist from a Claude transcript (#637); absent when none or all completed. */
+  checklist?: Checklist
   /** Its open question's options, recommendation and default (#487), while config.json turns decisions on; absent when none. */
   decision?: CardDecision
   /** Its auto-compact (#378, core/compact.ts compactView): absent when neither it nor Settings has a limit. */

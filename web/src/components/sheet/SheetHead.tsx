@@ -12,6 +12,7 @@ import { useCollapse } from '../../hooks/useCollapse.ts'
 import type { SheetPick } from '../../hooks/useContextMenus.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { categoryInfo, catOf, colOf } from '../../models/board-view.ts'
+import { cardChecklist } from '../../models/card.ts'
 import { nodeLook } from '../../models/devices.ts'
 import { linkedSessions } from '../../models/helper-model.ts'
 import { foldLine, sheetHead, type WorkspaceFact } from '../../models/sheet.ts'
@@ -144,7 +145,8 @@ export function SheetHead({
   const schedules = (card.schedule?.held ? card.schedule.held.view.data : data)?.schedules ?? []
   const reminders = schedules.filter(e => e.key === item.key).length
   const linked = linkedSessions(item, key => !!data?.items.some(i => i.key === key))
-  const fields = card.open || !!item.doing || !!item.wait || reminders > 0 || linked.length > 0
+  const checklist = cardChecklist(item, t)
+  const fields = card.open || !!item.doing || !!item.wait || reminders > 0 || linked.length > 0 || !!checklist
   // On a phone (session-head.css) the fields fold into the line that matters most, and that line
   // opens them as the pencil does elsewhere, the empty ones to fill included; with nothing to show
   // it reads as the pencil's own words.

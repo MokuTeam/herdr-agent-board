@@ -196,7 +196,23 @@
    other /compact until its context is below the limit or the limit changes). */
 #sheet .sheet-card .compact-run { padding: 3px 0; color: var(--label-2); font-size: 12px; line-height: 18px; font-variant-numeric: tabular-nums; }
 #sheet .sheet-card .compact-run.held { color: color-mix(in srgb, var(--orange) 65%, var(--label)); }
+/* Active TodoWrite checklist (#637): quiet progress header + ordered items inside SheetCard. */
+#sheet .sheet-card .checklist-row { align-items: flex-start; }
+#sheet .sheet-card .checklist-row > .row-label { padding-top: 3px; line-height: 18px; }
+#sheet .sheet-card .checklist-detail { display: flex; flex-direction: column; gap: 6px; padding: 3px 0; }
+#sheet .sheet-card .checklist-head { display: flex; align-items: center; gap: 8px; }
+#sheet .sheet-card .checklist-ratio { font-size: 12px; font-weight: 600; color: var(--label-2); font-variant-numeric: tabular-nums; line-height: 18px; }
+#sheet .sheet-card .checklist-bar { width: 56px; height: 3px; border-radius: 999px; overflow: hidden; background: var(--fill); }
+#sheet .sheet-card .checklist-bar-fill { height: 100%; background: var(--accent); transition: width 220ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+#sheet .sheet-card .checklist-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+#sheet .sheet-card .checklist-item { display: flex; align-items: flex-start; gap: 6px; font-size: 12.5px; line-height: 1.38; color: var(--label-2); }
+#sheet .sheet-card .checklist-item.completed { color: var(--label-3); }
+#sheet .sheet-card .checklist-item.in_progress { color: var(--label); font-weight: 500; }
+#sheet .sheet-card .checklist-mark { flex: none; width: 12px; text-align: center; font-size: 11px; line-height: 1.5; color: var(--label-3); }
+#sheet .sheet-card .checklist-item.in_progress .checklist-mark { color: var(--accent); }
+#sheet .sheet-card .checklist-text { min-width: 0; overflow-wrap: anywhere; }
+
 @media (prefers-reduced-motion: reduce) {
-  .sheet-pills button, .sheet-fold .chevron { transition: none; }
+  .sheet-pills button, .sheet-fold .chevron, #sheet .sheet-card .checklist-bar-fill { transition: none; }
 }
 

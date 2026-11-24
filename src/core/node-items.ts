@@ -12,6 +12,7 @@
 //   `@<device>:` prefix (core/nodes.ts nodeKey), and each item, launch and entry the device. The
 //   node's own `device` field is never read, so a node cannot make an item claim another device.
 // - Without one: the same check, keys as the node has them. That is what the offline copy keeps.
+import { checklistActive, MAX_CHECKLIST_ITEMS, MAX_CHECKLIST_TEXT } from './checklist.ts'
 import { nodeKey, parseNodeKey } from './nodes.ts'
 import { MAX_REPORT, type ScheduleEntry } from './schedule-rules.ts'
 import type { Item, LaunchView } from './types.ts'
@@ -226,6 +227,31 @@ const todo = shape(
   },
   ['id', 'text', 'owner', 'by', 'at'],
 )
+const checklistItem = shape(
+  {
+    content: str(MAX_CHECKLIST_TEXT),
+    status: oneOf('pending', 'in_progress', 'completed'),
+    activeForm: str(MAX_CHECKLIST_TEXT),
+  },
+  ['content', 'status'],
+)
+const rawChecklist = shape(
+  {
+    done: num,
+    total: num,
+    current: str(MAX_CHECKLIST_TEXT),
+    items: list(checklistItem, MAX_CHECKLIST_ITEMS),
+    at: num,
+  },
+  ['done', 'total', 'current', 'items'],
+)
+const checklist: Check = (v, k) => {
+  const got = rawChecklist(v, k) as
+    | { done: number; total: number; current: string; items: { content: string; status: string }[] }
+    | undefined
+  if (!got || got.done < 0 || got.total <= 0 || got.done >= got.total || got.items.length === 0) return undefined
+  return checklistActive(got as Parameters<typeof checklistActive>[0]) ? got : undefined
+}
 const secret = shape(
   {
     id: str(LEN.id),
@@ -346,6 +372,7 @@ const ITEM: Record<string, Check> = {
   profileFolder: str(LEN.path),
   profileWanted: str(LEN.id),
   todos: list(todo),
+  checklist,
   compact,
   secrets: list(secret, 20),
   launch: orNull(launch),

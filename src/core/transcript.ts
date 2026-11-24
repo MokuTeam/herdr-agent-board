@@ -1,6 +1,7 @@
 // Reading what Claude Code wrote into a transcript (JSONL lines): the end of it for a card, the
 // last turns for the detail view. Pure: the file reading lives with the adapter.
 
+import { parseChecklist } from './checklist.ts'
 import { type FormQuestion, questionsOf } from './dialogs/question-form.ts'
 import { t } from './lang.ts'
 import { parseLostAccess } from './lost-access.ts'
@@ -218,6 +219,25 @@ function isRecap(line: string | undefined, info: TranscriptInfo): boolean {
 }
 
 /**
+ * Read the newest valid TodoWrite call in an assistant message (#637). Returns true once the
+ * checklist state is settled (either active items or an empty/all-completed reset).
+ */
+function readChecklist(o: Rec, content: unknown[], errored: ReadonlySet<string>, info: TranscriptInfo): boolean {
+  if (o.isSidechain || o.forkedFrom) return false
+  const at = Date.parse(str(o.timestamp)) || undefined
+  for (let j = content.length - 1; j >= 0; j--) {
+    const b = rec(content[j])
+    if (b?.type !== 'tool_use' || str(b.name) !== 'TodoWrite') continue
+    if (errored.has(str(b.id))) continue
+    const parsed = parseChecklist(b.input, at)
+    if (!parsed.found) continue
+    if (parsed.checklist) info.checklist = parsed.checklist
+    return true
+  }
+  return false
+}
+
+/**
  * True once the tail holds everything a card needs; the reader widens its window until then. Not
  * a recap: many sessions never get one.
  */
@@ -240,8 +260,10 @@ export const tailComplete = (info: TranscriptInfo): boolean =>
 export function parseTranscriptTail(lines: string[]): TranscriptInfo {
   const info: TranscriptInfo = { title: '', prompt: '', lastText: '', question: '', replied: false, tool: null }
   const results = new Set<string>() // tool_use ids that already have a result (seen later in the file)
+  const errored = new Set<string>() // tool_use ids whose tool_result failed
   let compacted = false // a compaction came after every request still to be read: they say nothing of the context now
   let accessSettled = false // newest assistant outcome decides whether access is currently lost (#632)
+  let checklistSettled = false // newest valid TodoWrite decides whether a checklist is active (#637)
   let i = lines.length - 1
   for (; i >= 0 && !tailComplete(info); i--) {
     const line = lines[i]
@@ -281,7 +303,11 @@ export function parseTranscriptTail(lines: string[]): TranscriptInfo {
       if (Array.isArray(content)) {
         for (const b of content) {
           const block = rec(b)
-          if (block?.type === 'tool_result') results.add(str(block.tool_use_id))
+          if (block?.type === 'tool_result') {
+            const id = str(block.tool_use_id)
+            results.add(id)
+            if (block.is_error === true) errored.add(id)
+          }
         }
       }
       // A reminder the board typed in (services/scheduler.ts) or a background task reporting back is not the user answering.
@@ -296,6 +322,9 @@ export function parseTranscriptTail(lines: string[]): TranscriptInfo {
       continue
     }
     if (o.type !== 'assistant' || !Array.isArray(content)) continue
+    if (!checklistSettled && line.includes('"TodoWrite"')) {
+      if (readChecklist(o, content, errored, info)) checklistSettled = true
+    }
     if (!accessSettled) {
       const errorCode = typeof o.error === 'string' ? o.error : ''
       if (o.isApiErrorMessage === true || errorCode) {
@@ -352,8 +381,28 @@ export function parseTranscriptTail(lines: string[]): TranscriptInfo {
       }
     }
   }
-  // The window read for the rest can hold an older recap still: looked for without reading more.
-  for (; i >= 0 && info.recap === undefined; i--) isRecap(lines[i], info)
+  // The window read for the rest can hold an older recap or checklist still: looked for without reading more.
+  for (; i >= 0 && (info.recap === undefined || !checklistSettled); i--) {
+    const line = lines[i]
+    if (!line) continue
+    if (info.recap === undefined) isRecap(line, info)
+    if (!checklistSettled) {
+      if (line.includes('"is_error"') && line.includes('"type":"user"')) {
+        const o = parse(line)
+        const content = o && !o.isSidechain ? rec(o.message)?.content : undefined
+        if (Array.isArray(content)) {
+          for (const b of content) {
+            const block = rec(b)
+            if (block?.type === 'tool_result' && block.is_error === true) errored.add(str(block.tool_use_id))
+          }
+        }
+      } else if (line.includes('"TodoWrite"') && line.includes('"type":"assistant"')) {
+        const o = parse(line)
+        const content = o ? rec(o.message)?.content : undefined
+        if (o && Array.isArray(content) && readChecklist(o, content, errored, info)) checklistSettled = true
+      }
+    }
+  }
   return info
 }
 

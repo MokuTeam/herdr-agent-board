@@ -1,4 +1,5 @@
 // What a card on the board says: its words, its age, the question it waits on, its alarm.
+import { type ChecklistItem, checklistActive } from '../../../src/core/checklist.ts'
 import type { FormQuestion } from '../../../src/core/dialogs/question-form.ts'
 import type { ScheduleEntry } from '../../../src/core/schedule-rules.ts'
 import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'
@@ -61,6 +62,38 @@ export function cardMeter(
     it.effortLive && typeof it.effort === 'string' && it.effort ? t('card.effort', { level: it.effort }) : ''
   if (!context && !effort) return null
   return { context, tone: pct == null || pct < 70 ? '' : pct < 90 ? 'warn' : 'full', effort }
+}
+
+export interface CardChecklist {
+  done: number
+  total: number
+  ratio: string
+  pct: number
+  current: string
+  items: ChecklistItem[]
+  tooltip: string
+  ariaLabel: string
+}
+
+/**
+ * A Claude session's latest active TodoWrite checklist (#637). Hidden when absent, when all items
+ * are completed, or for non-Claude agents.
+ */
+export function cardChecklist(it: Pick<Item, 'agent' | 'checklist'>, t: Translator): CardChecklist | null {
+  if (it.agent !== 'claude' || !checklistActive(it.checklist)) return null
+  const { done, total, current, items } = it.checklist
+  const ratio = `${done}/${total}`
+  const pct = Math.min(100, Math.max(0, Math.round((done / total) * 100)))
+  const cleanCurrent = plain(current)
+  const lines = items.map(entry => {
+    const mark = entry.status === 'completed' ? '✓' : entry.status === 'in_progress' ? '▸' : '○'
+    return `${mark} ${plain(entry.status === 'in_progress' && entry.activeForm ? entry.activeForm : entry.content)}`
+  })
+  const tooltip = [`${t('card.checklist')} (${ratio})`, ...lines].join('\n')
+  const ariaLabel = cleanCurrent
+    ? t('card.checklistStep', { done, total, current: cleanCurrent })
+    : t('card.checklistProgress', { done, total })
+  return { done, total, ratio, pct, current: cleanCurrent, items, tooltip, ariaLabel }
 }
 
 /** "5 min ago" and the like, against the board's clock `now`; nothing for no time. */

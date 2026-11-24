@@ -25,8 +25,10 @@ import { type CallLines as CallView, callLines, inMokupilot } from '../models/ca
 import {
   ago,
   askLine,
+  type CardChecklist,
   type CardWords,
   cardAge,
+  cardChecklist,
   cardMeter,
   cardWords,
   compact,
@@ -34,6 +36,7 @@ import {
   folds,
   inTurn,
   launchOf,
+  plain,
   questionLine,
 } from '../models/card.ts'
 import { nameParts } from '../models/card-head.ts'
@@ -156,8 +159,10 @@ export function Card(props: CardProps) {
 }
 
 function CardContent({ item, launch, folding }: { item: Item; launch: LaunchSlots | undefined; folding: boolean }) {
+  const t = useT()
   const { data } = useBoardContext()
   const oneLine = compact(item, data?.schedules)
+  const checklist = !oneLine && !folding ? cardChecklist(item, t) : null
   return (
     <>
       <CardTop item={item} />
@@ -170,7 +175,24 @@ function CardContent({ item, launch, folding }: { item: Item; launch: LaunchSlot
       )}
       {!oneLine && <CardBody item={item} launch={launch} folding={folding} />}
       <CardActions item={item} />
+      {checklist && <ChecklistEdge checklist={checklist} />}
     </>
+  )
+}
+
+/** Quiet 2px progress line along the card's bottom edge (#637); full list in native tooltip. */
+function ChecklistEdge({ checklist }: { checklist: CardChecklist }) {
+  return (
+    <div
+      className="card-todo-track"
+      role="progressbar"
+      aria-label={checklist.ariaLabel}
+      aria-valuemin={0}
+      aria-valuemax={checklist.total}
+      aria-valuenow={checklist.done}
+    >
+      <div className="card-todo-fill" style={{ width: `${checklist.pct}%` }} />
+    </div>
   )
 }
 
@@ -270,8 +292,48 @@ function CardBody({ item, launch, folding }: { item: Item; launch: LaunchSlots |
   const t = useT()
   const words = cardWords(item)
   const started = launchOf(item)
+  const checklist = cardChecklist(item, t)
+  const explicitDoing = !!plain(item.doing)
+  const stepDiffers = !!checklist?.current && plain(words.own) !== checklist.current
+  const inlineChecklist = checklist && (
+    <>
+      <span className="card-todo-ratio">{checklist.ratio}</span>
+      {checklist.current && (!explicitDoing || stepDiffers) && (
+        <>
+          <span className="card-todo-sep" aria-hidden="true">
+            {' · '}
+          </span>
+          <span className="card-todo-step">{checklist.current}</span>
+        </>
+      )}
+    </>
+  )
   const what = words.recap ? (
-    <RecapLine item={item} words={words} />
+    <RecapLine item={item} words={words} checklist={checklist} />
+  ) : explicitDoing ? (
+    <div className="what" title={checklist?.tooltip}>
+      {checklist && (
+        <>
+          <span className="card-todo-ratio">{checklist.ratio}</span>
+          <span className="card-todo-sep" aria-hidden="true">
+            {' · '}
+          </span>
+        </>
+      )}
+      <KeyText text={words.own} />
+      {checklist && stepDiffers && (
+        <>
+          <span className="card-todo-sep" aria-hidden="true">
+            {' · '}
+          </span>
+          <span className="card-todo-step">{checklist.current}</span>
+        </>
+      )}
+    </div>
+  ) : checklist ? (
+    <div className="what" title={checklist.tooltip}>
+      {inlineChecklist}
+    </div>
   ) : words.own ? (
     <div className="what">
       <KeyText text={words.own} />
@@ -320,7 +382,7 @@ function CardBody({ item, launch, folding }: { item: Item; launch: LaunchSlots |
  * set back a shade once the session has gone on long after it. The task it stands over under it,
  * in one line. Both end at a word.
  */
-function RecapLine({ item, words }: { item: Item; words: CardWords }) {
+function RecapLine({ item, words, checklist }: { item: Item; words: CardWords; checklist: CardChecklist | null }) {
   const t = useT()
   const { now } = useBoardContext()
   const line = useRef<HTMLDivElement>(null)
@@ -333,7 +395,13 @@ function RecapLine({ item, words }: { item: Item; words: CardWords }) {
       <div
         ref={line}
         className={classNames('what recap', words.stale && 'stale')}
-        title={recap === words.recap ? undefined : words.recap}
+        title={
+          recap === words.recap
+            ? checklist?.tooltip
+            : checklist
+              ? `${words.recap}\n\n${checklist.tooltip}`
+              : words.recap
+        }
       >
         <span className="sr-only">{`${t('card.recap')}: `}</span>
         {age && (
@@ -342,11 +410,22 @@ function RecapLine({ item, words }: { item: Item; words: CardWords }) {
           </span>
         )}
         {age && ' '}
+        {checklist && !words.task && (
+          <>
+            <span className="card-todo-ratio">{checklist.ratio}</span>{' '}
+          </>
+        )}
         <span data-clip="">{recap}</span>
       </div>
       {words.task && (
-        <div ref={task} className="task" title={doing === words.task ? undefined : words.task}>
-          <span className="task-label">{t('row.task')}</span> <span data-clip="">{doing}</span>
+        <div ref={task} className="task" title={checklist?.tooltip ?? (doing === words.task ? undefined : words.task)}>
+          <span className="task-label">{t('row.task')}</span>{' '}
+          {checklist && (
+            <>
+              <span className="card-todo-ratio">{checklist.ratio}</span>{' '}
+            </>
+          )}
+          <span data-clip="">{doing}</span>
         </div>
       )}
     </>
