@@ -673,12 +673,15 @@ export function createComputerSetup(d: ComputerSetupDeps): ComputerSetup {
         if (closed || gen !== generation) return failAnswer(409, t('node.computer.err.cancelled'))
         if (!claimed.ok) {
           if (claimed.status === 409) {
-            // Another master holds this computer: keep its relay key intact and instruct how to forget it.
+            // Another master holds this computer: remove only this attempt's "-init" paste key
+            // (same backoff path as TTL removal, leaving any permanent key/socket intact) and
+            // instruct how to forget it.
             stopTimers()
             active = null
             d.releaseProbe?.(cur.socket)
-            clearRetry(cur.pasteKeyName)
-            dropPending(cur.pasteKeyName)
+            addPending({ socket: cur.pasteKeyName, expiresAt: d.now() })
+            await removePendingKey(cur.relay, cur.pasteKeyName)
+            if (closed || gen !== generation) return failAnswer(409, t('node.computer.err.cancelled'))
             const msg = t('node.computer.err.alreadyClaimed')
             step('claim', 'fail', { key: 'node.computer.said.claimFailed', params: { error: msg } })
             set({
@@ -732,12 +735,21 @@ export function createComputerSetup(d: ComputerSetupDeps): ComputerSetup {
           }
         }
 
-        // Claim + permanent key rotation succeeded: disarm expiry, drop pasted key (leaving permanent socket alive).
+        if (closed || gen !== generation) return failAnswer(409, t('node.computer.err.cancelled'))
+
+        // Claim succeeded: disarm expiry; remove the "-init" paste key only when the node rotated
+        // to a permanent key, otherwise keep it enrolled and stop tracking it as pending.
         stopTimers()
         active = null
         d.releaseProbe?.(cur.socket)
-        addPending({ socket: cur.pasteKeyName, expiresAt: d.now() })
-        await removePendingKey(cur.relay, cur.pasteKeyName)
+        if (claimed.relayPublicKey) {
+          addPending({ socket: cur.pasteKeyName, expiresAt: d.now() })
+          await removePendingKey(cur.relay, cur.pasteKeyName)
+          if (closed || gen !== generation) return failAnswer(409, t('node.computer.err.cancelled'))
+        } else {
+          clearRetry(cur.pasteKeyName)
+          dropPending(cur.pasteKeyName)
+        }
         step('claim', 'ok', { key: 'node.setup.said.device', params: { id: deviceId } })
         set({ command: null, script: null })
 

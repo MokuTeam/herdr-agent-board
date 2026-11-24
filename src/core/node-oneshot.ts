@@ -337,7 +337,7 @@ export function nodeOneshotScript(input: NodeOneshotInput): string {
     '  UNIT_FILE="$HOME/.config/systemd/user/herdr.service"',
     '  if [ ! -f "$UNIT_FILE" ]; then',
     `    write_file_mode "$UNIT_FILE" 644 <<'${UNIT_END}'`,
-    herdrUnit().trimEnd(),
+    herdrUnit('Added by "Add a computer".').trimEnd(),
     UNIT_END,
     '  fi',
     '  if command -v systemctl >/dev/null 2>&1; then',

@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { LAUNCHD_LABEL, launchdPlist, nodeOneLine, nodeOneshotScript } from '../../src/core/node-oneshot.ts'
-import { BUN_VERSION, HERDR_MIN } from '../../src/core/node-texts.ts'
+import { BUN_VERSION, HERDR_MIN, herdrUnit } from '../../src/core/node-texts.ts'
 import { RELAY_NODE_USER } from '../../src/core/relay-texts.ts'
 
 const DIAL_KEY = [
@@ -195,6 +195,12 @@ describe('node-oneshot script and paste (#513)', () => {
           if (osName === 'Linux') {
             const unit = readFileSync(join(home, '.config', 'systemd', 'user', 'herdr.service'), 'utf8')
             expect(unit).toContain('ExecStart=%h/.local/bin/herdr server')
+            expect(unit).toContain('# agent-board: herdr for the node\'s user. Added by "Add a computer".')
+            expect(unit).not.toContain('Add a server')
+            expect(unit).not.toContain('Undo')
+            expect(herdrUnit()).toContain(
+              '# agent-board: herdr for the node\'s user. Added by "Add a server"; its Undo removes it.',
+            )
             expect(log).toContain('systemctl --user start herdr.service')
           } else {
             const plist = readFileSync(join(home, 'Library', 'LaunchAgents', `${LAUNCHD_LABEL}.plist`), 'utf8')

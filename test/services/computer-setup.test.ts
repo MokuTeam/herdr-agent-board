@@ -490,7 +490,7 @@ describe('createComputerSetup service (#513)', () => {
     }
   })
 
-  test('claim is idempotent across transient errors, and genuine 409 keeps relay key with board node forget hint', async () => {
+  test('claim is idempotent across transient errors, keeps paste key without rotation, and genuine 409 removes -init key', async () => {
     const h = harness()
     try {
       await h.setup.start()
@@ -533,19 +533,28 @@ describe('createComputerSetup service (#513)', () => {
       expect(r1.status).toBe(502)
       expect(h.setup.view().phase).toBe('failed')
 
-      // 2nd Approve sends the exact same nonce and succeeds
+      // 2nd Approve sends the exact same nonce and succeeds; without relayPublicKey the paste key stays enrolled
+      const pasteKey1 = `${h.setup.view().socket}-init`
       const r2 = await h.setup.approve({ id: 'anna-mac' })
       expect(r2.status).toBe(200)
       expect(nonces[0]).toBeTruthy()
       expect(nonces[1]).toBe(nonces[0])
       expect(h.setup.view().phase).toBe('done')
+      expect(h.enrolled.has(pasteKey1)).toBe(true)
+      expect(h.removed).toEqual([])
+      expect(existsSync(h.pendingFile)).toBe(false)
+      h.advance(120_000)
+      await h.setup.sweepExpired()
+      expect(h.enrolled.has(pasteKey1)).toBe(true)
+      expect(h.removed).toEqual([])
 
-      // Separate genuine 409 from another master: key is kept and owner told to run board node forget
+      // Separate genuine 409 from another master: removes only -init paste key, keeps permanent socket/key intact
       const h2 = harness()
       try {
         await h2.setup.start()
         const sock = h2.setup.view().socket ?? ''
         const pasteKey = `${sock}-init`
+        h2.enrolled.set(sock, 'ssh-ed25519 AAAAOtherMasterKey')
         const sc2 = gunzipSync(Buffer.from((h2.setup.view().command ?? '').split(' ')[1] ?? '', 'base64')).toString(
           'utf8',
         )
@@ -570,12 +579,74 @@ describe('createComputerSetup service (#513)', () => {
         h2.setClaim(() => ({ ok: false, status: 409, error: 'claimed' }))
         const r409 = await h2.setup.approve({ id: 'anna-mac' })
         expect(r409.status).toBe(409)
-        expect(h2.enrolled.has(pasteKey)).toBe(true)
-        expect(h2.removed).toEqual([])
+        expect(h2.enrolled.has(pasteKey)).toBe(false)
+        expect(h2.removed).toEqual([pasteKey])
+        expect(h2.enrolled.get(sock)).toBe('ssh-ed25519 AAAAOtherMasterKey')
+        expect(existsSync(h2.pendingFile)).toBe(false)
+        expect(h2.setup.view().phase).toBe('failed')
         expect(h2.setup.view().next?.key).toBe('node.computer.next.claimed')
       } finally {
         h2.cleanup()
       }
+    } finally {
+      h.cleanup()
+    }
+  })
+
+  test('genuine 409 retries -init paste key removal with backoff without touching permanent key (#725)', async () => {
+    let failures = 2
+    const h = harness({
+      retryBaseMs: 25,
+      retryMaxMs: 60,
+      removeBehavior: () => (failures-- > 0 ? { ok: false, error: 'relay unreachable' } : { ok: true }),
+    })
+    try {
+      await h.setup.start()
+      const sock = h.setup.view().socket ?? ''
+      const pasteKey = `${sock}-init`
+      h.enrolled.set(sock, 'ssh-ed25519 AAAAOtherMasterKey')
+      const script = gunzipSync(Buffer.from((h.setup.view().command ?? '').split(' ')[1] ?? '', 'base64')).toString(
+        'utf8',
+      )
+      const joinCode = (JSON.parse((/JOIN_JSON='([^']+)'/.exec(script) ?? [])[1] ?? '{}') as { code: string }).code
+      h.setProbe(() => ({
+        ok: true,
+        certPem: h.cert.certPem,
+        certFingerprint: h.cert.fp,
+        hello: {
+          host: 'anna',
+          platform: 'darwin',
+          version: '0.1',
+          node: {
+            api: 1,
+            id: 'anna-mac',
+            claimed: false,
+            join: { fingerprint: h.cert.fp, proof: joinProof(joinCode, h.cert.fp, 'anna-mac'), expiresAt: 2e12 },
+          },
+        },
+      }))
+      await until(() => h.setup.view().phase === 'found', 3000)
+      h.setClaim(() => ({ ok: false, status: 409, error: 'claimed' }))
+
+      const r409 = await h.setup.approve({ id: 'anna-mac' })
+      expect(r409.status).toBe(409)
+      expect(h.enrolled.has(pasteKey)).toBe(true)
+      expect(existsSync(h.pendingFile)).toBe(true)
+      const pending = JSON.parse(readFileSync(h.pendingFile, 'utf8')) as Array<{
+        socket: string
+        unclaimedSocket?: string
+      }>
+      expect(pending).toHaveLength(1)
+      expect(pending[0]?.socket).toBe(pasteKey)
+      expect(pending[0]?.unclaimedSocket).toBeUndefined()
+      expect(h.setup.view().phase).toBe('failed')
+      expect(h.setup.view().next?.key).toBe('node.computer.next.claimed')
+
+      await until(() => !existsSync(h.pendingFile) && !h.enrolled.has(pasteKey), 3000)
+      expect(h.removed).toEqual([pasteKey])
+      expect(h.enrolled.get(sock)).toBe('ssh-ed25519 AAAAOtherMasterKey')
+      expect(h.setup.view().phase).toBe('failed')
+      expect(h.setup.view().error).toBeTruthy()
     } finally {
       h.cleanup()
     }
