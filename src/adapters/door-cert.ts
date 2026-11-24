@@ -3,7 +3,6 @@
 // openssl binary required on Linux, macOS, or Windows).
 import {
   createHash,
-  createHmac,
   createPublicKey,
   createSign,
   generateKeyPairSync,
@@ -13,9 +12,8 @@ import {
 } from 'node:crypto'
 import { mkdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { connect as tlsConnect } from 'node:tls'
 import { replaceFile } from './json-store.ts'
-import { nodeDir } from './node-store.ts'
+import { nodeDir } from './paths.ts'
 
 export interface DoorCert {
   cert: string
@@ -142,9 +140,10 @@ export function isValidCertPem(pem: string): boolean {
 }
 
 /**
- * Reads an existing door certificate and key from `dir`; null when neither file exists.
- * Throws if only one half is present, does not parse, or the key does not match the cert, so a
- * pinned door identity is never rotated silently.
+ * Reads an existing door certificate and key from `dir`; null when no cert file is present
+ * (including a key-only state left by an interrupted first write, so `ensureDoorCert` can
+ * regenerate). Throws if `door-cert.pem` exists without a key, does not parse, or the key does not
+ * match the cert, so a pinned door identity is never rotated silently.
  */
 export function readDoorCert(dir = nodeDir()): DoorCert | null {
   const cPath = doorCertPath(dir)
@@ -159,9 +158,9 @@ export function readDoorCert(dir = nodeDir()): DoorCert | null {
   }
   const cert = readOpt(cPath)
   const key = readOpt(kPath)
-  if (cert === null && key === null) return null
-  if (cert === null || key === null) {
-    throw new Error(`door TLS files in ${dir} are incomplete: both door-cert.pem and door-key.pem must exist`)
+  if (cert === null) return null
+  if (key === null) {
+    throw new Error(`door TLS files in ${dir} are incomplete: door-cert.pem exists without door-key.pem`)
   }
   const x509 = new X509Certificate(cert)
   const pubFromKey = createPublicKey(key).export({ type: 'spki', format: 'der' })
@@ -240,71 +239,12 @@ export function isCertError(err: unknown): boolean {
     if (typeof obj.code === 'string' && CERT_ERROR_CODES.has(obj.code)) return true
     if (
       typeof obj.message === 'string' &&
-      /self signed certificate|certificate.*mismatch|ERR_DOOR_CERT_MISMATCH/i.test(obj.message)
+      /self signed certificate|certificate.*mismatch|does not match the pinned certificate|door certificate missing raw DER bytes|ERR_DOOR_CERT_MISMATCH/i.test(
+        obj.message,
+      )
     )
       return true
     cur = obj.cause
   }
   return false
-}
-
-/**
- * Connects over TLS to `host:port` (127.0.0.1 by default) without verifying CA and returns the peer
- * certificate PEM and SHA-256 fingerprint (used during T18 enrolment before HMAC verification).
- */
-export function probeDoorCert(
-  port: number,
-  opts?: { host?: string; timeoutMs?: number },
-): Promise<{ cert: string; fingerprint: string }> {
-  const host = opts?.host ?? '127.0.0.1'
-  const timeoutMs = opts?.timeoutMs ?? 5000
-  return new Promise((resolve, reject) => {
-    let settled = false
-    const socket = tlsConnect({ host, port, rejectUnauthorized: false })
-    const timer = setTimeout(() => {
-      if (settled) return
-      settled = true
-      socket.destroy()
-      reject(new Error(`TLS certificate probe timed out after ${timeoutMs} ms`))
-    }, timeoutMs)
-    const fail = (err: Error): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      socket.destroy()
-      reject(err)
-    }
-    socket.once('error', fail)
-    socket.once('secureConnect', () => {
-      if (settled) return
-      try {
-        const peer = socket.getPeerCertificate(true)
-        const raw = peer?.raw
-        if (!(raw instanceof Uint8Array) || raw.length === 0) {
-          return fail(new Error('peer presented no TLS certificate'))
-        }
-        const cert = toPem('CERTIFICATE', raw)
-        const fingerprint = createHash('sha256').update(raw).digest('hex')
-        settled = true
-        clearTimeout(timer)
-        socket.destroy()
-        resolve({ cert, fingerprint })
-      } catch (err) {
-        fail(err instanceof Error ? err : new Error(String(err)))
-      }
-    })
-  })
-}
-
-/** HMAC-SHA256 proof binding `fingerprint` to a join `code` (used by T18 enrolment). */
-export function certProof(fingerprint: string, code: string): string {
-  return createHmac('sha256', code).update(fingerprint).digest('hex')
-}
-
-/** Constant-time verification of `certProof(fingerprint, code)`. */
-export function verifyCertProof(fingerprint: string, code: string, proof: string): boolean {
-  if (typeof proof !== 'string' || !/^[0-9a-f]{64}$/.test(proof)) return false
-  const expected = Buffer.from(certProof(fingerprint, code), 'hex')
-  const actual = Buffer.from(proof, 'hex')
-  return expected.length === actual.length && timingSafeEqual(expected, actual)
 }

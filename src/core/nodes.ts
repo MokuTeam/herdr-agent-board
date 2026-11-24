@@ -450,6 +450,7 @@ function readNode(raw: unknown): { config: NodeConfig | null; problems: NodesPro
   const relay = given(raw.relay)
     ? (relayOf(raw.relay, [...RELAY_KEYS, 'socket'], problems) as NodeConfig['relay'])
     : null
+  if (relay && (!given(raw.tls) || raw.tls === false)) flag('tls', 'required')
   if (problems.length) return { config: null, problems }
   return {
     config: {

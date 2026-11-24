@@ -42,8 +42,6 @@ export interface NodeListenerOptions {
   log: (text: string) => void
   /** Provides/persists the door's TLS cert and key when `node.tls` is true (default: ensureDoorCert). */
   doorCert?: (nodeId: string) => DoorCert
-  /** Extra fields merged into `/api/hello`'s `node` object (e.g. join proof in #513). */
-  helloExtra?: (node: NodeConfig, certFingerprint: string | null) => Record<string, unknown>
   /** Called whenever the door starts listening, moves, or closes. */
   onChange?: () => void
 }
@@ -100,7 +98,6 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
       url = new URL(req.url)
       const raw = url.pathname
       if (req.method === 'GET' && raw === '/api/hello') {
-        const extra = o.helloExtra ? o.helloExtra(here, boundCertFp) : {}
         return json(200, {
           ...o.hello(),
           node: {
@@ -108,7 +105,6 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
             id: here.id,
             claimed: o.store.list().length > 0,
             ...(boundTls && boundCertFp ? { cert: boundCertFp } : {}),
-            ...extra,
           },
         })
       }

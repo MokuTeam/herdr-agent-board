@@ -23,7 +23,7 @@ import { hasUnprintable } from '../core/team.ts'
 import { isValidCertPem } from './door-cert.ts'
 import { isRecord, readJson, replaceFile, updateJson } from './json-store.ts'
 import { pace } from './pacing.ts'
-import { stateDir } from './paths.ts'
+import { nodeDir, stateDir } from './paths.ts'
 
 /** How a master came to this node: by `board node token` (stage 1); claim and install come later. */
 export type MasterVia = 'hand' | 'claim' | 'install'
@@ -42,8 +42,7 @@ export interface MasterRecord {
 /** A master's name: trimmed, not empty, at most this long, nothing unprintable. */
 export const MASTER_NAME_MAX = 64
 
-/** The node's own folder in the board's state folder. */
-export const nodeDir = (): string => join(stateDir(), 'node')
+export { nodeDir }
 
 /** The node's relay dial private key (`<state>/node/relay-key`), known_hosts, and pid record (`relay-pid.json`). */
 export const nodeRelayKeyPath = (dir = nodeDir()): string => join(dir, 'relay-key')
@@ -268,8 +267,6 @@ export interface DeviceStore {
   certPath(id: string): string
   /** The device's pinned door certificate PEM, or null when missing, unreadable, or invalid. */
   cert(id: string): string | null
-  /** Stores the device's pinned door certificate PEM, mode 0600, whole or not at all. */
-  setCert(id: string, pem: string): void
   /**
    * The device's offline copy (`snapshot.json`, #500): when its last payload came and its part of
    * the master's payload as checked then (core/node-items.ts). null: none, unreadable, or not one.
@@ -354,12 +351,6 @@ export function createDeviceStore({ dir = nodesDir() }: { dir?: string } = {}): 
       } catch {
         return null
       }
-    },
-    setCert(id, pem) {
-      if (!isValidCertPem(pem)) throw new Error('not a valid X.509 certificate')
-      const at = folder(id)
-      mkdirSync(at, { recursive: true })
-      replaceFile(join(at, 'door-cert.pem'), `${pem.trim()}\n`, undefined, 0o600)
     },
     snapshot(id) {
       try {

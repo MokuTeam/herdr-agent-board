@@ -64,34 +64,10 @@
 // `wrong`) and exit 1 (spec, "Checked by the spike").
 // `hang` stays up silent.
 import { createHmac } from 'node:crypto'
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-  writeSync,
-} from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, writeSync } from 'node:fs'
 import { connect, createServer } from 'node:net'
 import { dirname, join } from 'node:path'
 import { nodeKind, prepScript, relayKind, unpackNodeRun } from './fake-root-prep.ts'
-
-const ENROL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/
-const ENROL_PREFIXES: Readonly<Record<string, string>> = {
-  'ssh-ed25519': 'AAAAC3NzaC1lZDI1NTE5',
-  'ssh-rsa': 'AAAAB3NzaC1yc2E',
-  'ecdsa-sha2-nistp256': 'AAAAE2VjZHNhLXNoYTItbmlzdHAyNTY',
-  'ecdsa-sha2-nistp384': 'AAAAE2VjZHNhLXNoYTItbmlzdHAzODQ',
-  'ecdsa-sha2-nistp521': 'AAAAE2VjZHNhLXNoYTItbmlzdHA1MjE',
-}
-function enrolKeyBody(ktype: string, kbody: string): string | null {
-  const prefix = ENROL_PREFIXES[ktype]
-  if (!prefix || kbody.length < 32 || kbody.length > 4096 || kbody.length % 4 !== 0) return null
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(kbody) || !kbody.startsWith(prefix)) return null
-  return `${ktype} ${kbody}`
-}
 
 type Mode = 'forward' | 'refuse' | 'publickey' | 'hostkey' | 'hang'
 type Admin = {
@@ -110,7 +86,6 @@ type State = {
   keygen?: 'unprotected' | 'passphrase'
   ssh?: { mode?: Mode; seq?: Mode[]; exitAfterMs?: number; proxyPort?: number; domain?: string; unixForward?: boolean }
   admin?: Admin
-  enrol?: { keysDir: string; socketsDir?: string; fail?: string }
   sshVersion?: string
 }
 
@@ -536,76 +511,19 @@ async function passwordLogin(a: Admin, target: string): Promise<void> {
   denied()
 }
 
-function runEnrol(enrol: NonNullable<State['enrol']>, cmd: string): never {
-  const fail = (msg: string): never => {
-    say(`@@error ${msg}`)
-    return end(1)
-  }
-  if (enrol.fail) return fail(enrol.fail)
-  const parts = cmd.trim().split(/\s+/).filter(Boolean)
-  const [sub = '', ...rest] = parts
-  mkdirSync(enrol.keysDir, { recursive: true })
-  if (sub === 'check' && rest.length === 0) {
-    out('@@ok 1')
-    return end(0)
-  }
-  if (sub === 'list' && rest.length === 0) {
-    const names = readdirSync(enrol.keysDir)
-      .filter(f => f.endsWith('.pub'))
-      .map(f => f.slice(0, -4))
-      .filter(n => ENROL_NAME.test(n))
-      .sort()
-    if (names.length) out(...names)
-    return end(0)
-  }
-  if (sub === 'add' && rest.length >= 3) {
-    const [name = '', ktype = '', kbody = ''] = rest
-    if (!ENROL_NAME.test(name)) return fail('invalid key name')
-    const body = enrolKeyBody(ktype, kbody)
-    if (!body) return fail('invalid public key')
-    writeFileSync(join(enrol.keysDir, `${name}.pub`), `${body} ${name}\n`)
-    out(`@@added ${name}`)
-    return end(0)
-  }
-  if (sub === 'remove' && rest.length === 1) {
-    const [name = ''] = rest
-    if (!ENROL_NAME.test(name)) return fail('invalid key name')
-    let had = false
-    const pub = join(enrol.keysDir, `${name}.pub`)
-    if (existsSync(pub)) {
-      rmSync(pub, { force: true })
-      had = true
-    }
-    if (enrol.socketsDir) {
-      const sock = join(enrol.socketsDir, `${name}.sock`)
-      if (existsSync(sock)) {
-        rmSync(sock, { force: true })
-        had = true
-      }
-    }
-    out(had ? `@@removed ${name}` : `@@missing ${name}`)
-    return end(0)
-  }
-  return fail('unknown relay enrol command')
-}
-
 async function admin(): Promise<void> {
   const a = state.admin ?? {}
   adminHostKey()
   const target = args.at(-2) ?? ''
   const user = target.slice(0, target.indexOf('@'))
   if (a.publickey) await passwordLogin(a, target)
-  const rawCmd = args.at(-1) ?? ''
-  if (state.enrol && !rawCmd.startsWith('env ') && !rawCmd.startsWith('sh -c ')) {
-    runEnrol(state.enrol, rawCmd)
-  }
   // a stdin the board left open keeps this waiting, as it would keep sudo -S
   // as bytes: the node's plugin archive comes this way (#509)
   const bytes = Buffer.from(await Bun.stdin.arrayBuffer())
   const input = bytes.toString('utf8')
   const m =
     /^(env LC_ALL=C sudo -n -- |env LC_ALL=C sudo -S -p '' -- )?sh -c 'eval "\$\(echo ([A-Za-z0-9+/=]+) \| base64 -d\)"'$/.exec(
-      rawCmd,
+      args.at(-1) ?? '',
     )
   const unexpected = (): never => {
     say('fake: unexpected command')

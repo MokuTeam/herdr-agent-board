@@ -6,6 +6,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { cardStore } from '../core/card-store.ts'
+import { RELAY_SOCKETS_DIR } from '../core/relay-texts.ts'
 
 export const PLUGIN_ID = 'agent-board'
 export const ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))))
@@ -20,6 +21,13 @@ export const configDir = (): string =>
   join(process.env.APPDATA || join(homedir(), '.config'), 'herdr', 'plugins', 'config', PLUGIN_ID)
 export const stateDir = (): string =>
   join(process.env.LOCALAPPDATA || join(homedir(), '.local', 'state'), 'herdr', 'plugins', PLUGIN_ID)
+/** The node's own folder in the board's state folder. */
+export const nodeDir = (): string => join(stateDir(), 'node')
+/**
+ * Where the server-side relay sockets live (#512): RELAY_SOCKETS_DIR, or in a test a scratch
+ * sockets folder (BOARD_TEST_RELAY_SOCKETS_DIR; unset in production).
+ */
+export const relaySocketsDir = (): string => process.env.BOARD_TEST_RELAY_SOCKETS_DIR || RELAY_SOCKETS_DIR
 export const cardsDir = (): string => cardStore(process.env, homedir(), process.platform).cards
 // Reminders and repeating pings for sessions (schedule-store.ts), one file per entry.
 export const scheduleDir = (): string => join(stateDir(), 'schedule')

@@ -5,9 +5,10 @@
 import { existsSync } from 'node:fs'
 import { nodeRelayKeyPath, nodeRelayKnownHostsReady, nodeRelayPidFile } from '../../adapters/node-store.ts'
 import { pace } from '../../adapters/pacing.ts'
+import { relaySocketsDir } from '../../adapters/paths.ts'
 import { endStraySsh, publicKeyOf, readPidRecord, spawnSsh, sshBin, writePidRecord } from '../../adapters/ssh.ts'
 import type { NodeConfig } from '../../core/nodes.ts'
-import { RELAY_SOCKETS_DIR, relaySocketPath } from '../../core/relay-texts.ts'
+import { relaySocketPath } from '../../core/relay-texts.ts'
 import { forwardSpec, sshArgs, type TunnelConfig, type TunnelStatus } from '../../core/tunnel.ts'
 import {
   type Clock,
@@ -29,9 +30,6 @@ export interface RelayDialLine {
   doorPort: number
   platform?: string
 }
-
-/** Where the server-side relay sockets live (overrideable for tests via BOARD_RELAY_SOCKETS_DIR). */
-export const relaySocketsDir = (): string => process.env.BOARD_RELAY_SOCKETS_DIR || RELAY_SOCKETS_DIR
 
 function relayTunnelConfig(relay: RelayConfig, socketPath: string, key: string): TunnelConfig {
   return {
@@ -59,8 +57,8 @@ export function relayDialArgs(l: RelayDialLine): string[] {
 }
 
 /**
- * Builds the TunnelPlan for the node's relay dialer, or null if `node.relay` is absent, the door
- * port is invalid, or `relay.socket` does not pass validation.
+ * Builds the TunnelPlan for the node's relay dialer, or null if `node.relay` is absent,
+ * `node.tls` is not true, the door port is invalid, or `relay.socket` does not pass validation.
  */
 export function relayDialPlan(o: {
   node: NodeConfig
@@ -72,7 +70,7 @@ export function relayDialPlan(o: {
   platform?: string
 }): TunnelPlan | null {
   const { relay } = o.node
-  if (!relay || o.doorPort <= 0) return null
+  if (!relay || !o.node.tls || o.doorPort <= 0) return null
   const socketPath = relaySocketPath(relay.socket, o.socketsDir ?? relaySocketsDir())
   if (!socketPath) return null
   const conf = relayTunnelConfig(relay, socketPath, o.key)
@@ -128,6 +126,7 @@ export function createRelayDial(o: RelayDialOptions): RelayDial {
   const bin = o.bin ?? (() => sshBin())
   const pidFile = nodeRelayPidFile()
   let warnedMissingKey = false
+  let warnedNoTls = false
 
   const supervisor: Supervisor = createSupervisor({
     label: 'relay dial',
@@ -137,8 +136,18 @@ export function createRelayDial(o: RelayDialOptions): RelayDial {
       const port = o.doorPort()
       if (!n?.relay || port === null || port <= 0) {
         warnedMissingKey = false
+        warnedNoTls = false
         return null
       }
+      if (!n.tls) {
+        warnedMissingKey = false
+        if (!warnedNoTls) {
+          warnedNoTls = true
+          o.log('relay dial: refusing to forward plaintext door (node.tls must be true)')
+        }
+        return null
+      }
+      warnedNoTls = false
       const key = keyPath()
       if (!keyExists(key)) {
         if (!warnedMissingKey) {

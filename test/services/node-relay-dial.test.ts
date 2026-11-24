@@ -5,6 +5,7 @@
 import { describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { relaySocketsDir } from '../../src/adapters/paths.ts'
 import { type PidRecord, readPidRecord, writePidRecord } from '../../src/adapters/ssh.ts'
 import type { NodeConfig } from '../../src/core/nodes.ts'
 import { RELAY_SOCKETS_DIR } from '../../src/core/relay-texts.ts'
@@ -160,6 +161,29 @@ describe('relayDialArgs and relayDialPlan', () => {
         }),
       ).toBeNull()
     }
+
+    // Plaintext door is never forwarded over relay even if relay config is present
+    expect(
+      relayDialPlan({
+        node: { ...NODE_CFG, tls: false },
+        doorPort: 12430,
+        key: '/s/relay-key',
+        knownHosts: '/s/known_hosts',
+      }),
+    ).toBeNull()
+  })
+
+  test('relaySocketsDir defaults to RELAY_SOCKETS_DIR and honours BOARD_TEST_RELAY_SOCKETS_DIR', () => {
+    const prev = process.env.BOARD_TEST_RELAY_SOCKETS_DIR
+    try {
+      delete process.env.BOARD_TEST_RELAY_SOCKETS_DIR
+      expect(relaySocketsDir()).toBe(RELAY_SOCKETS_DIR)
+      process.env.BOARD_TEST_RELAY_SOCKETS_DIR = '/tmp/test-relay-sockets'
+      expect(relaySocketsDir()).toBe('/tmp/test-relay-sockets')
+    } finally {
+      if (prev === undefined) delete process.env.BOARD_TEST_RELAY_SOCKETS_DIR
+      else process.env.BOARD_TEST_RELAY_SOCKETS_DIR = prev
+    }
   })
 })
 
@@ -182,12 +206,20 @@ describe('createRelayDial supervisor lifecycle', () => {
     expect(w.record).toBeNull()
   })
 
-  test('without relay or without relay-key: spawns no ssh and creates no pid record', async () => {
+  test('without relay, without tls, or without relay-key: spawns no ssh and creates no pid record', async () => {
     const wNoRelay = dialWorld({ ...NODE_CFG, relay: null })
     await wNoRelay.dial.sync()
     expect(wNoRelay.spawns).toHaveLength(0)
     expect(wNoRelay.record).toBeNull()
     expect(wNoRelay.dial.status().state).toBe('off')
+
+    const wNoTls = dialWorld({ ...NODE_CFG, tls: false })
+    await wNoTls.dial.sync()
+    await wNoTls.dial.sync()
+    expect(wNoTls.spawns).toHaveLength(0)
+    expect(wNoTls.record).toBeNull()
+    expect(wNoTls.dial.status().state).toBe('off')
+    expect(wNoTls.logs.filter(l => l.includes('plaintext door'))).toHaveLength(1)
 
     const wNoKey = dialWorld(NODE_CFG)
     wNoKey.hasKey = false

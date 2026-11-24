@@ -3,7 +3,7 @@
 //   fingerprint in /api/hello, refuses plain HTTP and wrong pinned cert; tls: false creates no cert.
 // - Stand-in relay (two sandbox boards + unix socket via fake-ssh): node ssh -R + master ssh -L,
 //   payload aggregation, proxied session route, and rogue cert refusal ('cert') without token leak.
-// - Real unprivileged OpenSSH verification: real sshd + real ssh -R and ssh -L + real enrol.
+// - Real unprivileged OpenSSH verification: real sshd + real ssh -R and ssh -L.
 // - Without relay/tls keys: no ssh spawned, no certificate files, same route table and /api/hello.
 import { describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { type ChildProcess, spawn, spawnSync } from 'node:child_process'
@@ -32,6 +32,7 @@ import {
 import {
   createDeviceStore,
   createNodeStore,
+  type DeviceStore,
   nodeRelayKeyPath,
   nodeRelayKnownHostsPath,
   nodeRelayPidFile,
@@ -39,14 +40,7 @@ import {
 } from '../../src/adapters/node-store.ts'
 import { t as translate } from '../../src/core/lang.ts'
 import type { DeviceView } from '../../src/core/nodes.ts'
-import {
-  relayEnrolKeyLine,
-  relayEnrolScript,
-  relayMasterFenceSettings,
-  relayMasterKeyLine,
-  relayNodeFenceSettings,
-} from '../../src/core/relay-texts.ts'
-import { createRelayEnrol } from '../../src/services/nodes/relay.ts'
+import { relayMasterFenceSettings, relayMasterKeyLine, relayNodeFenceSettings } from '../../src/core/relay-texts.ts'
 import { deviceRows } from '../../web/src/models/devices.ts'
 import { logged, serveBoard, unusedPort } from '../support/board-server.ts'
 import { sh } from '../support/fake-root.ts'
@@ -58,6 +52,11 @@ import { routeTable, stateFolder } from '../support/tunnel-board.ts'
 setDefaultTimeout(60_000)
 
 const sshdBin = ['/usr/sbin/sshd', '/sbin/sshd'].find(p => existsSync(p)) ?? null
+
+const writeCert = (store: DeviceStore, id: string, pem: string): void => {
+  mkdirSync(store.dir(id), { recursive: true })
+  writeFileSync(store.certPath(id), pem, { mode: 0o600 })
+}
 
 async function waitPort(port: number, ms = 5000): Promise<void> {
   const deadline = Date.now() + ms
@@ -204,7 +203,7 @@ describe('stand-in relay pipe between two sandbox boards', () => {
           BOARD_SSH_KEYGEN_BIN_PATH: fake,
           FAKE_SSH_STATE: nodeSshState,
           FAKE_SSH_LOG: join(nodeBox.dir, 'ssh.jsonl'),
-          BOARD_RELAY_SOCKETS_DIR: socketsDir,
+          BOARD_TEST_RELAY_SOCKETS_DIR: socketsDir,
         },
       )
       await until(() => logged(nodeProc, `node door: listening on 127.0.0.1:${nodeDoorPort} as nat-1 (tls)`), 10_000)
@@ -217,7 +216,7 @@ describe('stand-in relay pipe between two sandbox boards', () => {
       const mNodesDir = join(stateFolder(masterBox), 'nodes')
       const store = createDeviceStore({ dir: mNodesDir })
       store.setToken('nat-1', token)
-      store.setCert('nat-1', certPem)
+      writeCert(store, 'nat-1', certPem)
       mkdirSync(join(mNodesDir, 'relay'), { recursive: true })
       writeFileSync(relayKeyPath('master', mNodesDir), 'fake-master-relay-key\n', { mode: 0o600 })
 
@@ -239,7 +238,7 @@ describe('stand-in relay pipe between two sandbox boards', () => {
           BOARD_SSH_KEYGEN_BIN_PATH: fake,
           FAKE_SSH_STATE: masterSshState,
           FAKE_SSH_LOG: join(masterBox.dir, 'ssh.jsonl'),
-          BOARD_RELAY_SOCKETS_DIR: socketsDir,
+          BOARD_TEST_RELAY_SOCKETS_DIR: socketsDir,
         },
       )
 
@@ -291,7 +290,7 @@ describe('stand-in relay pipe between two sandbox boards', () => {
         const rmNodesDir = join(stateFolder(rogueMaster), 'nodes')
         const rmStore = createDeviceStore({ dir: rmNodesDir })
         rmStore.setToken('nat-1', token)
-        rmStore.setCert('nat-1', certPem)
+        writeCert(rmStore, 'nat-1', certPem)
         mkdirSync(join(rmNodesDir, 'relay'), { recursive: true })
         writeFileSync(relayKeyPath('master', rmNodesDir), 'fake-master-relay-key\n', { mode: 0o600 })
         const rmSshState = join(rogueMaster.dir, 'ssh-state.json')
@@ -311,7 +310,7 @@ describe('stand-in relay pipe between two sandbox boards', () => {
             BOARD_SSH_BIN_PATH: fake,
             BOARD_SSH_KEYGEN_BIN_PATH: fake,
             FAKE_SSH_STATE: rmSshState,
-            BOARD_RELAY_SOCKETS_DIR: rogueSocketsDir,
+            BOARD_TEST_RELAY_SOCKETS_DIR: rogueSocketsDir,
           },
         )
         const refused = await waitDevice(rmUrl, 'nat-1', d => d.link?.state === 'refused')
@@ -332,36 +331,26 @@ describe('stand-in relay pipe between two sandbox boards', () => {
 })
 
 describe.skipIf(!sh || !sshdBin)('real unprivileged OpenSSH relay pipe verification', () => {
-  test('real sshd + real ssh -R + real ssh -L + real enrol + pinned TLS door end-to-end', async () => {
+  test('real sshd + real ssh -R + real ssh -L + pinned TLS door end-to-end', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'board-relay-real-'))
     const procs: ChildProcess[] = []
     try {
       chmodSync(dir, 0o700)
       const socketsDir = join(dir, 'sockets')
-      const keysDir = join(dir, 'keys')
       mkdirSync(socketsDir, { mode: 0o770 })
-      mkdirSync(keysDir, { mode: 0o700 })
 
       const hostKey = join(dir, 'host_ed25519')
       const masterKey = join(dir, 'master_ed25519')
-      const enrolKey = join(dir, 'enrol_ed25519')
       const nodeKey = join(dir, 'node_ed25519')
-      for (const k of [hostKey, masterKey, enrolKey, nodeKey]) {
+      for (const k of [hostKey, masterKey, nodeKey]) {
         const r = spawnSync('ssh-keygen', ['-t', 'ed25519', '-N', '', '-q', '-f', k], { encoding: 'utf8' })
         expect(r.status).toBe(0)
       }
       const masterPub = readFileSync(`${masterKey}.pub`, 'utf8').trim()
-      const enrolPub = readFileSync(`${enrolKey}.pub`, 'utf8').trim()
       const nodePub = readFileSync(`${nodeKey}.pub`, 'utf8').trim()
 
-      const enrolPath = join(dir, 'enrol.sh')
-      writeFileSync(enrolPath, relayEnrolScript({ keysDir, socketsDir }), { mode: 0o755 })
-      chmodSync(enrolPath, 0o755)
-
       const masterKeysPath = join(dir, 'master_keys')
-      writeFileSync(masterKeysPath, `${relayMasterKeyLine(masterPub)}\n${relayEnrolKeyLine(enrolPub, enrolPath)}\n`, {
-        mode: 0o600,
-      })
+      writeFileSync(masterKeysPath, `${relayMasterKeyLine(masterPub)}\n`, { mode: 0o600 })
 
       const nodeKeysPath = join(dir, 'node_keys')
       const nodeBody = nodePub.split(/\s+/).slice(0, 2).join(' ')
@@ -416,17 +405,7 @@ describe.skipIf(!sh || !sshdBin)('real unprivileged OpenSSH relay pipe verificat
       }
       await Promise.all([waitPort(masterPort), waitPort(nodePort)])
 
-      // 1. Real enrol client against real sshd
-      const enrol = createRelayEnrol({
-        relay: { host: '127.0.0.1', sshPort: masterPort, user: me },
-        key: enrolKey,
-        knownHosts: () => join(dir, 'enrol_known_hosts'),
-      })
-      expect(await enrol.check()).toEqual({ ok: true, version: 1 })
-      expect(await enrol.add('nat-real', nodePub)).toEqual({ ok: true })
-      expect(await enrol.list()).toEqual({ ok: true, names: ['nat-real'] })
-
-      // 2. Node board dials real nodeSshd with real ssh -R
+      // 1. Node board dials real nodeSshd with real ssh -R
       const nodeBox = await sandbox()
       showPanes(nodeBox, [
         {
@@ -462,19 +441,19 @@ describe.skipIf(!sh || !sshdBin)('real unprivileged OpenSSH relay pipe verificat
           ...PAIR_ENV,
           BOARD_SSH_BIN_PATH: realSsh,
           BOARD_SSH_KEYGEN_BIN_PATH: realKeygen,
-          BOARD_RELAY_SOCKETS_DIR: socketsDir,
+          BOARD_TEST_RELAY_SOCKETS_DIR: socketsDir,
         },
       )
       await until(() => logged(nodeProc, `node door: listening on 127.0.0.1:${nodeDoorPort} as nat-real (tls)`), 10_000)
       const sockPath = join(socketsDir, 'nat-real.sock')
       await until(() => existsSync(sockPath), 15_000)
 
-      // 3. Master board dials real masterSshd with real ssh -L and pinned cert
+      // 2. Master board dials real masterSshd with real ssh -L and pinned cert
       const masterBox = await sandbox()
       const mNodesDir = join(stateFolder(masterBox), 'nodes')
       const store = createDeviceStore({ dir: mNodesDir })
       store.setToken('nat-real', token)
-      store.setCert('nat-real', readFileSync(doorCertPath(nDir), 'utf8'))
+      writeCert(store, 'nat-real', readFileSync(doorCertPath(nDir), 'utf8'))
       mkdirSync(join(mNodesDir, 'relay'), { recursive: true })
       copyFileSync(masterKey, relayKeyPath('master', mNodesDir))
       chmodSync(relayKeyPath('master', mNodesDir), 0o600)
@@ -493,7 +472,7 @@ describe.skipIf(!sh || !sshdBin)('real unprivileged OpenSSH relay pipe verificat
           ...PAIR_ENV,
           BOARD_SSH_BIN_PATH: realSsh,
           BOARD_SSH_KEYGEN_BIN_PATH: realKeygen,
-          BOARD_RELAY_SOCKETS_DIR: socketsDir,
+          BOARD_TEST_RELAY_SOCKETS_DIR: socketsDir,
         },
       )
 
@@ -505,11 +484,6 @@ describe.skipIf(!sh || !sshdBin)('real unprivileged OpenSSH relay pipe verificat
       )
       expect(online.kind).toBe('relay')
       expect(online.status?.id).toBe('nat-real')
-
-      // 4. Enrol remove deletes both .pub and .sock on the server
-      expect(await enrol.remove('nat-real')).toEqual({ ok: true, removed: true })
-      expect(existsSync(join(keysDir, 'nat-real.pub'))).toBe(false)
-      expect(existsSync(sockPath)).toBe(false)
     } finally {
       for (const p of procs) {
         try {

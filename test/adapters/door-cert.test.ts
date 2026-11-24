@@ -8,7 +8,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   certFingerprint,
-  certProof,
   doorCertPath,
   doorKeyPath,
   ensureDoorCert,
@@ -16,9 +15,7 @@ import {
   isCertError,
   isValidCertPem,
   pinnedTls,
-  probeDoorCert,
   readDoorCert,
-  verifyCertProof,
 } from '../../src/adapters/door-cert.ts'
 import { createDeviceStore } from '../../src/adapters/node-store.ts'
 
@@ -39,7 +36,7 @@ describe('door certificate generation and storage', () => {
     expect(createHash('sha256').update(x509.raw).digest('hex')).toBe(pair.fingerprint)
   })
 
-  test('ensureDoorCert persists 0600 files once and reuses them; refuses corrupt or half-missing state', () => {
+  test('ensureDoorCert persists 0600 files once, recovers from key-only state, and refuses cert-only or mismatched state', () => {
     const dir = mkdtempSync(join(tmpdir(), 'board-door-cert-'))
     try {
       expect(readDoorCert(dir)).toBeNull()
@@ -53,7 +50,15 @@ describe('door certificate generation and storage', () => {
       const second = ensureDoorCert('node-a', dir)
       expect(second).toEqual(first)
 
-      // Half-missing state throws instead of silently rotating a pinned cert
+      // Crash after writing door-key.pem before door-cert.pem: treated as absent and regenerated cleanly
+      rmSync(doorCertPath(dir))
+      expect(readDoorCert(dir)).toBeNull()
+      const regenerated = ensureDoorCert('node-a', dir)
+      expect(isValidCertPem(regenerated.cert)).toBe(true)
+      expect(regenerated.fingerprint).not.toBe(first.fingerprint)
+      expect(readDoorCert(dir)).toEqual(regenerated)
+
+      // Cert-only state (missing key) throws instead of silently rotating a pinned cert
       rmSync(doorKeyPath(dir))
       expect(() => readDoorCert(dir)).toThrow('incomplete')
       expect(() => ensureDoorCert('node-a', dir)).toThrow('incomplete')
@@ -66,18 +71,9 @@ describe('door certificate generation and storage', () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
-
-  test('certProof and verifyCertProof bind fingerprint to join code', () => {
-    const pair = generateDoorCert('node-a')
-    const proof = certProof(pair.fingerprint, 'secret-code-123')
-    expect(verifyCertProof(pair.fingerprint, 'secret-code-123', proof)).toBe(true)
-    expect(verifyCertProof(pair.fingerprint, 'wrong-code', proof)).toBe(false)
-    expect(verifyCertProof('0'.repeat(64), 'secret-code-123', proof)).toBe(false)
-    expect(verifyCertProof(pair.fingerprint, 'secret-code-123', 'not-hex')).toBe(false)
-  })
 })
 
-describe('pinnedTls, probeDoorCert, and isCertError', () => {
+describe('pinnedTls and isCertError', () => {
   test('pinnedTls accepts matching cert over HTTPS and SSE, refuses other cert, and distinguishes non-cert errors', async () => {
     const a = generateDoorCert('node-a')
     const b = generateDoorCert('node-b')
@@ -119,11 +115,6 @@ describe('pinnedTls, probeDoorCert, and isCertError', () => {
       expect(sse.status).toBe(200)
       expect(await sse.text()).toBe('data: {"ok":true}\n\n')
 
-      // probeDoorCert extracts the exact cert and fingerprint
-      const probed = await probeDoorCert(srv.port ?? 0)
-      expect(probed.fingerprint).toBe(a.fingerprint)
-      expect(certFingerprint(probed.cert)).toBe(a.fingerprint)
-
       // Different pinned cert fails and isCertError() classifies it as a cert error
       let mismatchErr: unknown
       try {
@@ -162,18 +153,24 @@ describe('pinnedTls, probeDoorCert, and isCertError', () => {
       resetSrv.close()
     }
   })
+
+  test('isCertError matches message-only pinning failures and ignores unrelated errors', () => {
+    expect(isCertError(new Error('door certificate does not match the pinned certificate'))).toBe(true)
+    expect(isCertError(new Error('door certificate missing raw DER bytes'))).toBe(true)
+    expect(isCertError(new Error('socket hang up'))).toBe(false)
+  })
 })
 
 describe('DeviceStore pinned cert persistence', () => {
-  test('setCert stores 0600 PEM, refuses invalid PEMs, and dropCredentials removes door-cert.pem', () => {
+  test('cert reads valid PEM on disk, rejects corrupt PEM, and dropCredentials removes door-cert.pem', () => {
     const dir = mkdtempSync(join(tmpdir(), 'board-store-cert-'))
     try {
       const store = createDeviceStore({ dir })
       const pair = generateDoorCert('mac-1')
       expect(store.cert('mac-1')).toBeNull()
-      expect(() => store.setCert('mac-1', 'not a cert')).toThrow('not a valid X.509 certificate')
 
-      store.setCert('mac-1', pair.cert)
+      mkdirSync(store.dir('mac-1'), { recursive: true })
+      writeFileSync(store.certPath('mac-1'), pair.cert, { mode: 0o600 })
       expect(store.cert('mac-1')).toBe(pair.cert)
       if (process.platform !== 'win32') expect(statSync(store.certPath('mac-1')).mode & 0o777).toBe(0o600)
       expect(readFileSync(store.certPath('mac-1'), 'utf8')).toBe(pair.cert)

@@ -490,6 +490,14 @@ describe('nodeConfig', () => {
         { id: 's', workRoot: '/a\n[Service]' },
         { key: 'workRoot', why: 'type' },
       ],
+      [
+        { id: 's', relay: { host: 'r', user: 'u', socket: 's' } },
+        { key: 'tls', why: 'required' },
+      ],
+      [
+        { id: 's', tls: false, relay: { host: 'r', user: 'u', socket: 's' } },
+        { key: 'tls', why: 'required' },
+      ],
     ]
     for (const [raw, problem] of cases) {
       assert.equal(nodeConfig(raw), null, JSON.stringify(raw))

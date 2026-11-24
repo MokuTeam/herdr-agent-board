@@ -1298,7 +1298,7 @@ export async function startServer({
       void relayDial.sync()
       return
     }
-    if (!n?.relay) return
+    if (!n?.relay || !n.tls) return
     relayDial = createRelayDial({
       node: () => nodeConfig(cfg.node),
       doorPort: () => door?.listening() ?? null,
