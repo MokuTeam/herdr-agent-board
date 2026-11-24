@@ -859,3 +859,142 @@ test('a refused start with this computer draining explains why the task could no
   assert.deepEqual(started(pair.master.box), [])
   await settled(pair.master.url)
 }, 60_000)
+
+test('a start syncing its profile survives a master restart and keeps its session id (#588)', async () => {
+  const pair = await placing({
+    count: 2,
+    nodes: { order: ['server-1', 'server-2', 'local'], whenFull: 'local' },
+  })
+  const [one, two] = pair.nodes as [Pair['nodes'][0], Pair['nodes'][0]]
+  const skill = ['skills', 'atlas', 'SKILL.md']
+  const mine = join(pair.master.box.env.HOME ?? '', '.claude', ...skill)
+  mkdirSync(dirname(mine), { recursive: true })
+  writeFileSync(mine, 'the atlas skill')
+  let release = (): void => {}
+  const held = new Promise<void>(resolve => {
+    release = resolve
+  })
+  one.proxy.intercept = async (method, path, forward) => {
+    if (method !== 'GET' || path !== '/api/node/bundle/default') return null
+    one.proxy.intercept = null
+    await held
+    return forward()
+  }
+  const id = await startAt(pair.master.url, pair.checkout, 'atlas %s тест')
+  await launchWhere(pair.master.url, id, l => l?.step === 'syncing')
+  const file = join(stateFolder(pair.master.box), 'nodes', 'queue.json')
+  const entries = () =>
+    (JSON.parse(readFileSync(file, 'utf8')) as { entries: { id: string; session: string; syncing?: string }[] }).entries
+  assert.equal(entries().length, 1)
+  const saved = entries()[0]
+  assert.equal(saved?.id, id)
+  assert.equal(saved?.syncing, 'server-1')
+
+  // Master stops mid-sync and comes back: the start finishes on server-1 with the same session id.
+  pair.master.proc.kill()
+  await pair.master.proc.exited
+  release()
+  const again = await serveBoard(pair.master.box, pair.masterConfig, pair.env)
+  again.proc.send('refresh')
+  await fresh(again.url)
+  await until(() => started(one.box).length === 1, 20_000)
+  assert.deepEqual(started(one.box), [saved?.session ?? ''])
+  assert.deepEqual(started(two.box), [])
+  assert.deepEqual(started(pair.master.box), [])
+  await until(() => entries().length === 0, 10_000)
+  await settled(again.url)
+  again.proc.kill()
+  await again.proc.exited
+}, 90_000)
+
+test('a start sent to a node before its 202 arrives survives a master restart and never starts twice or elsewhere (#588)', async () => {
+  const pair = await placing({
+    count: 2,
+    nodes: { order: ['server-1', 'server-2', 'local'], whenFull: 'local' },
+  })
+  const [one, two] = pair.nodes as [Pair['nodes'][0], Pair['nodes'][0]]
+  let release = (): void => {}
+  const held = new Promise<void>(resolve => {
+    release = resolve
+  })
+  let forwarded = false
+  one.proxy.intercept = async (method, path, forward) => {
+    if (method !== 'POST' || path !== '/api/node/launch') return null
+    one.proxy.intercept = null
+    const res = await forward()
+    await res.text()
+    forwarded = true
+    await held
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 202,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  const id = await startAt(pair.master.url, pair.checkout, 'atlas 1')
+  await until(() => forwarded, 20_000)
+  const file = join(stateFolder(pair.master.box), 'nodes', 'queue.json')
+  const entries = () =>
+    (JSON.parse(readFileSync(file, 'utf8')) as { entries: { id: string; session: string; sent?: string }[] }).entries
+  assert.equal(entries().length, 1)
+  const saved = entries()[0]
+  assert.equal(saved?.id, id)
+  assert.equal(saved?.sent, 'server-1')
+
+  // Master restarts before seeing 202: server-2 and local are free, yet only server-1 takes it once.
+  pair.master.proc.kill()
+  await pair.master.proc.exited
+  release()
+  const again = await serveBoard(pair.master.box, pair.masterConfig, pair.env)
+  again.proc.send('refresh')
+  await fresh(again.url)
+  await until(() => entries().length === 0, 20_000)
+  await settled(again.url)
+  assert.deepEqual(started(one.box), [saved?.session ?? ''])
+  assert.deepEqual(started(two.box), [])
+  assert.deepEqual(started(pair.master.box), [])
+  again.proc.kill()
+  await again.proc.exited
+}, 90_000)
+
+test('a start held on its way to a node retries there on master restart and starts once (#588)', async () => {
+  const pair = await placing({
+    count: 2,
+    nodes: { order: ['server-1', 'server-2', 'local'], whenFull: 'local' },
+  })
+  const [one, two] = pair.nodes as [Pair['nodes'][0], Pair['nodes'][0]]
+  let release = (): void => {}
+  const held = new Promise<void>(resolve => {
+    release = resolve
+  })
+  let sawPost = false
+  one.proxy.intercept = async (method, path, forward) => {
+    if (method !== 'POST' || path !== '/api/node/launch') return null
+    one.proxy.intercept = null
+    sawPost = true
+    await held
+    return forward()
+  }
+  const id = await startAt(pair.master.url, pair.checkout, 'atlas 2')
+  await until(() => sawPost, 20_000)
+  const file = join(stateFolder(pair.master.box), 'nodes', 'queue.json')
+  const entries = () =>
+    (JSON.parse(readFileSync(file, 'utf8')) as { entries: { id: string; session: string; sent?: string }[] }).entries
+  const saved = entries()[0]
+  assert.equal(saved?.id, id)
+  assert.equal(saved?.sent, 'server-1')
+
+  // Master restarts before the node ever got the POST: the new master sends it to server-1 with the same id.
+  pair.master.proc.kill()
+  await pair.master.proc.exited
+  release()
+  const again = await serveBoard(pair.master.box, pair.masterConfig, pair.env)
+  again.proc.send('refresh')
+  await fresh(again.url)
+  await until(() => started(one.box).length === 1 && entries().length === 0, 20_000)
+  await settled(again.url)
+  assert.deepEqual(started(one.box), [saved?.session ?? ''])
+  assert.deepEqual(started(two.box), [])
+  assert.deepEqual(started(pair.master.box), [])
+  again.proc.kill()
+  await again.proc.exited
+}, 90_000)

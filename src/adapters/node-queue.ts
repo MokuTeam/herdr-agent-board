@@ -1,8 +1,9 @@
-// The master's queue of starts that wait for room (#504, docs/design/nodes 8.3):
-// `<state>/nodes/queue.json`, so a start that waits survives a restart of the master (launches
-// themselves live in memory). At most 50 entries; each names the master that accepted it
-// (`nodes.id`), and a board reads back only its own, leaving another's as it found them. Written
-// through the locked JSON writer, 0600: a start's first message is in it.
+// The master's queue of starts that wait for room or are on their way to a node (#504, #588,
+// docs/design/nodes 8.3): `<state>/nodes/queue.json`, so a start that waits or has not been
+// acknowledged by a node yet survives a restart of the master (launches themselves live in
+// memory). At most 50 entries; each names the master that accepted it (`nodes.id`), and a board
+// reads back only its own, leaving another's as it found them. Written through the locked JSON
+// writer, 0600: a start's first message is in it.
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type { GitIdentity } from '../core/git-access.ts'
@@ -44,6 +45,10 @@ export interface QueueEntry {
   source: NodeSource | null
   /** What it waits on, for its card after a restart. */
   wait?: Blocker
+  /** The node whose profile is being synced before the launch request (#588). */
+  syncing?: string
+  /** The node `POST /api/node/launch` was sent to without an acknowledgement yet (#588). */
+  sent?: string
   /** True when the start must use `session` as an exact Claude session id (a verifier, #675). */
   exactSession?: true
 }
@@ -54,6 +59,7 @@ interface QueueFile {
 }
 
 const SESSION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+const isDevice = (v: unknown): boolean => v === undefined || (typeof v === 'string' && v.length > 0)
 const isEntry = (v: unknown): v is QueueEntry =>
   isRecord(v) &&
   typeof v.id === 'string' &&
@@ -64,7 +70,9 @@ const isEntry = (v: unknown): v is QueueEntry =>
   isRecord(v.request) &&
   typeof v.request.name === 'string' &&
   typeof v.request.cwd === 'string' &&
-  isRecord(v.task)
+  isRecord(v.task) &&
+  isDevice(v.syncing) &&
+  isDevice(v.sent)
 const isQueueFile = (v: unknown): v is QueueFile => isRecord(v) && v.version === 1 && Array.isArray(v.entries)
 
 export interface NodeQueue {

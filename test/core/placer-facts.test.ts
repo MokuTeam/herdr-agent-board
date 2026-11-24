@@ -154,12 +154,27 @@ test('the queue keeps 50 starts, each its master’s; another master’s entries
   // Put again: replaced, not added.
   expect(q.put({ ...entry('1'), at: 2 })).toBe(true)
   expect(q.read('laptop').find(e => e.id === '1')?.at).toBe(2)
+  // Optional in-flight markers (#588) round-trip and are checked when present.
+  expect(q.put({ ...entry('2'), syncing: 'server-1' })).toBe(true)
+  expect(q.put({ ...entry('3'), sent: 'server-1' })).toBe(true)
+  expect(q.read('laptop').find(e => e.id === '2')?.syncing).toBe('server-1')
+  expect(q.read('laptop').find(e => e.id === '3')?.sent).toBe('server-1')
   q.remove('1')
   q.remove('nope')
   expect(q.read('laptop').some(e => e.id === '1')).toBe(false)
   expect((JSON.parse(readFileSync(file, 'utf8')) as { entries: unknown[] }).entries.length).toBe(QUEUE_MAX)
-  // An entry without a session id of the board's shape is not one.
-  writeFileSync(file, JSON.stringify({ version: 1, entries: [{ ...entry('y'), session: '' }] }))
+  // An entry without a session id of the board's shape, or with invalid in-flight markers, is not one.
+  writeFileSync(
+    file,
+    JSON.stringify({
+      version: 1,
+      entries: [
+        { ...entry('y'), session: '' },
+        { ...entry('z1'), syncing: '' },
+        { ...entry('z2'), sent: 42 },
+      ],
+    }),
+  )
   expect(q.read('laptop')).toEqual([])
   if (process.platform !== 'win32') expect(statSync(file).mode & 0o777).toBe(0o600)
   // A file that is not the queue's is read as empty, and not taken for one.

@@ -6,7 +6,7 @@
 // well turns the start to the next device as `bundle` (a profile the node lacks as `profile`); two
 // starts for one device and profile share one sync; a start that stays here syncs nothing.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -87,7 +87,10 @@ const json = (code: number, body: unknown) =>
  * sent, the starts it took. `hold` keeps the bundle's first question waiting until released;
  * `commit` answers a commit instead of taking it; `profiles` are the ones it has.
  */
-function door(id: string, o: { profiles?: string[]; commit?: () => Response } = {}) {
+function door(
+  id: string,
+  o: { profiles?: string[]; commit?: () => Response; launch?: (body: Record<string, unknown>) => Response } = {},
+) {
   const profiles = new Set(o.profiles ?? ['default'])
   const has = new Map<string, { seq: number; hash: string; files: Record<string, string> }>()
   const blobs = new Set<string>()
@@ -95,10 +98,14 @@ function door(id: string, o: { profiles?: string[]; commit?: () => Response } = 
   const starts: Record<string, unknown>[] = []
   let held: Promise<void> | null = null
   let release = () => {}
+  let launchHeld: Promise<void> | null = null
+  let releaseLaunch = () => {}
   const self = {
     id,
     /** The node gone: its link down, a request finds nothing to answer it. */
     down: false,
+    /** Override the link state reported to the placer (`connecting` / `offline` / `online`). */
+    linkState: null as 'online' | 'connecting' | 'offline' | null,
     requests,
     starts,
     hold() {
@@ -107,11 +114,21 @@ function door(id: string, o: { profiles?: string[]; commit?: () => Response } = 
       })
     },
     release: () => release(),
+    holdLaunch() {
+      launchHeld = new Promise<void>(r => {
+        releaseLaunch = r
+      })
+    },
+    releaseLaunch: () => releaseLaunch(),
     async fetch(path: string, init: RequestInit = {}): Promise<Response> {
       const method = init.method ?? 'GET'
       requests.push(`${method} ${path}`)
       if (method === 'POST' && path === '/api/node/launch') {
-        starts.push(JSON.parse(String(init.body)))
+        if (launchHeld) await launchHeld
+        if (self.down) throw new TypeError('fetch failed')
+        const body = JSON.parse(String(init.body)) as Record<string, unknown>
+        if (o.launch) return o.launch(body)
+        starts.push(body)
         return json(202, { ok: true })
       }
       const m = /^\/api\/node\/bundle\/([^/]+)(\/blob\/([0-9a-f]{64})|\/commit)?$/.exec(path)
@@ -166,6 +183,10 @@ function master(o: {
   profileMap?: Record<string, string>
   /** git's author in a folder (adapters/git.ts checkoutIdentity); not asked when not given. */
   identity?: (dir: string) => Promise<GitIdentity | null>
+  /** Remote payload override for testing already-shown recovery. */
+  remote?: () => { items: unknown[]; launches: unknown[]; schedules: unknown[]; devices: { id: string }[] } | null
+  /** Per-device config overrides (e.g. revoked, paused, drain). */
+  deviceCfg?: Record<string, Record<string, unknown>>
 }) {
   isolatedHome()
   const dir = mkdtempSync(join(tmpdir(), 'placer-sync-'))
@@ -187,6 +208,7 @@ function master(o: {
       minFreeMemMb: 0,
       maxLoad: 100,
       ...(o.profileMap && { profiles: o.profileMap }),
+      ...o.deviceCfg?.[n.id],
     }
   const cfg = {
     language: 'en',
@@ -201,17 +223,30 @@ function master(o: {
     },
   } as unknown as Config
   const byId = new Map(o.nodes.map(n => [n.id, n]))
+  const listeners: ((id: string) => void)[] = []
   const link = (id: string) => {
     const n = byId.get(id)
     if (!n) return null
     return {
-      view: () => ({ status: status(id, 0, clock.now(), o.nodeProfiles) }),
-      state: () => ({ state: n.down ? 'offline' : 'online' }),
-      status: async () => status(id, 0, clock.now(), o.nodeProfiles),
+      view: () => ({ status: n.linkState === 'connecting' ? null : status(id, 0, clock.now(), o.nodeProfiles) }),
+      state: () => ({ state: n.linkState ?? (n.down ? 'offline' : 'online') }),
+      status: async () => (n.down || n.linkState ? null : status(id, 0, clock.now(), o.nodeProfiles)),
       fetch: (path: string, init?: RequestInit) => n.fetch(path, init),
     }
   }
-  const links = { link: (id: string) => link(id) as never, onChange: () => () => {} }
+  const links = {
+    link: (id: string) => link(id) as never,
+    onChange: (fn: (id: string) => void) => {
+      listeners.push(fn)
+      return () => {
+        const i = listeners.indexOf(fn)
+        if (i >= 0) listeners.splice(i, 1)
+      }
+    },
+  }
+  const notifyLink = (id: string) => {
+    for (const fn of listeners) fn(id)
+  }
   const record = new Map<string, unknown>()
   const real = createBundleSync({
     cfg,
@@ -235,11 +270,13 @@ function master(o: {
   }
   const ran: Launch[] = []
   const queued = new Map<string, QueueEntry>()
+  for (const e of o.restored ?? []) queued.set(e.id, e)
+  const queuePuts: QueueEntry[] = []
   const logs: string[] = []
   const placer = createPlacer({
     cfg,
     links,
-    remote: () => null,
+    remote: (o.remote as never) ?? (() => null),
     launches: {
       runLocal: (l: Launch) => void ran.push(l),
       adopt: () => {},
@@ -253,6 +290,7 @@ function master(o: {
     queue: {
       read: () => o.restored ?? [],
       put: (e: QueueEntry) => {
+        queuePuts.push(e)
         queued.set(e.id, e)
         return true
       },
@@ -304,9 +342,11 @@ function master(o: {
     checkout,
     ran,
     queued,
+    queuePuts,
     logs,
     syncs,
     clock,
+    notifyLink,
     close: () => {
       placer.close()
       real.close()
@@ -678,6 +718,241 @@ describe('the queue after the board starts again (#593)', () => {
   test('a placer nothing observes tries its queue as it is made', async () => {
     const m = master({ nodes: [door('server-1')], lanes: [], whenFull: 'wait', restored: [waited(tmpdir())] })
     await until(() => m.ran.length === 1)
+    m.close()
+  }, 15_000)
+})
+
+describe('a start on its way to a node survives a master restart (#588)', () => {
+  const entry = (over: Partial<QueueEntry> = {}): QueueEntry => ({
+    id: 'e1f2a3b4',
+    session: randomUUID(),
+    master: 'laptop',
+    at: NOW - 10_000,
+    request: {
+      name: 'atlas 1',
+      label: '',
+      cwd: tmpdir(),
+      category: 'atlas',
+      workspaceId: 'wA',
+      workspaceLabel: 'atlas',
+      newWorkspace: false,
+      message: '',
+      worktree: null,
+      profile: 'default',
+      profileDir: tmpdir(),
+      configDir: null,
+      parent: null,
+      profileArgs: [],
+      profileCommand: null,
+      agent: 'claude',
+      model: null,
+    },
+    task: {
+      lane: 'atlas',
+      profile: 'default',
+      agent: 'claude',
+      byHand: true,
+      origin: 'local',
+      portable: { ok: true },
+    },
+    source: { kind: 'repo', url: ADDRESS, ref: 'main', subdir: '', worktree: null },
+    ...over,
+  })
+
+  test('while syncing and while POST /api/node/launch awaits acknowledgement, the start is kept in the queue and removed on 202', async () => {
+    const one = door('server-1')
+    const m = master({ nodes: [one] })
+    one.hold()
+    one.holdLaunch()
+    const l = m.start('atlas 1')
+    await until(() => l.step === 'syncing')
+    expect(m.queued.get(l.id)?.syncing).toBe('server-1')
+    expect(m.queued.get(l.id)?.sent).toBeUndefined()
+    expect(m.queued.get(l.id)?.session).toBe(l.sessionGiven ?? '')
+    one.release()
+    await until(() => one.requests.includes('POST /api/node/launch'))
+    expect(m.queued.get(l.id)?.sent).toBe('server-1')
+    expect(m.queued.get(l.id)?.syncing).toBeUndefined()
+    one.releaseLaunch()
+    await until(settledOf(l))
+    expect(l.state).toBe('done')
+    expect(m.queued.size).toBe(0)
+    m.close()
+  }, 15_000)
+
+  test('restart during syncing: waits while the node is connecting, then syncs and starts there with the same session id', async () => {
+    const one = door('server-1')
+    one.linkState = 'connecting'
+    const two = door('server-2')
+    const saved = entry({ syncing: 'server-1' })
+    const m = master({ nodes: [one, two], restored: [saved], whenFull: 'local' })
+    await Bun.sleep(50)
+    // Connecting: waits on server-1 instead of dumping to server-2 or local.
+    expect(one.starts).toEqual([])
+    expect(two.starts).toEqual([])
+    expect(m.ran).toEqual([])
+    expect(m.queued.get(saved.id)?.syncing).toBe('server-1')
+    one.linkState = null
+    m.notifyLink('server-1')
+    await until(() => one.starts.length === 1)
+    expect(one.starts[0]?.id).toBe(saved.session)
+    expect(two.starts).toEqual([])
+    expect(m.ran).toEqual([])
+    expect(m.queued.size).toBe(0)
+    m.close()
+  }, 15_000)
+
+  test('restart during syncing when the node goes offline falls through to the next device', async () => {
+    const one = door('server-1')
+    one.down = true
+    const two = door('server-2')
+    const saved = entry({ syncing: 'server-1' })
+    const m = master({ nodes: [one, two], restored: [saved] })
+    await until(() => two.starts.length === 1)
+    expect(two.starts[0]?.id).toBe(saved.session)
+    expect(m.queued.size).toBe(0)
+    m.close()
+  }, 15_000)
+
+  test('restart with sent: waits for that node even when another node and local have room, then retries POST /api/node/launch without re-syncing', async () => {
+    const one = door('server-1')
+    one.linkState = 'connecting'
+    const two = door('server-2')
+    const saved = entry({ sent: 'server-1' })
+    const m = master({ nodes: [one, two], restored: [saved], whenFull: 'local' })
+    await Bun.sleep(50)
+    expect(one.starts).toEqual([])
+    expect(two.starts).toEqual([])
+    expect(m.ran).toEqual([])
+    expect(m.queued.get(saved.id)?.sent).toBe('server-1')
+    one.linkState = null
+    m.notifyLink('server-1')
+    await until(() => one.starts.length === 1)
+    expect(one.starts[0]?.id).toBe(saved.session)
+    // Retries POST /api/node/launch directly without running bundle sync again.
+    expect(m.syncs).toEqual([])
+    expect(two.starts).toEqual([])
+    expect(m.ran).toEqual([])
+    expect(m.queued.size).toBe(0)
+    m.close()
+  }, 15_000)
+
+  test('restart with sent when the node already shows the session settles without sending again', async () => {
+    const one = door('server-1')
+    const saved = entry({ sent: 'server-1' })
+    const m = master({
+      nodes: [one],
+      restored: [saved],
+      remote: () => ({
+        items: [{ device: 'server-1', key: `@server-1:${saved.session}`, session: saved.session }],
+        launches: [],
+        schedules: [],
+        devices: [{ id: 'server-1' }],
+      }),
+    })
+    await until(() => !m.queued.has(saved.id))
+    expect(one.requests).toEqual([])
+    expect(one.starts).toEqual([])
+    m.close()
+  }, 15_000)
+
+  test('restart with sent when that node answers 409 full clears sent and places on the next device with the same id', async () => {
+    const one = door('server-1', { launch: () => json(409, { error: 'full' }) })
+    const two = door('server-2')
+    const saved = entry({ sent: 'server-1' })
+    const m = master({ nodes: [one, two], restored: [saved] })
+    await until(() => two.starts.length === 1)
+    expect(two.starts[0]?.id).toBe(saved.session)
+    expect(m.queued.size).toBe(0)
+    m.close()
+  }, 15_000)
+
+  test('restart with sent when that device was revoked places on the next device', async () => {
+    const one = door('server-1')
+    const two = door('server-2')
+    const saved = entry({ sent: 'server-1' })
+    const m = master({
+      nodes: [one, two],
+      restored: [saved],
+      deviceCfg: { 'server-1': { revoked: true } },
+    })
+    await until(() => two.starts.length === 1)
+    expect(one.starts).toEqual([])
+    expect(two.starts[0]?.id).toBe(saved.session)
+    expect(m.queued.size).toBe(0)
+    m.close()
+  }, 15_000)
+
+  test('restart with sent when that node answers 400 launch refusal marks failed and removes from queue', async () => {
+    const one = door('server-1', {
+      launch: () => json(400, { error: 'launch', field: 'cwd', detail: 'bad folder' }),
+    })
+    const two = door('server-2')
+    const saved = entry({ sent: 'server-1' })
+    const m = master({ nodes: [one, two], restored: [saved] })
+    await until(() => !m.queued.has(saved.id))
+    expect(two.starts).toEqual([])
+    expect(m.ran).toEqual([])
+    m.close()
+  }, 15_000)
+
+  test('a sync loss or 409 turn onto a full fallback clears stale syncing/sent markers on disk', async () => {
+    const one = door('server-1')
+    const m1 = master({ nodes: [one], localAwake: 1, whenFull: 'wait' })
+    one.hold()
+    const l1 = m1.start('atlas sync-drop', false)
+    await until(() => l1.step === 'syncing')
+    expect(m1.queued.get(l1.id)?.syncing).toBe('server-1')
+    one.down = true
+    one.release()
+    await until(settledOf(l1))
+    expect(l1.state).toBe('queued')
+    expect(m1.queued.get(l1.id)?.syncing).toBeUndefined()
+    expect(m1.queued.get(l1.id)?.sent).toBeUndefined()
+    m1.close()
+
+    const oneFull = door('server-1', { launch: () => json(409, { error: 'full' }) })
+    const m2 = master({ nodes: [oneFull], localAwake: 1, whenFull: 'wait', sync: false })
+    const l2 = m2.start('atlas turn-full', false)
+    await until(settledOf(l2))
+    expect(l2.state).toBe('queued')
+    expect(m2.queued.get(l2.id)?.sent).toBeUndefined()
+    expect(m2.queued.get(l2.id)?.syncing).toBeUndefined()
+    m2.close()
+  }, 15_000)
+
+  test('graceful close while syncing or launching keeps the persisted entry in the queue', async () => {
+    const one = door('server-1')
+    one.hold()
+    const syncingMaster = master({ nodes: [one] })
+    const l1 = syncingMaster.start('atlas 1')
+    await until(() => l1.step === 'syncing')
+    syncingMaster.close()
+    one.release()
+    await Bun.sleep(40)
+    expect(syncingMaster.queued.get(l1.id)?.syncing).toBe('server-1')
+    expect(syncingMaster.ran).toEqual([])
+
+    const two = door('server-1')
+    two.holdLaunch()
+    const sentMaster = master({ nodes: [two], sync: false })
+    const l2 = sentMaster.start('atlas 2')
+    await until(() => two.requests.includes('POST /api/node/launch'))
+    sentMaster.close()
+    two.releaseLaunch()
+    await Bun.sleep(40)
+    expect(sentMaster.queued.get(l2.id)?.sent).toBe('server-1')
+    expect(sentMaster.ran).toEqual([])
+  }, 15_000)
+
+  test('a start that stays on this computer never writes to the queue', async () => {
+    const one = door('server-1')
+    const m = master({ nodes: [one], lanes: [] })
+    const l = m.start('atlas local')
+    await until(() => m.ran.length === 1)
+    expect(l.place?.home).toEqual({ kind: 'lane' })
+    expect(m.queuePuts).toEqual([])
+    expect(m.queued.size).toBe(0)
     m.close()
   }, 15_000)
 })
