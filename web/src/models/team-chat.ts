@@ -2,7 +2,7 @@
 // sender's messages a few minutes apart under one header, the "new messages" line where the
 // unread start, a reply's quote, how far a message of this board's got, whose agent wrote one, and
 // the times the list and the bubbles show. Pure: the clock, the time zone and the words come in.
-import type { OutState } from '../../../src/core/team-wire.ts'
+import { compareMessageTime, type OutState } from '../../../src/core/team-wire.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import { capital, dayLabel, daysFrom, timeOf } from '../../../src/core/when-format.ts'
 import type { ThreadLine, ThreadView } from './team.ts'
@@ -19,7 +19,38 @@ export type ChatItem =
   /** `first`: it opens a group (its sender's name over it); `last`: it closes one. */
   | { kind: 'msg'; key: string; line: ThreadLine; first: boolean; last: boolean }
 
+export interface ChatDayGroup {
+  key: string
+  label: string
+  items: Exclude<ChatItem, { kind: 'day' }>[]
+}
+
 const msOf = (l: { ts: string }): number => Date.parse(l.ts)
+
+const OUT_PROGRESS: Record<OutState, number> = { queued: 0, delivered: 1, acked: 2, expired: 2, refused: 2 }
+
+function settleRank(l: ThreadLine): number {
+  if (l.dir === 'out') {
+    const s = deliveryOf(l)
+    return s ? OUT_PROGRESS[s] : -1
+  }
+  if (l.dir === 'in') return l.held ? 0 : 1
+  return 0
+}
+
+/**
+ * Deduplicates lines by `(dir, id)` (keeping the more settled copy, or the later entry on tie)
+ * and sorts them onto one chronological UTC timeline.
+ */
+export function orderMessages(lines: readonly ThreadLine[]): ThreadLine[] {
+  const byKey = new Map<string, ThreadLine>()
+  for (const l of lines) {
+    const k = `${l.dir}:${l.id}`
+    const have = byKey.get(k)
+    if (!have || settleRank(l) >= settleRank(have)) byKey.set(k, l)
+  }
+  return [...byKey.values()].sort(compareMessageTime)
+}
 
 /** A day in the board's time zone, as a key. */
 const dayKey = (ms: number): string => {
@@ -48,8 +79,10 @@ export function unreadStart(lines: readonly ThreadLine[], n: number): number {
 }
 
 /** The first unread line's id, by the thread's unread count (unreadStart); null: nothing unread. */
-export const firstUnread = (lines: readonly ThreadLine[], n: number): string | null =>
-  lines[unreadStart(lines, n)]?.id ?? null
+export function firstUnread(lines: readonly ThreadLine[], n: number): string | null {
+  const ordered = orderMessages(lines)
+  return ordered[unreadStart(ordered, n)]?.id ?? null
+}
 
 /**
  * A thread's messages (no drafts) as the conversation draws them: a day's separator before its
@@ -61,11 +94,12 @@ export function chatItems(
   lines: readonly ThreadLine[],
   opts: { t: Translator; now: number; unreadFrom?: string | null },
 ): ChatItem[] {
+  const ordered = orderMessages(lines)
   const out: ChatItem[] = []
-  const start = opts.unreadFrom ? lines.findIndex(l => l.id === opts.unreadFrom) : -1
+  const start = opts.unreadFrom ? ordered.findIndex(l => l.dir === 'in' && l.id === opts.unreadFrom) : -1
   let day = ''
   let prev: { line: ThreadLine; at: number } | null = null
-  lines.forEach((l, i) => {
+  ordered.forEach((l, i) => {
     const ms = msOf(l)
     let fresh = false
     const d = dayKey(ms)
@@ -88,6 +122,16 @@ export function chatItems(
     prev = { line: l, at: out.length - 1 }
   })
   return out
+}
+
+/** Groups `chatItems` by day so each day's sticky chip stays inside its own day container. */
+export function chatDayGroups(items: readonly ChatItem[]): ChatDayGroup[] {
+  const groups: ChatDayGroup[] = []
+  for (const item of items) {
+    if (item.kind === 'day') groups.push({ key: item.key, label: item.label, items: [] })
+    else groups.at(-1)?.items.push(item)
+  }
+  return groups
 }
 
 /** A message's time on its bubble: "14:05". */

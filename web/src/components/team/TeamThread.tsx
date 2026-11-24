@@ -9,7 +9,7 @@
 //   end; it follows new messages while you are at the end, and offers a jump to the latest
 //   (with what came in meanwhile) while you are not. A quote scrolls to the message it answers.
 // - Under them: an agent's held drafts with when, Send and Discard, then the box to write in.
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ApiError, errorText } from '../../api/client.ts'
 import type { NewTopic } from '../../hooks/useTeam.ts'
 import { useThreadsContext } from '../../hooks/useThreads.tsx'
@@ -28,7 +28,15 @@ import {
   type ThreadLine,
   type ThreadView,
 } from '../../models/team.ts'
-import { chatItems, draftWhen, fullWhen, type Quote, quoteOf } from '../../models/team-chat.ts'
+import {
+  chatDayGroups,
+  chatItems,
+  draftWhen,
+  fullWhen,
+  orderMessages,
+  type Quote,
+  quoteOf,
+} from '../../models/team-chat.ts'
 import { confirmError, ownerPost } from '../../models/team-confirm.ts'
 import type { TopicWork } from '../../models/work-share.ts'
 import { statusColor } from '../../models/work-threads.ts'
@@ -93,9 +101,9 @@ export function TeamThread(props: TeamThreadProps) {
   const peer = team ? null : (view.roster.find(p => p.peer === scope) ?? null)
   const changed = peer?.pin === 'changed'
   const channel = isChannel(thread)
-  const messages = lines.filter(l => l.dir !== 'draft')
+  const messages = orderMessages(lines.filter(l => l.dir !== 'draft'))
   const drafts = lines.filter(l => l.dir === 'draft')
-  const items = chatItems(messages, { t, now, unreadFrom })
+  const groups = chatDayGroups(chatItems(messages, { t, now, unreadFrom }))
   const scroll = useChatScroll(selected, messages)
   const reply = replyTo && !topic ? quoteOf(replyTo, messages, t) : null
   const named = team || channel
@@ -139,29 +147,32 @@ export function TeamThread(props: TeamThreadProps) {
       <div className="team-scroll-wrap">
         <div className="team-scroll" ref={scroll.ref} onScroll={scroll.onScroll}>
           {!messages.length && !drafts.length && <p className="hint team-empty">{t('team.threadEmpty')}</p>}
-          {items.map(item =>
-            item.kind === 'day' ? (
-              <div key={item.key} className="team-day">
-                <span>{item.label}</span>
+          {groups.map(group => (
+            <div key={group.key} className="team-day-group" data-day={group.key}>
+              <div className="team-day">
+                <span>{group.label}</span>
               </div>
-            ) : item.kind === 'unread' ? (
-              <div key={item.key} className="team-unread-line" data-unread-line>
-                <span>{t('team.newMessages')}</span>
-              </div>
-            ) : (
-              <TeamMessage
-                key={item.key}
-                line={item.line}
-                first={item.first}
-                last={item.last}
-                named={named}
-                quote={item.line.replyTo ? quoteOf(item.line.replyTo, messages, t) : null}
-                flash={scroll.flash === item.line.id}
-                onReply={canWrite && item.line.text !== null ? pickReply : undefined}
-                onQuote={scroll.jumpTo}
-              />
-            ),
-          )}
+              {group.items.map(item =>
+                item.kind === 'unread' ? (
+                  <div key={item.key} className="team-unread-line" data-unread-line>
+                    <span>{t('team.newMessages')}</span>
+                  </div>
+                ) : (
+                  <TeamMessage
+                    key={item.key}
+                    line={item.line}
+                    first={item.first}
+                    last={item.last}
+                    named={named}
+                    quote={item.line.replyTo ? quoteOf(item.line.replyTo, messages, t) : null}
+                    flash={scroll.flash === item.line.id}
+                    onReply={canWrite && item.line.text !== null ? pickReply : undefined}
+                    onQuote={scroll.jumpTo}
+                  />
+                ),
+              )}
+            </div>
+          ))}
         </div>
         {!scroll.atEnd && (
           <button
@@ -494,25 +505,33 @@ function AddMember({
  * it follows new messages while the reader is at the end and counts the ones that came in while
  * they are not; a quote's jump centres the message answered and lights it once.
  */
+const msgKey = (m: Pick<ThreadLine, 'dir' | 'id'>): string => `${m.dir}:${m.id}`
+
 function useChatScroll(key: string, messages: readonly ThreadLine[]) {
   const ref = useRef<HTMLDivElement>(null)
   const opened = useRef<string | null>(null)
-  const seen = useRef(0)
+  const seen = useRef<Set<string>>(new Set())
   const end = useRef(true)
   const [atEnd, setAtEnd] = useState(true)
   const [fresh, setFresh] = useState(0)
   const [flash, setFlash] = useState<string | null>(null)
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const behavior = (): ScrollBehavior => (reducedMotion.matches ? 'auto' : 'smooth')
-  const count = messages.length
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a new thread or a new message is when to look
+  const sig = messages.map(msgKey).join('\n')
+  useEffect(
+    () => () => {
+      if (flashTimer.current) clearTimeout(flashTimer.current)
+    },
+    [],
+  )
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new thread or a new set of messages is when to look
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
     if (opened.current !== key) {
-      if (!count) return
+      if (!messages.length) return
       opened.current = key
-      seen.current = count
+      seen.current = new Set(messages.map(msgKey))
       const line = el.querySelectorAll<HTMLElement>('[data-unread-line]')[0]
       // Clear of the day's pill that sticks to the top.
       if (line) el.scrollTop = Math.max(0, line.offsetTop - UNREAD_ROOM)
@@ -522,16 +541,14 @@ function useChatScroll(key: string, messages: readonly ThreadLine[]) {
       setFresh(0)
       return
     }
-    if (count <= seen.current) {
-      seen.current = count
-      return
-    }
-    const added = messages.slice(seen.current).filter(m => m.dir === 'in').length
-    const mine = messages.slice(seen.current).some(m => m.dir === 'out')
-    seen.current = count
+    const freshMsgs = messages.filter(m => !seen.current.has(msgKey(m)))
+    seen.current = new Set(messages.map(msgKey))
+    if (!freshMsgs.length) return
+    const added = freshMsgs.filter(m => m.dir === 'in').length
+    const mine = freshMsgs.some(m => m.dir === 'out')
     if (end.current || mine) el.scrollTo({ top: el.scrollHeight, behavior: behavior() })
-    else setFresh(n => n + added)
-  }, [key, count])
+    else if (added > 0) setFresh(n => n + added)
+  }, [key, sig])
   return {
     ref,
     atEnd,
