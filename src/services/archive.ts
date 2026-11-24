@@ -38,7 +38,7 @@ import {
   updateArchived,
 } from '../adapters/archive-store.ts'
 import { readCard } from '../adapters/cards.ts'
-import { cwdOf } from '../adapters/claude-home.ts'
+import { transcriptCwd } from '../adapters/claude-home.ts'
 import { agentGet, herdr, workspaceList } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { pause } from '../adapters/pacing.ts'
@@ -728,8 +728,8 @@ export async function bringBack(deps: Deps, app: ReturnApp, key: string): Promis
       )
       return elsewhere ? refused(own.title) : fail(t('archive.err.noTranscript', { name: rec.name }))
     }
-    // Claude finds a session by the folder it ran in.
-    cwd = (await cwdOf(path)) || rec.cwd
+    // Claude finds a session by the folder whose project folder holds its transcript (#621).
+    cwd = await transcriptCwd(path, rec.cwd)
     profileBody = { profile: own.id }
     parentOpt = { parent: { key: rec.key, name: rec.name, ...facts } }
   }

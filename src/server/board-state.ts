@@ -1,6 +1,7 @@
 // The board as the web page sees it: the latest items, whether they are fresh, and the payload
 // GET /api/board answers with and the event stream pushes.
 import { existsSync, statSync } from 'node:fs'
+import { hostname } from 'node:os'
 import { localAgyLimits } from '../adapters/agy-limits.ts'
 import { readArchiveLog } from '../adapters/archive-store.ts'
 import { readUsageFile } from '../adapters/claude-home.ts'
@@ -19,12 +20,14 @@ import { isCodexItem } from '../core/codex.ts'
 import { compactDefaultText } from '../core/compact.ts'
 import type { DecisionsPayload } from '../core/decisions.ts'
 import { foldModeOf } from '../core/fold-mode.ts'
+import { housekeepingConfig } from '../core/housekeeping.ts'
 import { LANGUAGES } from '../core/i18n/translator.ts'
 import { lang, t } from '../core/lang.ts'
 import { claudeProgram, commandText } from '../core/launch/spawn-args.ts'
 import type { Limits } from '../core/limits.ts'
 import { familyTitle } from '../core/model-check.ts'
-import { LOCAL, parseNodeKey } from '../core/nodes.ts'
+import { dropMovedCards } from '../core/node-items.ts'
+import { LOCAL, nodesConfig, parseNodeKey } from '../core/nodes.ts'
 import type {
   BackupPayload,
   BoardLimits,
@@ -312,7 +315,10 @@ export function createBoardState({
     // Other devices' cards (#500), only while this board is a master: a lane of theirs this board
     // does not have shows as any lane a session made up does.
     const others = nodes?.()?.part() ?? null
-    const shown = others ? [...items, ...others.items] : items
+    const masterId = others
+      ? (nodesConfig(cfg.nodes, hostname())?.id ?? others.devices.find(d => d.id === LOCAL)?.status?.id ?? '')
+      : ''
+    const shown = others ? dropMovedCards([...items, ...others.items], masterId) : items
     const ids = [...new Set([...cfg.categories.map(c => c.id), ...shown.map(i => i.category)])]
     const workdeskLine = workdesk?.()
     const dialogLine = workdeskDialog?.()
@@ -360,7 +366,7 @@ export function createBoardState({
           workspace: it.workspace || parent.workspace,
         }
       })
-      const merged = [...adjusted, ...theirs]
+      const merged = dropMovedCards([...adjusted, ...theirs], masterId)
       return hasNodeCallParent ? besideParents(merged) : merged
     })()
     // The schedule without the scheduler's bookkeeping; the log is what was sent or missed lately.
@@ -415,6 +421,11 @@ export function createBoardState({
       compactDefault: compactDefaultText(cfg.compact),
       // Continue after restart (#633): absent while on (default), false while off.
       ...(!turnResumeConfig(cfg.turnResume).on && { turnResume: false as const }),
+      // Node housekeeping (#652, #682): absent while both memory guard and tab sweep are off.
+      ...(() => {
+        const hk = housekeepingConfig(cfg.housekeeping)
+        return hk.memory.on || hk.tabs.on ? { housekeeping: { memory: hk.memory.on, tabs: hk.tabs.on } } : {}
+      })(),
       // remote: only while the remote mode is on; a board without it sends none.
       ...remoteOf(remote),
       // presence: only while config.json turns it on (#172).

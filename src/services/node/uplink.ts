@@ -28,6 +28,7 @@ import {
   KEPT_SUBS,
   type UplinkCall,
   type UplinkResult,
+  type UplinkSelf,
   uplinkCallOf,
   uplinkResultOf,
 } from '../../core/node-uplink.ts'
@@ -79,6 +80,7 @@ const publicOf = (c: OutboxCall): UplinkCall => ({
   session: c.session,
   lane: c.lane,
   files: c.files.map(({ n, name, size, sha256 }) => ({ n, name, size, sha256 })),
+  ...(c.self && { self: c.self }),
 })
 
 export function createNodeUplink(o: NodeUplinkOptions): NodeUplink {
@@ -147,11 +149,26 @@ export function createNodeUplink(o: NodeUplinkOptions): NodeUplink {
   async function call(raw: unknown): Promise<{ status: number; body: unknown }> {
     if (closed) return { status: 503, body: { error: 'node' } }
     if (!isObject(raw)) return bad('body')
-    const { id: given, cmd, argv, session, lane, files } = raw
+    const { id: given, cmd, argv, session, lane, files, self } = raw
     if (!isText(cmd) || !Array.isArray(argv) || !argv.every(isText) || !isText(session)) return bad('call')
     if (lane !== null && lane !== undefined && !isText(lane)) return bad('lane')
     if (files !== undefined && (!Array.isArray(files) || !files.every(isText))) return bad('files')
     if (given !== undefined && !isCallId(given)) return bad('id')
+    let validatedSelf: UplinkSelf | undefined
+    if (self !== undefined) {
+      if ((cmd !== 'thread' && cmd !== 'threads') || argv[0] !== 'verdict') return bad('self')
+      if (!isObject(self)) return bad('self')
+      const hasKey = Object.hasOwn(self, 'key') && self.key !== undefined
+      const hasWhy = Object.hasOwn(self, 'why') && self.why !== undefined
+      if (hasKey === hasWhy) return bad('self')
+      if (hasKey) {
+        if (!isText(self.key) || !self.key) return bad('self')
+        validatedSelf = { key: self.key }
+      } else {
+        if (!isText(self.why) || !self.why) return bad('self')
+        validatedSelf = { why: self.why }
+      }
+    }
     // Kept or not by what the command is, not by what the caller says.
     const keep = (cmd === 'thread' || cmd === 'threads') && KEPT_SUBS.has(argv[0] ?? '')
     if (!keep && !clients.size) return { status: 200, body: { state: 'unreachable' } satisfies CallAnswer }
@@ -170,6 +187,7 @@ export function createNodeUplink(o: NodeUplinkOptions): NodeUplink {
         session,
         lane: (lane as string | null | undefined) ?? null,
         files: got.files,
+        ...(validatedSelf && { self: validatedSelf }),
         keep,
         at: Date.now(),
       }
@@ -187,7 +205,9 @@ export function createNodeUplink(o: NodeUplinkOptions): NodeUplink {
       const event = callEvent(publicOf(kept))
       for (const client of [...clients]) write(client, event)
     }
-    const result = await wait(id, keep ? knobMs('BOARD_NODE_KEPT_MS', KEPT_MS) : knobMs('BOARD_NODE_READ_MS', READ_MS))
+    const verdict = (cmd === 'thread' || cmd === 'threads') && argv[0] === 'verdict'
+    const ms = keep || verdict ? knobMs('BOARD_NODE_KEPT_MS', KEPT_MS) : knobMs('BOARD_NODE_READ_MS', READ_MS)
+    const result = await wait(id, ms)
     if (result) return { status: 200, body: answered(result) }
     if (keep) return { status: 200, body: { state: 'kept', id } satisfies CallAnswer }
     // Not kept: no master takes it later.

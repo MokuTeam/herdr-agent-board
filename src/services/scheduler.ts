@@ -137,17 +137,24 @@ export function startScheduler({
   deps,
   onChange = () => {},
   remote,
+  remoteItems,
   verify,
 }: {
   deps: Deps
   onChange?: () => void
   remote?: () => RemoteDelivery | null
+  /** Other devices' items from the aggregate while `nodes` is on (#675), only handed to the verifier. */
+  remoteItems?: () => readonly Item[]
   /** Verified done (#492, services/work-verify.ts): its sweep on every tick, its `verify` entries. */
   verify?: Verifier
 }): {
   stop(): void
 } {
   const { cfg, log } = deps
+  const withRemote = (local: Item[]): Item[] => {
+    const extra = remoteItems?.()
+    return extra?.length ? [...local, ...extra] : local
+  }
   // Five minutes at most: setTimeout takes no more than 24 days, and a larger value runs at once.
   const tickMs = (): number => Math.min(300, Math.max(0.1, positive(cfg.scheduleTickSec, 15))) * 1000
   const patience = (): number => positive(cfg.scheduleWaitMin, 240) * 60_000
@@ -181,7 +188,9 @@ export function startScheduler({
       if (watchesConfig(cfg.watches)) void watches.pass()
       // Held dones get their verifiers, failed launches go to the owner (#492): only while threads.verify is set.
       if (verify && threadsConfig(cfg.threads)?.verify)
-        await verify.sweep(() => collect(deps)).catch((err: unknown) => log(`verify: ${messageOf(err)}`))
+        await verify
+          .sweep(async () => withRemote(await collect(deps)))
+          .catch((err: unknown) => log(`verify: ${messageOf(err)}`))
       const now = Date.now()
       // A run that waits for its session is tried again once a tick, not on every file change; a
       // restart herdr-wake refused, not before its retry time.
@@ -209,7 +218,7 @@ export function startScheduler({
           if (!verify || flying.has(entry.key)) continue
           flying.add(entry.key)
           verify
-            .due(entry, items)
+            .due(entry, withRemote(items))
             .catch(err => log(`verify ${entry.id}: ${messageOf(err)}`))
             .finally(() => {
               flying.delete(entry.key)

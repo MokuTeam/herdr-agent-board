@@ -57,6 +57,7 @@ import {
   channelMembers,
   checkEnvelope,
   checkMessage,
+  compareMessageTime,
   DEFAULT_MAX_FILE_BYTES,
   DEFAULT_TTL_S,
   type Envelope,
@@ -462,6 +463,7 @@ export function createTeam({
   let myName: string | null = null
   let roster: RosterPeer[] = []
   let lastRx = 0
+  let lastPostAt = Number.NEGATIVE_INFINITY
   let retry: unknown
   let upTimer: unknown
   let pinger: unknown
@@ -1073,6 +1075,9 @@ export function createTeam({
     // The first copy's id is the post's: every copy of a team post carries it to a board with
     // `replies` (#370), so a reply to it names one message on every member's board.
     const postId = work?.id ?? crypto.randomUUID()
+    const postAt = Math.max(clock.now(), lastPostAt + 1)
+    lastPostAt = postAt
+    const postTs = new Date(postAt).toISOString()
     for (const p of recipients) {
       // A channel's copy goes as a channel only to a board that reads channels; any other gets it
       // in its pair's general with the title in front, so an answer there reaches this board alone.
@@ -1122,7 +1127,7 @@ export function createTeam({
         to: p.peer,
         kind: 'question',
         reply_to: null,
-        ts: new Date(clock.now()).toISOString(),
+        ts: postTs,
         // A team copy waits as long as the hub keeps anything, for members who are away.
         ttl_s,
         body: msgBody,
@@ -1347,11 +1352,14 @@ export function createTeam({
     )
     const outgoing: ThreadLine[] = [...items.posts.entries()].map(([id, copies]): ThreadLine => {
       const first = copies[0] as OutboxItem
+      const earliest = copies.reduce((best, cur) =>
+        compareMessageTime({ ts: cur.msg.ts, id: cur.msg.id }, { ts: best.msg.ts, id: best.msg.id }) < 0 ? cur : best,
+      )
       return {
         id,
         dir: 'out',
         text: first.msg.body.text,
-        ts: first.msg.ts,
+        ts: earliest.msg.ts,
         ...(first.msg.body.via && { via: first.msg.body.via }),
         ...(first.session?.name && { agent: first.session.name }),
         ...(first.pressed && { pressed: true }),
@@ -1377,7 +1385,7 @@ export function createTeam({
           ...(d.file && { file: lineFileDraft(d.file) }),
         }),
       )
-    return [...[...incoming, ...outgoing].sort((a, b) => a.ts.localeCompare(b.ts)), ...drafts]
+    return [...[...incoming, ...outgoing].sort(compareMessageTime), ...drafts]
   }
 
   /** A file an agent attached to a draft (#371): a regular file within what the hub takes, under a name a meta can carry. */
@@ -1468,7 +1476,7 @@ export function createTeam({
       const drafts = readDrafts()
         .filter(d => d.to === peer)
         .map((d): ThreadMessage => ({ id: d.id, dir: 'draft', text: d.text, ts: new Date(d.createdAt).toISOString() }))
-      return [...[...incoming, ...outgoing].sort((a, b) => a.ts.localeCompare(b.ts)), ...drafts]
+      return [...[...incoming, ...outgoing].sort(compareMessageTime), ...drafts]
     },
     async send(to, text, thread, replyTo, file) {
       const r = await post({ to, ...(thread && { thread }), ...(replyTo && { replyTo }) }, text, { by: 'ui' }, file)
@@ -1521,16 +1529,20 @@ export function createTeam({
     threadLines: key => (config() ? threadLines(key) : []),
     lasts() {
       if (!config()) return {}
-      const out: Record<string, ThreadLast> = {}
-      const put = (key: string, l: ThreadLast): void => {
-        const was = out[key]
-        if (!was || was.ts < l.ts) out[key] = l
+      const best = new Map<string, { id: string; last: ThreadLast }>()
+      const put = (key: string, id: string, l: ThreadLast): void => {
+        const was = best.get(key)
+        if (
+          !was ||
+          compareMessageTime({ ts: was.last.ts, id: was.id, dir: was.last.dir }, { ts: l.ts, id, dir: l.dir }) < 0
+        )
+          best.set(key, { id, last: l })
       }
       // A line of it is enough for the list; the thread itself shows the whole text.
       const line = (text: string): string => [...text.slice(0, LAST_CHARS + 1)].slice(0, LAST_CHARS).join('')
       for (const [peer, list] of Object.entries(readAllInbox()))
         for (const i of list)
-          put(keyOf(i.thread, peer), {
+          put(keyOf(i.thread, peer), i.id, {
             dir: 'in',
             who: nameOf(peer),
             text: i.held ? null : line(i.text),
@@ -1539,12 +1551,14 @@ export function createTeam({
           })
       for (const list of Object.values(readAllOutbox()))
         for (const o of list)
-          put(keyOf(o.thread, o.msg.to), {
+          put(keyOf(o.thread, o.msg.to), o.post ?? o.msg.id, {
             dir: 'out',
             text: line(o.text ?? o.msg.body.text),
             ts: o.msg.ts,
             ...(o.msg.body.via && { via: o.msg.body.via }),
           })
+      const out: Record<string, ThreadLast> = {}
+      for (const [key, entry] of best) out[key] = entry.last
       return out
     },
     nameOf,

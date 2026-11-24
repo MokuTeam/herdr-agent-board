@@ -28,17 +28,18 @@ import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { CategoryDraft } from '../categories/CategoryDraft.tsx'
 import { classNames } from '../class-names.ts'
 import { ArchiveGlyph, ChevIcon, PlusIcon, WriteGlyph } from '../icons.tsx'
-import { Panel } from '../panel/Panel.tsx'
+import { Panel, type PanelBack } from '../panel/Panel.tsx'
 
 export interface TimeSettingsPanelProps {
   open: boolean
   onClose(): void
+  back?: PanelBack | undefined
 }
 
 /** One change: its body; true when the board took it. `part` is where a refusal is said. */
 export type TimeSettingsSend = (part: string, body: Record<string, unknown>) => Promise<boolean>
 
-export function TimeSettingsPanel({ open, onClose }: TimeSettingsPanelProps) {
+export function TimeSettingsPanel({ open, onClose, back }: TimeSettingsPanelProps) {
   const t = useT()
   const { data, canEdit, toast } = useBoardContext()
   const latest = useLatest({ t, toast })
@@ -92,6 +93,7 @@ export function TimeSettingsPanel({ open, onClose }: TimeSettingsPanelProps) {
     <Panel
       id="time-settings-sheet"
       kind="timeSettings"
+      back={back}
       open={open}
       onClose={onClose}
       title={

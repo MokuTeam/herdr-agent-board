@@ -18,6 +18,7 @@ import { closeLimits, LimitsPop } from './components/LimitsPop.tsx'
 import { LaunchDialog } from './components/launch/LaunchDialog.tsx'
 import { ContextMenu } from './components/menu/ContextMenu.tsx'
 import { NavRail, RAIL_STORAGE_KEY, type RailPlace } from './components/NavRail.tsx'
+import type { PanelBack } from './components/panel/Panel.tsx'
 import { usePhonesPanel } from './components/phones/PhonesPanel.tsx'
 import { SheetQuestion } from './components/questions/SheetQuestion.tsx'
 import { RenameField } from './components/RenameField.tsx'
@@ -57,6 +58,7 @@ import { useThreadLinks } from './hooks/useThreadLinks.ts'
 import { linkThreadsSheet, useThreadsContext } from './hooks/useThreads.tsx'
 import { useTodos } from './hooks/useTodos.ts'
 import { useToolbarMenu } from './hooks/useToolbarMore.ts'
+import { useT } from './i18n/I18nProvider.tsx'
 import { linkDecisionsSheet } from './models/decisions.ts'
 import { pageLayers } from './models/lifecycle.ts'
 import { remotePage } from './models/remote-page.ts'
@@ -67,7 +69,23 @@ import { isWakeView, noteShown } from './models/wake.ts'
 import { useBoardContext } from './state/BoardProvider.tsx'
 import { storage } from './state/storage.ts'
 
+type SettingsChild =
+  | 'profiles'
+  | 'wake'
+  | 'phones'
+  | 'mokupilot'
+  | 'access'
+  | 'backup'
+  | 'updates'
+  | 'housekeeping'
+  | 'timeSettings'
+  | 'calendarSettings'
+  | 'localPaths'
+  | 'team'
+  | 'devices'
+
 export function App() {
+  const t = useT()
   const limitsAnchor = useRef<HTMLButtonElement>(null)
   const { ui, dispatch, data, calOpen, teamOpen, now } = useBoardContext()
   const panels = usePanelLayout()
@@ -81,8 +99,14 @@ export function App() {
     })
   }
   const [drawerOpen, setDrawerOpen] = useState(false)
-  // Structured Settings panel (#651).
+  // Structured Settings panel (#651) and inner Settings navigation (#679).
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsChild, setSettingsChildState] = useState<SettingsChild | null>(null)
+  const settingsChildRef = useRef<SettingsChild | null>(null)
+  const setSettingsChild = (next: SettingsChild | null) => {
+    settingsChildRef.current = next
+    setSettingsChildState(next)
+  }
   // The categories and schedule panels, each opened at a lane or a session when asked.
   const [categories, setCategories] = useState(false)
   const [lane, setLane] = useState<{ id: string } | null>(null)
@@ -293,6 +317,61 @@ export function App() {
   const more = useToolbarMenu(menus.menu)
   const terminalKeys = useTerminalKeys(menus)
   useOmarchyTheme(data?.omarchy)
+  const closeSettingsChild = (child: SettingsChild) => {
+    switch (child) {
+      case 'profiles':
+        return setProfiles(false)
+      case 'wake':
+        return setWake(false)
+      case 'phones':
+        return setPhones(false)
+      case 'mokupilot':
+        return setMokupilot(false)
+      case 'access':
+        return setAccess(false)
+      case 'backup':
+        return setBackup(false)
+      case 'updates':
+        return setUpdates(false)
+      case 'housekeeping':
+        return setHousekeeping(false)
+      case 'timeSettings':
+        return setTimeSettings(false)
+      case 'calendarSettings':
+        return setCalendarSettings(false)
+      case 'localPaths':
+        return setLocalPaths(false)
+      case 'team':
+        return setTeam(false)
+      case 'devices':
+        return setDevices(false)
+    }
+  }
+  const openFromSettings = (child: SettingsChild, open: () => void) => {
+    setSettingsChild(child)
+    open()
+  }
+  const closeChild = (child: SettingsChild, close: () => void) => {
+    if (settingsChildRef.current === child) setSettingsChild(null)
+    close()
+  }
+  const backToSettings = (): boolean => {
+    const child = settingsChildRef.current
+    if (!child) return false
+    setSettingsChild(null)
+    closeSettingsChild(child)
+    setSettingsOpen(true)
+    return true
+  }
+  const settingsBack = (child: SettingsChild): PanelBack | undefined =>
+    settingsChild === child
+      ? { label: t('set.title'), ariaLabel: t('set.back'), onBack: () => void backToSettings() }
+      : undefined
+  const toggleSettings = () => {
+    if (settingsChildRef.current) backToSettings()
+    else setSettingsOpen(was => !was)
+  }
+
   useBoardKeys({
     openNextAttention,
     newSession,
@@ -300,17 +379,20 @@ export function App() {
     layerOpen: () => menus.menu.isOpen() || launch.isOpen() || terminal.isOpen() || helpers.isOpen() || fork.isOpen(),
     quickLookOpen: quickLook.isOpen,
     panelOpen: () => !!panels.place.openPanel(),
-    closePanel: panels.closeOpen,
+    closePanel: () => {
+      if (!backToSettings()) panels.closeOpen()
+    },
     rename: rename.start,
     sessionPanelOpen: () => !!panels.place.openPanel(),
     pickOption: questions.pickOption,
     openTerminal: terminal.openTerminal,
     archive,
-    openSettings: () => setSettingsOpen(was => !was),
+    openSettings: toggleSettings,
     terminal: terminalKeys,
   })
   // Layers above the board, topmost first (models/lifecycle.ts PAGE_LAYERS): Back on a phone
-  // closes them one at a time (the quick look and the helpers window a step at a time).
+  // closes them one at a time (the quick look and the helpers window a step at a time), and on
+  // any viewport steps back from an inner Settings page to the Settings list (#679).
   useDialogHistory(
     pageLayers({
       menu: { open: menus.open, close: () => menus.menu.close() },
@@ -320,8 +402,14 @@ export function App() {
       helpers: { open: helpers.open, close: helpers.back },
       limits: { open: ui.limitsOpen, close: () => closeLimits(dispatch, limitsAnchor, true) },
       setup: { open: setup.open, close: () => setup.close(true) },
-      panels: { open: panels.open, close: panels.closeOpen },
+      panels: {
+        open: panels.open,
+        close: () => {
+          if (!backToSettings()) panels.closeOpen()
+        },
+      },
     }),
+    { always: settingsChild !== null, isAlways: () => settingsChildRef.current !== null },
   )
   // A card kept in sight while the board makes room for a panel stays below the toolbar.
   useEffect(() => {
@@ -340,29 +428,30 @@ export function App() {
     (data?.todos ? proposedCount(data.items) > 0 : false) ||
     (data?.calendar ? data.calendar.failing > 0 : false)
 
-  const activePlace: RailPlace = settingsOpen
-    ? 'settings'
-    : decisionsOpen
-      ? 'decisions'
-      : threads?.shown
-        ? 'threads'
-        : team
-          ? 'team'
-          : todosOpen
-            ? 'todos'
-            : calendarOpen
-              ? 'calendar'
-              : schedule
-                ? 'schedule'
-                : timeOpen
-                  ? 'time'
-                  : spendOpen
-                    ? 'spend'
-                    : categories
-                      ? 'categories'
-                      : archive.panel.open
-                        ? 'archive'
-                        : 'board'
+  const activePlace: RailPlace =
+    settingsOpen || settingsChild !== null
+      ? 'settings'
+      : decisionsOpen
+        ? 'decisions'
+        : threads?.shown
+          ? 'threads'
+          : team
+            ? 'team'
+            : todosOpen
+              ? 'todos'
+              : calendarOpen
+                ? 'calendar'
+                : schedule
+                  ? 'schedule'
+                  : timeOpen
+                    ? 'time'
+                    : spendOpen
+                      ? 'spend'
+                      : categories
+                        ? 'categories'
+                        : archive.panel.open
+                          ? 'archive'
+                          : 'board'
 
   return (
     <>
@@ -388,7 +477,7 @@ export function App() {
         onSpend={toggleSpend}
         onCategories={() => (categories ? setCategories(false) : openCategories())}
         onArchive={archive.togglePanel}
-        onSettings={() => setSettingsOpen(was => !was)}
+        onSettings={toggleSettings}
         systemAlert={systemAlert}
       />
       <div className="page">
@@ -436,21 +525,79 @@ export function App() {
       <SidePanels
         categories={{ open: categories, focus: lane, onClose: () => setCategories(false), onOpen: openCategories }}
         schedule={{ open: schedule, focus: session, onClose: () => setSchedule(false), schedule: reminders }}
-        profiles={{ open: profiles, onClose: () => setProfiles(false) }}
-        wake={{ open: wake, onClose: () => setWake(false) }}
-        phones={{ open: phones, onClose: () => setPhones(false) }}
-        {...(mokupilotMounted ? { mokupilot: { open: mokupilot, onClose: () => setMokupilot(false) } } : {})}
-        {...(accessMounted && !remotePage() ? { access: { open: access, onClose: () => setAccess(false) } } : {})}
-        {...(backupMounted && !remotePage() ? { backup: { open: backup, onClose: () => setBackup(false) } } : {})}
-        {...(updatesMounted && !remotePage() ? { updates: { open: updates, onClose: () => setUpdates(false) } } : {})}
+        profiles={{
+          open: profiles,
+          onClose: () => closeChild('profiles', () => setProfiles(false)),
+          back: settingsBack('profiles'),
+        }}
+        wake={{ open: wake, onClose: () => closeChild('wake', () => setWake(false)), back: settingsBack('wake') }}
+        phones={{
+          open: phones,
+          onClose: () => closeChild('phones', () => setPhones(false)),
+          back: settingsBack('phones'),
+        }}
+        {...(mokupilotMounted
+          ? {
+              mokupilot: {
+                open: mokupilot,
+                onClose: () => closeChild('mokupilot', () => setMokupilot(false)),
+                back: settingsBack('mokupilot'),
+              },
+            }
+          : {})}
+        {...(accessMounted && !remotePage()
+          ? {
+              access: {
+                open: access,
+                onClose: () => closeChild('access', () => setAccess(false)),
+                back: settingsBack('access'),
+              },
+            }
+          : {})}
+        {...(backupMounted && !remotePage()
+          ? {
+              backup: {
+                open: backup,
+                onClose: () => closeChild('backup', () => setBackup(false)),
+                back: settingsBack('backup'),
+              },
+            }
+          : {})}
+        {...(updatesMounted && !remotePage()
+          ? {
+              updates: {
+                open: updates,
+                onClose: () => closeChild('updates', () => setUpdates(false)),
+                back: settingsBack('updates'),
+              },
+            }
+          : {})}
         {...(housekeepingMounted && !remotePage()
-          ? { housekeeping: { open: housekeeping, onClose: () => setHousekeeping(false) } }
+          ? {
+              housekeeping: {
+                open: housekeeping,
+                onClose: () => closeChild('housekeeping', () => setHousekeeping(false)),
+                back: settingsBack('housekeeping'),
+              },
+            }
           : {})}
         {...(timeSettingsMounted && !remotePage()
-          ? { timeSettings: { open: timeSettings, onClose: () => setTimeSettings(false) } }
+          ? {
+              timeSettings: {
+                open: timeSettings,
+                onClose: () => closeChild('timeSettings', () => setTimeSettings(false)),
+                back: settingsBack('timeSettings'),
+              },
+            }
           : {})}
         {...(calendarSettingsMounted && !remotePage()
-          ? { calendarSettings: { open: calendarSettings, onClose: () => setCalendarSettings(false) } }
+          ? {
+              calendarSettings: {
+                open: calendarSettings,
+                onClose: () => closeChild('calendarSettings', () => setCalendarSettings(false)),
+                back: settingsBack('calendarSettings'),
+              },
+            }
           : {})}
         calendar={{
           open: calendarOpen,
@@ -463,14 +610,29 @@ export function App() {
           onSettings: remotePage() ? undefined : openCalendarSettings,
         }}
         {...(localPathsMounted && remotePage()
-          ? { localPaths: { open: localPaths, onClose: () => setLocalPaths(false) } }
+          ? {
+              localPaths: {
+                open: localPaths,
+                onClose: () => closeChild('localPaths', () => setLocalPaths(false)),
+                back: settingsBack('localPaths'),
+              },
+            }
           : {})}
-        {...(devicesMounted && !remotePage() ? { devices: { open: devices, onClose: () => setDevices(false) } } : {})}
+        {...(devicesMounted && !remotePage()
+          ? {
+              devices: {
+                open: devices,
+                onClose: () => closeChild('devices', () => setDevices(false)),
+                back: settingsBack('devices'),
+              },
+            }
+          : {})}
         {...(teamMounted && offersTeam(data)
           ? {
               team: {
                 open: team,
-                onClose: () => setTeam(false),
+                onClose: () => closeChild('team', () => setTeam(false)),
+                back: settingsBack('team'),
                 focus: teamFocus,
                 onFocused: () => setTeamFocus(null),
               },
@@ -488,18 +650,19 @@ export function App() {
           open: settingsOpen,
           onClose: () => setSettingsOpen(false),
           setup,
-          onOpenProfiles: () => setProfiles(true),
-          onOpenWake: () => setWake(true),
-          onOpenPhones: () => setPhones(true),
-          onOpenMokupilot: openMokupilot,
-          onOpenAccess: openAccess,
-          onOpenBackup: openBackup,
-          onOpenUpdates: openUpdates,
-          onOpenTimeSettings: openTimeSettings,
-          onOpenCalendarSettings: openCalendarSettings,
-          onOpenLocalPaths: openLocalPaths,
-          onOpenTeam: openTeam,
-          onOpenDevices: openDevices,
+          onOpenProfiles: () => openFromSettings('profiles', () => setProfiles(true)),
+          onOpenWake: () => openFromSettings('wake', () => setWake(true)),
+          onOpenPhones: () => openFromSettings('phones', () => setPhones(true)),
+          onOpenMokupilot: () => openFromSettings('mokupilot', openMokupilot),
+          onOpenAccess: () => openFromSettings('access', openAccess),
+          onOpenBackup: () => openFromSettings('backup', openBackup),
+          onOpenUpdates: () => openFromSettings('updates', openUpdates),
+          onOpenHousekeeping: () => openFromSettings('housekeeping', openHousekeeping),
+          onOpenTimeSettings: () => openFromSettings('timeSettings', openTimeSettings),
+          onOpenCalendarSettings: () => openFromSettings('calendarSettings', openCalendarSettings),
+          onOpenLocalPaths: () => openFromSettings('localPaths', openLocalPaths),
+          onOpenTeam: () => openFromSettings('team', openTeam),
+          onOpenDevices: () => openFromSettings('devices', openDevices),
         }}
         sheet={{
           onNewSession: newSession,

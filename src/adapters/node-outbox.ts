@@ -7,7 +7,7 @@
 // master", not for a connection: whichever master's stream opens next takes it.
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { isCallId, type UplinkFile } from '../core/node-uplink.ts'
+import { isCallId, type UplinkFile, type UplinkSelf } from '../core/node-uplink.ts'
 import { isRecord, replaceFile } from './json-store.ts'
 import { nodeDir } from './node-store.ts'
 
@@ -20,6 +20,8 @@ export interface OutboxCall {
   lane: string | null
   /** The files the call registered, each with its copy's path here, which never leaves this node. */
   files: (UplinkFile & { path: string })[]
+  /** For `board thread verdict` (#675): the pane's session as the node's herdr confirmed it. */
+  self?: UplinkSelf
   /** A write that waits for the master (core/node-uplink.ts KEPT_SUBS). */
   keep: boolean
   at: number
@@ -51,6 +53,20 @@ function callOf(v: unknown): OutboxCall | null {
       isText(f.sha256),
   )
   if (files.length !== v.files.length) return null
+  let self: UplinkSelf | undefined
+  if (v.self !== undefined && v.self !== null) {
+    if (!isRecord(v.self)) return null
+    const hasKey = Object.hasOwn(v.self, 'key') && v.self.key !== undefined
+    const hasWhy = Object.hasOwn(v.self, 'why') && v.self.why !== undefined
+    if (hasKey === hasWhy) return null
+    if (hasKey) {
+      if (!isText(v.self.key) || !v.self.key) return null
+      self = { key: v.self.key }
+    } else {
+      if (!isText(v.self.why) || !v.self.why) return null
+      self = { why: v.self.why }
+    }
+  }
   return {
     id: v.id,
     cmd: v.cmd,
@@ -58,6 +74,7 @@ function callOf(v: unknown): OutboxCall | null {
     session: v.session,
     lane: v.lane,
     files,
+    ...(self && { self }),
     keep: v.keep,
     at: v.at,
   }

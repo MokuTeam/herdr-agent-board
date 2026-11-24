@@ -1,6 +1,7 @@
 // MokuPilot call agent running on a remote node (#618): pure validation, CLI argument building,
 // and environment sanitization shared between the node's door endpoints (services/node/pilot-call.ts)
 // and the master's local bridge (services/nodes/pilot-call.ts). No I/O here.
+import { stripAnsi } from './dialogs/input-box.ts'
 
 export const PILOT_CALL_ID = /^[A-Za-z0-9_-]{8,64}$/
 export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -11,6 +12,12 @@ export const SAFE_TOOL = /^[A-Za-z0-9._:-]{1,120}$/
 
 /** Claude settings passed via --settings so owner hooks never fire during a voice call. */
 export const NO_HOOKS_SETTINGS = JSON.stringify({ disableAllHooks: true })
+
+/** Settings for resuming a Code Mode session headless without owner hooks (#683). */
+export const CODE_MODE_SETTINGS = JSON.stringify({
+  disableAllHooks: true,
+  env: { CLAUDE_CODE_EXPERIMENTAL_CODE_MODE: '1' },
+})
 
 /** Maximum size of one NDJSON line sent to Claude stdin (turns may include base64 images). */
 export const MAX_STDIN_LINE_BYTES = 16 * 1024 * 1024
@@ -226,6 +233,94 @@ export function parseReportRequest(raw: unknown): PilotCallReportRequest | { err
   return { session, report, reportId }
 }
 
+/** Whether one transcript JSONL line records Code Mode being enabled (`type: "repl-mode"`, `replMode: true`). */
+export function isCodeModeTranscriptLine(line: string): boolean {
+  if (!line.includes('"repl-mode"')) return false
+  const trimmed = line.replace(/^\uFEFF/, '').trim()
+  if (!trimmed) return false
+  try {
+    const row: unknown = JSON.parse(trimmed)
+    return isRecord(row) && row.type === 'repl-mode' && row.replMode === true
+  } catch {
+    return false
+  }
+}
+
+/** Whether a profile's settings object enables Code Mode via `env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE`. */
+export function profileHasCodeMode(settings: unknown): boolean {
+  if (!isRecord(settings) || !isRecord(settings.env)) return false
+  const v = settings.env.CLAUDE_CODE_EXPERIMENTAL_CODE_MODE
+  return v === '1' || v === 'true' || v === 1 || v === true
+}
+
+/** Classify a Claude stdout NDJSON or plain-text line to surface failure reasons in plain words. */
+export function extractClaudeError(line: string): {
+  kind: 'error' | 'clear' | 'notice' | 'plain' | 'other'
+  text: string
+} {
+  try {
+    const row: unknown = JSON.parse(line)
+    if (!isRecord(row)) return { kind: 'other', text: '' }
+    if (row.type === 'result') {
+      if (row.is_error === true) {
+        let raw = ''
+        if (Array.isArray(row.errors)) {
+          raw = row.errors
+            .filter((e): e is string => typeof e === 'string')
+            .map(e => e.trim())
+            .filter(Boolean)
+            .join('; ')
+        }
+        if (!raw && typeof row.result === 'string') {
+          raw = row.result.trim()
+        }
+        const text = stripAnsi(raw).trim()
+        if (text) return { kind: 'error', text }
+      } else if (row.is_error === false) {
+        return { kind: 'clear', text: '' }
+      }
+      return { kind: 'other', text: '' }
+    }
+    if (row.type === 'error') {
+      const raw =
+        isRecord(row.error) && typeof row.error.message === 'string'
+          ? row.error.message
+          : typeof row.error === 'string'
+            ? row.error
+            : typeof row.message === 'string'
+              ? row.message
+              : ''
+      const text = stripAnsi(raw).trim()
+      return text ? { kind: 'error', text } : { kind: 'other', text: '' }
+    }
+    if (
+      row.type === 'system' &&
+      row.subtype === 'notification' &&
+      (row.color === 'warning' || row.priority === 'high') &&
+      typeof row.text === 'string'
+    ) {
+      const text = stripAnsi(row.text).trim()
+      return text ? { kind: 'notice', text } : { kind: 'other', text: '' }
+    }
+    return { kind: 'other', text: '' }
+  } catch {
+    const text = stripAnsi(line).trim()
+    return text ? { kind: 'plain', text } : { kind: 'other', text: '' }
+  }
+}
+
+/** Summarize multi-line stderr/error output into a short single-line message for logs and HTTP errors. */
+export function failureSummary(text: string, maxLen = 400): string {
+  const joined = stripAnsi(text)
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .slice(-3)
+    .join('; ')
+  if (joined.length <= maxLen) return joined
+  return `${joined.slice(0, Math.max(0, maxLen - 3)).trimEnd()}...`
+}
+
 /** Command-line arguments for headless Claude Code running as a MokuPilot call agent. */
 export function claudePilotArgs(o: {
   session: string
@@ -233,6 +328,7 @@ export function claudePilotArgs(o: {
   model?: string
   effort?: string
   fullAccess: boolean
+  codeMode?: boolean
   mcpConfigPath?: string
   mcpName?: string
   mcpTools?: readonly string[]
@@ -252,7 +348,7 @@ export function claudePilotArgs(o: {
   else args.push('--permission-mode', 'acceptEdits')
   args.push('--resume', o.session)
   if (o.fork) args.push('--fork-session')
-  args.push('--settings', NO_HOOKS_SETTINGS)
+  args.push('--settings', o.codeMode ? CODE_MODE_SETTINGS : NO_HOOKS_SETTINGS)
   if (o.mcpConfigPath) {
     args.push('--mcp-config', o.mcpConfigPath)
     if (o.mcpName && o.mcpTools?.length) {

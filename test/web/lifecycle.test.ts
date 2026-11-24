@@ -150,6 +150,61 @@ test('wide desktop does not add dialog history entries', () => {
   assert.equal(pushes, 0)
 })
 
+test('desktop arms dialog history only while always() is true, and cleans up on manual exit (#679)', () => {
+  let pushes = 0
+  let backs = 0
+  let closed = 0
+  let open = true
+  let inner = false
+  const history: FakeHistory = {
+    state: null,
+    pushState(s) {
+      this.state = s
+      pushes++
+    },
+    replaceState(s) {
+      this.state = s
+    },
+    back() {
+      backs++
+    },
+  }
+  const controller = dialogHistory({
+    history,
+    mobile: () => false,
+    always: () => inner,
+    isOpen: () => open,
+    closeTop() {
+      closed++
+      inner = false
+    },
+  })
+  // Settings list alone on desktop: zero history entries.
+  controller.sync()
+  assert.equal(pushes, 0)
+  // Enter inner Settings page on desktop: sentinel armed.
+  inner = true
+  controller.sync()
+  assert.equal(pushes, 1)
+  // Browser Back steps back to Settings list without re-arming.
+  history.state = null
+  controller.pop()
+  assert.equal(closed, 1)
+  assert.equal(inner, false)
+  assert.equal(pushes, 1)
+  // Re-enter inner page, then leave manually via UI back button: sentinel cleaned up via history.back().
+  inner = true
+  controller.sync()
+  assert.equal(pushes, 2)
+  inner = false
+  controller.sync()
+  assert.equal(backs, 1)
+  // Closing Settings completely while not armed does nothing extra.
+  open = false
+  controller.sync()
+  assert.equal(backs, 1)
+})
+
 test('late GET after an SSE failure stays read-only until the stream reconnects', async () => {
   let current: FakeStream | undefined
   let resolveSnapshot: ((value: unknown) => void) | undefined

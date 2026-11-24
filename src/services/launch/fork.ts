@@ -5,7 +5,7 @@
 // conversation was recorded in: Claude resumes a session only from there), lane, workspace and
 // Claude profile, under the name it is given and with an optional first message. Who it is a fork
 // of is in its own transcript, whose copied lines carry `forkedFrom` (core/links.ts).
-import { cwdOf } from '../../adapters/claude-home.ts'
+import { transcriptCwd } from '../../adapters/claude-home.ts'
 import { workspaceList } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { findCommand } from '../../adapters/setup-facts.ts'
@@ -60,12 +60,8 @@ export async function forkSession(deps: Deps, app: ForkApp, item: Item, body: un
   const transcript = codex ? deps.codex.transcriptInfo(item.session) : item.transcript
   if (!transcript) return { ok: false, error: t('fork.err.noTranscript', { session: item.session }) }
   if (codex && !canCodexFork()) return { ok: false, error: t('fork.err.codexMissing') }
-  // Claude finds a session by the folder it ran in.
-  const cwd = codex
-    ? await deps.codex.cwdOf(item.session)
-    : item.transcript
-      ? (await cwdOf(item.transcript)) || item.cwd
-      : item.cwd
+  // Claude finds a session by the folder whose project folder holds its transcript (#621).
+  const cwd = codex ? await deps.codex.cwdOf(item.session) : await transcriptCwd(item.transcript, item.cwd)
   if (!cwd) return { ok: false, error: t('fork.err.noFolder') }
   let workspaces: { id: string; label: string }[]
   try {

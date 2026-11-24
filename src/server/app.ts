@@ -64,7 +64,8 @@ import { answerText, decisionsConfig } from '../core/decisions.ts'
 import { journalConfig } from '../core/journal.ts'
 import { t } from '../core/lang.ts'
 import { messageGate } from '../core/message-gate.ts'
-import { deviceIdFromHost, fillThresholds, markRevoked, nodeConfig, nodesConfig } from '../core/nodes.ts'
+import { dropMovedCards } from '../core/node-items.ts'
+import { deviceIdFromHost, fillThresholds, markRevoked, nodeConfig, nodesConfig, parseNodeKey } from '../core/nodes.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
 import type { BackupPayload, CalendarPayload, TimePayload } from '../core/payload.ts'
 import type { Observation } from '../core/presence.ts'
@@ -1111,14 +1112,16 @@ export async function startServer({
       deps,
       items: board.items,
       refresh,
-      toDevice: (targets, device, how) =>
-        nodeLinks && nodesConfig(cfg.nodes)
+      toDevice: (targets, device, how) => {
+        const moveNodes = () => nodesConfig(cfg.nodes, hostname())
+        const masterId = moveNodes()?.id ?? ''
+        return nodeLinks && moveNodes()
           ? moveToDevice(
               {
-                nodes: () => nodesConfig(cfg.nodes),
+                nodes: moveNodes,
                 link: id => nodeLinks?.link(id) ?? null,
                 ...movers(),
-                items: () => [...board.items(), ...(nodeAggregate?.part()?.items ?? [])],
+                items: () => dropMovedCards([...board.items(), ...(nodeAggregate?.part()?.items ?? [])], masterId),
                 rekeyThreads: (from, to) => {
                   withThreadsDb(false, db => db?.write('board', tx => rekeySession(tx, from, to)))
                 },
@@ -1129,7 +1132,8 @@ export async function startServer({
               device,
               how,
             )
-          : null,
+          : null
+      },
     }),
     // Settings → Sleep and wake… (services/wake/control.ts), for this computer only.
     ...wakeRoutes(wake),
@@ -1328,7 +1332,10 @@ export async function startServer({
     process.on('exit', nodePilotCall.closeAll)
     const nodeLaunch = createNodeLaunch({
       node: () => nodeConfig(cfg.node),
-      start: (body, session) => launches.start(body, board.items(), { node: { session } }),
+      start: (body, session, o) =>
+        launches.start(body, board.items(), {
+          node: { session, ...(o?.exactSession && { exactSession: true }) },
+        }),
       launch: id => launches.list().find(l => l.id === id),
       profiles: () => deps.profiles(),
       workspaces: () => workspaceList(8000),
@@ -1533,7 +1540,10 @@ export async function startServer({
     uplinkRunner = createUplinkRunner({
       links: nodeLinks,
       find: board.findAny,
-      items: () => [...board.items(), ...(aggregate.part()?.items ?? [])],
+      items: () => {
+        const masterId = nodesConfig(cfg.nodes, hostname())?.id ?? ''
+        return dropMovedCards([...board.items(), ...(aggregate.part()?.items ?? [])], masterId)
+      },
       // Case files (#488): the same cards, a device not heard now marked as its copy.
       caseItems: () => caseItems(board.items(), aggregate.part()),
       cfg,
@@ -1656,9 +1666,51 @@ export async function startServer({
     start: (body, items, options) => launches.start(body, items, options),
     launchState: id => launches.state(id),
     workspaces: async () => (await workspaceList(8000)).map(w => ({ id: w.id, label: w.label ?? '' })),
-    archive: async item => ((await askArchive(deps, item, { by: 'agent' })).ok ? 'ok' : 'busy'),
+    archive: async item => {
+      const at = parseNodeKey(item.key)
+      if (!at) return (await askArchive(deps, item, { by: 'agent' })).ok ? 'ok' : 'busy'
+      const link = nodeLinks?.link(at.device)
+      if (link?.state().state !== 'online') return 'busy'
+      const res = await link
+        .fetch('/api/archive', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ op: 'archive', keys: [at.key] }),
+          signal: AbortSignal.timeout(15_000),
+        })
+        .catch(() => null)
+      if (!res) return 'busy'
+      const body = (await res.json().catch(() => null)) as { done?: { key?: unknown }[] } | null
+      return res.ok && Array.isArray(body?.done) && body.done.some(d => d?.key === at.key) ? 'ok' : 'busy'
+    },
     withDb: fn => withThreadsDb(false, fn),
     profiles: () => shownProfiles(deps.profiles().list).length,
+    node: device => {
+      const n = nodesConfig(cfg.nodes)?.devices[device]
+      if (!n?.link) return null
+      const link = nodeLinks?.link(device)
+      const st = link?.view().status ?? null
+      return {
+        configured: true,
+        online: link?.state().state === 'online',
+        status: st,
+        profiles: n.profiles,
+        paused: n.paused,
+        drain: n.drain,
+        ...(n.revoked && { revoked: true }),
+      }
+    },
+    remoteLaunchState: key => {
+      const l = nodeAggregate?.part()?.launches.find(x => x.id === key)
+      if (l) return { state: l.state, error: l.error, sessionId: l.key }
+      const at = parseNodeKey(key)
+      const local = at ? launches.sessionState?.(at.key) : null
+      return local && local.state !== 'done' ? local : null
+    },
+    cancelQueued: (launchId, key) => {
+      const at = parseNodeKey(key)
+      return launches.cancelQueued?.(launchId ?? '', at?.key ?? key) ?? false
+    },
   })
   // A reminder for a node's card goes through its node (#501): asked only for a key with a device's
   // prefix, which exists only with `nodes`.
@@ -1679,7 +1731,13 @@ export async function startServer({
     verifyWas = on
   }
   if (!verifyWas && verifyKeptOff(cfg.threads)) verifyGone()
-  const scheduler = startScheduler({ deps, onChange: refresh, remote: () => nodeProxy, verify: verifier })
+  const scheduler = startScheduler({
+    deps,
+    onChange: refresh,
+    remote: () => nodeProxy,
+    remoteItems: () => nodeAggregate?.part()?.items ?? [],
+    verify: verifier,
+  })
   workdesk.configChanged()
   workdeskDialog.configChanged()
   void configureWorkdeskStream()

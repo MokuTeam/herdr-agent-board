@@ -11,6 +11,8 @@
 // thread in the code.
 
 import { switched, switchedOff, withField } from './feature-switch.ts'
+import { readModel } from './launch/model.ts'
+import { DEVICE_ID, LOCAL } from './node-key.ts'
 import type { CaseSessionView } from './work-cases.ts'
 
 export const THREAD_STATUSES = ['next', 'doing', 'waiting', 'owner', 'done', 'dropped'] as const
@@ -276,13 +278,43 @@ export interface VerifyConfig {
   model: string | null
   lanes: string[]
   brief: string | Record<string, string> | null
-  profile: string | null
+  profile: string | Record<string, string> | null
   limitMin: number
   max: number
 }
 
 export const VERIFY_LIMIT_MIN = 30
+export const VERIFY_LIMIT_MIN_MAX = 24 * 60
 export const VERIFY_MAX = 2
+export const VERIFY_MAX_LIMIT = 10
+export const VERIFY_CODE_CHECKLIST = 'docs/agents/verify-checklist-code.md'
+
+export interface VerifySettingsData {
+  model: string | null
+  lanes: string[]
+  brief: string | Record<string, string> | null
+  profile: string | Record<string, string> | null
+  limitMin: number | null
+  max: number | null
+}
+
+export interface VerifySettingsPatch {
+  model?: string | null
+  lanes?: string[] | null
+  brief?: string | Record<string, string | null> | null
+  profile?: string | Record<string, string | null> | null
+  limitMin?: number | null
+  max?: number | null
+}
+
+export interface VerifySettingsView {
+  threadsOn: boolean
+  verify: {
+    on: boolean
+    settings: VerifySettingsData
+    defaults: { limitMin: number; max: number }
+  }
+}
 
 /**
  * `threads.verify`: `true` or an object is on, with its settings; absent, `"on": false` (Settings
@@ -306,13 +338,22 @@ export function verifyConfig(raw: unknown): VerifyConfig | null {
     })
     if (per.length) brief = Object.fromEntries(per)
   }
+  let profile: VerifyConfig['profile'] = text(r.profile, 100)
+  if (!profile && typeof r.profile === 'object' && r.profile !== null && !Array.isArray(r.profile)) {
+    const per = Object.entries(r.profile as Record<string, unknown>).flatMap(([device, id]) => {
+      const p = text(id, 100)
+      const d = device.trim().toLowerCase()
+      return p && (d === LOCAL || DEVICE_ID.test(d)) ? [[d, p] as const] : []
+    })
+    if (per.length) profile = Object.fromEntries(per)
+  }
   const limit = Number(r.limitMin)
   const max = Number(r.max)
   return {
     model: text(r.model, 200),
     lanes,
     brief,
-    profile: text(r.profile, 100),
+    profile,
     limitMin: Number.isFinite(limit) && limit >= 1 ? Math.min(Math.round(limit), 24 * 60) : VERIFY_LIMIT_MIN,
     max: Number.isFinite(max) && max >= 1 ? Math.min(Math.floor(max), 10) : VERIFY_MAX,
   }
@@ -323,6 +364,16 @@ export function briefFor(c: Pick<VerifyConfig, 'brief'>, lane: string): string |
   if (!c.brief) return null
   if (typeof c.brief === 'string') return c.brief
   return c.brief[lane] ?? c.brief['*'] ?? null
+}
+
+/**
+ * The Claude profile for a verifier of a non-Claude worker (#675): a string is the master's own,
+ * an object names each device (`local` or its id).
+ */
+export function profileFor(c: Pick<VerifyConfig, 'profile'>, device: string | null = null): string | null {
+  if (!c.profile) return null
+  if (typeof c.profile === 'string') return !device || device === LOCAL ? c.profile : null
+  return c.profile[!device || device === LOCAL ? LOCAL : device] ?? null
 }
 
 export const GAP_SEC = 60
@@ -395,6 +446,182 @@ export function threadsParts(raw: unknown, change: { cases?: boolean; verify?: b
     next = withField(next, 'verify', switched(section.verify, change.verify))
   }
   return next
+}
+
+const isPlainObj = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v)
+
+const VERIFY_PATCH_KEYS = ['model', 'profile', 'lanes', 'brief', 'limitMin', 'max'] as const
+
+// biome-ignore lint/suspicious/noControlCharactersInRegex: reject control characters in config strings
+const CTRL_CHARS = /[\x00-\x1f\x7f]/
+
+/**
+ * Read `threads.verify` as Settings shows it: `on` plus the explicit values configured in
+ * config.json (null/empty when using defaults so hand-written vs unset stays distinct).
+ */
+export function verifySettingsOf(rawVerify: unknown): { on: boolean; settings: VerifySettingsData } {
+  const on = rawVerify === true || (isPlainObj(rawVerify) && !switchedOff(rawVerify))
+  if (!isPlainObj(rawVerify)) {
+    return {
+      on,
+      settings: { model: null, lanes: [], brief: null, profile: null, limitMin: null, max: null },
+    }
+  }
+  const { on: _off, ...rest } = rawVerify
+  const parsed = verifyConfig(rest)
+  const limit = Number(rest.limitMin)
+  const max = Number(rest.max)
+  return {
+    on,
+    settings: {
+      model: parsed?.model ?? null,
+      lanes: parsed?.lanes ?? [],
+      brief: parsed?.brief ?? null,
+      profile: parsed?.profile ?? null,
+      limitMin:
+        'limitMin' in rest && Number.isFinite(limit) && limit >= 1
+          ? Math.min(Math.round(limit), VERIFY_LIMIT_MIN_MAX)
+          : null,
+      max: 'max' in rest && Number.isFinite(max) && max >= 1 ? Math.min(Math.floor(max), VERIFY_MAX_LIMIT) : null,
+    },
+  }
+}
+
+export type VerifyPatchField = 'setting' | 'model' | 'profile' | 'lanes' | 'brief' | 'limitMin' | 'max'
+
+function cleanMap(
+  raw: Record<string, unknown>,
+  validKey: (k: string) => boolean,
+  maxLen: number,
+): Record<string, string> | null | false {
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(raw)) {
+    const key = k.trim().toLowerCase()
+    if (!validKey(key)) return false
+    if (v === null) continue
+    if (typeof v !== 'string') return false
+    const trimmed = v.trim()
+    if (!trimmed) continue
+    if (trimmed.length > maxLen || CTRL_CHARS.test(trimmed)) return false
+    out[key] = trimmed
+  }
+  return Object.keys(out).length ? out : null
+}
+
+/** Validate and normalize a partial `verifySettings` patch from `POST /api/threads-settings`. */
+export function parseVerifyPatch(
+  raw: unknown,
+): { ok: true; patch: VerifySettingsPatch } | { ok: false; field: VerifyPatchField } {
+  if (!isPlainObj(raw)) return { ok: false, field: 'setting' }
+  const keys = Object.keys(raw)
+  if (!keys.length || keys.some(k => !VERIFY_PATCH_KEYS.includes(k as (typeof VERIFY_PATCH_KEYS)[number])))
+    return { ok: false, field: 'setting' }
+  const patch: VerifySettingsPatch = {}
+  let touched = false
+
+  if (raw.model !== undefined) {
+    touched = true
+    if (raw.model === null) patch.model = null
+    else {
+      const r = readModel(raw.model)
+      if (!r.ok) return { ok: false, field: 'model' }
+      patch.model = r.model
+    }
+  }
+
+  if (raw.profile !== undefined) {
+    touched = true
+    if (raw.profile === null) patch.profile = null
+    else if (typeof raw.profile === 'string') {
+      const trimmed = raw.profile.trim()
+      if (!trimmed) patch.profile = null
+      else if (trimmed.length > 100 || CTRL_CHARS.test(trimmed)) return { ok: false, field: 'profile' }
+      else patch.profile = trimmed
+    } else if (isPlainObj(raw.profile)) {
+      const mapped = cleanMap(raw.profile, k => k === LOCAL || DEVICE_ID.test(k), 100)
+      if (mapped === false) return { ok: false, field: 'profile' }
+      patch.profile = mapped
+    } else return { ok: false, field: 'profile' }
+  }
+
+  if (raw.lanes !== undefined) {
+    touched = true
+    if (raw.lanes === null) patch.lanes = null
+    else if (Array.isArray(raw.lanes)) {
+      const out: string[] = []
+      const seen = new Set<string>()
+      for (const item of raw.lanes) {
+        if (typeof item !== 'string') return { ok: false, field: 'lanes' }
+        const lane = item.trim().toLowerCase()
+        if (!LANE.test(lane)) return { ok: false, field: 'lanes' }
+        if (!seen.has(lane)) {
+          seen.add(lane)
+          out.push(lane)
+        }
+      }
+      patch.lanes = out.length ? out : null
+    } else return { ok: false, field: 'lanes' }
+  }
+
+  if (raw.brief !== undefined) {
+    touched = true
+    if (raw.brief === null) patch.brief = null
+    else if (typeof raw.brief === 'string') {
+      const trimmed = raw.brief.trim()
+      if (!trimmed) patch.brief = null
+      else if (trimmed.length > 1000 || CTRL_CHARS.test(trimmed)) return { ok: false, field: 'brief' }
+      else patch.brief = trimmed
+    } else if (isPlainObj(raw.brief)) {
+      const mapped = cleanMap(raw.brief, k => k === '*' || LANE.test(k), 1000)
+      if (mapped === false) return { ok: false, field: 'brief' }
+      patch.brief = mapped
+    } else return { ok: false, field: 'brief' }
+  }
+
+  if (raw.limitMin !== undefined) {
+    touched = true
+    if (raw.limitMin === null) patch.limitMin = null
+    else if (
+      typeof raw.limitMin === 'number' &&
+      Number.isInteger(raw.limitMin) &&
+      raw.limitMin >= 1 &&
+      raw.limitMin <= VERIFY_LIMIT_MIN_MAX
+    )
+      patch.limitMin = raw.limitMin
+    else return { ok: false, field: 'limitMin' }
+  }
+
+  if (raw.max !== undefined) {
+    touched = true
+    if (raw.max === null) patch.max = null
+    else if (typeof raw.max === 'number' && Number.isInteger(raw.max) && raw.max >= 1 && raw.max <= VERIFY_MAX_LIMIT)
+      patch.max = raw.max
+    else return { ok: false, field: 'max' }
+  }
+
+  return touched ? { ok: true, patch } : { ok: false, field: 'setting' }
+}
+
+/**
+ * Apply a `VerifySettingsPatch` (and optional on/off toggle) to `threads`, preserving unknown keys
+ * in both `threads` and `threads.verify` as well as `#597` off-keeps-values behaviour.
+ */
+export function applyVerifyPatch(rawThreads: unknown, patch: VerifySettingsPatch, toggle?: boolean): unknown {
+  const section = isPlainObj(rawThreads) ? rawThreads : {}
+  const rawVerify = section.verify
+  const wasOn = rawVerify === true || (isPlainObj(rawVerify) && !switchedOff(rawVerify))
+  const nextOn = toggle !== undefined ? toggle : wasOn
+  const { on: _was, ...own }: Record<string, unknown> = isPlainObj(rawVerify) ? { ...rawVerify } : {}
+  for (const key of VERIFY_PATCH_KEYS) {
+    const val = patch[key]
+    if (val === undefined) continue
+    if (val === null || (key === 'lanes' && Array.isArray(val) && val.length === 0)) delete own[key]
+    else own[key] = val
+  }
+  const hasFields = Object.keys(own).length > 0
+  const nextVerify = nextOn ? (hasFields ? own : true) : hasFields ? { ...own, on: false } : undefined
+  return withField(rawThreads, 'verify', nextVerify)
 }
 
 // ------------------------------------------------------------------ limits

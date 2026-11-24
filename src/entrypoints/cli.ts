@@ -137,6 +137,9 @@
 //                            [--passphrase-file <file> | --passphrase-stdin] [--replace-file]   the database back as a
 //                            snapshot has it (the newest of the target when none is named); without
 //                            a target, the snapshots each target holds
+//   board db rekey --from <old> --to <new> [--dry-run] [--json]   rewrites master-relative session
+//                            keys in board.db, schedule, watches and legacy move marks when the master
+//                            changes devices (#696)
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
 import { readFileSync, statSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
@@ -220,7 +223,7 @@ import { currentWakeMode } from '../services/wake/mode.ts'
 import { compactCli } from './compact-cli.ts'
 import type { ThreadCmdContext } from './thread-cli.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] | decisions [--done] [--json] | done [text] | clear | favorite [off] | list | agents [--json] | cats | remind <when> "<text>" [--idle] | send <name|key> "<text>" | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | move <id|name|pane>... --device <id|local> [--dry-run] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | doctor | update | housekeeping [--dry-run | status] [--json] | presence [here | away | call] | journal [--since <when> | --away] [--json] | spend [--day <d>] [--lane <id>] [--json] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | resume --agy <conversation id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp [--agents] | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] | decisions [--done] [--json] | done [text] | clear | favorite [off] | list | agents [--json] | cats | remind <when> "<text>" [--idle] | send <name|key> "<text>" | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | move <id|name|pane>... --device <id|local> [--dry-run] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | doctor | update | housekeeping [--dry-run | status] [--json] | presence [here | away | call] | journal [--since <when> | --away] [--json] | spend [--day <d>] [--lane <id>] [--json] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | resume --agy <conversation id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp [--agents] | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>] | db rekey --from <old> --to <new> [--dry-run] [--json]] [--session <id|name|pane>]`
 const MIN_REPEAT_MS = 5 * 60_000
 /** The commands that print a help of their own for `--help` (#305). */
 const OWN_HELP: ReadonlySet<string> = new Set(['thread', 'time', 'cal', 'spend'])
@@ -495,13 +498,14 @@ async function runSend(
   const body = await board()
   if (!body) return { code: 1, out: [], err: ['the board does not run: nothing was sent (open it first)'] }
   const A = await import('../core/agent-send.ts')
-  const targets = A.targetsOf(body.items)
+  const own = A.ownDeviceOf(body)
+  const targets = A.targetsOf(body.items, own)
   const plan = A.planSend({
     targets,
     to,
     message,
     from: { key: s.key, name: targets.find(t => t.key === s.key)?.name ?? s.name ?? '', device: null },
-    own: A.ownDeviceOf(body),
+    own,
     now: Date.now(),
   })
   if ('error' in plan) return { code: 1, out: [], err: [plan.error] }
@@ -569,9 +573,9 @@ async function runAgents({
   const body = config.web === false ? null : fresh ? await fetchBoard(config.port) : await boardAnswer()
   const items = body ? body.items : await collect(fresh ? defaultDeps(config) : deps)
   const A = await import('../core/agent-send.ts')
-  const targets = A.targetsOf(items)
-  const offline = body ? A.offlineDevices(body) : new Set<string>()
   const own = body ? A.ownDeviceOf(body) : ''
+  const targets = A.targetsOf(items, own)
+  const offline = body ? A.offlineDevices(body) : new Set<string>()
   if (json) return { code: 0, out: [JSON.stringify(A.agentViewsOf(targets, { selfKey, offline }))], err: [] }
   const lines = A.formatAgentLines(targets, { selfKey, offline, own, now: Date.now() })
   return { code: 0, out: lines.length ? lines : ['no sessions on the board'], err: [] }
@@ -2920,9 +2924,10 @@ async function backupCmd(): Promise<void> {
   throw new Error(t('backup.cli.usage'))
 }
 
-/** `board db restore …` (#233): the board's database back as a snapshot has it (services/backup.ts restore). */
+/** `board db restore …` (#233) and `board db rekey …` (#696). */
 async function dbCmd(): Promise<void> {
   const [op] = words
+  if (op === 'rekey') return dbRekeyCmd()
   if (op !== 'restore') throw new Error(t('backup.cli.restoreUsage'))
   const backup = await import('../services/backup.ts')
   const { activeTargets, backupConfig, isTarget } = await import('../core/backup.ts')
@@ -2981,6 +2986,45 @@ async function dbCmd(): Promise<void> {
   passedOver(r.skipped)
   if (!r.inPlace) return console.log(t('backup.cli.restoredFile', { from: r.from, aside: r.aside ?? '' }))
   console.log(t('backup.cli.restored', { from: r.from, before: r.before ?? '-' }))
+}
+
+const DB_REKEY_USAGE = 'usage: board db rekey --from <old> --to <new> [--dry-run] [--json]'
+
+/** `board db rekey --from <old> --to <new> [--dry-run] [--json]` (#696). */
+async function dbRekeyCmd(): Promise<void> {
+  const restArgs = flagWords.slice(1)
+  if (words.length !== flagWords.length) throw new Error(DB_REKEY_USAGE)
+  let from: string | undefined
+  let to: string | undefined
+  let dryRun = false
+  let json = false
+  for (let i = 0; i < restArgs.length; i++) {
+    const w = restArgs[i] ?? ''
+    if (w === '--dry-run') {
+      dryRun = true
+    } else if (w === '--json') {
+      json = true
+    } else if (w === '--from' || w.startsWith('--from=')) {
+      if (from !== undefined) throw new Error(DB_REKEY_USAGE)
+      const val = w === '--from' ? restArgs[++i] : w.slice('--from='.length)
+      if (!val || val.startsWith('--')) throw new Error(DB_REKEY_USAGE)
+      from = val
+    } else if (w === '--to' || w.startsWith('--to=')) {
+      if (to !== undefined) throw new Error(DB_REKEY_USAGE)
+      const val = w === '--to' ? restArgs[++i] : w.slice('--to='.length)
+      if (!val || val.startsWith('--')) throw new Error(DB_REKEY_USAGE)
+      to = val
+    } else {
+      throw new Error(DB_REKEY_USAGE)
+    }
+  }
+  const { formatRekeyReport, validateRekeyDevices } = await import('../core/db-rekey.ts')
+  const checked = validateRekeyDevices(from, to)
+  if (!checked.ok) throw new Error(`${checked.error}\n${DB_REKEY_USAGE}`)
+  const { rekeyBoard } = await import('../services/db-rekey.ts')
+  const report = rekeyBoard({ from: checked.from, to: checked.to, dryRun, by: 'user' })
+  if (json) console.log(JSON.stringify(report, null, 2))
+  else console.log(formatRekeyReport(report).join('\n'))
 }
 
 async function tunnel(): Promise<void> {

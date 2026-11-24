@@ -536,6 +536,8 @@ describe('nodePart and ListAgents with bgTasks (#676)', () => {
           status: 'working',
           day: false,
           activity: 2_000_000,
+          movedTo: null,
+          movedAt: null,
           bgTasks: { count: 1, since: 1000, detail: 'Chrome', stuckMin: 30, stuck: true },
         },
         {
@@ -551,6 +553,8 @@ describe('nodePart and ListAgents with bgTasks (#676)', () => {
           status: 'done',
           day: false,
           activity: 2_000_000,
+          movedTo: null,
+          movedAt: null,
         },
       ],
       { now: 2_000_000 },

@@ -296,6 +296,7 @@ const CLASSIFIED: Record<string, [method: string, raw: string, door: 'door' | 'r
   'GET /api/team/unread': [['GET', '/api/team/unread', 'refused']],
   'POST /api/team/read': [['POST', '/api/team/read', 'refused']],
   'POST /api/team/focus': [['POST', '/api/team/focus', 'refused']],
+  'GET /api/threads-settings': [['GET', '/api/threads-settings', 'refused']],
   'POST /api/threads-settings': [['POST', '/api/threads-settings', 'refused']],
   'GET /api/threads': [['GET', '/api/threads', 'refused']],
   'GET /api/threads/events': [['GET', '/api/threads/events', 'refused']],

@@ -7,10 +7,11 @@
 import { closeSync, lstatSync, openSync, readdirSync, readFileSync, readSync, type Stats, statSync } from 'node:fs'
 import { lstat, open, readdir, realpath, stat } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
-import { isAbsolute, join, relative } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { onLanguage } from '../core/lang.ts'
 import { normDir, sameDir } from '../core/launch/names.ts'
 import { type Limits, parseLimits } from '../core/limits.ts'
+import { isCodeModeTranscriptLine } from '../core/pilot-call.ts'
 import { type QueuedPrompt, type QueueWindow, queuedPrompts } from '../core/queue.ts'
 import { projectFolderName } from '../core/resume.ts'
 import {
@@ -243,6 +244,67 @@ export async function lastCwdOf(file: string): Promise<string | null> {
   }
 }
 
+const CODE_MODE_CHUNK_BYTES = 256 << 10
+const CODE_MODE_MAX_LINE_BYTES = 64 << 10
+const CODE_MODE_MARKER = Buffer.from('"repl-mode"')
+
+/**
+ * Read-only bounded scan of a Claude transcript JSONL file for an active Code Mode marker
+ * (`{"type":"repl-mode","replMode":true,...}`). Streams in 256 KiB chunks and skips lines over
+ * 64 KiB so multi-MB tool/screenshot records never bloat memory.
+ */
+export async function transcriptUsesCodeMode(file: string): Promise<boolean> {
+  if (!file) return false
+  let fh: Awaited<ReturnType<typeof open>> | undefined
+  const checkLine = (buf: Buffer): boolean => {
+    if (buf.length === 0 || buf.indexOf(CODE_MODE_MARKER) < 0) return false
+    const end = buf[buf.length - 1] === 0x0d ? buf.length - 1 : buf.length
+    if (end === 0) return false
+    return isCodeModeTranscriptLine(buf.subarray(0, end).toString('utf8'))
+  }
+  try {
+    fh = await open(file, 'r')
+    const buf = Buffer.alloc(CODE_MODE_CHUNK_BYTES)
+    let carry: Buffer = Buffer.alloc(0)
+    let skippingLine = false
+    for (;;) {
+      const { bytesRead } = await fh.read(buf, 0, CODE_MODE_CHUNK_BYTES, null)
+      if (bytesRead === 0) break
+      const chunk = buf.subarray(0, bytesRead)
+      let pos = 0
+      for (;;) {
+        const nl = chunk.indexOf(0x0a, pos)
+        if (nl < 0) break
+        if (!skippingLine) {
+          const part = chunk.subarray(pos, nl)
+          if (carry.length + part.length <= CODE_MODE_MAX_LINE_BYTES) {
+            const lineBuf = carry.length ? Buffer.concat([carry, part]) : part
+            if (checkLine(lineBuf)) return true
+          }
+        }
+        carry = Buffer.alloc(0)
+        skippingLine = false
+        pos = nl + 1
+      }
+      const tail = chunk.subarray(pos)
+      if (!skippingLine && tail.length > 0) {
+        if (carry.length + tail.length > CODE_MODE_MAX_LINE_BYTES) {
+          carry = Buffer.alloc(0)
+          skippingLine = true
+        } else {
+          carry = carry.length ? Buffer.concat([carry, tail]) : Buffer.from(tail)
+        }
+      }
+    }
+    if (!skippingLine && carry.length > 0 && checkLine(carry)) return true
+    return false
+  } catch {
+    return false
+  } finally {
+    await fh?.close()
+  }
+}
+
 const defaultIsDir = (dir: string): boolean => !!statSync(dir, { throwIfNoEntry: false })?.isDirectory()
 
 /**
@@ -271,6 +333,52 @@ export async function sessionCwd(
     if (first) return first
   }
   return ''
+}
+
+const matchesProject = (cwd: string, under: string, platform: string = process.platform): boolean => {
+  const encoded = projectFolderName(cwd)
+  return !!encoded && (platform === 'win32' ? encoded.toLowerCase() === under.toLowerCase() : encoded === under)
+}
+
+/**
+ * The folder Claude resumes or forks a session from: the one whose project folder holds
+ * `transcript`. For a session that never moved, its transcript's first "cwd" already lies under
+ * that project folder and is returned immediately with no extra reads. For a moved session (#621),
+ * the first "cwd" names the source device's folder, so `fallback` (the card's or archive record's
+ * cwd) and then the transcript's last "cwd" are checked against that project folder before falling
+ * back to an existing recorded folder.
+ */
+export async function transcriptCwd(
+  transcript: string | null | undefined,
+  fallback?: string | null,
+  { isDir = defaultIsDir, platform = process.platform }: { isDir?: (dir: string) => boolean; platform?: string } = {},
+): Promise<string> {
+  const fb = fallback?.trim() ? fallback : ''
+  if (!transcript) return fb
+  const under = basename(dirname(transcript))
+  const first = (await cwdOf(transcript)) ?? ''
+  // Fast path: unmoved session whose first recorded cwd matches the transcript's project folder
+  // and exists on disk: identical to cwdOf(transcript) with no extra I/O.
+  if (first && matchesProject(first, under, platform) && isDir(first)) return first
+  // Moved session (or first cwd missing / collided): prefer a candidate whose project folder holds
+  // this transcript and exists on disk. Card/record cwd first covers a freshly moved session before
+  // any new turn writes a local cwd; lastCwdOf covers a moved session whose shell cd'd away or
+  // whose fallback cwd is empty.
+  if (fb && matchesProject(fb, under, platform) && isDir(fb)) return fb
+  const last = (await lastCwdOf(transcript)) ?? ''
+  if (last && matchesProject(last, under, platform) && isDir(last)) return last
+  // None matches and exists: if a candidate matches the project folder (for example, deleted on
+  // this device), return it so launch validation reports the missing local path rather than a
+  // foreign source-device path.
+  if (first && matchesProject(first, under, platform)) return first
+  if (fb && matchesProject(fb, under, platform)) return fb
+  if (last && matchesProject(last, under, platform)) return last
+  // Transcript not under a matching project folder name (legacy or custom layout): prefer an
+  // existing local folder, else preserve the original (await cwdOf(transcript)) || fallback order.
+  if (first && isDir(first)) return first
+  if (last && isDir(last)) return last
+  if (fb && isDir(fb)) return fb
+  return first || fb
 }
 
 const normCwd = (s: string): string =>

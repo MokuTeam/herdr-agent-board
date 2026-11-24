@@ -24,6 +24,7 @@
 // Made by server/app.ts only once config.json has `nodes`.
 import { createHash } from 'node:crypto'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { createDeviceStore, type DeviceStore } from '../../adapters/node-store.ts'
 import { pace } from '../../adapters/pacing.ts'
@@ -234,7 +235,9 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     // is remembered here: the node sends a call again on every stream while its command waits, and
     // a write must not run twice.
     const kept = (call.cmd === 'thread' || call.cmd === 'threads') && KEPT_SUBS.has(call.argv[0] ?? '')
-    const remembered = kept || call.cmd === 'send' || (call.cmd === 'time' && TIME_WRITE_SUBS.has(call.argv[0] ?? ''))
+    const verdict = (call.cmd === 'thread' || call.cmd === 'threads') && call.argv[0] === 'verdict'
+    const remembered =
+      kept || verdict || call.cmd === 'send' || (call.cmd === 'time' && TIME_WRITE_SUBS.has(call.argv[0] ?? ''))
     let result = remembered ? store.seenCall(id, call.id) : null
     if (!result) {
       const ran = await runCall(id, call)
@@ -375,6 +378,18 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
             }
           })()
         : undefined
+      const verdictSelf =
+        sub === 'verdict' && call.self
+          ? 'why' in call.self
+            ? async () => ({ why: (call.self as { why: string }).why })
+            : async () => {
+                try {
+                  return { key: nodeKey(id, (call.self as { key: string }).key) }
+                } catch {
+                  return { why: 'not a session of the node' }
+                }
+              }
+          : undefined
       const code = await (o.run ?? threadCmd)(argv, {
         cfg: { threads: o.cfg.threads, port: o.cfg.port },
         actor,
@@ -384,6 +399,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
         out: l => out.push(l),
         err: l => err.push(l),
         sendOut: (thread, entry) => sendOut(thread, entry),
+        ...(verdictSelf && { self: verdictSelf }),
         ...(cases && { cases }),
       })
       return { code, out, err }
@@ -409,12 +425,13 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     const item = o.find(key)
     const [to = '', ...words] = call.argv
     const { planSend, targetsOf } = await import('../../core/agent-send.ts')
+    const own = nodesConfig(o.cfg.nodes, hostname())?.id ?? ''
     const plan = planSend({
-      targets: targetsOf(o.items()).filter(t => t.device === null || t.device === id),
+      targets: targetsOf(o.items(), own).filter(t => t.device === null || t.device === id),
       to,
       message: words.join(' '),
       from: { key, name: item?.name || item?.autoName || '', device: id },
-      own: nodesConfig(o.cfg.nodes)?.id ?? '',
+      own,
       now: Date.now(),
     })
     if ('error' in plan) return failed(plan.error)
@@ -439,14 +456,14 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
       return refused('not a session of the node')
     }
     const { agentViewsOf, formatAgentLines, targetsOf } = await import('../../core/agent-send.ts')
-    const targets = targetsOf(o.items()).filter(t => t.device === null || t.device === id)
+    const own = nodesConfig(o.cfg.nodes, hostname())?.id ?? ''
+    const targets = targetsOf(o.items(), own).filter(t => t.device === null || t.device === id)
     // One view a line (#639): a result's line is cut at RESULT_LINE_MAX, which one array of a
     // few hundred cards would pass; the lines joined are the same JSON array.
     if (call.argv.includes('--json')) {
       const views = agentViewsOf(targets, { selfKey: key }).map(v => JSON.stringify(v))
       return { code: 0, out: ['[', ...views.map((v, i) => (i < views.length - 1 ? `${v},` : v)), ']'], err: [] }
     }
-    const own = nodesConfig(o.cfg.nodes)?.id ?? ''
     const lines = formatAgentLines(targets, { selfKey: key, own, now: Date.now() })
     return { code: 0, out: lines.length ? lines : ['no sessions on the board'], err: [] }
   }

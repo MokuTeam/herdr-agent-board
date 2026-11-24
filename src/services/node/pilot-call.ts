@@ -10,7 +10,8 @@ import { chmodSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync, writeF
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { enqueueReport, reportHash, reportIdentity } from '../../adapters/call-receipts.ts'
-import { type ClaudeHome, sessionCwd } from '../../adapters/claude-home.ts'
+import { type ClaudeHome, sessionCwd, transcriptUsesCodeMode } from '../../adapters/claude-home.ts'
+import { readSettings } from '../../adapters/hook-settings.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { knobMs, pace } from '../../adapters/pacing.ts'
 import { addEntry, listEntries, type NewEntry } from '../../adapters/schedule-store.ts'
@@ -19,6 +20,8 @@ import { sameDir } from '../../core/launch/names.ts'
 import {
   claudePilotArgs,
   claudePilotEnv,
+  extractClaudeError,
+  failureSummary,
   isPilotCallId,
   MAX_MCP_BODY_BYTES,
   type PilotMcpSpec,
@@ -28,6 +31,7 @@ import {
   parseReportRequest,
   parseStartRequest,
   parseStdinRequest,
+  profileHasCodeMode,
 } from '../../core/pilot-call.ts'
 import { absoluteProfileDir, defaultProfileDir, type ProfileSet, resolveProfileDir } from '../../core/profiles.ts'
 import { MAX_REPORT } from '../../core/schedule-rules.ts'
@@ -89,6 +93,11 @@ interface RunState {
   listeners: Set<(ev: SseEvent) => void>
   detachers: Set<() => void>
   stderrTail: string[]
+  lastError: string
+  lastNotice: string
+  plainStdoutTail: string[]
+  flushStdout: () => void
+  flushStderr: () => void
   exited: { code: number | null; stderr: string } | null
   mcpServer: ReturnType<typeof Bun.serve> | null
   mcpDir: string | null
@@ -184,6 +193,7 @@ async function resolveSessionTarget(
   transcript: string | null
   cwd: string
   profileId: string
+  profileDir: string | null
   profileEnvDir: string | null | undefined
 }> {
   const home = deps.home ?? homedir()
@@ -245,13 +255,18 @@ async function resolveSessionTarget(
       profileEnvDir = sameDir(foundDir, defaultProfileDir(home, platform)) ? null : foundDir
     }
   }
-  return { transcript, cwd, profileId: foundId, profileEnvDir }
+  return { transcript, cwd, profileId: foundId, profileDir: foundDir, profileEnvDir }
 }
 
-/** Read a chunked stream into complete lines, calling `onLine` for each non-empty line. */
-function readLines(stream: NodeJS.ReadableStream | null, onLine: (line: string) => void): void {
-  if (!stream) return
+/** Read a chunked stream into complete lines, calling `onLine` for each non-empty line, returning a flush hook. */
+function readLines(stream: NodeJS.ReadableStream | null, onLine: (line: string) => void): () => void {
+  if (!stream) return () => {}
   let rest = ''
+  const flush = (): void => {
+    const line = rest.endsWith('\r') ? rest.slice(0, -1) : rest
+    rest = ''
+    if (line) onLine(line)
+  }
   stream.setEncoding('utf8')
   stream.on('data', (chunk: string) => {
     const parts = (rest + chunk).split('\n')
@@ -261,11 +276,8 @@ function readLines(stream: NodeJS.ReadableStream | null, onLine: (line: string) 
       if (line) onLine(line)
     }
   })
-  stream.on('end', () => {
-    const line = rest.endsWith('\r') ? rest.slice(0, -1) : rest
-    rest = ''
-    if (line) onLine(line)
-  })
+  stream.on('end', flush)
+  return flush
 }
 
 export function createNodePilotCall(deps: NodePilotCallDeps): NodePilotCall {
@@ -327,11 +339,26 @@ export function createNodePilotCall(deps: NodePilotCallDeps): NodePilotCall {
     run.idleTimer = run.lifeTimer = run.killTimer = null
   }
 
-  function finishRun(run: RunState, code: number | null, extraStderr = ''): void {
+  function failureReason(run: RunState, signal: NodeJS.Signals | null = null): string {
+    return (
+      run.lastError ||
+      run.plainStdoutTail.join('\n') ||
+      run.lastNotice ||
+      (signal ? `claude terminated by signal ${signal}` : '')
+    )
+  }
+
+  function finishRun(run: RunState, code: number | null, extraStderr = '', signal: NodeJS.Signals | null = null): void {
     if (run.exited) return
+    run.flushStdout()
+    run.flushStderr()
     clearTimers(run)
     cleanupMcp(run)
-    const tail = extraStderr ? [...run.stderrTail, extraStderr].slice(-STDERR_TAIL_MAX) : run.stderrTail
+    const tail = extraStderr ? [...run.stderrTail, extraStderr].slice(-STDERR_TAIL_MAX) : [...run.stderrTail]
+    if (code !== 0 && tail.length === 0) {
+      const reason = failureReason(run, signal)
+      if (reason) tail.push(reason)
+    }
     const stderr = tail.join('\n')
     run.exited = { code, stderr }
     emit(run, { name: 'exit', data: JSON.stringify(run.exited) })
@@ -496,6 +523,11 @@ export function createNodePilotCall(deps: NodePilotCallDeps): NodePilotCall {
         listeners: new Set(),
         detachers: new Set(),
         stderrTail: [],
+        lastError: '',
+        lastNotice: '',
+        plainStdoutTail: [],
+        flushStdout: () => {},
+        flushStderr: () => {},
         exited: null,
         mcpServer: null,
         mcpDir: null,
@@ -523,12 +555,19 @@ export function createNodePilotCall(deps: NodePilotCallDeps): NodePilotCall {
         }
       }
 
+      const codeMode = target.transcript
+        ? await transcriptUsesCodeMode(target.transcript)
+        : target.profileDir
+          ? profileHasCodeMode(readSettings(target.profileDir).settings)
+          : false
+
       const args = claudePilotArgs({
         session: parsed.session,
         fork: parsed.fork,
         model: parsed.model,
         effort: parsed.effort,
         fullAccess: parsed.fullAccess,
+        codeMode,
         ...(run.mcpConfigPath && parsed.mcp
           ? { mcpConfigPath: run.mcpConfigPath, mcpName: parsed.mcp.name, mcpTools: parsed.mcp.tools }
           : {}),
@@ -557,8 +596,18 @@ export function createNodePilotCall(deps: NodePilotCallDeps): NodePilotCall {
         `pilot-call ${runId}: started ${parsed.fork ? 'fork of ' : ''}${parsed.session.slice(0, 8)} in ${target.cwd}`,
       )
 
-      readLines(child.stdout, line => emit(run, { name: 'line', data: JSON.stringify({ line }) }))
-      readLines(child.stderr, line => {
+      run.flushStdout = readLines(child.stdout, line => {
+        emit(run, { name: 'line', data: JSON.stringify({ line }) })
+        const info = extractClaudeError(line)
+        if (info.kind === 'error') run.lastError = info.text
+        else if (info.kind === 'clear') run.lastError = ''
+        else if (info.kind === 'notice') run.lastNotice = info.text
+        else if (info.kind === 'plain') {
+          run.plainStdoutTail.push(info.text)
+          if (run.plainStdoutTail.length > 10) run.plainStdoutTail.shift()
+        }
+      })
+      run.flushStderr = readLines(child.stderr, line => {
         run.stderrTail.push(line)
         if (run.stderrTail.length > STDERR_TAIL_MAX) run.stderrTail.shift()
         emit(run, { name: 'stderr', data: JSON.stringify({ line }) })
@@ -567,9 +616,10 @@ export function createNodePilotCall(deps: NodePilotCallDeps): NodePilotCall {
         deps.log(`pilot-call ${runId}: process error: ${err.message}`)
         finishRun(run, -1, err.message)
       })
-      child.once('close', code => {
-        deps.log(`pilot-call ${runId}: exited (${String(code)})`)
-        finishRun(run, code)
+      child.once('close', (code, signal) => {
+        finishRun(run, code, '', signal)
+        const detail = code !== 0 ? failureSummary(run.exited?.stderr ?? '') : ''
+        deps.log(`pilot-call ${runId}: exited (${String(code)})${detail ? `: ${detail}` : ''}`)
       })
 
       // If no SSE client attaches within idleCloseMs, reap the orphaned process.
@@ -685,17 +735,26 @@ export function createNodePilotCall(deps: NodePilotCallDeps): NodePilotCall {
       if (!isPilotCallId(runId)) return { status: 404, body: { ok: false, error: 'not found' } }
       const run = runs.get(runId)
       if (!run) return { status: 404, body: { ok: false, error: 'not found' } }
-      if (run.exited || !run.child.stdin || run.child.stdin.destroyed || !run.child.stdin.writable)
-        return { status: 409, body: { ok: false, error: 'process is not running' } }
+      const exitReason = (): string =>
+        failureSummary(run.exited?.stderr || run.stderrTail.join('\n') || failureReason(run))
+      if (run.exited || !run.child.stdin || run.child.stdin.destroyed || !run.child.stdin.writable) {
+        const reason = exitReason()
+        return {
+          status: 409,
+          body: { ok: false, error: reason ? `process is not running: ${reason}` : 'process is not running' },
+        }
+      }
       const parsed = parseStdinRequest(rawBody)
       if ('error' in parsed) return { status: 400, body: { ok: false, error: parsed.error } }
       try {
         run.child.stdin.write(`${parsed.line}\n`)
         return { status: 200, body: { ok: true } }
       } catch (err) {
+        const reason = exitReason()
+        const msg = err instanceof Error ? err.message : String(err)
         return {
           status: 409,
-          body: { ok: false, error: `stdin write failed: ${err instanceof Error ? err.message : String(err)}` },
+          body: { ok: false, error: reason ? `stdin write failed: ${reason}` : `stdin write failed: ${msg}` },
         }
       }
     },
