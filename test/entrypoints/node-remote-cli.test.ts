@@ -58,8 +58,10 @@ test("a key with another machine's prefix is foreign; a bare one or this node's 
 // computer's fits, so the master's agents are asked and the archive goes up by the prefixed key.
 const ME = '3e4f5a6b-7c8d-4e9f-8a0b-1c2d3e4f5a6b'
 
-function standIn(archived: unknown[]) {
+function standIn(archived: unknown[], o: { unreachable?: boolean } = {}) {
   const calls: unknown[] = []
+  /** Every other POST: its path and body. */
+  const posted: { path: string; body: unknown }[] = []
   const server = Bun.serve({
     hostname: '127.0.0.1',
     port: 0,
@@ -70,6 +72,7 @@ function standIn(archived: unknown[]) {
       if (req.method === 'POST' && path === '/api/node/call') {
         const body = await req.json()
         calls.push(body)
+        if (o.unreachable) return Response.json({ state: 'unreachable' })
         return Response.json({
           state: 'answered',
           code: 0,
@@ -81,20 +84,27 @@ function standIn(archived: unknown[]) {
         archived.push(await req.json())
         return Response.json({ ok: true, failed: [] })
       }
+      if (req.method === 'POST') {
+        const body: unknown = await req.json().catch(() => null)
+        posted.push({ path, body })
+        if (path === '/api/sleep') return Response.json({ results: [{ target: 'x', name: 'cleo', result: 'asleep' }] })
+        if (path === '/api/move') return Response.json({ results: [{ target: 'x', name: 'cleo', result: 'moved' }] })
+        if (path.endsWith('/fork')) return Response.json({ ok: true, name: 'cleo fork' })
+      }
       return new Response(null, { status: 404 })
     },
   })
-  return { port: server.port as number, calls, stop: () => server.stop(true) }
+  return { port: server.port as number, calls, posted, stop: () => server.stop(true) }
 }
 
-async function archiveCli(box: Sandbox, port: number, target: string) {
+async function nodeCli(box: Sandbox, port: number, args: string[]) {
   const dir = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board')
   mkdirSync(dir, { recursive: true })
   writeFileSync(
     join(dir, 'config.json'),
     JSON.stringify({ language: 'en', wakeUrl: null, port, node: { id: 'laptop', port: 12430, workRoot: '/srv/work' } }),
   )
-  const proc = Bun.spawn([process.execPath, join(root, 'src/entrypoints/cli.ts'), 'archive', '--session', target], {
+  const proc = Bun.spawn([process.execPath, join(root, 'src/entrypoints/cli.ts'), ...args], {
     cwd: root,
     env: { ...box.env, CLAUDE_CODE_SESSION_ID: ME },
     stdout: 'pipe',
@@ -103,6 +113,8 @@ async function archiveCli(box: Sandbox, port: number, target: string) {
   const [o, e] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
   return { code: await proc.exited, out: `${o}${e}`.trim() }
 }
+
+const archiveCli = (box: Sandbox, port: number, target: string) => nodeCli(box, port, ['archive', '--session', target])
 
 test("board archive on a node: another machine's session by its id or its name goes to the master by its prefixed key", async () => {
   const box = await sandbox()
@@ -128,6 +140,45 @@ test("board archive on a node: another machine's session by its id or its name g
     const none = await archiveCli(box, board.port, 'nobody')
     expect(none).toEqual({ code: 1, out: 'board: no session "nobody" on the board' })
     expect(archived).toHaveLength(3)
+  } finally {
+    board.stop()
+  }
+}, 30_000)
+
+test("board sleep, fork and move --device on a node: another machine's session by its bare id or name goes up by its key", async () => {
+  const box = await sandbox()
+  box.state({ 'api snapshot': { result: { snapshot: { panes: [], tabs: [], workspaces: [] } } } })
+  const board = standIn([])
+  try {
+    const slept = await nodeCli(box, board.port, ['sleep', 'cleo'])
+    expect(slept.code).toBe(0)
+    expect(slept.out).toStartWith('ok · 1 put to sleep of 1')
+    const forked = await nodeCli(box, board.port, ['fork', '--session', SID])
+    expect(forked.code).toBe(0)
+    const moved = await nodeCli(box, board.port, ['move', 'atlas', '--device', 'local'])
+    expect(moved.code).toBe(0)
+    expect(board.posted).toEqual([
+      { path: '/api/sleep', body: { targets: [`@server-2:${SID}`] } },
+      { path: `/api/session/${encodeURIComponent(`@server-2:${SID}`)}/fork`, body: {} },
+      { path: '/api/move', body: { targets: ['@server-1:b1c2d3e4-0000-4000-8000-000000000001'], device: 'local' } },
+    ])
+  } finally {
+    board.stop()
+  }
+}, 30_000)
+
+test('the master not reachable is said as such, not as "no session"; nothing is archived', async () => {
+  const box = await sandbox()
+  box.state({ 'api snapshot': { result: { snapshot: { panes: [], tabs: [], workspaces: [] } } } })
+  const archived: unknown[] = []
+  const board = standIn(archived, { unreachable: true })
+  try {
+    const r = await archiveCli(box, board.port, 'cleo')
+    expect(r).toEqual({
+      code: 1,
+      out: "board: the board's computer could not be asked for other machines' sessions: it is not reachable from here now",
+    })
+    expect(archived).toEqual([])
   } finally {
     board.stop()
   }

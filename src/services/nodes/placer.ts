@@ -405,6 +405,7 @@ export function createPlacer(o: PlacerOptions): Placer {
           ? { syncing: h.syncing }
           : {}),
       ...(l.exactSession && { exactSession: true as const }),
+      ...(l.trust && { trust: true as const }),
     }
   }
 
@@ -976,6 +977,7 @@ export function createPlacer(o: PlacerOptions): Placer {
     l.id = e.id
     l.sessionGiven = e.session
     if (e.exactSession) l.exactSession = true
+    if (e.trust) l.trust = true
     l.startedAt = e.at
     l.state = 'queued'
     l.step = 'placing'

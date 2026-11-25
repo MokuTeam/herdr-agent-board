@@ -1753,7 +1753,11 @@ async function fork(): Promise<void> {
   // On a node (#786), another machine's session by its key: its board forks it, through the master.
   const node = nodeConfig(cfg.node)
   const { foreignTargets } = await import('./node-remote-cli.ts')
-  const s = node && target && foreignTargets([target], node.id) ? { key: target, name: target } : await resolveSession()
+  // Its bare id or name (#798): another machine's when none of this computer's answers to it.
+  const up =
+    node && target && !foreignTargets([target], node.id) ? (await foreignTargetsUp([target], node.id))[0] : target
+  const key = node && up && foreignTargets([up], node.id) ? up : undefined
+  const s = key ? { key, name: target || key } : await resolveSession()
   if (cfg.web === false) throw new Error('board fork goes through the web board, and config.json turns it off')
   const res = await fetch(`http://127.0.0.1:${cfg.port ?? 12422}/api/session/${encodeURIComponent(s.key)}/fork`, {
     method: 'POST',
@@ -1969,17 +1973,20 @@ async function archive(): Promise<void> {
 }
 
 /**
- * On a node (#798): the session of another machine that `target` names by its id or name, as the
- * master's `board agents --json` lists them (asked as this session, through the uplink), in this
- * node's terms (`@<device>:<key>`); null when none does, or the master cannot be asked.
+ * On a node (#798): the sessions of other machines as the master's `board agents --json` lists them,
+ * asked once as this session through the uplink, as a lookup of a target by its id or name that
+ * gives its key in this node's terms (`@<device>:<key>`), null when none fits. null instead of the
+ * lookup when this is no session (the uplink asks as one). The master not answering is its own
+ * error, never "no session".
  */
-async function foreignTargetUp(target: string, self: string): Promise<string | null> {
+async function foreignLookup(self: string): Promise<((target: string) => string | null) | null> {
   const from = await ownSession().catch(() => null)
   if (!from?.key) return null
   const [{ callBoard }, { boardCall, foreignMatch }] = await Promise.all([
     import('./node-call.ts'),
     import('./node-remote-cli.ts'),
   ])
+  const asked = "the board's computer could not be asked for other machines' sessions"
   const answer = await callBoard(cfg.port)({
     cmd: 'agents',
     argv: ['--json'],
@@ -1987,19 +1994,48 @@ async function foreignTargetUp(target: string, self: string): Promise<string | n
     lane: null,
     files: [],
   })
-  if (answer?.state !== 'answered' || answer.code !== 0) return null
+  if (!answer) throw new Error(`${asked}: ${NO_BOARD}`)
+  if (answer.state !== 'answered') throw new Error(`${asked}: it is not reachable from here now`)
+  if (answer.code !== 0) throw new Error(`${asked}: ${answer.err.join('; ') || `exit ${answer.code}`}`)
   let views: unknown
   try {
     views = JSON.parse(answer.out.join('\n'))
   } catch {
-    return null
+    throw new Error(`${asked}: its answer could not be read`)
   }
   // The master's own sessions go by its id, which this node's payload carries (core/board-slices.ts).
   const relayed = (await boardCall(cfg.port, '/api/board', { ms: 5000 }))?.body.relayedDevices
   const masterId = isRecord(relayed) && typeof relayed.master === 'string' ? relayed.master : ''
-  const m = foreignMatch(views, target, self, masterId)
-  if (m && 'error' in m) throw new Error(m.error)
-  return m?.key ?? null
+  return target => {
+    const m = foreignMatch(views, target, self, masterId)
+    if (m && 'error' in m) throw new Error(m.error)
+    return m?.key ?? null
+  }
+}
+
+/** One target of another machine's (#798), as foreignLookup finds it; null when none is or this is no session. */
+async function foreignTargetUp(target: string, self: string): Promise<string | null> {
+  const look = await foreignLookup(self)
+  return look ? look(target) : null
+}
+
+/**
+ * On a node (#798): `targets` with each that no session of this computer answers to (by key,
+ * session id, pane or name) and that has no device prefix yet named as another machine's session,
+ * when one fits; the others as they came. The master is asked only when such a target is there.
+ */
+async function foreignTargetsUp(targets: readonly string[], self: string): Promise<string[]> {
+  const { parseNodeKey } = await import('../core/node-key.ts')
+  const items = await collect(deps)
+  const here = (t: string): boolean => {
+    const want = t.toLowerCase()
+    return items.some(i => [i.key, i.session, i.pane, i.name, i.autoName].some(v => !!v && v.toLowerCase() === want))
+  }
+  const unknown = targets.filter(t => !parseNodeKey(t) && !here(t))
+  if (!unknown.length) return [...targets]
+  const look = await foreignLookup(self)
+  if (!look) return [...targets]
+  return targets.map(t => (unknown.includes(t) ? (look(t) ?? t) : t))
 }
 
 /** `board archive` of another machine's session from a node (#786): through the master, which hands it on. */
@@ -2076,7 +2112,13 @@ async function sleep(): Promise<void> {
     )
   // On a node (#786), another machine's sessions by their keys: put to sleep there, through the master.
   const node = nodeConfig(cfg.node)
-  if (node && !self && (await import('./node-remote-cli.ts')).foreignTargets(targets, node.id)) return sleepUp(targets)
+  if (node && !self) {
+    const { foreignTargets } = await import('./node-remote-cli.ts')
+    if (foreignTargets(targets, node.id)) return sleepUp(targets)
+    // A bare id or name of another machine's session (#798): found through the master, put to sleep there.
+    const up = await foreignTargetsUp(targets, node.id)
+    if (foreignTargets(up, node.id)) return sleepUp(up)
+  }
   const up = await wakeAnswers(deps)
   if (!up.ok) throw new Error(`putting sessions to sleep needs ${wakeMissing(up)}; nothing was put to sleep`)
   const from = await ownSession()
@@ -2201,7 +2243,12 @@ async function moveDevice(targets: string[], device: string, dryRun: boolean): P
  */
 async function move(): Promise<void> {
   const asked = parseMoveAny([...rest, ...(target ? [target] : [])])
-  if (asked.device !== undefined) return moveDevice(asked.targets, asked.device, asked.dryRun)
+  if (asked.device !== undefined) {
+    // On a node (#798): a bare id or name of another machine's session goes by its key, which the relay takes up.
+    const node = nodeConfig(cfg.node)
+    const targets = node ? await foreignTargetsUp(asked.targets, node.id) : asked.targets
+    return moveDevice(targets, asked.device, asked.dryRun)
+  }
   const { targets, profile } = asked
   const from = await ownSession()
   const items = await collect(deps)

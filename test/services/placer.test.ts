@@ -1034,6 +1034,51 @@ test('a start held on its way to a node retries there on master restart and star
   await again.proc.exited
 }, 90_000)
 
+test('a --trust start held on its way to a node keeps trust across a master restart (#798)', async () => {
+  const pair = await placing({ count: 1, nodes: { order: ['server-1', 'local'], whenFull: 'local' } })
+  const node = pair.nodes[0] as Pair['nodes'][0]
+  let release = (): void => {}
+  const held = new Promise<void>(resolve => {
+    release = resolve
+  })
+  let sawPost = false
+  // The first POST never reaches the node: the master that sent it is gone before any answer.
+  node.proxy.intercept = async (method, path) => {
+    if (method !== 'POST' || path !== '/api/node/launch') return null
+    node.proxy.intercept = null
+    sawPost = true
+    await held
+    return new Response(JSON.stringify({ error: 'node' }), {
+      status: 503,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+  const id = await startAt(pair.master.url, pair.checkout, 'atlas trusted', { trust: true })
+  await until(() => sawPost, 20_000)
+  const file = join(stateFolder(pair.master.box), 'nodes', 'queue.json')
+  const entries = () =>
+    (JSON.parse(readFileSync(file, 'utf8')) as { entries: { id: string; session: string; trust?: true }[] }).entries
+  const saved = entries()[0]
+  assert.equal(saved?.id, id)
+  assert.equal(saved?.trust, true)
+
+  pair.master.proc.kill()
+  await pair.master.proc.exited
+  release()
+  const again = await serveBoard(pair.master.box, pair.masterConfig, pair.env)
+  again.proc.send('refresh')
+  await fresh(again.url)
+  await until(() => started(node.box).length === 1 && entries().length === 0, 20_000)
+  await settled(again.url)
+  assert.deepEqual(started(node.box), [saved?.session ?? ''])
+  // What the new master sent the node still says trust.
+  const sent = launchBodies(node).at(-1)
+  assert.equal(sent?.name, 'atlas trusted')
+  assert.equal(sent?.trust, true)
+  again.proc.kill()
+  await again.proc.exited
+}, 90_000)
+
 test("#786: a start from a node's own page goes to the master's placer, which places it on another node", async () => {
   const pair = await placing({ nodes: { order: ['server-2', 'server-1', 'local'] } })
   const [one, two] = pair.nodes as [Pair['nodes'][0], Pair['nodes'][0]]

@@ -54,6 +54,8 @@ export interface QueueEntry {
   sentAt?: number
   /** True when the start must use `session` as an exact Claude session id (a verifier, #675). */
   exactSession?: true
+  /** spawn-agent --trust (#798): the board that runs it answers the folder-trust dialog. */
+  trust?: true
 }
 
 interface QueueFile {
@@ -78,7 +80,8 @@ const isEntry = (v: unknown): v is QueueEntry =>
   isRecord(v.task) &&
   optionalDevice(v.syncing) &&
   optionalDevice(v.sent) &&
-  optionalAt(v.sentAt)
+  optionalAt(v.sentAt) &&
+  (v.trust === undefined || v.trust === true)
 const isQueueFile = (v: unknown): v is QueueFile => isRecord(v) && v.version === 1 && Array.isArray(v.entries)
 
 export interface NodeQueue {
