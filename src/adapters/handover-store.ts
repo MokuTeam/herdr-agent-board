@@ -530,7 +530,12 @@ function pruneHandoverBackups(): void {
       })
       .filter((x): x is { p: string; at: number } => x !== null)
       .sort((a, b) => b.at - a.at)
-    for (const old of dirs.slice(HANDOVER_BACKUPS_KEPT)) rmSync(old.p, { recursive: true, force: true })
+    // A backup still holding what a commit moved aside (#777) is the only way back to that state:
+    // kept until a rollback takes its files back.
+    for (const old of dirs.slice(HANDOVER_BACKUPS_KEPT)) {
+      if (listFilesRecursive(join(old.p, 'retired'), '').length) continue
+      rmSync(old.p, { recursive: true, force: true })
+    }
   } catch {}
 }
 
@@ -719,10 +724,11 @@ const isOldMasterRetiredRel = (rel: string): boolean =>
 
 /**
  * Removes live shipped schedule, watch, calendar-reminder, and owner-watch files from a newly
- * demoted old master after the new master commits, preventing duplicate scheduler runs.
- * Backup copies remain in `handover/backups/<id>/` for rollback.
+ * demoted old master after the new master commits, preventing duplicate scheduler runs, then moves
+ * the rest of the shipped state aside (moveShippedOldMasterState). Backup copies remain in
+ * `handover/backups/<id>/` for rollback. Returns how many files it removed.
  */
-export function retireShippedOldMasterState(id: string): number {
+export function retireShippedOldMasterState(id: string, log?: (line: string) => void): number {
   const dir = handoverBackupDir(id)
   const manifest = readJson(join(dir, 'backup-manifest.json'), isBackupManifest)
   if (!manifest) throw new Error(`handover backup ${id} not found or unreadable`)
@@ -749,9 +755,31 @@ export function retireShippedOldMasterState(id: string): number {
   rmFile(ownerWatchFile())
   forgetOwnerWatch()
 
-  // What the new master took over and this board, a node now, no longer runs (#777): moved under
-  // the backup's retired/ folder, not deleted, so a rollback puts the very same files back. A second
-  // run (a finalization retried after a crash) keeps the copy the first one moved.
+  moveShippedOldMasterState(id, log)
+  return removed
+}
+
+/** Whether the commit's move of the shipped state (moveShippedOldMasterState) ran for this backup. */
+export function shippedStateMoved(id: string): boolean {
+  const manifest = readJson(join(handoverBackupDir(id), 'backup-manifest.json'), isBackupManifest)
+  return manifest?.retired !== undefined
+}
+
+/**
+ * What the new master took over and this board, a node now, no longer runs (#777): moved under the
+ * backup's retired/ folder, not deleted, so a rollback puts the very same files back. Run by the
+ * commit, and once at boot by a node demoted before it existed. Best effort, file by file: a file
+ * that will not move (locked, no room) is named in the log and stays live, and the rest go on, so a
+ * finalization never stops halfway on it. A second run (a finalization retried after a crash) keeps
+ * the copy the first one moved. Returns how many files moved.
+ */
+export function moveShippedOldMasterState(id: string, log: (line: string) => void = () => {}): number {
+  const dir = handoverBackupDir(id)
+  const manifestFile = join(dir, 'backup-manifest.json')
+  const manifest = readJson(manifestFile, isBackupManifest)
+  if (!manifest) throw new Error(`handover backup ${id} not found or unreadable`)
+  const save = (retired: string[]): void =>
+    replaceFile(manifestFile, `${JSON.stringify({ ...manifest, retired }, null, 2)}\n`, undefined, PRIVATE_MODE)
   // The manifest names them before the first move: a crash halfway leaves every moved file findable
   // (a rollback skips a name whose copy is not there).
   const retiredRoot = join(dir, 'retired')
@@ -759,21 +787,23 @@ export function retireShippedOldMasterState(id: string): number {
   const moves = retirableOldMasterFiles().filter(
     f => isSafeHandoverRelPath(f.rel) && !existsSync(join(retiredRoot, ...f.rel.split('/'))),
   )
-  const retired = [...new Set([...known, ...moves.map(f => f.rel)])]
-  if (retired.length !== known.length) {
-    replaceFile(
-      join(dir, 'backup-manifest.json'),
-      `${JSON.stringify({ ...manifest, retired }, null, 2)}\n`,
-      undefined,
-      PRIVATE_MODE,
-    )
-  }
+  const planned = [...new Set([...known, ...moves.map(f => f.rel)])]
+  if (manifest.retired === undefined || planned.length !== known.length) save(planned)
+  const failed = new Set<string>()
+  let moved = 0
   for (const f of moves) {
     const dest = join(retiredRoot, ...f.rel.split('/'))
-    mkdirSync(dirname(dest), { recursive: true, mode: PRIVATE_DIR_MODE })
-    moveFile(f.abs, dest)
+    try {
+      mkdirSync(dirname(dest), { recursive: true, mode: PRIVATE_DIR_MODE })
+      moveFile(f.abs, dest)
+      moved++
+    } catch (err) {
+      failed.add(f.rel)
+      log(`handover ${id}: ${f.rel} stays in place: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
-  return removed
+  if (failed.size) save(planned.filter(rel => !failed.has(rel)))
+  return moved
 }
 
 const SQLITE_SIDECARS = ['-wal', '-shm', '-journal'] as const

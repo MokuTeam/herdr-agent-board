@@ -2,12 +2,15 @@
 // refuses the forms that add a device and the backup's changes with a plain sentence, and shows no
 // backup line, while a board without `node` answers them as before; and a master whose config.json
 // loses `nodes` while it runs closes what only a master runs, and makes it again when `nodes` is back.
+
+import { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { logged, serveBoard } from '../support/board-server.ts'
+import { logged, serveBoard, unusedPort } from '../support/board-server.ts'
 import { nodeBoard } from '../support/node-pair.ts'
 import { sandbox, until } from '../support/sandbox.ts'
+import { stateFolder } from '../support/tunnel-board.ts'
 
 const SETUP = ['/api/nodes/setup', '/api/nodes/relay/setup', '/api/nodes/computer/setup']
 const ON_NODE = 'This computer is a node of the master board.'
@@ -53,6 +56,67 @@ describe('a node board (#777)', () => {
     const payload = (await (await fetch(`${node.url}/api/board`)).json()) as Record<string, unknown>
     expect(payload.backup).toBeUndefined()
     expect(payload.machine).toBeDefined()
+  }, 60_000)
+})
+
+describe('a node demoted by a handover before #777', () => {
+  test('moves the shipped state aside and drops the backup target once, at boot; a second boot changes nothing', async () => {
+    const id = 'ho-before-777'
+    const box = await sandbox()
+    const state = stateFolder(box)
+    const backups = join(state, 'handover', 'backups', id)
+    mkdirSync(backups, { recursive: true })
+    writeFileSync(
+      join(state, 'handover', 'state.json'),
+      JSON.stringify({
+        v: 1,
+        id,
+        role: 'old-master',
+        phase: 'committed',
+        from: 'laptop',
+        to: 'atlas',
+        peerId: 'atlas',
+        otherNodes: [],
+        at: 1000,
+      }),
+    )
+    writeFileSync(
+      join(backups, 'backup-manifest.json'),
+      JSON.stringify({ v: 1, id, at: 1000, hadConfig: true, files: [], appliedFiles: [] }),
+    )
+    new Database(join(state, 'board.db')).close()
+    writeFileSync(join(state, 'access.json'), '{"owner":"anna"}')
+    const file = configOf(box)
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, JSON.stringify({ language: 'en', backup: { folder: join(box.dir, 'Sync') } }))
+    const nodeCfg = async () => ({
+      language: 'en',
+      node: { id: 'laptop', port: await unusedPort(), workRoot: box.dir },
+    })
+    const first = await serveBoard(box, await nodeCfg())
+    const logs = () => JSON.stringify(first.proc.messages)
+    await until(() => logged(first.proc, `handover ${id}: moved`), 10_000).catch(err => {
+      throw new Error(`${err.message}: ${logs().slice(0, 2000)}`)
+    })
+    const retired = join(backups, 'retired')
+    await until(() => logged(first.proc, 'node door: listening'), 10_000).catch(err => {
+      throw new Error(`${err.message}: ${logs().slice(0, 3000)}`)
+    })
+    expect(existsSync(join(retired, 'access.json'))).toBe(true)
+    expect(existsSync(join(retired, 'board.db'))).toBe(true)
+    expect(existsSync(join(state, 'access.json'))).toBe(false)
+    const config = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>
+    expect(config.backup).toBeUndefined()
+    expect(config.language).toBe('en')
+
+    // a second boot: what the node writes since stays where it is
+    first.proc.kill()
+    writeFileSync(join(state, 'access.json'), '{"owner":"ben"}')
+    const again = await serveBoard(box, await nodeCfg())
+    await untilAsync(async () => (await fetch(`${again.url}/api/board`)).ok)
+    expect(logged(again.proc, `handover ${id}: moved`)).toBe(false)
+    expect(readFileSync(join(state, 'access.json'), 'utf8')).toBe('{"owner":"ben"}')
+    expect(readFileSync(join(retired, 'access.json'), 'utf8')).toBe('{"owner":"anna"}')
   }, 60_000)
 })
 

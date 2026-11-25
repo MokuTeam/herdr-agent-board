@@ -26,8 +26,10 @@ import { archiveCommit, archiveStamp, headCommit } from '../adapters/git.ts'
 import { gitTools, masterGit } from '../adapters/git-access.ts'
 import {
   handoverStageDir,
+  moveShippedOldMasterState,
   readHandoverState,
   restoreLocalBackup,
+  shippedStateMoved,
   writeHandoverState,
 } from '../adapters/handover-store.ts'
 import { workspaceList } from '../adapters/herdr.ts'
@@ -435,6 +437,27 @@ export async function startServer({
       })
       delete (cfg as unknown as Record<string, unknown>).node
       log(`handover ${bootHandover.id}: completed deferred node-door removal after commit`)
+    }
+  } else if (bootHandover?.role === 'old-master' && bootHandover.phase === 'committed' && isNodeOnly(cfg)) {
+    // A node its handover demoted before #777 still holds the master's state live: moved aside once,
+    // before any database opens (a rollback still puts it back), and its stale backup target dropped.
+    try {
+      if (!shippedStateMoved(bootHandover.id)) {
+        const moved = moveShippedOldMasterState(bootHandover.id, log)
+        log(`handover ${bootHandover.id}: moved ${moved} files the new master took over aside`)
+      }
+    } catch (err) {
+      log(`handover ${bootHandover.id}: moving the shipped state aside failed: ${messageOf(err)}`)
+    }
+    if (Object.hasOwn(readConfigFile() ?? {}, 'backup')) {
+      withConfigFile((current, save) => {
+        if (!current || !Object.hasOwn(current, 'backup')) return
+        const next = { ...current }
+        delete next.backup
+        save(next)
+      })
+      delete (cfg as unknown as Record<string, unknown>).backup
+      log(`handover ${bootHandover.id}: dropped the backup target the new master took over`)
     }
   } else if (oldMasterStillMaster) {
     log(`handover ${bootHandover?.id}: old master committed before finishing demotion; staying write-frozen`)

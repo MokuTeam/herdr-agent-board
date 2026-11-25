@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite'
 import { afterEach, describe, expect, test } from 'bun:test'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { accessFile } from '../../src/adapters/access-store.ts'
@@ -439,5 +439,47 @@ describe('adapters/handover-store (#697)', () => {
     expect(readFileSync(accessFile(), 'utf8')).toBe('{"owner":"ben"}')
     expect(existsSync(dbFile())).toBe(true)
     expect(existsSync(join(handoverBackupDir('ho-keep'), 'retired'))).toBe(false)
+  })
+
+  test('a file that will not move stays live and the rest move on, named in the log (#777)', async () => {
+    const env = makeEnv()
+    writeFileSync(join(env.configDir, 'config.json'), JSON.stringify({ nodes: { id: 'laptop', devices: {} } }))
+    openDb({ create: true })?.close()
+    mkdirSync(calendarDir(), { recursive: true })
+    writeFileSync(join(calendarDir(), 'cache.json'), '[]')
+    writeFileSync(accessFile(), '{"owner":"anna"}')
+    takeLocalBackup('ho-stuck', 1000)
+    // a file where the calendar's folder would go: that move fails, as a lock or a full disk would
+    const dir = handoverBackupDir('ho-stuck')
+    mkdirSync(join(dir, 'retired'), { recursive: true })
+    writeFileSync(join(dir, 'retired', 'calendar'), 'in the way')
+    const lines: string[] = []
+    expect(() => retireShippedOldMasterState('ho-stuck', line => lines.push(line))).not.toThrow()
+    expect(existsSync(join(calendarDir(), 'cache.json'))).toBe(true)
+    expect(existsSync(dbFile())).toBe(false)
+    expect(existsSync(accessFile())).toBe(false)
+    expect(lines.some(l => l.includes('calendar/cache.json stays in place'))).toBe(true)
+    const manifest = JSON.parse(readFileSync(join(dir, 'backup-manifest.json'), 'utf8'))
+    expect(manifest.retired).toContain('board.db')
+    expect(manifest.retired).not.toContain('calendar/cache.json')
+    await restoreLocalBackup('ho-stuck', { scope: 'old-master-committed' })
+    expect(existsSync(dbFile())).toBe(true)
+    expect(readFileSync(accessFile(), 'utf8')).toBe('{"owner":"anna"}')
+    expect(readFileSync(join(calendarDir(), 'cache.json'), 'utf8')).toBe('[]')
+  })
+
+  test('the prune keeps a backup that holds retired files, and prunes the others as before (#777)', () => {
+    const env = makeEnv()
+    writeFileSync(join(env.configDir, 'config.json'), JSON.stringify({ nodes: { id: 'laptop', devices: {} } }))
+    openDb({ create: true })?.close()
+    takeLocalBackup('ho-retired', 1000)
+    retireShippedOldMasterState('ho-retired')
+    takeLocalBackup('ho-plain', 1000)
+    const long = Date.now() / 1000 - 3600
+    utimesSync(handoverBackupDir('ho-retired'), long, long)
+    utimesSync(handoverBackupDir('ho-plain'), long + 1, long + 1)
+    for (const n of [1, 2, 3, 4, 5]) takeLocalBackup(`ho-new-${n}`, 1000 + n)
+    expect(existsSync(join(handoverBackupDir('ho-retired'), 'retired', 'board.db'))).toBe(true)
+    expect(existsSync(handoverBackupDir('ho-plain'))).toBe(false)
   })
 })

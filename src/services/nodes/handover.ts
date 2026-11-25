@@ -1373,7 +1373,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
           // The databases it moves aside must not stay open under it (#777).
           await o.beforeDbReplace()
           try {
-            retireShippedOldMasterState(id)
+            retireShippedOldMasterState(id, o.log)
           } finally {
             await o.afterDbReplace()
           }
