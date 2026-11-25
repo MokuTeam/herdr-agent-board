@@ -126,6 +126,8 @@ test("a node's page and its sessionless terminal reach the master's time, calend
     body: JSON.stringify({ cmd: 'presence', argv: ['away'] }),
   })
   expect(cliBySession.status).toBe(403)
+  const slicesBySession = await fetch(`${node.url}/api/board-slices`, { headers: asSession })
+  expect(slicesBySession.status).toBe(403)
 
   // The node's payload carries the master's parts.
   const payload = await until('the node payload has the master parts', async () => {

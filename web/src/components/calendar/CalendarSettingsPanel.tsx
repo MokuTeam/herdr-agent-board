@@ -7,7 +7,7 @@
 // file of its own, never config.json; the panel never shows it again, only whether it is set.
 import { type CSSProperties, type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
 import { type CalZone, defaultZoneLabel, MAX_EXTRA_ZONES, MAX_ZONE_LABEL } from '../../../../src/core/calendar.ts'
-import { errorText, postJson, replyOf } from '../../api/client.ts'
+import { errorText, postJson, refusalText, replyOf } from '../../api/client.ts'
 import { useLatest } from '../../hooks/useLatest.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { agoText, type CalSourceView, sourceColors, sourceLabel } from '../../models/calendar.ts'
@@ -119,7 +119,7 @@ export function CalendarSettingsPanel({ open, onClose, back }: CalendarSettingsP
       if (res.ok && isView(value)) {
         setView(value)
         setFailed(null)
-      } else setFailed(String((value as { error?: unknown }).error ?? res.status))
+      } else setFailed(refusalText(value, String(res.status), latest.current.t))
     } catch (err) {
       setFailed(errorText(err, latest.current.t))
     }
@@ -140,12 +140,12 @@ export function CalendarSettingsPanel({ open, onClose, back }: CalendarSettingsP
         setSaid(
           reply.ok
             ? { part, text: t('cal.set.tested', { n: reply.count ?? 0 }), ok: true }
-            : { part, text: reply.error || t('err.status', { code: res.status }) },
+            : { part, text: refusalText(reply, t('err.status', { code: res.status }), t) },
         )
         return !!reply.ok
       }
       if (!res.ok || reply.ok === false) {
-        setSaid({ part, text: reply.error || t('err.status', { code: res.status }) })
+        setSaid({ part, text: refusalText(reply, t('err.status', { code: res.status }), t) })
         return false
       }
       return true

@@ -12,7 +12,7 @@
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { CalEvent } from '../../../../src/core/calendar.ts'
-import { errorText, postJson, replyOf } from '../../api/client.ts'
+import { errorText, postJson, refusalText, replyOf } from '../../api/client.ts'
 import { useLatest } from '../../hooks/useLatest.ts'
 import { useMediaQuery } from '../../hooks/useMediaQuery.ts'
 import { useMinute } from '../../hooks/useMinute.ts'
@@ -117,7 +117,7 @@ export function CalendarPanel({ open, focus = null, onFocused, onClose, onSettin
         if (res.ok && isCalAnswer(value)) {
           setAnswer(value)
           setError(null)
-        } else setError(String((value as { error?: unknown }).error ?? res.status))
+        } else setError(refusalText(value, String(res.status), latest.current.t))
       } catch (err) {
         if (turns.current.last(n)) setError(errorText(err, latest.current.t))
       }

@@ -119,6 +119,15 @@ export function errorText(err: unknown, t: Translator): string {
   return t('err.offline', { why: err instanceof Error ? err.message : String(err) })
 }
 
+/**
+ * A refusal's words as a panel shows them: an offline device's card or the shared board away (#780)
+ * in plain words, else the answer's own error, else `fallback`.
+ */
+export function refusalText(value: unknown, fallback: string, t: Translator): string {
+  const reply = isReply(value) ? value : {}
+  return offlineAnswer(reply, t) ?? (typeof reply.error === 'string' && reply.error ? reply.error : fallback)
+}
+
 /** An answer's JSON, {} when it has none. */
 export async function replyOf(res: Response): Promise<unknown> {
   try {

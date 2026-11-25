@@ -11,7 +11,7 @@
 import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useState } from 'react'
 import type { BoardCategory, Swatch } from '../../../../src/core/payload.ts'
 import { systemsOfProject } from '../../../../src/core/time.ts'
-import { errorText, postJson, replyOf } from '../../api/client.ts'
+import { errorText, postJson, refusalText, replyOf } from '../../api/client.ts'
 import { useLatest } from '../../hooks/useLatest.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { draftColor } from '../../models/categories.ts'
@@ -55,7 +55,7 @@ export function TimeSettingsPanel({ open, onClose, back }: TimeSettingsPanelProp
       if (res.ok && isTimeSettingsView(value)) {
         setView(value)
         setLoadError(null)
-      } else setLoadError(String((value as { error?: unknown }).error ?? res.status))
+      } else setLoadError(refusalText(value, String(res.status), latest.current.t))
     } catch (err) {
       setLoadError(errorText(err, latest.current.t))
     }
@@ -76,7 +76,7 @@ export function TimeSettingsPanel({ open, onClose, back }: TimeSettingsPanelProp
       const reply = (await replyOf(res)) as { ok?: boolean; error?: string; moved?: number; view?: unknown }
       if (isTimeSettingsView(reply.view)) setView(reply.view)
       if (!res.ok || reply.ok === false) {
-        setRefusal({ part, text: reply.error || t('err.status', { code: res.status }) })
+        setRefusal({ part, text: refusalText(reply, t('err.status', { code: res.status }), t) })
         return false
       }
       if (body.op === 'rename' && reply.moved) toast(t('time.set.moved', { n: reply.moved }))

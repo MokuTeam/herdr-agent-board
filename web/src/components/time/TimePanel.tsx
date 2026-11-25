@@ -31,7 +31,7 @@
 // days' figures (GET /api/time?from&to) and drawn by TimeSpanView.tsx, and a tap on a day opens it
 // here. The client chips pick in all three.
 import { type PointerEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { errorText, postJson, replyOf } from '../../api/client.ts'
+import { errorText, postJson, refusalText, replyOf } from '../../api/client.ts'
 import { useLaneFades } from '../../hooks/useLaneFades.ts'
 import { useLatest } from '../../hooks/useLatest.ts'
 import { useSegmentThumb } from '../../hooks/useSegmentThumb.ts'
@@ -132,7 +132,7 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
         if (res.ok && isTimeDay(value)) {
           setDay(value)
           setError(null)
-        } else setError({ date: d, text: String((value as { error?: unknown }).error ?? res.status) })
+        } else setError({ date: d, text: refusalText(value, String(res.status), latest.current.t) })
       } catch (err) {
         if (turns.current.last(n)) setError({ date: d, text: errorText(err, latest.current.t) })
       }
@@ -152,7 +152,7 @@ export function TimePanel({ open, onClose, client, onClient }: TimePanelProps) {
         if (res.ok && isTimeSpan(value)) {
           setSpan(value)
           setSpanError(null)
-        } else setSpanError({ from: a, to: b, text: String((value as { error?: unknown }).error ?? res.status) })
+        } else setSpanError({ from: a, to: b, text: refusalText(value, String(res.status), latest.current.t) })
       } catch (err) {
         if (spanTurns.current.last(n)) setSpanError({ from: a, to: b, text: errorText(err, latest.current.t) })
       }

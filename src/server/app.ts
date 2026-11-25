@@ -1505,7 +1505,11 @@ export async function startServer({
     if (handoverFrozen && req.method !== 'GET' && req.method !== 'HEAD')
       return json(503, { error: 'handover-frozen', message: 'master handover in progress; writes are frozen' })
     // For a node only (#780): the payload's master-run parts, and a sessionless terminal's command as the owner's.
-    if (req.method === 'GET' && raw === BOARD_SLICES_PATH) return json(200, { ok: true, slices: board.slices() })
+    if (req.method === 'GET' && raw === BOARD_SLICES_PATH) {
+      // The node's own page asks as the owner; a node session reads its panels by their own paths.
+      if (from?.who.kind !== 'owner') return json(403, { ok: false, error: 'owner' })
+      return json(200, { ok: true, slices: board.slices() })
+    }
     if (req.method === 'POST' && raw === NODE_CLI_PATH) {
       if (from?.who.kind !== 'owner') return json(403, { ok: false, error: 'owner' })
       const call = ownerCliOf(await req.json().catch(() => null))
