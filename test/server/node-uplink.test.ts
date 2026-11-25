@@ -693,7 +693,7 @@ test('#698 shared-state commands from a node reach master state, enforce trust b
   expect((await nodeCli(['away', 'off'])).stdout.trim()).toBe('ok · here')
   expect((await nodeCli(['presence'])).stdout).toContain('here')
 
-  // board list, cats, journal, spend: list omits free-text master notes and hides server-2; spend runs locally on node.
+  // board list, cats, journal, spend: list omits free-text notes, server-2's too (#772); spend runs locally on node.
   const jr = await nodeCli(['journal', '--since', '1h', '--json'])
   expect(jr.code, jr.stderr).toBe(0)
   expect(JSON.parse(jr.stdout)).toMatchObject({ ok: true })
@@ -727,7 +727,7 @@ test('#698 shared-state commands from a node reach master state, enforce trust b
   expect(decHuman.stdout).toContain('master question?')
   expect(decHuman.stdout).toContain('node question?')
 
-  // board remind/every aimed at master session lands on master; own remind stays local; server-2 hidden.
+  // board remind/every aimed at master session lands on master; own remind stays local; server-2's session too (#772).
   const rem = await nodeCli(['remind', '--session', MASTER_S, '--idle', 'in', '20m', 'check master'])
   expect(rem.code, rem.stderr).toBe(0)
   const remMatch = /reminder ([0-9a-f]{6})/.exec(rem.stdout)
@@ -743,9 +743,14 @@ test('#698 shared-state commands from a node reach master state, enforce trust b
   const evId = /every ([0-9a-f]{6})/.exec(ev.stdout)?.[1] as string
   expect(existsSync(join(masterSchedDir, `${evId}.json`))).toBe(true)
 
-  const remHidden = await nodeCli(['remind', '--session', HIDDEN_S, 'in', '20m', 'nope'])
-  expect(remHidden.code).toBe(1)
-  expect(remHidden.stderr).toContain(`no session "${HIDDEN_S}"`)
+  // Another node's session (#772): held on the master for its prefixed key, sent through its node.
+  const remPeer = await nodeCli(['remind', '--session', HIDDEN_S, 'in', '20m', 'to the other node'])
+  expect(remPeer.code, remPeer.stderr).toBe(0)
+  const remPeerId = /reminder ([0-9a-f]{6})/.exec(remPeer.stdout)?.[1] as string
+  expect(existsSync(join(nodeSchedDir, `${remPeerId}.json`))).toBe(false)
+  const peerEntry = JSON.parse(readFileSync(join(masterSchedDir, `${remPeerId}.json`), 'utf8'))
+  expect(peerEntry).toMatchObject({ key: `@${node2.id}:${HIDDEN_S}`, text: 'to the other node' })
+  expect(peerEntry).not.toHaveProperty('pane')
 
   // Own reminder without --session stays local on the node.
   const localRem = await nodeCli(['remind', 'in', '20m', 'local note'])

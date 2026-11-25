@@ -1035,12 +1035,21 @@ const MASTER_CARDS = [
   ),
 ]
 
-/** What the master's uplink answers a node session's call (services/nodes/uplink.ts sendFrom, agentsFrom). */
-function asMaster(call: Record<string, unknown>, cards: Record<string, unknown>[] = MASTER_CARDS) {
-  const targets = targetsOf(cards).filter(t => t.device === null || t.device === 'server-2')
+/**
+ * What the master's uplink answers a node session's call (services/nodes/uplink.ts sendFrom, agentsFrom):
+ * every machine's sessions (#772), `offline` the devices whose link is not online.
+ */
+function asMaster(
+  call: Record<string, unknown>,
+  cards: Record<string, unknown>[] = MASTER_CARDS,
+  offline: ReadonlySet<string> = new Set(),
+) {
+  const targets = targetsOf(cards)
   const argv = call.argv as string[]
   if (call.cmd === 'agents') {
-    const views = agentViewsOf(targets, { selfKey: `@server-2:${String(call.session)}` }).map(v => JSON.stringify(v))
+    const views = agentViewsOf(targets, { selfKey: `@server-2:${String(call.session)}`, offline }).map(v =>
+      JSON.stringify(v),
+    )
     return {
       state: 'answered',
       code: 0,
@@ -1239,6 +1248,43 @@ test('#639 on a node this profile’s session and a local agy session of the nam
     'Queued for Gemini Worker (agy) through the board',
   )
   expect(agy.calls).toEqual([])
+})
+
+const SID_B3 = 'c1d2e3f4-5a6b-4c7d-8e9f-0a1b2c3d4e5f'
+const SID_B4 = 'd2e3f4a5-6b7c-4d8e-9f0a-1b2c3d4e5f6a'
+/** The master's cards with another node's two sessions, one asleep, and a third node's, beside this one's. */
+const MESH_CARDS = [
+  masterCard('work-00', SID_WORK00),
+  masterCard('Node Me', SID_ME, { key: ME_ON_NODE, device: 'server-2', pane: 'w5:pA' }),
+  masterCard('Legacy-master', SID_L, { key: `@server-2:${SID_L}`, device: 'server-2', pane: 'w5:pB' }),
+  masterCard('Builder 100%', SID_B3, { key: `@server-3:${SID_B3}`, device: 'server-3', status: 'working' }),
+  masterCard('Ночной', SID_B4, { key: `@server-4:${SID_B4}`, device: 'server-4', agent: 'agy', sleeping: true }),
+]
+
+test('#772 ListAgents on a node lists the other nodes’ sessions too, never its own; SendMessage reaches them', async () => {
+  const { w, calls } = await nodeWorld(c => asMaster(c, MESH_CARDS, new Set(['server-4'])))
+  const part = masterPart(contextOf(await listOn(w)))
+  expect(part[0]).toStartWith("Sessions on the board's main computer and its other nodes (this one is its node;")
+  expect(part.slice(1)).toEqual([
+    '  work-00 [4db8b7f6]  ·  idle',
+    '  Builder 100% [c1d2e3f4]  ·  node server-3  ·  working',
+    '  Ночной [d2e3f4a5]  ·  agy  ·  node server-4 (offline now)  ·  asleep',
+  ])
+  const r = await runHook(w, 'pre-send', sendFrom('Builder 100%', 'build done', SID_ME))
+  expect(denied(r)).toContain('queued for Builder 100% [c1d2e3f4] on node server-3')
+  expect(calls.map(c => c.cmd)).toEqual(['agents', 'agents', 'send'])
+  expect(scheduled(w)).toEqual([])
+})
+
+test('#772 a master that has no card of this session yet: this node’s own are still left out, by config.json’s node id', async () => {
+  const cards = MESH_CARDS.filter(c => c.key !== ME_ON_NODE)
+  const { w } = await nodeWorld(c => asMaster(c, cards))
+  const part = masterPart(contextOf(await listOn(w)))
+  expect(part.slice(1)).toEqual([
+    '  work-00 [4db8b7f6]  ·  idle',
+    '  Builder 100% [c1d2e3f4]  ·  node server-3  ·  working',
+    '  Ночной [d2e3f4a5]  ·  agy  ·  node server-4  ·  asleep',
+  ])
 })
 
 test('#639 without `node` in config.json nothing goes up: a plain board and a master make no node call', async () => {

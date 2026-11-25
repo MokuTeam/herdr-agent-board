@@ -466,9 +466,10 @@ describe("the master's side", () => {
     expect(existsSync(join(dir, 'nodes', 'server-1', 'uplink'))).toBe(false)
   })
 
-  test("#619 a node session's board send is queued here once for the card it names, signed with its prefixed key; another node is out of its reach", async () => {
+  test("#619 #772 a node session's board send is queued here once for the card it names, signed with its prefixed key; another node's session too", async () => {
     const dir = isolatedHome()
     const store = createDeviceStore({ dir: join(dir, 'nodes') })
+    const OTHER = '8c9d0e1f-2a3b-4c4d-9e5f-6a7b8c9d0e1f'
     const sent = [
       { id: 's-1', cmd: 'send', argv: ['Monitor', 'done: case 42'], session: 'n-1', lane: null },
       { id: 's-2', cmd: 'send', argv: ['nobody', 'x'], session: 'n-1', lane: null },
@@ -478,8 +479,10 @@ describe("the master's side", () => {
       { id: 's-1', cmd: 'send', argv: ['Monitor', 'done: case 42'], session: 'n-1', lane: null },
       // A card named like a thread write: not kept, and no thread command runs.
       { id: 's-5', cmd: 'send', argv: ['post', 'to post'], session: 'n-1', lane: null },
-      // Another node's session: not reached, not even named.
+      // Another node's session (#772): reached as from the master, through its own node.
       { id: 's-6', cmd: 'send', argv: ['Elsewhere', 'x'], session: 'n-1', lane: null },
+      // A node that names another node's session as its own is still signed as its own node.
+      { id: 's-7', cmd: 'send', argv: ['Monitor', 'posing'], session: `@server-2:${OTHER}`, lane: null },
     ]
     const posted: [string, UplinkResult][] = []
     const link = standIn((path, init) => {
@@ -503,8 +506,8 @@ describe("the master's side", () => {
       pane: 'w2:p4',
     } as Item
     const elsewhere = {
-      key: `@server-2:${N1}`,
-      session: N1,
+      key: `@server-2:${OTHER}`,
+      session: OTHER,
       name: 'Elsewhere',
       device: 'server-2',
       pane: 'w5:p1',
@@ -539,7 +542,15 @@ describe("the master's side", () => {
     expect(answers('s-5')).toMatchObject([
       { code: 0, out: [expect.stringMatching(/^ok · queued for post \[a1b2c3d4\]/)] },
     ])
-    expect(answers('s-6')).toEqual([{ code: 1, out: [], err: ['no session "Elsewhere" on the board'] }])
+    expect(answers('s-6')).toEqual([
+      {
+        code: 0,
+        out: [
+          'ok · queued for Elsewhere [8c9d0e1f] on node server-2: the board types it in once it is free, waking it first if it sleeps; the answer comes back as a board reminder',
+        ],
+        err: [],
+      },
+    ])
     // Two sessions' calls run side by side: the entries in the order of their texts.
     expect(listEntries().sort((a, b) => a.text.localeCompare(b.text))).toMatchObject([
       {
@@ -556,12 +567,16 @@ describe("the master's side", () => {
         fromDevice: 'server-1',
       },
       { key: monitor.key, text: 'from the twin', from: { key: `@server-1:${N1}` }, replyTo: 'worker [7b8c9d0e]' },
+      { key: monitor.key, text: 'posing', from: { key: `@server-1:@server-2:${OTHER}` }, fromDevice: 'server-1' },
       { key: post.key, text: 'to post' },
+      // No pane or folder: the target's node finds its session by its key.
+      { key: elsewhere.key, name: 'Elsewhere', text: 'x', from: { key: '@server-1:n-1' }, fromDevice: 'server-1' },
     ])
+    expect(listEntries().find(e => e.key === elsewhere.key)).not.toHaveProperty('pane')
     expect(store.seenCall('server-1', 's-1')).toEqual(queued)
   })
 
-  test('#628 board agents from a node lists only the master and this node (never another node) and is not remembered', async () => {
+  test('#628 #772 board agents from a node lists every machine, a node not online marked, and is not remembered', async () => {
     const dir = isolatedHome()
     const store = createDeviceStore({ dir: join(dir, 'nodes') })
     const N1 = '7b8c9d0e-1f2a-4b3c-8d4e-5f6a7b8c9d0e'
@@ -617,13 +632,14 @@ describe("the master's side", () => {
       out: [
         'Laptop Master [3e4f5a6b]  ·  claude  ·  laptop  ·  idle',
         'Gemini-dev [7b8c9d0e]  ·  agy  ·  node server-1  ·  working  ·  (this session)',
+        'Other Node Secret [8c9d0e1f]  ·  claude  ·  node server-2  ·  idle  ·  node offline now: goes out once it is back',
       ],
       err: [],
     })
-    expect(posted.get('ag-1')?.out.join('\n')).not.toContain('Other Node Secret')
     expect(JSON.parse(posted.get('ag-2')?.out.join('\n') ?? '[]')).toMatchObject([
-      { key: ME_M, agent: 'claude', self: false },
-      { key: `@server-1:${N1}`, agent: 'agy', device: 'server-1', self: true },
+      { key: ME_M, agent: 'claude', self: false, offline: false },
+      { key: `@server-1:${N1}`, agent: 'agy', device: 'server-1', self: true, offline: false },
+      { key: `@server-2:${OTHER}`, agent: 'claude', device: 'server-2', self: false, offline: true },
     ])
     expect(store.seenCall('server-1', 'ag-1')).toBeNull()
   })
@@ -1338,7 +1354,8 @@ describe("the master's side", () => {
     const listText = byId('ls-1')[0]?.out.join('\n') ?? ''
     expect(listText).toContain('NodeOne [atlas]')
     expect(listText).toContain('MasterSession [personal]')
-    expect(listText).not.toContain('HiddenPeer')
+    // Another node's card too (#772), without its notes as any card.
+    expect(listText).toContain('HiddenPeer [other]')
     expect(listText).not.toContain('private secret master note')
     expect(listText).not.toContain('node work')
     // Shared formatter includes notes only when includeNote is explicitly true (local board list).
@@ -1351,15 +1368,20 @@ describe("the master's side", () => {
     ).toContain('private secret master note')
 
     expect(byId('rm-no-target')[0]?.code).toBe(126)
-    expect(byId('rm-other-node')[0]).toEqual({ code: 1, out: [], err: ['no session "HiddenPeer" on the board'] })
+    expect(byId('rm-other-node')[0]?.code).toBe(0)
     expect(byId('rm-ok')).toHaveLength(2)
     expect(byId('rm-ok')[0]).toEqual(byId('rm-ok')[1])
     expect(byId('rm-ok')[0]?.out[0]).toContain('when the session is free')
     expect(byId('ev-ok')[0]?.out[0]).toContain('every ')
 
-    // Master schedule has otherEntry + 1 remind + 1 every (rm-ok ran once).
+    // Master schedule has otherEntry + 2 reminds + 1 every (rm-ok ran once).
     const created = listEntries().filter(e => e.from?.key === '@server-1:s-1')
-    expect(created).toHaveLength(2)
+    expect(created).toHaveLength(3)
+    // Another node's session (#772): its key alone, its node finds the pane.
+    const toPeer = created.find(e => e.key === otherNode.key)
+    expect(toPeer).toMatchObject({ name: 'HiddenPeer', text: 'ping', from: { key: '@server-1:s-1', name: 'NodeOne' } })
+    expect(toPeer).not.toHaveProperty('pane')
+    expect(toPeer).not.toHaveProperty('cwd')
     expect(created.find(e => e.text === 'ping master')).toMatchObject({
       key: masterItem.key,
       pane: 'w1:p1',

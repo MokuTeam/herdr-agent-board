@@ -234,7 +234,10 @@ async function masterViews(
   }
 }
 
-/** ListAgents on a node (#639): the master's sessions, as its `board agents` lists them for this session; null for none. */
+/**
+ * ListAgents on a node (#639): the master's sessions and the other nodes' (#772), as its `board agents`
+ * lists them for this session; null for none. This node's own are Claude Code's and the parts above.
+ */
 async function masterContext(
   raw: Record<string, unknown> | null,
   input: Record<string, unknown>,
@@ -243,11 +246,18 @@ async function masterContext(
   if (!sid) return null
   const views = await masterViews(raw, sid)
   if (!views) return null
-  // The master's own computer's (no device): this node's are listed above, another node's never come.
-  const theirs = views.filter(v => isRecord(v) && v.device === null && typeof v.label === 'string' && v.self !== true)
+  // This node's id: the device the master gives this session, else config.json's `node.id`.
+  const selfView = views.find(v => v.self === true && typeof v.device === 'string')
+  const node = isRecord(raw?.node) && typeof raw.node.id === 'string' ? raw.node.id : ''
+  const mine = typeof selfView?.device === 'string' ? selfView.device : node
+  // The master's own computer's (no device) and another node's; this node's are listed above.
+  const elsewhere = (v: Record<string, unknown>): boolean =>
+    v.device === null || (typeof v.device === 'string' && v.device !== '' && v.device !== mine)
+  const theirs = views.filter(v => elsewhere(v) && typeof v.label === 'string' && v.self !== true)
   const plain = (v: unknown): string => printable(String(v)).slice(0, 120)
   const row = (v: Record<string, unknown>): string =>
-    `  ${plain(v.label)}${typeof v.agent === 'string' && v.agent !== 'claude' ? `  ·  ${plain(v.agent)}` : ''}  ·  ${plain(v.status)}`
+    `  ${plain(v.label)}${typeof v.agent === 'string' && v.agent !== 'claude' ? `  ·  ${plain(v.agent)}` : ''}` +
+    `${typeof v.device === 'string' ? `  ·  node ${plain(v.device)}${v.offline === true ? ' (offline now)' : ''}` : ''}  ·  ${plain(v.status)}`
   const live = theirs.filter(v => v.sleeping !== true)
   const asleep = theirs.filter(v => v.sleeping === true)
   const rows = [...live, ...asleep.slice(0, LIST_MAX)].map(row)
@@ -256,8 +266,9 @@ async function masterContext(
       `  ... and ${asleep.length - LIST_MAX} more asleep there, not shown (board agents lists all); SendMessage by name reaches them too`,
     )
   if (!rows.length) return null
+  const nodes = theirs.some(v => typeof v.device === 'string') ? ' and its other nodes' : ''
   return (
-    `Sessions on the board's main computer (this one is its node; not listed above: Claude Code knows only this ` +
+    `Sessions on the board's main computer${nodes} (this one is its node; not listed above: Claude Code knows only this ` +
     `computer's). SendMessage to one by name goes through the board: it types the message in once the session is ` +
     `free, waking it first if it sleeps, and the reply comes back as a board reminder. Two with one name: add the ` +
     `ref in brackets, as listed. \`board send "<name>" "<text>"\` does the same from a shell.\n${rows.join('\n')}`

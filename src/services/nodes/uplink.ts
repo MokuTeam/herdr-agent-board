@@ -407,17 +407,21 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     return { key, item, lane, name }
   }
 
-  /** Items visible to node `id`: master items and that node's own items, never another node's. */
-  const visibleItems = (id: string): Item[] =>
-    o.items().filter(i => {
-      const p = parseNodeKey(i.key)
-      return !p || p.device === id
-    })
+  /**
+   * Items a node's session reaches (#772, epic #763): every machine's of this board, the master's and
+   * each paired device's, as a session on the master reaches them. The caller is still checked to be
+   * a session of the node that sent the call; a Team peer is no device and reaches none of these.
+   */
+  const visibleItems = (): Item[] => o.items()
 
-  /** Resolve a session visible to node `id` by key, unprefixed node session key, session, pane, or name. */
-  function findVisibleSession(id: string, word: string): Item {
+  /** The devices among `targets` whose link is not online now, for `board agents` to say so. */
+  const offlineOf = (targets: readonly { device: string | null }[]): Set<string> =>
+    new Set(targets.flatMap(t => (t.device && !online(t.device) ? [t.device] : [])))
+
+  /** Resolve a session on the board by key, unprefixed node session key, session, pane, or name. */
+  function findVisibleSession(word: string): Item {
     const w = word.toLowerCase()
-    const vis = visibleItems(id)
+    const vis = visibleItems()
     const matches = (i: Item, fields: readonly ('key' | 'session' | 'pane' | 'name' | 'autoName')[]): boolean =>
       fields.some(f => {
         const v = i[f]
@@ -653,8 +657,8 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
 
   /**
    * `board send <name|key> "<text>"` in a session of the node (#619, core/agent-send.ts): queued here
-   * for the card it names, signed with the node's session. A node reaches this computer's sessions
-   * and its own, never another node's (design 10, "Trust"): those are not even named to it.
+   * for the card it names, signed with the node's session. Any machine's session of the board, as from
+   * this computer (#772): the scheduler sends it through the target's node as any entry for its key.
    */
   async function sendFrom(id: string, call: UplinkCall): Promise<UplinkResult> {
     let key: string
@@ -668,7 +672,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     const { planSend, targetsOf } = await import('../../core/agent-send.ts')
     const own = nodesConfig(o.cfg.nodes, hostname())?.id ?? ''
     const plan = planSend({
-      targets: targetsOf(o.items(), own).filter(t => t.device === null || t.device === id),
+      targets: targetsOf(visibleItems(), own),
       to,
       message: words.join(' '),
       from: { key, name: item?.name || item?.autoName || '', device: id },
@@ -686,8 +690,8 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
   }
 
   /**
-   * `board agents [--json]` in a session of the node (#628, core/agent-send.ts): lists the cards
-   * this node is allowed to reach — the master's sessions and this node's own, never another node's.
+   * `board agents [--json]` in a session of the node (#628, core/agent-send.ts): every machine's
+   * sessions of the board (#772), a device whose link is not online now marked as such.
    */
   async function agentsFrom(id: string, call: UplinkCall): Promise<UplinkResult> {
     let key: string
@@ -698,14 +702,15 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     }
     const { agentViewsOf, formatAgentLines, targetsOf } = await import('../../core/agent-send.ts')
     const own = nodesConfig(o.cfg.nodes, hostname())?.id ?? ''
-    const targets = targetsOf(o.items(), own).filter(t => t.device === null || t.device === id)
+    const targets = targetsOf(visibleItems(), own)
+    const offline = offlineOf(targets)
     // One view a line (#639): a result's line is cut at RESULT_LINE_MAX, which one array of a
     // few hundred cards would pass; the lines joined are the same JSON array.
     if (call.argv.includes('--json')) {
-      const views = agentViewsOf(targets, { selfKey: key }).map(v => JSON.stringify(v))
+      const views = agentViewsOf(targets, { selfKey: key, offline }).map(v => JSON.stringify(v))
       return { code: 0, out: ['[', ...views.map((v, i) => (i < views.length - 1 ? `${v},` : v)), ']'], err: [] }
     }
-    const lines = formatAgentLines(targets, { selfKey: key, own, now: Date.now() })
+    const lines = formatAgentLines(targets, { selfKey: key, own, offline, now: Date.now() })
     return { code: 0, out: lines.length ? lines : ['no sessions on the board'], err: [] }
   }
 
@@ -846,7 +851,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
           ...(call.claimed && { claimed: true }),
         }),
         find: async word => {
-          const item = findVisibleSession(id, word)
+          const item = findVisibleSession(word)
           return { key: item.key, ...(item.name && { name: item.name }) }
         },
       })
@@ -960,10 +965,10 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     return { code: 0, out: [`${known}. A new id makes a new lane.`], err: [] }
   }
 
-  /** `board list` in a session of the node (#698): master sessions and this node's own, without free-text notes or another node's cards. */
+  /** `board list` in a session of the node (#698): every machine's sessions (#772), without free-text notes. */
   function listFrom(id: string, call: UplinkCall): UplinkResult {
     if (!sessionOf(id, call.session)) return refused('not a session of the node')
-    return { code: 0, out: formatListLines(visibleItems(id), o.cfg, { now: Date.now(), includeNote: false }), err: [] }
+    return { code: 0, out: formatListLines(visibleItems(), o.cfg, { now: Date.now(), includeNote: false }), err: [] }
   }
 
   /** `board remind` / `board every` aimed at another session from a node (#698). */
@@ -978,7 +983,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     const cleanBefore = before.filter((_, i) => i !== si && i !== si + 1)
     const restArgv = dashes < 0 ? cleanBefore : [...cleanBefore, ...call.argv.slice(dashes)]
     try {
-      const targetItem = findVisibleSession(id, targetWord)
+      const targetItem = findVisibleSession(targetWord)
       const now = Date.now()
       const isMasterTarget = !parseNodeKey(targetItem.key)
       const from = targetItem.key !== who.key ? { key: who.key, name: who.name } : undefined
