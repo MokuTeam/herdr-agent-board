@@ -182,9 +182,11 @@ describe('services/nodes/handover e2e (#697)', () => {
         journal: true,
         backup: { folder: masterBackupDir },
         categories: [{ id: 'atlas', title: 'Atlas', color: 'blue', paths: [] }],
+        wake: { enabled: false, telegram: 'auto', port: 12421 },
       },
       nodeCfg: () => ({
         backup: { folder: targetBackupDir },
+        wake: { enabled: false, port: 12429, reaper: { enabled: false, idleMinutes: 45 } },
       }),
       masterSetup: box => {
         seedMasterState(stateFolder(box), masterBackupDir)
@@ -276,6 +278,20 @@ describe('services/nodes/handover e2e (#697)', () => {
     expect(readFileSync(join(nodeState, 'thread-files', 'tr1', 'spec.txt'), 'utf8')).toBe('handover spec')
     expect(JSON.parse(readFileSync(join(nodeState, 'schedule', '112233.json'), 'utf8')).key).toBe('s-server-1')
 
+    // Target (server-1) received wake.telegram: 'auto' while preserving its own wake settings (#748)
+    const newMasterCfgOnDisk = JSON.parse(
+      readFileSync(
+        join(node.box.env.APPDATA ?? '', 'herdr', 'plugins', 'config', 'agent-board', 'config.json'),
+        'utf8',
+      ),
+    ) as { wake?: Record<string, unknown> }
+    expect(newMasterCfgOnDisk.wake).toEqual({
+      enabled: false,
+      port: 12429,
+      reaper: { enabled: false, idleMinutes: 45 },
+      telegram: 'auto',
+    })
+
     // 3. Post-commit rollback requires explicit discardSinceCommit confirmation (Item 8)
     const rbRefused = await postJson(node.url, '/api/nodes/handover', { op: 'rollback' })
     expect(rbRefused.status).toBe(409)
@@ -293,6 +309,8 @@ describe('services/nodes/handover e2e (#697)', () => {
     expect(existsSync(join(nodeState, 'board.db'))).toBe(false)
     expect(existsSync(join(stateFolder(pair.master.box), 'board.db'))).toBe(true)
     expect(existsSync(join(stateFolder(pair.master.box), 'schedule', '112233.json'))).toBe(true)
+    const targetCfgPath = join(node.box.env.APPDATA ?? '', 'herdr', 'plugins', 'config', 'agent-board', 'config.json')
+    expect(existsSync(targetCfgPath)).toBe(false)
   })
 
   test('preflight refuses offline target, missing backup, self-backup, and missing reverse link', async () => {

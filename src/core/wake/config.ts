@@ -99,27 +99,96 @@ export function wakeSwitch(file: { exists: boolean; raw: unknown }): boolean {
   return raw ? wakeConfig(raw.wake).enabled : false
 }
 
+export interface TelegramEnvSource {
+  /** Source name only (never a value or absolute path), e.g. `node/env/default.env`. */
+  name: string
+  vars: Readonly<Record<string, string | undefined>>
+}
+
+export interface TelegramTargetOptions {
+  /** Process environment preferred when expanding `${VAR}` in MCP headers. */
+  env?: Readonly<Record<string, string | undefined>>
+  /**
+   * Fallback profile env files (`node/env/default.env`, then other `*.env`),
+   * evaluated lazily only when a `${VAR}` in the header is missing from `env`.
+   */
+  envFiles?: readonly TelegramEnvSource[] | (() => readonly TelegramEnvSource[])
+}
+
 export interface TelegramTarget {
   url: string
   authorization: string
   /** The url's host and port. */
   host: string
+  /** Source name when `${VAR}` in the Authorization header was expanded (never the value); omitted for literal tokens. */
+  tokenSource?: string
+}
+
+const ENV_VAR_REF = /\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}/g
+
+function resolveHeaderAuthorization(
+  raw: string,
+  o?: TelegramTargetOptions,
+): { value: string; tokenSource?: string } | null {
+  if (!raw.includes('${')) return { value: raw }
+  const env = o?.env
+  let cachedFiles: readonly TelegramEnvSource[] | undefined
+  const files = (): readonly TelegramEnvSource[] => {
+    if (cachedFiles === undefined) {
+      cachedFiles = typeof o?.envFiles === 'function' ? o.envFiles() : (o?.envFiles ?? [])
+    }
+    return cachedFiles
+  }
+  const sources: string[] = []
+  let missing = false
+  const value = raw.replace(ENV_VAR_REF, (_match, name: string, fallback: string | undefined) => {
+    if (env && Object.hasOwn(env, name)) {
+      const v = env[name]
+      if (typeof v === 'string' && v !== '') {
+        if (!sources.includes('env')) sources.push('env')
+        return v
+      }
+    }
+    for (const file of files()) {
+      if (Object.hasOwn(file.vars, name)) {
+        const v = file.vars[name]
+        if (typeof v === 'string' && v !== '') {
+          if (!sources.includes(file.name)) sources.push(file.name)
+          return v
+        }
+      }
+    }
+    if (fallback !== undefined) return fallback
+    missing = true
+    return ''
+  })
+  if (missing || !filled(value)) return null
+  return sources.length > 0 ? { value, tokenSource: sources.join(', ') } : { value }
 }
 
 /** tg-mcp's url and token: the section's, else the `<server>` MCP server in ~/.claude.json (`/mcp` taken off the url); null when Telegram is off or either is missing. */
-export function telegramTarget(cfg: WakeConfig, claudeJson: unknown): TelegramTarget | null {
+export function telegramTarget(cfg: WakeConfig, claudeJson: unknown, o?: TelegramTargetOptions): TelegramTarget | null {
   if (cfg.telegram !== 'auto') return null
   const mcp = record(record(record(claudeJson)?.mcpServers)?.[cfg.server])
   const mcpUrl = filled(mcp?.url) ? mcp.url.replace(/\/mcp\/?$/, '') : null
-  const mcpAuthorization = record(mcp?.headers)?.Authorization
+  const headers = record(mcp?.headers)
+  const rawAuth =
+    headers?.Authorization ??
+    (headers ? Object.entries(headers).find(([k]) => k.toLowerCase() === 'authorization')?.[1] : undefined)
   const url = cfg.url ?? (filled(mcpUrl) ? mcpUrl : null)
-  const authorization = cfg.authorization ?? (filled(mcpAuthorization) ? mcpAuthorization : null)
-  if (!url || !authorization) return null
+  const auth = cfg.authorization
+    ? { value: cfg.authorization }
+    : filled(rawAuth)
+      ? resolveHeaderAuthorization(rawAuth, o)
+      : null
+  if (!url || !auth) return null
   let host: string
   try {
     host = new URL(url).host
   } catch {
     return null
   }
-  return host ? { url, authorization, host } : null
+  return host
+    ? { url, authorization: auth.value, host, ...(auth.tokenSource && { tokenSource: auth.tokenSource }) }
+    : null
 }

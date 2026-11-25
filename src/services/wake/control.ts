@@ -16,6 +16,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { type EditResult, editWake } from '../../adapters/config-file.ts'
 import { asSnapshot, herdr as herdrCli } from '../../adapters/herdr.ts'
+import { readAllNodeEnvFiles } from '../../adapters/node-env.ts'
 import { ROOT } from '../../adapters/paths.ts'
 import { wakeAlive } from '../../adapters/wake-api.ts'
 import {
@@ -30,7 +31,13 @@ import {
 } from '../../adapters/wake-files.ts'
 import { t } from '../../core/lang.ts'
 import type { Config } from '../../core/types.ts'
-import { telegramTarget, WAKE_SHIPPED, type WakeConfig, wakeConfig } from '../../core/wake/config.ts'
+import {
+  type TelegramEnvSource,
+  telegramTarget,
+  WAKE_SHIPPED,
+  type WakeConfig,
+  wakeConfig,
+} from '../../core/wake/config.ts'
 import { STARTING_MS, type WakeState, wakeState } from '../../core/wake/status.ts'
 import type { SwitchResult, WakeHooksView, WakeSettingsView, WakeView } from '../../core/wake/view.ts'
 import { type BoardPlace, closeOfPane, recordedPane, wakeLeftover, workspaceOf } from './start.ts'
@@ -87,6 +94,10 @@ export interface WakeControlOptions {
   hooks?: () => WakeHooksView[]
   /** ~/.claude.json, where tg-mcp's url and token are by default. */
   claudeJson?: () => unknown
+  /** Environment for expanding `${VAR}` in MCP headers (tests). */
+  env?: Readonly<Record<string, string | undefined>>
+  /** Profile env files fallback for expanding `${VAR}` in MCP headers (tests). */
+  envFiles?: () => readonly TelegramEnvSource[]
   /** The view changed: the board publishes it. */
   onChange?: () => void
   /** Wake's state changed from the last view's, or a Switch over ended: the board checks its setup again. */
@@ -325,14 +336,17 @@ export function createWakeControl(o: WakeControlOptions): WakeControl {
     },
     async settings() {
       const s = settingsNow()
-      const target = telegramTarget(s, (o.claudeJson ?? readClaudeJson)())
+      const target = telegramTarget(s, (o.claudeJson ?? readClaudeJson)(), {
+        env: o.env ?? process.env,
+        envFiles: o.envFiles ?? (() => readAllNodeEnvFiles(log)),
+      })
       const answer = s.enabled ? record(await status().catch(() => null)) : null
       // What the takeover at wake's first start did, until the panel has shown it.
       const takenOver = unseenWakeTakeover()
       return {
         reaper: s.reaper,
         telegram: s.telegram,
-        found: target ? { host: target.host } : null,
+        found: target ? { host: target.host, ...(target.tokenSource && { tokenSource: target.tokenSource }) } : null,
         lastError: typeof answer?.lastError === 'string' ? answer.lastError : null,
         log: wakeLogFile(),
         hooks: o.hooks?.() ?? [],

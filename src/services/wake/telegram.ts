@@ -283,7 +283,13 @@ export function createTelegram(o: TelegramDeps): Telegram {
 
   function report(next: TelegramStatus): void {
     const was = now.status
-    if (was.state === next.state && was.host === next.host && was.error === next.error) return
+    if (
+      was.state === next.state &&
+      was.host === next.host &&
+      was.tokenSource === next.tokenSource &&
+      was.error === next.error
+    )
+      return
     now.status = next
     o.onState?.(next)
   }
@@ -457,14 +463,14 @@ export function createTelegram(o: TelegramDeps): Telegram {
         now.lastPoll = new Date().toISOString()
         if (now.lastError !== null) o.log('connected to tg-mcp again')
         now.lastError = null
-        report({ state: 'polling', host: t.host })
+        report({ state: 'polling', host: t.host, ...(t.tokenSource && { tokenSource: t.tokenSource }) })
         backoff = MIN_BACKOFF_MS
       } catch (err) {
         if (r.stopped) return
         const message = messageOf(err)
         if (now.lastError !== message) o.log(`poll failed: ${message}`)
         now.lastError = message
-        report({ state: 'error', host: t.host, error: message })
+        report({ state: 'error', host: t.host, ...(t.tokenSource && { tokenSource: t.tokenSource }), error: message })
         await pauseFor(backoff, r)
         backoff = Math.min(backoff * 2, MAX_BACKOFF_MS)
       }
@@ -477,8 +483,8 @@ export function createTelegram(o: TelegramDeps): Telegram {
     if (!t) return
     const r: Run = { stopped: false, abort: new AbortController() }
     run = r
-    o.log(`Telegram on: polling tg-mcp at ${t.host}`)
-    report({ state: 'polling', host: t.host })
+    o.log(`Telegram on: polling tg-mcp at ${t.host}${t.tokenSource ? ` (token from ${t.tokenSource})` : ''}`)
+    report({ state: 'polling', host: t.host, ...(t.tokenSource && { tokenSource: t.tokenSource }) })
     void poll(r).catch(err => o.log(`Telegram's poll ended: ${messageOf(err)}`))
   }
 

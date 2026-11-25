@@ -607,3 +607,112 @@ test('GET /alive answers its pid at once while herdr hangs (the supervisor’s h
   expect((await fetch(`${wake.url}/alive`, { headers: { origin: wake.url } })).status).toBe(403)
   expect((await fetch(`${wake.url}/alive`, { headers: { host: `evil.example:${port}` } })).status).toBe(403)
 })
+
+test('Telegram on with MCP_TELEGRAM_AUTHORIZATION placeholder: falls back to node/env/default.env and reports source name only (#748)', async () => {
+  const ref = ['$', '{', 'MCP_TELEGRAM_AUTHORIZATION', '}'].join('')
+  const tg = tgMcp()
+  try {
+    const boxDefault = await wakeSandbox()
+    idleAndAsleep(boxDefault)
+    writeFileSync(
+      join(home(boxDefault), '.claude.json'),
+      JSON.stringify({ mcpServers: { telegram: { url: `${tg.url}/mcp`, headers: { Authorization: ref } } } }),
+    )
+    const envDirDefault = join(stateOf(boxDefault), 'node', 'env')
+    mkdirSync(envDirDefault, { recursive: true })
+    writeFileSync(join(envDirDefault, 'default.env'), `MCP_TELEGRAM_AUTHORIZATION='${TG_TOKEN}'\n`)
+    writeFileSync(join(envDirDefault, 'work.env'), "MCP_TELEGRAM_AUTHORIZATION='Bearer tg-work-ignored'\n")
+    writeFileSync(
+      statusFile(boxDefault),
+      JSON.stringify({ state: 'running', at: Date.now() - 5000, pane: 'w9:p1', pid: 77 }),
+    )
+
+    const portDefault = await unusedPort()
+    const wakeDefault = await startWakeProcess(boxDefault, {
+      port: portDefault,
+      wake: { telegram: 'auto' },
+      env: { MCP_TELEGRAM_AUTHORIZATION: '' },
+    })
+    await until(() => tg.waits.length >= 1)
+    expect(tg.waits[0]).toBe(TG_TOKEN)
+    expect((await (await fetch(`${wakeDefault.url}/status`)).json()).telegram).toEqual({
+      state: 'polling',
+      host: tg.host,
+      tokenSource: 'node/env/default.env',
+    })
+    expect(JSON.parse(readFileSync(statusFile(boxDefault), 'utf8')).telegram).toEqual({
+      state: 'polling',
+      host: tg.host,
+      tokenSource: 'node/env/default.env',
+    })
+    expect(wakeLogText(boxDefault)).toContain('(token from node/env/default.env)')
+    expect(wakeLogText(boxDefault)).not.toContain('tg-secret')
+  } finally {
+    await tg.stop()
+  }
+})
+
+test('Telegram on with MCP_TELEGRAM_AUTHORIZATION placeholder: falls back to other profile env file when absent from default.env (#748)', async () => {
+  const ref = ['$', '{', 'MCP_TELEGRAM_AUTHORIZATION', '}'].join('')
+  const tg = tgMcp()
+  try {
+    const boxWork = await wakeSandbox()
+    idleAndAsleep(boxWork)
+    writeFileSync(
+      join(home(boxWork), '.claude.json'),
+      JSON.stringify({ mcpServers: { telegram: { url: `${tg.url}/mcp`, headers: { Authorization: ref } } } }),
+    )
+    const envDirWork = join(stateOf(boxWork), 'node', 'env')
+    mkdirSync(envDirWork, { recursive: true })
+    writeFileSync(join(envDirWork, 'default.env'), 'OTHER_VAR=1\n')
+    writeFileSync(join(envDirWork, 'work.env'), "MCP_TELEGRAM_AUTHORIZATION='Bearer tg-secret-work'\n")
+
+    const wakeWork = await startWakeProcess(boxWork, {
+      port: await unusedPort(),
+      wake: { telegram: 'auto' },
+      env: { MCP_TELEGRAM_AUTHORIZATION: '' },
+    })
+    await until(() => tg.waits.length >= 1)
+    expect(tg.waits[0]).toBe('Bearer tg-secret-work')
+    expect((await (await fetch(`${wakeWork.url}/status`)).json()).telegram).toEqual({
+      state: 'polling',
+      host: tg.host,
+      tokenSource: 'node/env/work.env',
+    })
+    expect(wakeLogText(boxWork)).not.toContain('tg-secret')
+  } finally {
+    await tg.stop()
+  }
+})
+
+test('Telegram on with MCP_TELEGRAM_AUTHORIZATION placeholder: prefers process env over node/env/*.env (#748)', async () => {
+  const ref = ['$', '{', 'MCP_TELEGRAM_AUTHORIZATION', '}'].join('')
+  const tg = tgMcp()
+  try {
+    const boxEnv = await wakeSandbox()
+    idleAndAsleep(boxEnv)
+    writeFileSync(
+      join(home(boxEnv), '.claude.json'),
+      JSON.stringify({ mcpServers: { telegram: { url: `${tg.url}/mcp`, headers: { Authorization: ref } } } }),
+    )
+    const envDirEnv = join(stateOf(boxEnv), 'node', 'env')
+    mkdirSync(envDirEnv, { recursive: true })
+    writeFileSync(join(envDirEnv, 'default.env'), "MCP_TELEGRAM_AUTHORIZATION='Bearer tg-file-ignored'\n")
+
+    const wakeEnv = await startWakeProcess(boxEnv, {
+      port: await unusedPort(),
+      wake: { telegram: 'auto' },
+      env: { MCP_TELEGRAM_AUTHORIZATION: 'Bearer tg-secret-from-env' },
+    })
+    await until(() => tg.waits.length >= 1)
+    expect(tg.waits[0]).toBe('Bearer tg-secret-from-env')
+    expect((await (await fetch(`${wakeEnv.url}/status`)).json()).telegram).toEqual({
+      state: 'polling',
+      host: tg.host,
+      tokenSource: 'env',
+    })
+    expect(wakeLogText(boxEnv)).not.toContain('tg-secret')
+  } finally {
+    await tg.stop()
+  }
+})

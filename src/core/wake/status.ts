@@ -17,6 +17,8 @@ export interface TelegramStatus {
   state: 'off' | 'polling' | 'error'
   /** tg-mcp's host and port, while on. */
   host?: string
+  /** Source name when `${VAR}` in the Authorization header was expanded (never the value). */
+  tokenSource?: string
   /** Why the last poll failed, in state error. */
   error?: string
 }
@@ -57,6 +59,7 @@ export function asTelegramStatus(value: unknown): TelegramStatus | null {
   return {
     state: v.state,
     ...(typeof v.host === 'string' && { host: v.host }),
+    ...(typeof v.tokenSource === 'string' && v.tokenSource !== '' && { tokenSource: v.tokenSource }),
     ...(typeof v.error === 'string' && { error: v.error }),
   }
 }

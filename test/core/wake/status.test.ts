@@ -81,13 +81,26 @@ test('asWakeStatus: a state and a time; the other fields only when of their type
 })
 
 test('asWakeStatus: the Telegram router’s state the wake process writes, its host and error only when strings', () => {
-  const telegram = { state: 'error', host: '127.0.0.1:8787', error: 'HTTP 401', extra: 'dropped' }
+  const telegram = {
+    state: 'error',
+    host: '127.0.0.1:8787',
+    tokenSource: 'node/env/default.env',
+    error: 'HTTP 401',
+    extra: 'dropped',
+  }
   expect(asWakeStatus({ state: 'running', at: NOW, telegram })).toEqual({
     state: 'running',
     at: NOW,
-    telegram: { state: 'error', host: '127.0.0.1:8787', error: 'HTTP 401' },
+    telegram: { state: 'error', host: '127.0.0.1:8787', tokenSource: 'node/env/default.env', error: 'HTTP 401' },
   })
-  expect(asTelegramStatus({ state: 'polling', host: 'box:1', error: 5 })).toEqual({ state: 'polling', host: 'box:1' })
+  expect(asTelegramStatus({ state: 'polling', host: 'box:1', tokenSource: '', error: 5 })).toEqual({
+    state: 'polling',
+    host: 'box:1',
+  })
+  expect(asTelegramStatus({ state: 'polling', host: 'box:1', tokenSource: 42 })).toEqual({
+    state: 'polling',
+    host: 'box:1',
+  })
   expect(asTelegramStatus({ state: 'off' })).toEqual({ state: 'off' })
   for (const not of [null, 'polling', [], {}, { state: 'on' }, { host: 'box:1' }]) {
     expect(asTelegramStatus(not)).toBeNull()

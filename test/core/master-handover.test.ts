@@ -609,4 +609,79 @@ describe('core/master-handover (#697)', () => {
       describeOldMasterLinkProblem({ listening: 12430, error: null, relay: null }, { port: 12430, usesRelay: false }),
     ).toBeNull()
   })
+
+  test('buildTargetMasterConfig carries master-level wake.telegram while preserving target wake settings (#748)', () => {
+    const flipped = flipNodesConfig(
+      {
+        id: 'laptop',
+        order: ['local', 'server-1'],
+        devices: {
+          local: { title: 'Anna Laptop' },
+          'server-1': { title: 'Atlas Server', link: { kind: 'direct', url: 'http://127.0.0.1:12430' } },
+        },
+      },
+      { oldMasterId: 'laptop', targetId: 'server-1', reverseLink: { kind: 'direct', url: 'http://127.0.0.1:12431' } },
+    )
+
+    // 1. Old master has wake.telegram: 'auto', target has its own wake port/reaper without telegram
+    const autoToTarget = buildTargetMasterConfig(
+      {
+        wake: {
+          enabled: true,
+          telegram: 'auto',
+          port: 12421,
+          reaper: { enabled: true, idleMinutes: 90 },
+          workspace: 'Old',
+        },
+      },
+      { port: 12425, wake: { enabled: true, port: 12429, reaper: { enabled: false, idleMinutes: 45 } } },
+      { flippedNodes: flipped, keepTargetNode: true },
+    )
+    expect(autoToTarget.wake).toEqual({
+      enabled: true,
+      port: 12429,
+      reaper: { enabled: false, idleMinutes: 45 },
+      telegram: 'auto',
+    })
+
+    // 2. Target with no wake section gets wake: { telegram: 'auto' }
+    const autoToMissing = buildTargetMasterConfig(
+      { wake: { telegram: 'auto' } },
+      { port: 12425 },
+      { flippedNodes: flipped, keepTargetNode: true },
+    )
+    expect(autoToMissing.wake).toEqual({ telegram: 'auto' })
+
+    // 3. Target with boolean wake preserves its enabled switch alongside carried telegram
+    expect(
+      buildTargetMasterConfig(
+        { wake: { telegram: 'auto' } },
+        { wake: true },
+        { flippedNodes: flipped, keepTargetNode: true },
+      ).wake,
+    ).toEqual({ enabled: true, telegram: 'auto' })
+    expect(
+      buildTargetMasterConfig(
+        { wake: { telegram: 'auto' } },
+        { wake: false },
+        { flippedNodes: flipped, keepTargetNode: true },
+      ).wake,
+    ).toEqual({ enabled: false, telegram: 'auto' })
+
+    // 4. Old master with Telegram off clears a stale wake.telegram: 'auto' on target
+    const offToStale = buildTargetMasterConfig(
+      { wake: { enabled: true } },
+      { wake: { enabled: true, telegram: 'auto', port: 12429 } },
+      { flippedNodes: flipped, keepTargetNode: true },
+    )
+    expect(offToStale.wake).toEqual({ enabled: true, telegram: 'off', port: 12429 })
+
+    // 5. Both Telegram off and no explicit telegram: target wake is left untouched
+    const bothOff = buildTargetMasterConfig(
+      { wake: { enabled: true } },
+      { port: 12425 },
+      { flippedNodes: flipped, keepTargetNode: true },
+    )
+    expect(bothOff.wake).toBeUndefined()
+  })
 })

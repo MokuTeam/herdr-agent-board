@@ -4,6 +4,7 @@
 import { isDevice, LOCAL } from './node-key.ts'
 import { type LinkConfig, NODE_PORT, type NodeConfig } from './nodes.ts'
 import { RELAY_NODE_USER, relaySocketStem } from './relay-texts.ts'
+import { wakeConfig } from './wake/config.ts'
 
 export const HANDOVER_MAGIC = 'MHB1'
 export const HANDOVER_VERSION = 1
@@ -645,7 +646,8 @@ const MASTER_ROLE_KEYS = [
 
 /**
  * Builds the new master's config.json by merging master-role sections onto the target's existing
- * machine-local config (preserving target's port, profiles, launch, wake, housekeeping, etc.).
+ * machine-local config (preserving target's port, profiles, launch, housekeeping, and the rest of
+ * wake while carrying master-level wake.telegram).
  */
 export function buildTargetMasterConfig(
   oldConfigRaw: Record<string, unknown>,
@@ -664,6 +666,19 @@ export function buildTargetMasterConfig(
     } else {
       delete next[key]
     }
+  }
+  const oldWake = isObj(oldConfigRaw.wake) ? oldConfigRaw.wake : null
+  const oldTelegram = wakeConfig(oldConfigRaw.wake).telegram
+  const oldTelegramExplicit = oldWake?.telegram === 'auto' || oldWake?.telegram === 'off'
+  const targetTelegram = wakeConfig(next.wake).telegram
+  if (oldTelegram !== targetTelegram || oldTelegramExplicit) {
+    const section: Record<string, unknown> = isObj(next.wake)
+      ? { ...next.wake }
+      : next.wake === undefined
+        ? {}
+        : { enabled: wakeConfig(next.wake).enabled }
+    section.telegram = oldTelegram
+    next.wake = section
   }
   if (opts.normalizeTunnelKey && isObj(next.tunnel)) {
     const tunnel = { ...next.tunnel }

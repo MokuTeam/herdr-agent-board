@@ -61,8 +61,8 @@ export interface WakeHooksView {
 export interface WakeSettingsView {
   reaper: ReaperConfig
   telegram: TelegramMode
-  /** tg-mcp's host and port, when Telegram's url and token are found; never the token. */
-  found: { host: string } | null
+  /** tg-mcp's host and port (plus token source name when expanded), when Telegram's url and token are found; never the token. */
+  found: { host: string; tokenSource?: string } | null
   /** Telegram's last poll error, as wake answers it. */
   lastError: string | null
   /** wake.log's path. */

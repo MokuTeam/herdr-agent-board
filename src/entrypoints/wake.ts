@@ -33,6 +33,7 @@ import { join } from 'node:path'
 import { configFile, liveConfig, loadConfig, readConfigFile } from '../adapters/config-file.ts'
 import { followedJson } from '../adapters/followed-json.ts'
 import { isRecord } from '../adapters/json-store.ts'
+import { readAllNodeEnvFiles } from '../adapters/node-env.ts'
 import { stateDir } from '../adapters/paths.ts'
 import { boardOnPath } from '../adapters/resume-report.ts'
 import { oldRouterAt, wakeAnswers } from '../adapters/wake-api.ts'
@@ -97,8 +98,14 @@ function roundMs(): number | null {
  */
 const claudeJson = followedJson(join(homedir(), '.claude.json'))
 
-const telegramSaid = (s: WakeConfig): string =>
-  (!isNodeOnly(cfg) && s.telegram === 'auto' && telegramTarget(s, claudeJson())?.host) || 'Telegram off'
+const targetOf = (s: WakeConfig): TelegramTarget | null =>
+  telegramTarget(s, claudeJson(), { env: process.env, envFiles: () => readAllNodeEnvFiles(log) })
+
+const telegramSaid = (s: WakeConfig): string => {
+  if (isNodeOnly(cfg) || s.telegram !== 'auto') return 'Telegram off'
+  const t = targetOf(s)
+  return t ? (t.tokenSource ? `${t.host} (token from ${t.tokenSource})` : t.host) : 'Telegram off'
+}
 const reaperSaid = (s: WakeConfig): string =>
   s.reaper.enabled ? `reaper on (${s.reaper.idleMinutes} min)` : 'reaper off'
 
@@ -172,7 +179,7 @@ const reaperLoop = (): Loop => every(roundMs() ?? REAP_EVERY_MS, 'reaper', () =>
 function telegramNow(): TelegramTarget | null {
   if (isNodeOnly(cfg)) return null
   const s = settings()
-  return !leaving && s.telegram === 'auto' ? telegramTarget(s, claudeJson()) : null
+  return !leaving && s.telegram === 'auto' ? targetOf(s) : null
 }
 
 const boardPort = (): number => {
@@ -212,7 +219,7 @@ function followTelegram(): void {
 
 /** Whether the file already says `b`; a file without Telegram's state says off. */
 const sameTelegram = (a: TelegramStatus | undefined, b: TelegramStatus): boolean =>
-  (a?.state ?? 'off') === b.state && a?.host === b.host && a?.error === b.error
+  (a?.state ?? 'off') === b.state && a?.host === b.host && a?.tokenSource === b.tokenSource && a?.error === b.error
 
 /**
  * Telegram's state into wake's status file, its other fields as they are (its time too: the board

@@ -413,6 +413,32 @@ test('settings: the reaper, Telegram and where tg-mcp is, the log file, wake’s
   expect(JSON.stringify(s)).not.toContain('secret')
 })
 
+test('settings: resolves env var placeholder from envFiles when missing from env, prefers env when set, reports tokenSource without leaking value (#748)', async () => {
+  isolatedHome()
+  const ref = ['$', '{', 'MCP_TELEGRAM_AUTHORIZATION', '}'].join('')
+  const cfg = on({ telegram: 'auto' })
+  const claudeJson = () => ({
+    mcpServers: { telegram: { url: 'http://tg.local:8080/mcp', headers: { Authorization: ref } } },
+  })
+  const envFiles = () => [{ name: 'node/env/default.env', vars: { MCP_TELEGRAM_AUTHORIZATION: 'Bearer file-secret' } }]
+
+  const fromFile = createWakeControl({ cfg, starter: () => {}, claudeJson, env: {}, envFiles })
+  const sFile = await fromFile.settings()
+  expect(sFile.found).toEqual({ host: 'tg.local:8080', tokenSource: 'node/env/default.env' })
+  expect(JSON.stringify(sFile)).not.toContain('file-secret')
+
+  const fromEnv = createWakeControl({
+    cfg,
+    starter: () => {},
+    claudeJson,
+    env: { MCP_TELEGRAM_AUTHORIZATION: 'Bearer env-secret' },
+    envFiles,
+  })
+  const sEnv = await fromEnv.settings()
+  expect(sEnv.found).toEqual({ host: 'tg.local:8080', tokenSource: 'env' })
+  expect(JSON.stringify(sEnv)).not.toContain('env-secret')
+})
+
 test('Start and Start again: refused while off or held, nothing to do while it answers', async () => {
   isolatedHome()
   const wakeOff = control(off())

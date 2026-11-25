@@ -98,3 +98,101 @@ test('Telegram off ignores a url and token of its own; an invalid url or a port 
     12421, 12421, 65535,
   ])
 })
+
+test('telegramTarget resolves env var placeholder in Authorization header: process env first, then node/env/*.env fallback (#748)', () => {
+  const ref = (name: string): string => ['$', '{', name, '}'].join('')
+  const mcpRef = (auth: string) => ({
+    mcpServers: { telegram: { url: 'http://127.0.0.1:8787/mcp', headers: { Authorization: auth } } },
+  })
+  const auto = wakeConfig({ telegram: 'auto' })
+
+  // 1. Present in process env -> uses env and does not read envFiles
+  let readFiles = 0
+  expect(
+    telegramTarget(auto, mcpRef(ref('MCP_TELEGRAM_AUTHORIZATION')), {
+      env: { MCP_TELEGRAM_AUTHORIZATION: 'Bearer from-env' },
+      envFiles: () => {
+        readFiles++
+        return [{ name: 'node/env/default.env', vars: { MCP_TELEGRAM_AUTHORIZATION: 'Bearer from-default' } }]
+      },
+    }),
+  ).toEqual({
+    url: 'http://127.0.0.1:8787',
+    authorization: 'Bearer from-env',
+    host: '127.0.0.1:8787',
+    tokenSource: 'env',
+  })
+  expect(readFiles).toBe(0)
+
+  // 2. Missing from env -> resolves from default.env first, then other profile env files
+  expect(
+    telegramTarget(auto, mcpRef(`Bearer ${ref('TG_TOKEN')}`), {
+      env: {},
+      envFiles: [
+        { name: 'node/env/default.env', vars: { TG_TOKEN: 'def$1$&' } },
+        { name: 'node/env/work.env', vars: { TG_TOKEN: 'work-tok' } },
+      ],
+    }),
+  ).toEqual({
+    url: 'http://127.0.0.1:8787',
+    authorization: 'Bearer def$1$&',
+    host: '127.0.0.1:8787',
+    tokenSource: 'node/env/default.env',
+  })
+
+  expect(
+    telegramTarget(auto, mcpRef(ref('MCP_TELEGRAM_AUTHORIZATION')), {
+      env: { MCP_TELEGRAM_AUTHORIZATION: '' },
+      envFiles: [
+        { name: 'node/env/default.env', vars: { OTHER: '1' } },
+        { name: 'node/env/work.env', vars: { MCP_TELEGRAM_AUTHORIZATION: 'Bearer from-work' } },
+      ],
+    }),
+  ).toEqual({
+    url: 'http://127.0.0.1:8787',
+    authorization: 'Bearer from-work',
+    host: '127.0.0.1:8787',
+    tokenSource: 'node/env/work.env',
+  })
+
+  // 3. Unresolved placeholder or prototype key -> null; :-default fallback works
+  expect(
+    telegramTarget(auto, mcpRef(ref('MCP_TELEGRAM_AUTHORIZATION')), {
+      env: {},
+      envFiles: [{ name: 'node/env/default.env', vars: {} }],
+    }),
+  ).toBeNull()
+  expect(telegramTarget(auto, mcpRef(ref('toString')), { env: {}, envFiles: [] })).toBeNull()
+  expect(telegramTarget(auto, mcpRef(`Bearer ${ref('TG_TOKEN:-fallback-tok')}`), { env: {}, envFiles: [] })).toEqual({
+    url: 'http://127.0.0.1:8787',
+    authorization: 'Bearer fallback-tok',
+    host: '127.0.0.1:8787',
+  })
+
+  // 4. Literal token, explicit cfg.authorization, or Telegram off -> unchanged, never invokes envFiles
+  let literalRead = 0
+  const spyFiles = () => {
+    literalRead++
+    return []
+  }
+  expect(telegramTarget(auto, TELEGRAM, { env: {}, envFiles: spyFiles })).toEqual({
+    url: 'http://127.0.0.1:8787',
+    authorization: 'Bearer t',
+    host: '127.0.0.1:8787',
+  })
+  expect(
+    telegramTarget(
+      wakeConfig({ telegram: 'auto', authorization: 'Bearer own' }),
+      mcpRef(ref('MCP_TELEGRAM_AUTHORIZATION')),
+      { env: {}, envFiles: spyFiles },
+    ),
+  ).toEqual({
+    url: 'http://127.0.0.1:8787',
+    authorization: 'Bearer own',
+    host: '127.0.0.1:8787',
+  })
+  expect(
+    telegramTarget(wakeConfig(undefined), mcpRef(ref('MCP_TELEGRAM_AUTHORIZATION')), { env: {}, envFiles: spyFiles }),
+  ).toBeNull()
+  expect(literalRead).toBe(0)
+})
