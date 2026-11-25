@@ -288,6 +288,55 @@ describe('core/master-handover (#697)', () => {
     })
   })
 
+  test('flipNodesConfig carries pilotBridge between target device, local, and old master (#730)', () => {
+    const withTargetEnabled = flipNodesConfig(
+      {
+        id: 'laptop',
+        order: ['local', 'server-1'],
+        devices: {
+          local: { title: 'Laptop', pilotBridge: true },
+          'server-1': {
+            title: 'Server 1',
+            pilotBridge: true,
+            link: { kind: 'direct', url: 'http://127.0.0.1:12430' },
+          },
+        },
+      },
+      {
+        oldMasterId: 'laptop',
+        targetId: 'server-1',
+        reverseLink: { kind: 'direct', url: 'http://127.0.0.1:12431' },
+      },
+    )
+    expect((withTargetEnabled.devices as Record<string, Record<string, unknown>>).local?.pilotBridge).toBe(true)
+    expect((withTargetEnabled.devices as Record<string, Record<string, unknown>>).laptop?.pilotBridge).toBe(true)
+
+    const withNeitherEnabled = flipNodesConfig(
+      {
+        id: 'laptop',
+        order: ['local', 'server-1'],
+        devices: {
+          local: { title: 'Laptop' },
+          'server-1': {
+            title: 'Server 1',
+            link: { kind: 'direct', url: 'http://127.0.0.1:12430' },
+          },
+        },
+      },
+      {
+        oldMasterId: 'laptop',
+        targetId: 'server-1',
+        reverseLink: { kind: 'direct', url: 'http://127.0.0.1:12431' },
+      },
+    )
+    expect('pilotBridge' in ((withNeitherEnabled.devices as Record<string, Record<string, unknown>>).local ?? {})).toBe(
+      false,
+    )
+    expect(
+      'pilotBridge' in ((withNeitherEnabled.devices as Record<string, Record<string, unknown>>).laptop ?? {}),
+    ).toBe(false)
+  })
+
   test('parseMasterCliArgs and formatters handle handover, dry-run, rollback, and status', () => {
     expect(parseMasterCliArgs(['handover', '--to', 'server-1', '--dry-run', '--reverse-link', 'relay:lap'])).toEqual({
       ok: true,

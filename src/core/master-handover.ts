@@ -422,7 +422,7 @@ export function parseReverseLinkSpec(o: {
 const pickDeviceLimits = (raw: Record<string, unknown> | undefined): Record<string, unknown> => {
   const out: Record<string, unknown> = {}
   if (!raw) return out
-  for (const key of ['title', 'maxSessions', 'minFreeMemMb', 'maxLoad', 'tags', 'drain'] as const) {
+  for (const key of ['title', 'maxSessions', 'minFreeMemMb', 'maxLoad', 'tags', 'drain', 'pilotBridge'] as const) {
     if (raw[key] !== undefined) out[key] = structuredClone(raw[key])
   }
   return out
@@ -432,8 +432,8 @@ const pickDeviceLimits = (raw: Record<string, unknown> | undefined): Record<stri
  * Flips `nodes` from old master `oldMasterId` to `targetId`:
  * - `nodes.id` becomes `targetId`
  * - `nodes.order` maps `targetId` -> `'local'` and `'local'` -> `oldMasterId`
- * - `nodes.devices.local` takes `targetId`'s thresholds/tags/title/drain (without `link`)
- * - `nodes.devices[oldMasterId]` takes old `local` thresholds/tags/title/drain + `link: reverseLink`
+ * - `nodes.devices.local` takes `targetId`'s thresholds/tags/title/drain/pilotBridge (without `link`)
+ * - `nodes.devices[oldMasterId]` takes old `local` thresholds/tags/title/drain/pilotBridge + `link: reverseLink`
  * - non-revoked third-party devices are preserved as-is; `targetId` is removed from `devices`
  */
 export function flipNodesConfig(
@@ -456,7 +456,7 @@ export function flipNodesConfig(
   const oldMasterEntry = pickDeviceLimits(oldLocalRaw)
   if (!oldMasterEntry.title && oldMasterTitle) oldMasterEntry.title = oldMasterTitle
   oldMasterEntry.link = reverseLink
-  for (const key of ['profiles', 'sinks', 'mcp', 'accept', 'paused', 'giveSecrets', 'pilotBridge'] as const) {
+  for (const key of ['profiles', 'sinks', 'mcp', 'accept', 'paused', 'giveSecrets'] as const) {
     if (oldLocalRaw[key] !== undefined) oldMasterEntry[key] = structuredClone(oldLocalRaw[key])
   }
   nextDevices[oldMasterId] = oldMasterEntry

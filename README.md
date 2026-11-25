@@ -4783,6 +4783,9 @@ and its first arguments, one per element, no shell, the board adding `call --cla
 `"auto"`, `"local"` or `"link"`, where a call starts, set by Settings → MokuPilot…, the older
 `"link": true` read as `"link"`).
 
+MokuPilot node bridge (off by default; no UI toggle yet): set `node.pilotBridge: true` in the
+node's `config.json` and `nodes.devices.<id>.pilotBridge: true` (or `nodes.devices.local.pilotBridge: true`) on the master.
+
 `tunnel` (the board [through your own domain](#another-computer-or-a-tablet-through-your-own-domain);
 Settings → Remote access… and `board tunnel on|off` set it): `on` (false), `host` (the server),
 `sshPort` (22), `user` (the tunnel's user on the server), `key` (the private key's path; empty:
