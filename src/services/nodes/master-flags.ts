@@ -5,7 +5,7 @@ import { calendarConfig } from '../../core/calendar.ts'
 import { decisionsConfig } from '../../core/decisions.ts'
 import { journalConfig } from '../../core/journal.ts'
 import type { MasterFlagKey, MasterFlagsWire } from '../../core/master-flags.ts'
-import { presenceConfig } from '../../core/presence.ts'
+import { type Presence, presenceConfig } from '../../core/presence.ts'
 import { remoteConfig } from '../../core/remote.ts'
 import { teamConfig } from '../../core/team.ts'
 import { timeConfig } from '../../core/time.ts'
@@ -16,19 +16,23 @@ import { watchesConfig } from '../../core/watches.ts'
 import { threadsConfig } from '../../core/work-threads.ts'
 import { workdeskConfig } from '../../core/workdesk.ts'
 
-/** The master's flags: names and switches only, never a section's own values (hubs, keys, sources). */
-export function masterFlagsFor(cfg: Config, master: string): MasterFlagsWire {
+/**
+ * The master's flags: names and switches only, never a section's own values (hubs, keys, sources);
+ * with presence on, the user's state as `presence` (the board's view of it) has it.
+ */
+export function masterFlagsFor(cfg: Config, master: string, presence: Presence | null = null): MasterFlagsWire {
   const raw = cfg as unknown as Record<string, unknown>
   const threads = threadsConfig(raw.threads)
   const todos = todosConfig(raw.todos)
   const decisions = decisionsConfig(raw.decisions)
+  const presenceOn = presenceConfig(raw.presence)
   const on: Record<MasterFlagKey, boolean> = {
     threads: threads !== null,
     time: timeConfig(raw.time) !== null,
     calendar: calendarConfig(raw.calendar) !== null,
     decisions: decisions !== null,
     journal: journalConfig(raw.journal) !== null,
-    presence: presenceConfig(raw.presence) !== null,
+    presence: presenceOn !== null,
     team: teamConfig(raw.team) !== null,
     watches: watchesConfig(raw.watches) !== null,
     todos: todos !== null,
@@ -42,5 +46,9 @@ export function masterFlagsFor(cfg: Config, master: string): MasterFlagsWire {
     ...(threads && { threads: { agents: threads.agents, ...(threads.cases && { cases: true as const }) } }),
     ...(todos && { todos: { agents: todos.agents, ...(todos.autoClose && { autoClose: true as const }) } }),
     ...(decisions && { decisions: { defaults: decisions.defaults } }),
+    ...(presenceOn &&
+      presence && {
+        presence: { state: presence.state, since: presence.since, by: presence.by, mode: presenceOn.mode },
+      }),
   }
 }

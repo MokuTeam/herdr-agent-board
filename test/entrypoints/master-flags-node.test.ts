@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { brief, calendarBrief, decisionsBrief } from '../../src/core/brief.ts'
 import { normalizeConfig } from '../../src/core/categories.ts'
 import { useLanguage } from '../../src/core/lang.ts'
+import { presenceBrief } from '../../src/core/presence.ts'
 import { todosBrief } from '../../src/core/todos.ts'
 import { watchesBrief } from '../../src/core/watches.ts'
 import { threadsBrief } from '../../src/core/work-threads.ts'
@@ -22,6 +23,7 @@ const FLAGS = {
   threads: { agents: true },
   todos: { agents: true },
   decisions: { defaults: true },
+  presence: { state: 'away', since: 1000, by: 'user', mode: 'auto' },
   at: 1,
 }
 
@@ -30,7 +32,8 @@ function config(box: Sandbox, extra: Record<string, unknown> = {}): void {
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, 'config.json'), JSON.stringify({ language: 'en', port: 9, ...extra }))
 }
-function flags(box: Sandbox, f: unknown = FLAGS): void {
+/** The flags as the node keeps them; just in by default (`at`: now). */
+function flags(box: Sandbox, f: Record<string, unknown> = { ...FLAGS, at: Date.now() }): void {
   const dir = join(box.env.LOCALAPPDATA as string, 'herdr/plugins/agent-board/node')
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, 'master-flags.json'), JSON.stringify(f))
@@ -78,7 +81,30 @@ test("a node with its master's flags: the brief tells of threads, calendar, watc
     todosBrief(),
   ])
     expect(text).toContain(part)
-  expect(text).toContain('- Presence: the board knows')
+  // The user's state as the master said it, never this node's own "at the computer".
+  expect(text).toContain(presenceBrief({ state: 'away', since: 1000, by: 'user' }))
+  expect(text).not.toContain('last heard from')
+})
+
+test('the master not heard from for a while: the brief says how old its word on presence is', async () => {
+  const box = await sandbox()
+  config(box, { node: NODE })
+  flags(box, { ...FLAGS, at: Date.now() - 2 * 3_600_000 })
+  writeCard(box)
+  const text = await sessionStart(box)
+  expect(text).toContain(presenceBrief({ state: 'away', since: 1000, by: 'user' }))
+  expect(text).toContain('[agent-board] The master board was last heard from 2 h ago')
+})
+
+test('presence on at the master but no state said: no presence line at all', async () => {
+  const box = await sandbox()
+  config(box, { node: NODE })
+  const { presence: _p, ...noState } = FLAGS
+  flags(box, { ...noState, at: Date.now() })
+  writeCard(box)
+  const text = await sessionStart(box)
+  expect(text).not.toContain('- Presence:')
+  expect(text).not.toContain('The user is at the computer')
 })
 
 test('a node the master sent nothing yet, and a board without node beside a flags file: the brief as before', async () => {

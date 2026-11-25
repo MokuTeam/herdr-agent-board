@@ -9,6 +9,7 @@
 // and the cards of this board read them as on via the master. `apply` puts them back after each
 // reload of config.json and takes out what it put there before.
 import { readMasterFlags, writeMasterFlags } from '../../adapters/master-flags-store.ts'
+import { keepPresence } from '../../adapters/presence-store.ts'
 import {
   type MasterFlags,
   masterFlagsWireOf,
@@ -69,7 +70,16 @@ export function createNodeMasterFlags(deps: NodeMasterFlagsDeps): NodeMasterFlag
       } catch (err) {
         deps.log(`master flags: not kept on disk: ${err instanceof Error ? err.message : String(err)}`)
       }
-      if (!sameFlags(was, current)) {
+      // The user's presence as the master said it, where this computer's hooks read it (presence.json):
+      // a node never detects it itself, and `board presence` there goes to the master.
+      if (current.presence) {
+        try {
+          keepPresence(current.presence)
+        } catch (err) {
+          deps.log(`master flags: presence not kept: ${err instanceof Error ? err.message : String(err)}`)
+        }
+      }
+      if (!sameFlags(was, current, { presence: false })) {
         apply()
         deps.changed()
       }

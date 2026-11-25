@@ -116,6 +116,8 @@ export const DOOR_ROUTES: readonly DoorRoute[] = [
   { method: 'GET', path: /^\/api\/node\/master-relay\/req\/[A-Za-z0-9_-]{8,64}\/body$/, door: true },
   { method: 'POST', path: /^\/api\/node\/master-relay\/res\/[A-Za-z0-9_-]{8,64}$/, door: true },
   { method: 'POST', path: /^\/api\/node\/master-relay\/stream\/[A-Za-z0-9_-]{8,64}$/, door: true },
+  // The master's feature flags (#775): which master-owned features are on there, and the user's presence.
+  { method: 'POST', path: '/api/node/master-flags', door: true },
   // Activate a newly staged relay dial key after claim rotation (#513).
   { method: 'POST', path: '/api/node/relay-key', door: true },
   // Telegram message routing from the master (#701).

@@ -16,6 +16,7 @@
 //
 // No I/O: the node keeps them in adapters/master-flags-store.ts, the master makes them in
 // services/nodes/master-flags.ts.
+import { isPresenceMode, isPresenceState, type Presence, type PresenceMode } from './presence.ts'
 
 /** The features a master owns, as the handover takes them off a node. */
 export const MASTER_FLAG_KEYS = [
@@ -49,6 +50,11 @@ export interface MasterFlagsWire {
   todos?: { agents: boolean; autoClose?: true }
   /** Decisions: whether a default may answer. */
   decisions?: { defaults: boolean }
+  /**
+   * Presence: the user's state at the master (a node never detects it, `board presence` there goes to
+   * the master), and Settings' mode, while presence is on at the master.
+   */
+  presence?: { state: Presence['state']; since: number; by: Presence['by']; mode: PresenceMode }
 }
 
 /** As the node keeps them: the wire, and when they came (ms). */
@@ -62,7 +68,7 @@ const DEVICE = /^[A-Za-z0-9._-]{1,64}$/
 /** The flags as a master sent them, or null: only known keys, each field of its kind. */
 export function masterFlagsWireOf(raw: unknown): MasterFlagsWire | null {
   if (!isObject(raw)) return null
-  const { master, on, threads, todos, decisions } = raw
+  const { master, on, threads, todos, decisions, presence } = raw
   if (typeof master !== 'string' || !DEVICE.test(master) || !Array.isArray(on)) return null
   const keys = MASTER_FLAG_KEYS.filter(k => on.includes(k))
   const out: MasterFlagsWire = { master, on: keys }
@@ -72,6 +78,17 @@ export function masterFlagsWireOf(raw: unknown): MasterFlagsWire | null {
     out.todos = { agents: todos.agents, ...(todos.agents && todos.autoClose === true && { autoClose: true as const }) }
   if (keys.includes('decisions') && isObject(decisions) && typeof decisions.defaults === 'boolean')
     out.decisions = { defaults: decisions.defaults }
+  if (
+    keys.includes('presence') &&
+    isObject(presence) &&
+    isPresenceState(presence.state) &&
+    typeof presence.since === 'number' &&
+    Number.isFinite(presence.since) &&
+    presence.since >= 0 &&
+    (presence.by === 'user' || presence.by === 'auto') &&
+    isPresenceMode(presence.mode)
+  )
+    out.presence = { state: presence.state, since: presence.since, by: presence.by, mode: presence.mode }
   return out
 }
 
@@ -82,9 +99,19 @@ export function masterFlagsOf(raw: unknown): MasterFlags | null {
   return wire && { ...wire, at: raw.at }
 }
 
-/** Whether two sets of flags say the same, whenever they came. */
-export const sameFlags = (a: MasterFlagsWire | null, b: MasterFlagsWire | null): boolean =>
-  JSON.stringify(a && masterFlagsWireOf(a)) === JSON.stringify(b && masterFlagsWireOf(b))
+/** Whether two sets of flags say the same, whenever they came; `presence: false`: leaving the user's state out. */
+export function sameFlags(
+  a: MasterFlagsWire | null,
+  b: MasterFlagsWire | null,
+  o: { presence?: boolean } = {},
+): boolean {
+  const shown = (f: MasterFlagsWire | null): string => {
+    const w = f && masterFlagsWireOf(f)
+    if (w && o.presence === false) delete w.presence
+    return JSON.stringify(w)
+  }
+  return shown(a) === shown(b)
+}
 
 /**
  * On at the master, as the node's config.json would say it: the value its readers take, always a new
@@ -123,17 +150,36 @@ export function withMasterFlags<T extends object>(cfg: T, flags: MasterFlagsWire
   return (out ?? cfg) as T
 }
 
-/** What a node's briefs say of the master-run features: threads as their reader takes them, calendar, presence. */
-export function briefFlags(flags: MasterFlagsWire | null): { threads: unknown; calendar: boolean; presence: boolean } {
-  if (!flags) return { threads: undefined, calendar: false, presence: false }
+/**
+ * What a node's briefs say of the master-run features: threads as their reader takes them, calendar,
+ * and the user's presence as the master last said it (null: presence off there, or not said).
+ */
+export function briefFlags(flags: MasterFlagsWire | null): {
+  threads: unknown
+  calendar: boolean
+  presence: Presence | null
+} {
+  if (!flags) return { threads: undefined, calendar: false, presence: null }
   const t = flags.threads
+  const p = flags.on.includes('presence') ? flags.presence : undefined
+  let threads: unknown
+  if (flags.on.includes('threads')) threads = t ? { agents: t.agents, ...(t.cases && { cases: true }) } : true
   return {
-    threads: flags.on.includes('threads')
-      ? t
-        ? { agents: t.agents, ...(t.cases && { cases: true }) }
-        : true
-      : undefined,
+    threads,
     calendar: flags.on.includes('calendar'),
-    presence: flags.on.includes('presence'),
+    presence: p ? { state: p.state, since: p.since, by: p.by } : null,
   }
+}
+
+/** The master sends its flags again this often while its stream is up, so a node can tell they are current. */
+export const FLAGS_EVERY_MS = 5 * 60_000
+/** Flags older than this: the master has not been heard from, and what they say may be out of date. */
+export const FLAGS_STALE_MS = 3 * FLAGS_EVERY_MS
+
+/** The line a node's brief adds after the presence when its master has not been heard from for a while; null while current. */
+export function staleFlagsLine(flags: Pick<MasterFlags, 'at'> | null, now: number): string | null {
+  if (!flags || now - flags.at <= FLAGS_STALE_MS) return null
+  const min = Math.round((now - flags.at) / 60_000)
+  const age = min < 120 ? `${min} min` : min < 48 * 60 ? `${Math.round(min / 60)} h` : `${Math.round(min / 1440)} days`
+  return `[agent-board] The master board was last heard from ${age} ago: the user's presence above is as it was then and may have changed.`
 }

@@ -28,6 +28,7 @@ import { backupNoteText } from '../../models/backup.ts'
 import { CARD_TEXT_KEY, CARD_TEXTS, type CardText, cardTextNow, setCardText } from '../../models/card-text.ts'
 import { reachable } from '../../models/devices.ts'
 import { LOOK_KEY, LOOKS, lookNow, setLook } from '../../models/look.ts'
+import { masterOwnedNow } from '../../models/master-owned.ts'
 import { DOCKS, type Dock } from '../../models/panel-layout.ts'
 import { offersProfiles } from '../../models/profiles.ts'
 import { adminHere, keptAuth, ownerAdminPage, remotePage } from '../../models/remote-page.ts'
@@ -219,9 +220,6 @@ export function SettingsPanel({
   const isRemote = remotePage()
   const canAdmin = adminHere()
   const languages = data?.languages ?? LANGUAGES
-  const presenceMode: PresenceMode | 'none' = data?.presence?.mode ?? 'none'
-  const idleMinutes = data?.presence?.idleMinutes ?? 15
-  const todosMode: TodoMode = todoModeOf(data?.todos ?? null)
   // A node's master-owned features (#775): shown as they are, set on the master, not here.
   const masterOwned = data?.masterFlags ?? null
   const ownedNote = masterOwned ? (
@@ -229,8 +227,24 @@ export function SettingsPanel({
       {t('node.masterOwned', { name: masterOwned.master })}
     </small>
   ) : null
-  const threadsInfo = data && canAdmin ? threadsNow(data) : null
-  const features = data && canAdmin ? featuresNow(data) : null
+  // As the master has them, not this computer's own (off) values.
+  const owned = masterOwned ? masterOwnedNow(masterOwned) : null
+  const presenceMode: PresenceMode | 'none' = owned ? owned.presence : (data?.presence?.mode ?? 'none')
+  const idleMinutes = data?.presence?.idleMinutes ?? 15
+  const todosMode: TodoMode = owned ? owned.todos : todoModeOf(data?.todos ?? null)
+  const threadsInfo = data && canAdmin ? (owned ? { mode: owned.threads, share: undefined } : threadsNow(data)) : null
+  const features =
+    data && canAdmin
+      ? owned
+        ? {
+            watches: owned.watches,
+            decisions: owned.decisions,
+            ...(owned.decisions && { decisionsDefaults: owned.decisionsDefaults }),
+            journal: owned.journal,
+            ...(owned.threads !== 'none' && { threadsCases: owned.threadsCases }),
+          }
+        : featuresNow(data)
+      : null
   const compact = data?.compactDefault
   const turnResumeOn = data?.turnResume !== false
   const compactChoices =

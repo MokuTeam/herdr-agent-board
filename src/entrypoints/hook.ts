@@ -28,14 +28,14 @@ import { loadConfig } from '../adapters/config-file.ts'
 import { agentGet } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { nodeMasterFlags } from '../adapters/master-flags-store.ts'
-import { currentPresence, presenceForBrief, presenceNews } from '../adapters/presence-store.ts'
+import { presenceForBrief, presenceNews } from '../adapters/presence-store.ts'
 import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
 import { readStdin } from '../adapters/stdin.ts'
 import { BRIEF_VERSION, brief, waitReminder } from '../core/brief.ts'
 import { calendarConfig } from '../core/calendar.ts'
 import { decisionsConfig } from '../core/decisions.ts'
 import { heldQuestionOf } from '../core/held-question.ts'
-import { briefFlags, withMasterFlags } from '../core/master-flags.ts'
+import { briefFlags, staleFlagsLine, withMasterFlags } from '../core/master-flags.ts'
 import { isNotice } from '../core/notices.ts'
 import { type Profile, profileReport } from '../core/profiles.ts'
 import { secretsConfig, usableSinks } from '../core/secrets.ts'
@@ -172,7 +172,7 @@ async function main(): Promise<void> {
     const gated = withMasterFlags(cfg, flags)
     const via = briefFlags(flags)
     // The user's presence (#172), only where config.json (or a node's master) turned it on.
-    const presence = presenceForBrief(cfg) ?? (via.presence ? currentPresence() : null)
+    const presence = presenceForBrief(cfg) ?? via.presence
     // The secret sinks (#273), only where config.json has any: else the brief is as it was.
     const sinks = cfg.secrets === undefined ? [] : usableSinks(secretsConfig(cfg.secrets, { home: homedir() }))
     // The calendar (#328), only while config.json turns it on: else the brief is as it was.
@@ -194,6 +194,9 @@ async function main(): Promise<void> {
       // Decisions (#487), likewise.
       decisionsConfig(gated.decisions),
     )
+    // The presence a node's master last said, when it has not been heard from for a while: its age.
+    const stale = presence && presence === via.presence ? staleFlagsLine(flags, Date.now()) : null
+    if (stale) context = `${context}\n${stale}`
     Object.assign(patch, { briefedAt: Date.now(), briefV: BRIEF_VERSION })
     if (presence) patch.presenceSeen = presence.since
     else if (card?.presenceSeen !== undefined) patch.presenceSeen = ''

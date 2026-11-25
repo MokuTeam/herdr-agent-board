@@ -6,7 +6,7 @@
 // the board's route table is the same, and the local hello is byte for byte main's.
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
@@ -459,6 +459,40 @@ describe('the master door', () => {
     // The web board answers it as any path it has no route for.
     const none = await answer(fetch(`${url}/api/no-such-route`))
     expect(await answer(fetch(`${url}/api/node/status`))).toEqual(none)
+  })
+
+  test("POST /api/node/master-flags through the door (#775): kept beside the config, the node's page shows them as the master's", async () => {
+    const flags = {
+      master: 'laptop',
+      on: ['presence', 'watches', 'todos'],
+      presence: { state: 'away', since: 1000, by: 'user', mode: 'auto' },
+    }
+    expect(await answer(master.post('/api/node/master-flags', flags))).toEqual([200, { ok: true }])
+    const kept = JSON.parse(readFileSync(join(stateFolder(box), 'node', 'master-flags.json'), 'utf8'))
+    expect(kept).toMatchObject(flags)
+    // The user's presence where the node's hooks read it.
+    expect(JSON.parse(readFileSync(join(stateFolder(box), 'presence.json'), 'utf8'))).toEqual({
+      state: 'away',
+      since: 1000,
+      by: 'user',
+    })
+    let shown = ''
+    for (const deadline = Date.now() + 5000; Date.now() < deadline; await Bun.sleep(20)) {
+      const [, board] = await answer(fetch(`${url}/api/board`, { headers: { 'x-board': '1' } }))
+      shown = (board as { masterFlags?: { on: string[] } }).masterFlags?.on.join() ?? ''
+      if (shown) break
+    }
+    expect(shown).toBe('presence,watches,todos')
+    // Not the door's: the web board has no such route.
+    expect(
+      (
+        await fetch(`${url}/api/node/master-flags`, {
+          method: 'POST',
+          headers: { 'x-board': '1', 'content-type': 'application/json' },
+          body: '{}',
+        })
+      ).status,
+    ).not.toBe(200)
   })
 
   test('the Host must name loopback, any port; a request with an Origin is refused, before the token', async () => {

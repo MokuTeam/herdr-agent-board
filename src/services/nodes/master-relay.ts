@@ -15,6 +15,7 @@
 import { createHash } from 'node:crypto'
 import { pace } from '../../adapters/pacing.ts'
 import { takeEvents } from '../../core/event-stream.ts'
+import { FLAGS_EVERY_MS } from '../../core/master-flags.ts'
 import {
   isRelayId,
   masterPath,
@@ -38,6 +39,8 @@ import type { NodeLinks } from './links.ts'
 
 export interface MasterRelayRunner {
   sync(): void
+  /** The flags may have changed (#775: the user's presence): posted to the nodes whose stream is up, where they did. */
+  flagsChanged(): void
   close(): Promise<void>
 }
 
@@ -71,6 +74,8 @@ interface Recorded {
 }
 
 const AGAIN_MS = 2000
+/** core/master-flags.ts FLAGS_EVERY_MS: the flags again, so a node can tell they are current. */
+const FLAGS_AGAIN_MS = FLAGS_EVERY_MS
 const NONE_MS = 60_000
 const MOST_EVENT_CHARS = 1 << 20
 const DEFAULT_MAX_INFLIGHT = 32
@@ -471,19 +476,31 @@ export function createMasterRelayRunner(o: MasterRelayRunnerOptions): MasterRela
     following.set(id, { ac, done })
   }
 
+  /** The flags to every node whose stream is up; `again`: even unchanged. */
+  function flagsToAll(again: boolean): void {
+    if (!o.flags) return
+    for (const [id, held] of following) {
+      const link = o.links.link(id)
+      if (link && streaming.has(id) && !held.ac.signal.aborted) void sendFlags(id, link, held.ac.signal, again)
+    }
+  }
+  // Only a runner with flags keeps a timer for them.
+  const flagsTimer = o.flags ? setInterval(() => flagsToAll(true), Math.round(FLAGS_AGAIN_MS * pace())) : null
+
   const off = o.links.onChange(changed)
 
   return {
     sync() {
       if (closed) return
       for (const id of new Set([...following.keys(), ...(o.deviceIds?.() ?? [])])) changed(id)
-      for (const [id, held] of following) {
-        const link = o.links.link(id)
-        if (link && streaming.has(id) && !held.ac.signal.aborted) void sendFlags(id, link, held.ac.signal, false)
-      }
+      flagsToAll(false)
+    },
+    flagsChanged() {
+      if (!closed) flagsToAll(false)
     },
     async close() {
       closed = true
+      if (flagsTimer) clearInterval(flagsTimer)
       off()
       for (const ac of running.values()) ac.abort()
       running.clear()

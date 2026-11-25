@@ -5,11 +5,11 @@ import { loadConfig } from '../adapters/config-file.ts'
 import { agentGet } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { nodeMasterFlags } from '../adapters/master-flags-store.ts'
-import { currentPresence, presenceForBrief, presenceNews } from '../adapters/presence-store.ts'
+import { presenceForBrief, presenceNews } from '../adapters/presence-store.ts'
 import { readStdin } from '../adapters/stdin.ts'
 import { brief, CODEX_BRIEF_VERSION, waitReminder } from '../core/brief.ts'
 import { CODEX_AGENT, isCodexSession } from '../core/codex.ts'
-import { briefFlags } from '../core/master-flags.ts'
+import { briefFlags, staleFlagsLine } from '../core/master-flags.ts'
 import { isNotice } from '../core/notices.ts'
 import { threadsConfig } from '../core/work-threads.ts'
 
@@ -37,8 +37,9 @@ async function main(): Promise<void> {
   if (event === 'SessionStart' || Number(card?.briefV ?? 0) < CODEX_BRIEF_VERSION) {
     const cfg = loadConfig()
     // On a node (#775): threads and presence as its master has them; without `node` nothing is read.
-    const via = briefFlags(nodeMasterFlags(cfg))
-    const presence = presenceForBrief(cfg) ?? (via.presence ? currentPresence() : null)
+    const flags = nodeMasterFlags(cfg)
+    const via = briefFlags(flags)
+    const presence = presenceForBrief(cfg) ?? via.presence
     context = [
       brief(
         cfg,
@@ -54,6 +55,9 @@ async function main(): Promise<void> {
       ),
       `Use \`board --session ${sid} <command>\` for the commands above, so a tool's shell targets this session even when it does not inherit the pane environment.`,
     ].join('\n')
+    // The presence a node's master last said, when it has not been heard from for a while: its age.
+    const stale = presence && presence === via.presence ? staleFlagsLine(flags, Date.now()) : null
+    if (stale) context = `${context}\n${stale}`
     Object.assign(patch, { briefedAt: Date.now(), briefV: CODEX_BRIEF_VERSION })
     if (presence) patch.presenceSeen = presence.since
     else if (card?.presenceSeen !== undefined) patch.presenceSeen = ''

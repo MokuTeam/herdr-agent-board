@@ -715,13 +715,19 @@ export async function startServer({
     onChange: accessChanged,
     server: serverSetup,
   })
+  // A master's nodes hear of a change of the user's presence (#775); set once the relay runner is made.
+  let presenceToNodes = (): void => {}
   // The user's presence (#172): nothing is read, asked or shown while config.json has no `presence`.
   const presence = createPresence({
     cfg,
     log,
     ...(presenceObserve && { observe: presenceObserve }),
     ...(presenceIntervalMs && { intervalMs: presenceIntervalMs }),
-    onChange: () => board.publish(),
+    onChange: () => {
+      board.publish()
+      // A master tells its nodes (#775): their sessions hear the user's presence from it.
+      presenceToNodes()
+    },
     sessions: () => board.items().map(i => i.key),
   })
   // The away journal (#489): nothing is opened, read or shown while config.json has no `journal`.
@@ -1049,7 +1055,15 @@ export async function startServer({
         const m = n && door && doorStore ? pickNodeMaster(n.id, doorStore.list(), door.connectedMasters()) : null
         if (m?.name) name = m.name
       } catch {}
-      return { master: name, at: f.at, on: [...f.on] }
+      return {
+        master: name,
+        at: f.at,
+        on: [...f.on],
+        ...(f.threads && { threads: f.threads }),
+        ...(f.todos && { todos: f.todos }),
+        ...(f.decisions && { decisions: f.decisions }),
+        ...(f.presence && { presenceMode: f.presence.mode }),
+      }
     },
     // Threads (#379): while config.json turns them on, the revision and the count that waits on
     // the owner (two queries a refresh); off, nothing is read.
@@ -2019,8 +2033,9 @@ export async function startServer({
       },
       replay: req => replayRelayed(req),
       // The master-owned features for the nodes (#775).
-      flags: () => masterFlagsFor(cfg, nodesConfig(cfg.nodes, hostname())?.id ?? ''),
+      flags: () => masterFlagsFor(cfg, nodesConfig(cfg.nodes, hostname())?.id ?? '', presence.view()),
     })
+    presenceToNodes = () => masterRelayRunner?.flagsChanged()
     nodeProxy = createNodeProxy({
       cfg,
       links: nodeLinks,

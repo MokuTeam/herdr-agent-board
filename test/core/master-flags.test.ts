@@ -4,10 +4,12 @@ import { expect, test } from 'bun:test'
 import { decisionsConfig } from '../../src/core/decisions.ts'
 import {
   briefFlags,
+  FLAGS_STALE_MS,
   type MasterFlagsWire,
   masterFlagsOf,
   masterFlagsWireOf,
   sameFlags,
+  staleFlagsLine,
   withMasterFlags,
 } from '../../src/core/master-flags.ts'
 import { todosConfig } from '../../src/core/todos.ts'
@@ -20,6 +22,7 @@ const ALL: MasterFlagsWire = {
   threads: { agents: true, cases: true },
   todos: { agents: true, autoClose: true },
   decisions: { defaults: false },
+  presence: { state: 'away', since: 1000, by: 'user', mode: 'auto' },
 }
 
 test('the wire keeps known keys and fields of their kind only', () => {
@@ -83,7 +86,33 @@ test('the briefs: threads as their reader takes them, calendar, presence', () =>
   const b = briefFlags(ALL)
   expect(threadsConfig(b.threads)).toMatchObject({ agents: true, cases: true })
   expect(b.calendar).toBe(true)
-  expect(b.presence).toBe(true)
-  expect(briefFlags(null)).toEqual({ threads: undefined, calendar: false, presence: false })
+  expect(b.presence).toEqual({ state: 'away', since: 1000, by: 'user' })
+  expect(briefFlags(null)).toEqual({ threads: undefined, calendar: false, presence: null })
   expect(briefFlags({ master: 'm', on: [] }).threads).toBeUndefined()
+  // Presence on at the master but no state said: nothing told, never a made-up "at the computer".
+  expect(briefFlags({ master: 'm', on: ['presence'] }).presence).toBeNull()
+})
+
+test("presence: the master's state kept only when well formed and on", () => {
+  const p: NonNullable<MasterFlagsWire['presence']> = { state: 'call', since: 5, by: 'auto', mode: 'suggest' }
+  expect(masterFlagsWireOf({ master: 'm', on: ['presence'], presence: p })?.presence).toEqual(p)
+  expect(masterFlagsWireOf({ master: 'm', on: [], presence: p })?.presence).toBeUndefined()
+  expect(
+    masterFlagsWireOf({ master: 'm', on: ['presence'], presence: { ...p, state: 'gone' } })?.presence,
+  ).toBeUndefined()
+  expect(masterFlagsWireOf({ master: 'm', on: ['presence'], presence: { ...p, since: -1 } })?.presence).toBeUndefined()
+  // A change of the state alone is not a change of the features.
+  const away: MasterFlagsWire = { master: 'm', on: ['presence'], presence: { ...p, state: 'away' } }
+  expect(sameFlags(away, { ...away, presence: p })).toBe(false)
+  expect(sameFlags(away, { ...away, presence: p }, { presence: false })).toBe(true)
+})
+
+test('stale flags: the age of the last word from the master, nothing while current', () => {
+  const now = 10 * 3_600_000
+  expect(staleFlagsLine(null, now)).toBeNull()
+  expect(staleFlagsLine({ at: now - FLAGS_STALE_MS }, now)).toBeNull()
+  expect(staleFlagsLine({ at: now - 20 * 60_000 }, now)).toBe(
+    "[agent-board] The master board was last heard from 20 min ago: the user's presence above is as it was then and may have changed.",
+  )
+  expect(staleFlagsLine({ at: now - 5 * 3_600_000 }, now)).toContain('5 h ago')
 })

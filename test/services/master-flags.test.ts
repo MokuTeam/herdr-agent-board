@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { configFile, editFeatures, editThreads, editTodos } from '../../src/adapters/config-file.ts'
 import { masterFlagsFile, nodeMasterFlags, readMasterFlags } from '../../src/adapters/master-flags-store.ts'
+import { readPresence } from '../../src/adapters/presence-store.ts'
 import { useLanguage } from '../../src/core/lang.ts'
 import type { MasterFlagsWire } from '../../src/core/master-flags.ts'
 import type { Config } from '../../src/core/types.ts'
@@ -42,6 +43,17 @@ describe("the master's flags", () => {
       decisions: { defaults: false },
     })
     expect(JSON.stringify(f)).not.toMatch(/hub|secret|anna|example/)
+  })
+
+  test("presence on: the user's state as the board's view has it, with Settings' mode; off, none", () => {
+    const view = { state: 'away' as const, since: 1000, by: 'user' as const, mode: 'suggest' as const, idleMinutes: 15 }
+    expect(masterFlagsFor({ presence: { mode: 'suggest' } } as unknown as Config, 'laptop', view).presence).toEqual({
+      state: 'away',
+      since: 1000,
+      by: 'user',
+      mode: 'suggest',
+    })
+    expect(masterFlagsFor({} as Config, 'laptop', view).presence).toBeUndefined()
   })
 
   test('a master with none of them on sends an empty list', () => {
@@ -109,6 +121,25 @@ describe("the node's copy", () => {
     expect(nodeMasterFlags(cfg2)?.at).toBe(1234)
   })
 
+  test("the master's presence goes where the node's hooks read it; a change of it alone does not reload the board", () => {
+    isolatedHome()
+    const cfg = { node: NODE } as unknown as Config
+    let changed = 0
+    const holder = createNodeMasterFlags({ cfg, log: () => {}, changed: () => changed++ })
+    const wire = (state: 'here' | 'away', since: number): MasterFlagsWire => ({
+      master: 'laptop',
+      on: ['presence'],
+      presence: { state, since, by: 'auto', mode: 'auto' },
+    })
+    holder.take(wire('away', 1000))
+    expect(readPresence()).toEqual({ state: 'away', since: 1000, by: 'auto' })
+    expect(changed).toBe(1)
+    holder.take(wire('here', 2000))
+    expect(readPresence()).toEqual({ state: 'here', since: 2000, by: 'auto' })
+    expect(readMasterFlags()?.presence?.state).toBe('here')
+    expect(changed).toBe(1)
+  })
+
   test('a board without node reads nothing and adds nothing', () => {
     isolatedHome()
     mkdirSync(join(masterFlagsFile(), '..'), { recursive: true })
@@ -173,6 +204,18 @@ describe('the link carries them', () => {
     await until(2)
     expect(holder.current()?.on).toEqual(['decisions', 'watches'])
     expect(cfg.decisions).toEqual({})
+    // The user's presence changed at the master: told at once, not at the next config change.
+    flags = {
+      ...flags,
+      on: ['decisions', 'presence', 'watches'],
+      presence: { state: 'away', since: 7, by: 'auto', mode: 'auto' },
+    }
+    runner.flagsChanged()
+    await until(3)
+    expect(holder.current()?.presence?.state).toBe('away')
+    runner.flagsChanged()
+    await Bun.sleep(50)
+    expect(posts.length).toBe(3)
   })
 
   test('a runner without flags posts none (a master as before)', async () => {

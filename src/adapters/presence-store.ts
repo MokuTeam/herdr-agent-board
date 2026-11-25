@@ -52,6 +52,22 @@ export function setPresence(
   return { presence, changed }
 }
 
+/**
+ * A node's copy of the user's presence as its master said it (#775): written as it came, so the
+ * hooks' readers here (presenceNews) see the master's state and its time; the same again writes nothing.
+ */
+export function keepPresence(p: Presence): void {
+  mkdirSync(stateDir(), { recursive: true })
+  updateJson(
+    presenceFile(),
+    (cur: Presence | null): Presence =>
+      cur && cur.state === p.state && cur.since === p.since && cur.by === p.by
+        ? cur
+        : { state: p.state, since: p.since, by: p.by },
+    isPresence,
+  )
+}
+
 /** Forget the state (presence turned off): the hooks go quiet again. */
 export function clearPresence(): void {
   try {
