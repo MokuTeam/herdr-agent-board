@@ -167,12 +167,12 @@ describe('web/MasterHandover (#697)', () => {
       writable: true,
     })
     Object.defineProperty(g, 'requestAnimationFrame', {
-      value: (cb: (t: number) => void) => setTimeout(() => cb(Date.now()), 0),
+      value: () => 0,
       configurable: true,
       writable: true,
     })
     Object.defineProperty(g, 'cancelAnimationFrame', {
-      value: (id: ReturnType<typeof setTimeout>) => clearTimeout(id),
+      value: () => {},
       configurable: true,
       writable: true,
     })
@@ -269,6 +269,137 @@ describe('web/MasterHandover (#697)', () => {
 
       const posts = sent(calls.slice(callsAfterMount)).filter(([, method]) => method === 'POST')
       expect(posts).toEqual([['/api/nodes/handover', 'POST', '1', { op: 'rollback', discardSinceCommit: true }]])
+    } finally {
+      await act(async () => {
+        root.unmount()
+      })
+      for (const [k, desc] of saved) {
+        if (desc) Object.defineProperty(g, k, desc)
+        else delete g[k]
+      }
+      dom.window.close()
+    }
+  })
+
+  test('shows relay setup step on target and memory-only sudo password prompt without separate wizard (#740)', async () => {
+    const relayPlan = {
+      ...PLAN,
+      ok: false,
+      relaySetup: {
+        host: 'atlas.example.com',
+        sshPort: 2222,
+        user: 'agent-board-relay-m',
+        needsSudoPassword: true,
+      },
+      checks: [
+        { id: 'online', ok: true, detail: 'server-1 is online', blocking: true },
+        { id: 'reverseLink', ok: false, detail: 'sudo password required on target', blocking: true },
+      ],
+    }
+    const viewNeedingSudo = {
+      phase: 'checked' as const,
+      step: null,
+      id: null,
+      target: 'server-1',
+      plan: relayPlan,
+      verify: null,
+      error: null,
+      rolledBack: false,
+      canRollback: false,
+      need: 'sudoPassword' as const,
+    }
+    const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
+      url: 'http://localhost/',
+    })
+    const g = globalThis as Record<string, unknown>
+    const win = dom.window as unknown as Record<string, unknown>
+    const keys = [
+      'window',
+      'document',
+      'navigator',
+      'HTMLElement',
+      'HTMLInputElement',
+      'Element',
+      'Node',
+      'Event',
+      'MouseEvent',
+      'MutationObserver',
+      'getComputedStyle',
+      'addEventListener',
+      'removeEventListener',
+      'devicePixelRatio',
+      'ResizeObserver',
+      'requestAnimationFrame',
+      'cancelAnimationFrame',
+      'IS_REACT_ACT_ENVIRONMENT',
+    ] as const
+    const saved = new Map<string, PropertyDescriptor | undefined>()
+    for (const k of keys) saved.set(k, Object.getOwnPropertyDescriptor(g, k))
+    for (const k of keys) {
+      if (k in win) Object.defineProperty(g, k, { value: win[k], configurable: true, writable: true })
+    }
+    g.IS_REACT_ACT_ENVIRONMENT = true
+    Object.defineProperty(g, 'devicePixelRatio', { value: 1, configurable: true, writable: true })
+    Object.defineProperty(g, 'ResizeObserver', {
+      value: class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+      configurable: true,
+      writable: true,
+    })
+    Object.defineProperty(g, 'requestAnimationFrame', {
+      value: () => 0,
+      configurable: true,
+      writable: true,
+    })
+    Object.defineProperty(g, 'cancelAnimationFrame', {
+      value: () => {},
+      configurable: true,
+      writable: true,
+    })
+
+    const { createRoot } = await import('react-dom/client')
+    const rootEl = dom.window.document.getElementById('root') as HTMLElement
+    const root = createRoot(rootEl)
+    const calls = answers()
+    try {
+      await act(async () => {
+        root.render(
+          <I18nProvider lang="en">
+            <BoardContext.Provider value={board({ data: payload({ devices: DEVICES }), canEdit: true, now: NOW })}>
+              <PanelProvider viewport={() => VP}>
+                <DevicesPanel open onClose={() => {}} handover={viewNeedingSudo} />
+              </PanelProvider>
+            </BoardContext.Provider>
+          </I18nProvider>,
+        )
+      })
+      const handoverSec = rootEl.querySelector('.devices-handover')
+      expect(handoverSec?.textContent).not.toContain('config.json')
+      expect(handoverSec?.textContent).not.toContain('Set up relay server')
+      expect(handoverSec?.textContent).toContain('Relay will be set up on server-1 (atlas.example.com:2222)')
+      expect(rootEl.querySelector('.devices-relay')).toBeNull()
+
+      const sudoInput = rootEl.querySelector('input[name="handover-sudo-password"]') as HTMLInputElement | null
+      expect(sudoInput).toBeTruthy()
+      if (!sudoInput) throw new Error('missing sudo password input')
+      sudoInput.value = 'target-sudo-pw'
+
+      const callsBefore = calls.length
+      const moveBtn = Array.from(rootEl.querySelectorAll('.devices-handover button')).find(
+        b => b.textContent === 'Move master',
+      ) as HTMLButtonElement | undefined
+      expect(moveBtn?.disabled).toBe(false)
+      await act(async () => {
+        moveBtn?.click()
+      })
+      const posts = sent(calls.slice(callsBefore)).filter(([, method]) => method === 'POST')
+      expect(posts).toEqual([
+        ['/api/nodes/handover', 'POST', '1', { op: 'run', to: 'server-1', sudoPassword: 'target-sudo-pw' }],
+      ])
+      expect(sudoInput.value).toBe('')
     } finally {
       await act(async () => {
         root.unmount()

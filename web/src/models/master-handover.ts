@@ -26,6 +26,12 @@ export interface HandoverPlan {
   totalBytes: number
   requiredFreeMb: number
   targetFreeMb: number | null
+  relaySetup?: {
+    host: string
+    sshPort: number
+    user: string
+    needsSudoPassword: boolean
+  }
   errors: string[]
   warnings: string[]
 }
@@ -54,6 +60,7 @@ export interface HandoverView {
   canRollback: boolean
   rollbackNeedsConfirm?: boolean
   rollbackReason?: string
+  need?: 'sudoPassword'
 }
 
 const PHASES = new Set(['idle', 'checking', 'checked', 'running', 'done', 'failed', 'rolled-back'])

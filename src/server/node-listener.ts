@@ -17,6 +17,7 @@
 // with the web board's guards. A master's open event streams end, with the event a phone's do, the moment
 // it is forgotten.
 
+import { hostname } from 'node:os'
 import { type DoorCert, ensureDoorCert } from '../adapters/door-cert.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import type { NodeJoinStore } from '../adapters/node-join-store.ts'
@@ -27,6 +28,7 @@ import { JOIN_CODE, sameJoinCode } from '../core/node-join.ts'
 import { type NodeConfig, nodeConfig } from '../core/nodes.ts'
 import { bearerOf } from '../core/remote.ts'
 import type { Config } from '../core/types.ts'
+import { ownAddresses } from '../services/tunnel.ts'
 import { dispatch, type GuardState, json, peerOf, type Route } from './http.ts'
 import type { Hello } from './remote.ts'
 import { decoded, endsWhenGone } from './streams.ts'
@@ -51,6 +53,10 @@ export interface NodeListenerOptions {
   doorCert?: (nodeId: string) => DoorCert
   /** Called whenever the door starts listening, moves, or closes. */
   onChange?: () => void
+  /** Local network addresses accepted in `Host` when `node.listen === 'tailnet'` (tests). */
+  ownAddresses?: () => string[]
+  /** Machine hostname accepted in `Host` when `node.listen === 'tailnet'` (tests). */
+  hostName?: () => string
 }
 
 export interface NodeListener {
@@ -82,6 +88,7 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
   let server: Server | null = null
   let bound: number | null = null
   let boundTls: boolean | null = null
+  let boundListen: 'loopback' | 'tailnet' | null = null
   let boundCertFp: string | null = null
   let node: NodeConfig | null = null
   let error: string | null = null
@@ -192,12 +199,26 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
     }
   }
 
+  function tailnetHostAllowed(rawHost: string): boolean {
+    if (loopbackHost(rawHost)) return true
+    const m = /^(\[[^\]]*\]|[^:[\]]*)(?::(\d{1,5}))?$/.exec(rawHost.trim())
+    if (!m) return false
+    const bare = (m[1] ?? '').replace(/^\[|\]$/g, '')
+    if (!bare) return false
+    const self = (o.hostName ?? hostname)().toLowerCase()
+    if (self && bare === self) return true
+    return (o.ownAddresses ?? ownAddresses)().some(a => a.toLowerCase() === bare)
+  }
+
   async function answer(req: Request, srv?: Server): Promise<Response> {
     // The door as this request found it, should a sync change it meanwhile.
     const here = node
     const port = bound
     if (!here || port === null) return json(503, { error: 'node' })
-    if (!loopbackHost((req.headers.get('host') ?? '').toLowerCase())) return json(403, { error: 'host' })
+    const rawHost = (req.headers.get('host') ?? '').toLowerCase()
+    if (!(boundListen === 'tailnet' ? tailnetHostAllowed(rawHost) : loopbackHost(rawHost))) {
+      return json(403, { error: 'host' })
+    }
     if (req.headers.has('origin')) return json(403, { error: 'origin' })
     let url: URL | undefined
     let master: MasterRecord | null = null
@@ -252,6 +273,7 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
     server = null
     bound = null
     boundTls = null
+    boundListen = null
     boundCertFp = null
     lastClaim = null
     if (s) {
@@ -260,13 +282,20 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
     }
   }
 
-  function listen(port: number, tlsOn: boolean, id: string): void {
+  function listen(port: number, tlsOn: boolean, listenMode: 'loopback' | 'tailnet', id: string): void {
+    if (listenMode === 'tailnet' && !tlsOn) {
+      const next = 'Cannot listen on tailnet without TLS'
+      if (next !== error) o.log(`node door: ${next}`)
+      error = next
+      return
+    }
+    const bindHost = listenMode === 'tailnet' ? '0.0.0.0' : '127.0.0.1'
     try {
       // Only load or generate a door certificate when `node.tls` is true.
       const pair = tlsOn ? (o.doorCert ?? (n => ensureDoorCert(n)))(id) : null
       // Not development, no idle timeout, no port reuse: as the web board's own server (app.ts).
       server = Bun.serve({
-        hostname: '127.0.0.1',
+        hostname: bindHost,
         port,
         idleTimeout: 0,
         development: false,
@@ -276,12 +305,13 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
       })
       bound = port
       boundTls = tlsOn
+      boundListen = listenMode
       boundCertFp = pair?.fingerprint ?? null
       error = null
-      o.log(`node door: listening on 127.0.0.1:${port} as ${id}${tlsOn ? ' (tls)' : ''}`)
+      o.log(`node door: listening on ${bindHost}:${port} as ${id}${tlsOn ? ' (tls)' : ''}`)
       o.onChange?.()
     } catch (err) {
-      const next = `Cannot listen on 127.0.0.1:${port}: ${messageOf(err)}`
+      const next = `Cannot listen on ${bindHost}:${port}: ${messageOf(err)}`
       if (next !== error) o.log(`node door: ${next}`)
       error = next
     }
@@ -301,10 +331,10 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
         error = null
         return
       }
-      if (!server || bound !== node.port || boundTls !== node.tls) {
+      if (!server || bound !== node.port || boundTls !== node.tls || boundListen !== node.listen) {
         // Nothing awaited on the way to the first listen: it listens once sync() has had its turn.
         if (server) await stop()
-        listen(node.port, node.tls, node.id)
+        listen(node.port, node.tls, node.listen, node.id)
       }
       // A port another program holds is tried again, while `node` asks for the door.
       if (!server && !closed) retry = setTimeout(() => void sync(), RETRY_MS)

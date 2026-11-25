@@ -146,6 +146,7 @@ export function DevicesPanel({ open, onClose, back, initial, setup, computerSetu
   const held = useHeld(devices, reorder.dragging)
   // without `nodes` the panel holds Add a server alone: a board adds its first server here (#509)
   const shown = held ?? []
+  const hasRelay = master && settings !== null ? !!settings.relay : undefined
   const rows = deviceRows(shown, now, t, settings, data?.schedules, data?.items)
   if (order) rows.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
   const ids = rows.map(r => r.id)
@@ -188,7 +189,12 @@ export function DevicesPanel({ open, onClose, back, initial, setup, computerSetu
           ))}
         </div>
         <AddServer open={open} {...(setup && { initial: setup })} />
-        <AddComputer open={open} {...(computerSetup && { initial: computerSetup })} />
+        <AddComputer
+          open={open}
+          devices={shown}
+          {...(hasRelay !== undefined && { hasRelay })}
+          {...(computerSetup && { initial: computerSetup })}
+        />
         {master && <MasterHandover open={open} devices={shown} {...(handover && { initial: handover })} />}
         {master && <LanesSection settings={settings} disabled={!canEdit} send={send} />}
         {master && (

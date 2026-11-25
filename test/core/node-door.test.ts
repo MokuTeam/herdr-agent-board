@@ -122,6 +122,8 @@ describe('the door takes what 6.2 lists', () => {
       ['POST', '/api/node/handover/rollback'],
       ['POST', '/api/node/handover/pair'],
       ['POST', '/api/node/handover/unpair'],
+      ['POST', '/api/node/handover/probe'],
+      ['POST', '/api/node/handover/relay'],
     ])
     // A move to or from another device (#616): a session id, a file's number, a hash; nothing else.
     const sid = '0f8fad5b-d9cb-469f-a165-70867728950e'

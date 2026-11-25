@@ -2366,9 +2366,15 @@ async function masterCmd(): Promise<void> {
     return
   }
 
+  const promptSudo = async (promptText: string): Promise<string | null> => {
+    if (!process.stdin.isTTY) return null
+    const { readHidden } = await import('../adapters/stdin.ts')
+    const [pw = ''] = await readHidden([promptText])
+    return pw || null
+  }
+
   if (cmd.op === 'rollback') {
-    let body: Record<string, unknown> | null = null
-    try {
+    const sendRollback = async (sudoPassword?: string): Promise<Record<string, unknown> | null> => {
       const res = await fetch(base, {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-board': '1' },
@@ -2377,10 +2383,19 @@ async function masterCmd(): Promise<void> {
           ...(cmd.id && { id: cmd.id }),
           ...(cmd.localOnly && { localOnly: true }),
           ...(cmd.discardSinceCommit && { discardSinceCommit: true }),
+          ...(sudoPassword !== undefined && { sudoPassword }),
         }),
         signal: AbortSignal.timeout(180_000),
       })
-      body = (await res.json().catch(() => null)) as Record<string, unknown> | null
+      return (await res.json().catch(() => null)) as Record<string, unknown> | null
+    }
+    let body: Record<string, unknown> | null = null
+    try {
+      body = await sendRollback()
+      if (body && body.ok !== true && body.need === 'sudoPassword' && !cmd.json) {
+        const pw = await promptSudo('Sudo password: ')
+        if (pw) body = await sendRollback(pw)
+      }
     } catch (err) {
       if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
         throw new Error(
@@ -2428,30 +2443,44 @@ async function masterCmd(): Promise<void> {
     return
   }
 
-  const payload = {
-    op: cmd.dryRun ? 'check' : 'run',
-    to: cmd.to,
-    ...(cmd.reverseLink !== undefined && { reverseLink: cmd.reverseLink }),
-    ...(cmd.nodePort !== undefined && { nodePort: cmd.nodePort }),
-    ...(cmd.allowOfflineNodes && { allowOfflineNodes: true }),
-  }
-  const res = await fetch(base, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-board': '1' },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(300_000),
-  }).catch(err => {
-    if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
-      throw new Error('handover request timed out while the board may still be running it; check "board master status"')
+  const sendHandover = async (
+    sudoPassword?: string,
+  ): Promise<{ status: number; data: Record<string, unknown> | null }> => {
+    const payload = {
+      op: cmd.dryRun ? 'check' : 'run',
+      to: cmd.to,
+      ...(cmd.reverseLink !== undefined && { reverseLink: cmd.reverseLink }),
+      ...(cmd.nodePort !== undefined && { nodePort: cmd.nodePort }),
+      ...(cmd.allowOfflineNodes && { allowOfflineNodes: true }),
+      ...(sudoPassword !== undefined && { sudoPassword }),
     }
-    throw new Error(`the board does not answer on port ${webPort}`)
-  })
-  const data = (await res.json().catch(() => null)) as Record<string, unknown> | null
-  if (!data) throw new Error(`board answered ${res.status}`)
+    const res = await fetch(base, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(300_000),
+    }).catch(err => {
+      if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+        throw new Error(
+          'handover request timed out while the board may still be running it; check "board master status"',
+        )
+      }
+      throw new Error(`the board does not answer on port ${webPort}`)
+    })
+    const jsonBody = (await res.json().catch(() => null)) as Record<string, unknown> | null
+    return { status: res.status, data: jsonBody }
+  }
+
+  let { status, data } = await sendHandover()
+  if (data && data.need === 'sudoPassword' && !cmd.json && !cmd.dryRun) {
+    const pw = await promptSudo('Sudo password on target: ')
+    if (pw) ({ status, data } = await sendHandover(pw))
+  }
+  if (!data) throw new Error(`board answered ${status}`)
 
   if (cmd.dryRun) {
     const plan = data.plan as Parameters<typeof formatHandoverPlan>[0] | undefined
-    if (!plan) throw new Error(String(data.error ?? `board answered ${res.status}`))
+    if (!plan) throw new Error(String(data.error ?? `board answered ${status}`))
     if (cmd.json) console.log(JSON.stringify(plan, null, 2))
     else console.log(formatHandoverPlan(plan).join('\n'))
     if (!plan.ok) process.exitCode = 1

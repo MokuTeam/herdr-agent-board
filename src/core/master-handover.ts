@@ -87,6 +87,12 @@ export interface HandoverPlan {
   otherNodes: { id: string; online: boolean }[]
   carryBackupServer: boolean
   normalizeTunnelKey: boolean
+  relaySetup?: {
+    host: string
+    sshPort: number
+    user: string
+    needsSudoPassword: boolean
+  }
   errors: string[]
   warnings: string[]
 }
@@ -105,7 +111,17 @@ export interface HandoverVerifyResult {
 
 export type HandoverPhase = 'idle' | 'checking' | 'checked' | 'running' | 'done' | 'failed' | 'rolled-back'
 
-export type HandoverStep = 'check' | 'freeze' | 'backup' | 'pair' | 'ship' | 'apply' | 'verify' | 'commit' | 'rollback'
+export type HandoverStep =
+  | 'check'
+  | 'relay'
+  | 'freeze'
+  | 'backup'
+  | 'pair'
+  | 'ship'
+  | 'apply'
+  | 'verify'
+  | 'commit'
+  | 'rollback'
 
 export interface HandoverStateRecord {
   v: 1
@@ -117,6 +133,7 @@ export interface HandoverStateRecord {
   peerId: string
   otherNodes: string[]
   enrolledSocket?: string
+  relayApplied?: boolean
   at: number
 }
 
@@ -132,6 +149,7 @@ export interface HandoverView {
   canRollback: boolean
   rollbackNeedsConfirm: boolean
   rollbackReason?: string
+  need?: 'sudoPassword'
   state: HandoverStateRecord | null
 }
 
@@ -444,9 +462,10 @@ export function flipNodesConfig(
     targetId: string
     oldMasterTitle?: string
     reverseLink: LinkConfig
+    relay?: { host: string; sshPort?: number; user?: string }
   },
 ): Record<string, unknown> {
-  const { oldMasterId, targetId, oldMasterTitle, reverseLink } = opts
+  const { oldMasterId, targetId, oldMasterTitle, reverseLink, relay } = opts
   const oldDevices = isObj(oldNodesRaw.devices) ? oldNodesRaw.devices : {}
   const oldLocalRaw = isObj(oldDevices[LOCAL]) ? oldDevices[LOCAL] : {}
   const targetRaw = isObj(oldDevices[targetId]) ? oldDevices[targetId] : {}
@@ -486,6 +505,7 @@ export function flipNodesConfig(
     id: targetId,
     order: nextOrder,
     devices: nextDevices,
+    ...(relay && !oldNodesRaw.relay ? { relay: structuredClone(relay) } : {}),
   }
   return next
 }
@@ -750,6 +770,92 @@ const CATEGORY_LABEL: Record<HandoverCategory, string> = {
   backup: 'backup key / server drop key',
 }
 
+/** True when `ip` is a Tailscale CGNAT IPv4 (100.64.0.0/10) or Tailscale IPv6 (fd7a:115c:a1e0::/48). */
+export function isTailscaleIp(ip: string): boolean {
+  const s = ip.trim().toLowerCase()
+  const parts = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s)
+  if (parts) {
+    const a = Number(parts[1])
+    const b = Number(parts[2])
+    return a === 100 && b >= 64 && b <= 127
+  }
+  return s.startsWith('fd7a:115c:a1e0:')
+}
+
+const isPrivateIpv4 = (ip: string): boolean => {
+  const parts = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip)
+  if (!parts) return false
+  const a = Number(parts[1])
+  const b = Number(parts[2])
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
+}
+
+/** Whether `raw` is a non-loopback, non-link-local IP address suitable for direct reachability probing. */
+export function isDirectProbeIp(raw: string): boolean {
+  const s = raw.trim().replace(/^\[|\]$/g, '')
+  if (!s || /\s/.test(s) || s.includes('%')) return false
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(s)
+  if (v4) {
+    const octets = [Number(v4[1]), Number(v4[2]), Number(v4[3]), Number(v4[4])]
+    if (octets.some(o => o < 0 || o > 255)) return false
+    const [a = 0, b = 0] = octets
+    if (a === 0 || a === 127 || (a === 169 && b === 254)) return false
+    return true
+  }
+  const low = s.toLowerCase()
+  if (!low.includes(':') || low === '::' || low === '::1') return false
+  if (low.startsWith('fe8') || low.startsWith('fe9') || low.startsWith('fea') || low.startsWith('feb')) return false
+  return /^[0-9a-f:]+$/.test(low)
+}
+
+/**
+ * Deduplicates and orders direct reachability candidate IPs: Tailscale first, then private RFC1918
+ * IPv4, then public IPv4, then IPv6.
+ */
+export function collectDirectProbeAddresses(addrs: readonly string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of addrs) {
+    const ip = raw.trim().replace(/^\[|\]$/g, '')
+    if (!isDirectProbeIp(ip)) continue
+    const key = ip.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(ip)
+  }
+  const rank = (ip: string): number => {
+    if (isTailscaleIp(ip)) return 0
+    if (ip.includes(':')) return 3
+    if (isPrivateIpv4(ip)) return 1
+    return 2
+  }
+  return out.sort((a, b) => rank(a) - rank(b))
+}
+
+/** Builds an `https://<host>:<port>` URL, bracketing bare IPv6 literals. */
+export function formatDirectHttpsUrl(host: string, port: number): string {
+  const h = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host
+  return `https://${h}:${port}`
+}
+
+/** Extracts SSH host/port where a target device can host the relay, or null when unsupported. */
+export function relayTargetEndpoint(
+  targetLink: LinkConfig | null | undefined,
+): { host: string; sshPort: number } | null {
+  if (!targetLink) return null
+  if (targetLink.kind === 'ssh') return { host: targetLink.host, sshPort: targetLink.sshPort }
+  if (targetLink.kind === 'direct') {
+    try {
+      const host = normalizeHost(new URL(targetLink.url).hostname)
+      if (!host || LOOPBACK_HOSTS.has(host)) return null
+      return { host, sshPort: 22 }
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
 /** Formats a handover dry-run plan into human-readable lines for CLI output. */
 export function formatHandoverPlan(plan: HandoverPlan): string[] {
   const lines: string[] = [
@@ -758,6 +864,9 @@ export function formatHandoverPlan(plan: HandoverPlan): string[] {
   for (const c of plan.checks) {
     const tag = c.ok ? 'ok' : c.blocking ? 'fail' : 'warn'
     lines.push(`  [${tag}] ${c.id}: ${c.detail}`)
+  }
+  if (plan.relaySetup) {
+    lines.push(`relay · set up on ${plan.to} (${plan.relaySetup.host}:${plan.relaySetup.sshPort})`)
   }
   lines.push(
     `state to move · ${plan.totalFiles} file(s), ${Math.ceil(plan.totalBytes / 1024)} KB (requires ${plan.requiredFreeMb} MB free on ${plan.to})`,

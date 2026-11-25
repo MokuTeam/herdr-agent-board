@@ -8,6 +8,7 @@
 // 10 s; either sends every link to try again at once.
 import { existsSync } from 'node:fs'
 import { hostname } from 'node:os'
+import { pinnedTls } from '../../adapters/door-cert.ts'
 import { headCommit } from '../../adapters/git.ts'
 import { localForward, localForwardUp, localPortFor, localPortTaken, nodeSshArgs } from '../../adapters/node-ssh.ts'
 import { createDeviceStore, type DeviceStore } from '../../adapters/node-store.ts'
@@ -113,6 +114,17 @@ function realLink(
   const deps: LinkDeps = { token: () => store.token(device.id), clock: realClock, log, commit }
   if (link?.kind === 'ssh') deps.ssh = sshPipeDeps(device.id, link, store)
   else if (link?.kind === 'relay' && relay) deps.relay = relayPipeDeps(device.id, link, relay, store)
+  else if (link?.kind === 'direct' && link.url.startsWith('https://')) {
+    deps.directTls = () => {
+      const cert = store.cert(device.id)
+      if (!cert) return undefined
+      try {
+        return pinnedTls(cert)
+      } catch {
+        return undefined
+      }
+    }
+  }
   return createLink({ device, cfg: times, deps })
 }
 

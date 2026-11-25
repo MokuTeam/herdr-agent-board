@@ -248,4 +248,21 @@ describe('POST /api/nodes, the panel’s ops (#510)', () => {
       ['local', undefined],
     ])
   })
+
+  test('GET includes settings.relay when nodes.relay is configured and omits it when unset (#740)', async () => {
+    isolatedHome()
+    seed({ language: 'en', nodes: NODES })
+    const unset = await call(routes().get)
+    expect((unset.body.settings as Record<string, unknown>).relay).toBeUndefined()
+
+    seed({
+      language: 'en',
+      nodes: { ...NODES, relay: { host: 'relay.example.com', sshPort: 2222, user: 'agent-board-relay-m' } },
+    })
+    const setRes = await call(routes().get)
+    expect((setRes.body.settings as Record<string, unknown>).relay).toEqual({
+      host: 'relay.example.com',
+      sshPort: 2222,
+    })
+  })
 })

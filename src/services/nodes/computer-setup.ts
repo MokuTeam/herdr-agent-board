@@ -557,7 +557,7 @@ export function createComputerSetup(d: ComputerSetupDeps): ComputerSetup {
     async start(o = {}) {
       if (busy) return failAnswer(409, t('node.computer.err.busy'))
       const cfg = nodesConfig(d.cfg.nodes, d.hostName())
-      if (!cfg?.relay) return failAnswer(409, t('node.computer.err.noRelay'))
+      if (!cfg?.relay) return { status: 409, body: { ok: false, need: 'relay', error: t('node.computer.err.noRelay') } }
       const explicitId = typeof o.id === 'string' ? o.id.trim() : ''
       if (explicitId) {
         const problem = computerIdProblem(explicitId, { selfId: cfg.id, devices: cfg.devices })

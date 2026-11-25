@@ -320,6 +320,24 @@ function handoverDoorRoutes(h: NodeHandover): Route[] {
         return answer(await h.unpair(body, doorMaster(req)?.id))
       },
     },
+    {
+      method: 'POST',
+      path: '/api/node/handover/probe',
+      async handle(req) {
+        const body = await jsonUpTo(req, 64 * 1024)
+        if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+        return answer(await h.probe(body))
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/node/handover/relay',
+      async handle(req) {
+        const body = await jsonUpTo(req, 64 * 1024)
+        if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+        return answer(await h.relay(body))
+      },
+    },
   ]
 }
 

@@ -3,12 +3,14 @@
 // master bundle + rekeying, live verification, commit (closing node role), rollback, and
 // multi-node re-pairing/unpairing.
 import { Database } from 'bun:sqlite'
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { hostname, networkInterfaces } from 'node:os'
 import { join } from 'node:path'
 import { accessFile, readLogins, readPasskeys, readSecrets } from '../../adapters/access-store.ts'
 import { readConfigFile, withConfigFile } from '../../adapters/config-file.ts'
 import { dbFile, integrityOf } from '../../adapters/db.ts'
+import { pinnedTls } from '../../adapters/door-cert.ts'
 import {
   applyHandoverFiles,
   checkBackupReadiness,
@@ -23,25 +25,39 @@ import {
   writeHandoverState,
 } from '../../adapters/handover-store.ts'
 import { isRecord } from '../../adapters/json-store.ts'
-import { masterName, type NodeStore } from '../../adapters/node-store.ts'
+import { dropRelayCredentials, masterName, type NodeStore, relayKeyPath } from '../../adapters/node-store.ts'
 import { knobMs, pace } from '../../adapters/pacing.ts'
 import { stateDir } from '../../adapters/paths.ts'
 import { keepStream } from '../../adapters/plugin-update.ts'
 import { listEntries } from '../../adapters/schedule-store.ts'
 import {
+  generateKey,
+  hostKeyFingerprint,
+  hostKeyPinned,
+  knownHostsReady,
+  publicKeyOf,
+  spawnRemote,
+  sshBin,
+  sshVersion,
+} from '../../adapters/ssh.ts'
+import { t } from '../../core/lang.ts'
+import {
   buildTargetMasterConfig,
   type HandoverStateRecord,
   type HandoverVerifyCheck,
   type HandoverVerifyResult,
+  isDirectProbeIp,
   MAX_HANDOVER_BUNDLE_BYTES,
 } from '../../core/master-handover.ts'
 import { nodeConfig, nodesConfig } from '../../core/nodes.ts'
+import { RELAY_MASTER_USER } from '../../core/relay-texts.ts'
 import { teamConfig } from '../../core/team.ts'
 import { timeConfig } from '../../core/time.ts'
 import { type TunnelStatus, tunnelConfig } from '../../core/tunnel.ts'
 import type { Config } from '../../core/types.ts'
 import { threadsConfig } from '../../core/work-threads.ts'
 import type { NodeLinks } from '../nodes/links.ts'
+import { relayEnrolFor } from '../nodes/relay.ts'
 import type { TeamState } from '../team-hub.ts'
 import type { Answer } from './bundle.ts'
 import { freeMbUnder } from './status.ts'
@@ -63,6 +79,275 @@ export interface NodeHandoverCheckPayload {
   handoverState: HandoverStateRecord | null
 }
 
+export type LocalRelayAnswer =
+  | { ok: true; user: string; hostKeys?: string[] }
+  | { ok: false; error: string; need?: 'sudoPassword' }
+
+export interface LocalRelayOps {
+  check(opts: { host: string; sshPort: number; sudoPassword?: string }): Promise<LocalRelayAnswer>
+  apply(opts: { host: string; sshPort: number; sudoPassword?: string }): Promise<LocalRelayAnswer>
+  enrolAdd(opts: { host: string; sshPort: number; socket: string; publicKey: string }): Promise<LocalRelayAnswer>
+  undo(opts: { host: string; sshPort: number; sudoPassword?: string }): Promise<LocalRelayAnswer>
+}
+
+export function readLocalSshHostKeys(sshDir = '/etc/ssh'): string[] {
+  if (!existsSync(sshDir)) return []
+  const keys: string[] = []
+  try {
+    for (const name of readdirSync(sshDir).sort()) {
+      if (!/^ssh_host_.*_key\.pub$/.test(name)) continue
+      const raw = readFileSync(join(sshDir, name), 'utf8')
+      for (const line of raw.split(/\r?\n/)) {
+        const parts = line.trim().split(/\s+/)
+        if (parts.length >= 2 && parts[0] && parts[1]) keys.push(`${parts[0]} ${parts[1]}`)
+      }
+    }
+  } catch {}
+  return keys
+}
+
+export function pinKnownHostKeys(
+  file: string,
+  endpoints: readonly { host: string; sshPort: number }[],
+  keyBodies: readonly string[],
+): void {
+  if (keyBodies.length === 0 || endpoints.length === 0) return
+  let cur = ''
+  try {
+    if (existsSync(file)) cur = readFileSync(file, 'utf8')
+  } catch {}
+  const existing = new Set(
+    cur
+      .split(/\r?\n/)
+      .map(l => l.trim())
+      .filter(Boolean),
+  )
+  const add: string[] = []
+  for (const ep of endpoints) {
+    const token = ep.sshPort === 22 ? ep.host : `[${ep.host}]:${ep.sshPort}`
+    for (const body of keyBodies) {
+      const line = `${token} ${body}`
+      if (!existing.has(line)) {
+        existing.add(line)
+        add.push(line)
+      }
+    }
+  }
+  if (add.length === 0) return
+  const prefix = cur && !cur.endsWith('\n') ? '\n' : ''
+  writeFileSync(file, `${cur}${prefix}${add.join('\n')}\n`, { mode: 0o600 })
+}
+
+export interface LocalRelaySetupLike {
+  view(): {
+    phase: string
+    hint: string | null
+    error: string | null
+    refusals: readonly { key: string; params?: Record<string, string> }[]
+    plan: { id: string } | null
+  }
+  look(o: Record<string, unknown>): Promise<{ status: number; body: unknown }>
+  apply(o: Record<string, unknown>): Promise<{ status: number; body: unknown }>
+  undoLook(o: Record<string, unknown>): Promise<{ status: number; body: unknown }>
+  undo(o: Record<string, unknown>): Promise<{ status: number; body: unknown }>
+  cancel(): { status: number; body: unknown }
+}
+
+/** Local relay lifecycle operations invoked on a Linux target (or on the new master during undo). */
+export function createLocalRelayOps(o: {
+  cfg: Config
+  createSetup: (deps: Record<string, unknown>) => LocalRelaySetupLike
+  hostName?: () => string
+  log: (t: string) => void
+  platform?: () => string
+  knownHosts?: () => string
+}): LocalRelayOps {
+  const hostFn = o.hostName ?? hostname
+  const khFn = o.knownHosts ?? knownHostsReady
+
+  function makeSetup(onChange: () => void): LocalRelaySetupLike {
+    return o.createSetup({
+      cfg: { ...o.cfg },
+      ssh: () => sshBin(),
+      sshVersion,
+      knownHosts: khFn,
+      hostKeyPinned,
+      hostKeyFingerprint,
+      spawn: spawnRemote,
+      ...(o.platform ? { platform: o.platform } : {}),
+      relayKey: async (kind: 'master' | 'enrol', make: boolean) => {
+        const key = relayKeyPath(kind)
+        if (existsSync(key)) return publicKeyOf(key)
+        return make ? generateKey(`agent-board relay ${kind} ${hostFn()}`, key) : null
+      },
+      dropRelayKeys: () => dropRelayCredentials(),
+      editNodes: () => ({ ok: true }),
+      follow: () => {},
+      hostName: hostFn,
+      onChange,
+      log: o.log,
+      now: () => Date.now(),
+      newId: () => randomBytes(6).toString('hex'),
+    })
+  }
+
+  function formatRefusal(body: Record<string, unknown>): LocalRelayAnswer {
+    if (body.need === 'sudoPassword' || body.hint === 'needPassword' || body.hint === 'sudoPassword') {
+      return {
+        ok: false,
+        need: 'sudoPassword',
+        error: typeof body.error === 'string' && body.error ? body.error : 'sudo password required on target',
+      }
+    }
+    if (body.hint === 'notSudoer' || body.hint === 'requiretty') {
+      return { ok: false, error: 'target server cannot run relay setup without root or sudo access' }
+    }
+    const err = typeof body.error === 'string' && body.error ? body.error : 'target cannot host a relay'
+    return { ok: false, error: err }
+  }
+
+  async function waitDone(
+    setup: LocalRelaySetupLike,
+    subscribe: (fn: () => void) => void,
+    timeoutMs = 180_000,
+  ): Promise<ReturnType<LocalRelaySetupLike['view']>> {
+    const done = (phase: string) => phase === 'done' || phase === 'undone' || phase === 'failed' || phase === 'idle'
+    if (done(setup.view().phase)) return setup.view()
+    return new Promise(resolve => {
+      const timer = setTimeout(() => resolve(setup.view()), timeoutMs)
+      subscribe(() => {
+        const v = setup.view()
+        if (done(v.phase)) {
+          clearTimeout(timer)
+          resolve(v)
+        }
+      })
+    })
+  }
+
+  return {
+    async check({ host, sshPort, sudoPassword }) {
+      const notify = () => {}
+      const setup = makeSetup(() => notify())
+      try {
+        const res = await setup.look({
+          local: true,
+          host,
+          sshPort,
+          ...(sudoPassword !== undefined ? { sudoPassword } : {}),
+        })
+        const b = isRecord(res.body) ? res.body : {}
+        if (res.status !== 200 || b.ok === false) return formatRefusal(b)
+        const v = setup.view()
+        if (v.refusals.length > 0) {
+          return { ok: false, error: v.refusals.map(w => t(w.key, w.params)).join('; ') }
+        }
+        return { ok: true, user: RELAY_MASTER_USER }
+      } finally {
+        setup.cancel()
+      }
+    },
+
+    async apply({ host, sshPort, sudoPassword }) {
+      let notify = () => {}
+      const setup = makeSetup(() => notify())
+      try {
+        const lookRes = await setup.look({
+          local: true,
+          host,
+          sshPort,
+          ...(sudoPassword !== undefined ? { sudoPassword } : {}),
+        })
+        const lb = isRecord(lookRes.body) ? lookRes.body : {}
+        if (lookRes.status !== 200 || lb.ok === false) return formatRefusal(lb)
+        const lv = setup.view()
+        if (lv.refusals.length > 0) {
+          return { ok: false, error: lv.refusals.map(w => t(w.key, w.params)).join('; ') }
+        }
+        if (!lv.plan) return { ok: false, error: 'relay setup returned no plan on target' }
+        const applyRes = await setup.apply({
+          plan: lv.plan.id,
+          ...(sudoPassword !== undefined ? { sudoPassword } : {}),
+        })
+        const ab = isRecord(applyRes.body) ? applyRes.body : {}
+        if (applyRes.status !== 200 || ab.ok === false) return formatRefusal(ab)
+        const fv = await waitDone(setup, fn => {
+          notify = fn
+        })
+        if (fv.phase !== 'done') {
+          if (fv.hint === 'needPassword' || fv.hint === 'sudoPassword') {
+            return {
+              ok: false,
+              need: 'sudoPassword',
+              error: fv.error ?? 'sudo password required or wrong on target',
+            }
+          }
+          return { ok: false, error: fv.error ?? 'relay setup failed on target' }
+        }
+        const hostKeys = readLocalSshHostKeys()
+        pinKnownHostKeys(
+          khFn(),
+          [
+            { host: '127.0.0.1', sshPort },
+            { host, sshPort },
+          ],
+          hostKeys,
+        )
+        return { ok: true, user: RELAY_MASTER_USER, hostKeys }
+      } finally {
+        setup.cancel()
+      }
+    },
+
+    async enrolAdd({ sshPort, socket, publicKey }) {
+      const hostKeys = readLocalSshHostKeys()
+      pinKnownHostKeys(khFn(), [{ host: '127.0.0.1', sshPort }], hostKeys)
+      const r = await relayEnrolFor({ host: '127.0.0.1', sshPort, user: RELAY_MASTER_USER }).add(socket, publicKey)
+      if (!r.ok) return { ok: false, error: r.error }
+      return { ok: true, user: RELAY_MASTER_USER }
+    },
+
+    async undo({ host, sshPort, sudoPassword }) {
+      let notify = () => {}
+      const setup = makeSetup(() => notify())
+      try {
+        const lookRes = await setup.undoLook({
+          local: true,
+          host,
+          sshPort,
+          ...(sudoPassword !== undefined ? { sudoPassword } : {}),
+        })
+        const lb = isRecord(lookRes.body) ? lookRes.body : {}
+        if (lookRes.status !== 200 || lb.ok === false) return formatRefusal(lb)
+        const lv = setup.view()
+        if (!lv.plan) return { ok: false, error: 'no relay installation found to undo' }
+        const undoRes = await setup.undo({
+          plan: lv.plan.id,
+          ...(sudoPassword !== undefined ? { sudoPassword } : {}),
+        })
+        const ub = isRecord(undoRes.body) ? undoRes.body : {}
+        if (undoRes.status !== 200 || ub.ok === false) return formatRefusal(ub)
+        const fv = await waitDone(setup, fn => {
+          notify = fn
+        })
+        if (fv.phase !== 'undone') {
+          if (fv.hint === 'needPassword' || fv.hint === 'sudoPassword') {
+            return {
+              ok: false,
+              need: 'sudoPassword',
+              error: fv.error ?? 'sudo password required or wrong to undo relay',
+            }
+          }
+          return { ok: false, error: fv.error ?? 'relay undo failed on target' }
+        }
+        return { ok: true, user: RELAY_MASTER_USER }
+      } finally {
+        setup.cancel()
+      }
+    },
+  }
+}
+
 export interface NodeHandoverOptions {
   cfg: Config
   nodeStore: NodeStore
@@ -79,6 +364,12 @@ export interface NodeHandoverOptions {
   hostName?: () => string
   freeMb?: (dir: string) => number | null
   now?: () => number
+  /** Custom fetch used by `/api/node/handover/probe` (tests). */
+  probeFetch?: (url: string, init: BunFetchRequestInit) => Promise<Response>
+  /** Allows non-routable loopback probe URLs in tests when probing a local fake master server. */
+  allowLoopbackProbe?: boolean
+  /** Overrides local relay setup/undo/enrol operations (tests). */
+  relayOps?: LocalRelayOps
 }
 
 export interface NodeHandover {
@@ -91,6 +382,8 @@ export interface NodeHandover {
   rollback(body: unknown): Promise<Answer>
   pair(body: unknown): Promise<Answer>
   unpair(body: unknown, callingMasterId?: string): Promise<Answer>
+  probe(body: unknown): Promise<Answer>
+  relay(body: unknown): Promise<Answer>
 }
 
 function collectSelfNames(host: string, masterHost?: string | null): string[] {
@@ -271,6 +564,19 @@ export function createNodeHandover(o: NodeHandoverOptions): NodeHandover {
           applied = await applyHandoverFiles(body.id, unpacked.manifest, unpacked.bodies, {
             keepTargetBackupKey: body.keepTargetBackupKey === true,
           })
+          if (body.relayApplied === true) {
+            const relayObj = isRecord(body.flippedNodes.relay) ? body.flippedNodes.relay : null
+            const host = typeof relayObj?.host === 'string' && relayObj.host ? relayObj.host : hostFn()
+            const sshPort = typeof relayObj?.sshPort === 'number' ? relayObj.sshPort : 22
+            pinKnownHostKeys(
+              knownHostsReady(),
+              [
+                { host: '127.0.0.1', sshPort },
+                { host, sshPort },
+              ],
+              readLocalSshHostKeys(),
+            )
+          }
           withConfigFile((_, save) => save(targetConfig))
           const otherNodes = unpacked.manifest.credentials.map(c => c.id).filter(id => id !== unpacked.manifest.from)
           writeHandoverState({
@@ -282,6 +588,7 @@ export function createNodeHandover(o: NodeHandoverOptions): NodeHandover {
             to: unpacked.manifest.to,
             peerId: unpacked.manifest.from,
             otherNodes,
+            ...(body.relayApplied === true && { relayApplied: true }),
             at: now(),
           })
         } finally {
@@ -582,6 +889,104 @@ export function createNodeHandover(o: NodeHandoverOptions): NodeHandover {
         if (!targetId) return { status: 400, body: { ok: false, error: 'missing masterId' } }
         const forgotten = o.nodeStore.forget(targetId)
         return { status: 200, body: { ok: true, forgotten } }
+      })
+    },
+
+    async probe(body) {
+      if (!isRecord(body)) return { status: 400, body: { ok: false, error: 'invalid probe payload' } }
+      const urls = Array.isArray(body.urls) ? body.urls.filter((u): u is string => typeof u === 'string') : null
+      const nonce = typeof body.nonce === 'string' ? body.nonce : ''
+      const cert = typeof body.cert === 'string' ? body.cert : ''
+      if (
+        !urls ||
+        urls.length === 0 ||
+        urls.length > 16 ||
+        !nonce ||
+        nonce.length > 128 ||
+        !cert.includes('-----BEGIN CERTIFICATE-----') ||
+        cert.length > 16_384
+      ) {
+        return { status: 400, body: { ok: false, error: 'invalid probe parameters' } }
+      }
+      let tls: BunFetchRequestInit['tls']
+      try {
+        tls = pinnedTls(cert)
+      } catch {
+        return { status: 400, body: { ok: false, error: 'invalid probe certificate' } }
+      }
+      const doFetch = o.probeFetch ?? ((url: string, init: BunFetchRequestInit) => fetch(url, init))
+      for (const raw of urls) {
+        let u: URL
+        try {
+          u = new URL(raw)
+        } catch {
+          continue
+        }
+        if (u.protocol !== 'https:' || u.username || u.password) continue
+        if (!o.allowLoopbackProbe && !isDirectProbeIp(u.hostname)) continue
+        try {
+          const res = await doFetch(`${u.origin}/probe`, {
+            headers: { 'x-probe-nonce': nonce },
+            tls,
+            redirect: 'manual',
+            signal: AbortSignal.timeout(2500),
+          })
+          const data = (await res.json().catch(() => null)) as Record<string, unknown> | null
+          if (res.ok && data?.ok === true && data.nonce === nonce) {
+            return {
+              status: 200,
+              body: { ok: true, url: u.origin, host: u.hostname.replace(/^\[|\]$/g, '') },
+            }
+          }
+        } catch {}
+      }
+      return { status: 200, body: { ok: false, error: 'direct-unreachable' } }
+    },
+
+    async relay(body) {
+      return withBusy(async () => {
+        if (!isRecord(body) || typeof body.op !== 'string') {
+          return { status: 400, body: { ok: false, error: 'invalid relay request' } }
+        }
+        const op = body.op
+        if (op !== 'check' && op !== 'apply' && op !== 'enrol-add' && op !== 'undo') {
+          return { status: 400, body: { ok: false, error: 'unknown relay op' } }
+        }
+        const host = typeof body.host === 'string' && body.host.trim() ? body.host.trim() : ''
+        const sshPort = body.sshPort === undefined ? 22 : Number(body.sshPort)
+        if (!host || !Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535) {
+          return { status: 400, body: { ok: false, error: 'invalid host or sshPort' } }
+        }
+        let sudoPassword: string | undefined
+        if (body.sudoPassword !== undefined) {
+          if (
+            typeof body.sudoPassword !== 'string' ||
+            /[\r\n]/.test(body.sudoPassword) ||
+            body.sudoPassword.length > 1024
+          ) {
+            return { status: 400, body: { ok: false, error: 'invalid sudoPassword' } }
+          }
+          if (body.sudoPassword) sudoPassword = body.sudoPassword
+        }
+        const ops = o.relayOps
+        if (!ops) {
+          return { status: 409, body: { ok: false, error: 'local relay setup is unavailable' } }
+        }
+        if (op === 'enrol-add') {
+          const socket = typeof body.socket === 'string' ? body.socket : ''
+          const publicKey = typeof body.publicKey === 'string' ? body.publicKey : ''
+          if (!socket || !publicKey) return { status: 400, body: { ok: false, error: 'missing socket or publicKey' } }
+          const r = await ops.enrolAdd({ host, sshPort, socket, publicKey })
+          return r.ok ? { status: 200, body: r } : { status: 409, body: r }
+        }
+        const relayArg = { host, sshPort, ...(sudoPassword !== undefined && { sudoPassword }) }
+        const res =
+          op === 'check'
+            ? await ops.check(relayArg)
+            : op === 'apply'
+              ? await ops.apply(relayArg)
+              : await ops.undo(relayArg)
+        return res.ok ? { status: 200, body: res } : { status: 409, body: res }
       })
     },
   }

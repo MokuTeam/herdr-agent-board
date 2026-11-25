@@ -816,6 +816,8 @@ export interface NodesPanelSettings {
   hosts?: Record<string, { host: string; sshPort: number }>
   /** Per device with any, the secrets its last syncs gave and those still to be given by hand (#604): names only. */
   secrets?: Record<string, { given: string[]; toGive: string[] }>
+  /** Currently configured `nodes.relay`, omitted when unset. */
+  relay?: { host: string; sshPort: number }
 }
 
 /**

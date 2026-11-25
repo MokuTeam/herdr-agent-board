@@ -81,6 +81,8 @@ export interface LinkDeps {
   ssh?: SshPipeDeps
   /** For a link of kind relay. */
   relay?: RelayPipeDeps
+  /** Optional pinned TLS config for `direct` https:// links (handover over tailnet/LAN). */
+  directTls?: () => BunFetchRequestInit['tls'] | undefined
   /** This board's own commit (adapters/git.ts headCommit), to say whether the node runs the same; '' unknown. */
   commit?: () => string
 }
@@ -167,9 +169,13 @@ interface Pipe {
 
 const NOTHING = { reset: async () => {}, close: async () => {}, killNow: () => {} }
 
-const directPipe = (url: string): Pipe => ({
+const directPipe = (url: string, directTls?: () => BunFetchRequestInit['tls'] | undefined): Pipe => ({
   ...NOTHING,
-  open: async () => ({ ok: true, base: url.replace(/\/+$/, '') }),
+  open: async () => {
+    const base = url.replace(/\/+$/, '')
+    const tls = base.startsWith('https://') ? directTls?.() : undefined
+    return { ok: true, base, ...(tls ? { tls } : {}) }
+  },
 })
 
 const notBuilt = (kind: string): Pipe => ({
@@ -349,7 +355,7 @@ function relayPipe(d: RelayPipeDeps, clock: Clock, log: (t: string) => void): Pi
 function pipeFor(device: DeviceConfig, deps: LinkDeps): Pipe {
   const link = device.link
   if (!link) return notBuilt('local')
-  if (link.kind === 'direct') return directPipe(link.url)
+  if (link.kind === 'direct') return directPipe(link.url, deps.directTls)
   if (link.kind === 'ssh' && deps.ssh)
     return sshPipe(link, deps.ssh, deps.clock, t => deps.log(`node ${device.id}: ${t}`))
   if (link.kind === 'relay' && deps.relay)

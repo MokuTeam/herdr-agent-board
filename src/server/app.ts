@@ -137,7 +137,7 @@ import { createMoveIn, type MoveIn } from '../services/move-in.ts'
 import { createMoveOut, type MoveOut } from '../services/move-out.ts'
 import { createNodeBundle, nodeBundleDeps } from '../services/node/bundle.ts'
 import { createNodeGit } from '../services/node/git-access.ts'
-import { createNodeHandover } from '../services/node/handover.ts'
+import { createLocalRelayOps, createNodeHandover } from '../services/node/handover.ts'
 import { createNodeLaunch } from '../services/node/launch.ts'
 import { createNodePilotBridge, type NodePilotBridge } from '../services/node/pilot-bridge.ts'
 import { createNodePilotCall, type NodePilotCall } from '../services/node/pilot-call.ts'
@@ -1543,6 +1543,12 @@ export async function startServer({
       beforeDbReplace,
       afterDbReplace,
       reloadConfig: reloadLiveConfig,
+      relayOps: createLocalRelayOps({
+        cfg,
+        hostName: () => hostname(),
+        log,
+        createSetup: deps => createRelaySetup(deps as never),
+      }),
       log,
     })
     door = createNodeListener({
@@ -1774,6 +1780,20 @@ export async function startServer({
         beforeDbReplace,
         afterDbReplace,
         reloadConfig: reloadLiveConfig,
+        checkLocalRelay: co =>
+          createLocalRelayOps({
+            cfg,
+            hostName: () => hostname(),
+            log,
+            createSetup: deps => createRelaySetup(deps as never),
+          }).check(co),
+        undoLocalRelay: uo =>
+          createLocalRelayOps({
+            cfg,
+            hostName: () => hostname(),
+            log,
+            createSetup: deps => createRelaySetup(deps as never),
+          }).undo(uo),
         log,
       })),
   )

@@ -117,6 +117,7 @@ const isHandoverState = (v: unknown): v is HandoverStateRecord =>
   Array.isArray(v.otherNodes) &&
   v.otherNodes.every(x => typeof x === 'string') &&
   (v.enrolledSocket === undefined || typeof v.enrolledSocket === 'string') &&
+  (v.relayApplied === undefined || typeof v.relayApplied === 'boolean') &&
   typeof v.at === 'number'
 
 export const readHandoverState = (): HandoverStateRecord | null => readJson(handoverStateFile(), isHandoverState)

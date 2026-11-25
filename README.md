@@ -4868,10 +4868,13 @@ The same flow is available in Settings -> Devices -> "Move master role…".
 
 1. **Preflight checks (`--dry-run`)**: verifies the target device is an online node on the same
    commit, does not already act as a master, has a working backup target that is not itself (or can
-   inherit the master's remote server backup target), has enough free disk space, and has a valid
-   reverse transport (NAT relay via `nodes.relay` when behind NAT, SSH via `--reverse-link ssh:user@host`,
-   or direct URL in local setups), and lists every category of state that will move. Dry run
-   changes nothing on either device.
+   inherit the master's remote server backup target), has enough free disk space, and resolves the
+   reverse transport: first probes whether the target can reach the old master directly over TLS
+   (e.g. Tailscale or LAN); if not and no `nodes.relay` is configured yet, sets up the NAT relay on
+   the target Linux server as part of handover (using passwordless sudo or prompting once for the
+   sudo password in memory, with no manual `config.json` step), and lists every category of state
+   that will move. Dry run changes nothing on either device. If a server master already runs with a
+   relay, "Add a computer" (Linux and macOS) connects computers behind NAT directly through it.
 2. **Freeze and backup**: pauses new session launches, the scheduler, backups, the tunnel, and Team
    on the old master, runs a backup to configured backup targets, and saves full pre-handover
    backups on both devices.

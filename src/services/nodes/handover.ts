@@ -39,7 +39,9 @@ import { activeTargets, backupConfig } from '../../core/backup.ts'
 import {
   buildOldMasterNodeConfig,
   buildOldMasterRelayNodeConfig,
+  collectDirectProbeAddresses,
   flipNodesConfig,
+  formatDirectHttpsUrl,
   HANDOVER_DISK_MULTIPLIER,
   HANDOVER_VERSION,
   type HandoverCheckItem,
@@ -55,13 +57,17 @@ import {
   MAX_HANDOVER_BUNDLE_BYTES,
   MIN_HANDOVER_FREE_MB,
   parseReverseLinkSpec,
+  relayTargetEndpoint,
 } from '../../core/master-handover.ts'
 
 import { LOCAL } from '../../core/node-key.ts'
 import { type LinkConfig, NODE_PORT, nodeConfig, nodesConfig } from '../../core/nodes.ts'
+import { RELAY_MASTER_USER, relaySocketStem } from '../../core/relay-texts.ts'
 import type { Config } from '../../core/types.ts'
 import { backupNow } from '../backup.ts'
 import { rekeyBoard } from '../db-rekey.ts'
+import { type LocalRelayAnswer, pinKnownHostKeys } from '../node/handover.ts'
+import { ownAddresses as systemOwnAddresses } from '../tunnel.ts'
 import type { Link } from './link.ts'
 import type { NodeLinks } from './links.ts'
 import { relayEnrolFor } from './relay.ts'
@@ -71,6 +77,7 @@ export interface MasterHandoverCheckOpts {
   reverseLink?: string
   nodePort?: number
   allowOfflineNodes?: boolean
+  sudoPassword?: string
 }
 
 export interface MasterHandoverRunResult {
@@ -80,6 +87,7 @@ export interface MasterHandoverRunResult {
   to?: string
   rolledBack?: boolean
   error?: string
+  need?: 'sudoPassword'
   plan?: HandoverPlan
   verify?: HandoverVerifyResult | null
 }
@@ -88,12 +96,14 @@ export interface MasterHandoverRollbackOpts {
   id?: string
   localOnly?: boolean
   discardSinceCommit?: boolean
+  sudoPassword?: string
 }
 
 export interface MasterHandoverRollbackResult {
   ok: boolean
   id?: string
   error?: string
+  need?: 'sudoPassword'
   restored?: number
   removed?: number
 }
@@ -110,6 +120,18 @@ export interface MasterHandoverOptions {
   store?: DeviceStore
   hostName?: () => string
   now?: () => number
+  ownAddresses?: () => string[]
+  /** Override direct-reachability check from target to old master (tests). */
+  probeDirect?: (opts: {
+    targetLink: Pick<Link, 'fetch'>
+    addresses: string[]
+    doorCert: { cert: string; key: string }
+    nodePort: number
+  }) => Promise<{ ok: true; host: string; url: string } | { ok: false }>
+  /** Pre-check local relay sudo readiness on committed new-master rollback. */
+  checkLocalRelay?: (opts: { host: string; sshPort: number; sudoPassword?: string }) => Promise<LocalRelayAnswer>
+  /** Override local relay undo on committed/localOnly rollback (tests). */
+  undoLocalRelay?: (opts: { host: string; sshPort: number; sudoPassword?: string }) => Promise<LocalRelayAnswer>
   generateKey?: (
     comment: string,
     path: string,
@@ -161,7 +183,7 @@ async function fetchJson<T>(
   path: string,
   init: RequestInit,
   timeoutMs = 30_000,
-): Promise<{ ok: true; status: number; data: T } | { ok: false; status: number; error: string }> {
+): Promise<{ ok: true; status: number; data: T } | { ok: false; status: number; error: string; need?: string }> {
   let res: Response
   try {
     res = await link.fetch(path, { ...init, signal: AbortSignal.timeout(timeoutMs) })
@@ -171,10 +193,71 @@ async function fetchJson<T>(
   const data = (await res.json().catch(() => null)) as T | null
   if (!res.ok) {
     const errText = isRecord(data) && typeof data.error === 'string' ? data.error : `HTTP ${res.status}`
-    return { ok: false, status: res.status, error: errText }
+    const need = isRecord(data) && typeof data.need === 'string' ? data.need : undefined
+    return { ok: false, status: res.status, error: errText, ...(need && { need }) }
   }
   if (!data) return { ok: false, status: res.status, error: 'empty response' }
   return { ok: true, status: res.status, data }
+}
+
+async function defaultProbeDirect(opts: {
+  targetLink: Pick<Link, 'fetch'>
+  addresses: string[]
+  doorCert: { cert: string; key: string }
+  nodePort: number
+}): Promise<{ ok: true; host: string; url: string } | { ok: false }> {
+  if (opts.addresses.length === 0) return { ok: false }
+  const nonce = randomBytes(16).toString('hex')
+  let srv: ReturnType<typeof Bun.serve> | null = null
+  try {
+    srv = Bun.serve({
+      hostname: '0.0.0.0',
+      port: 0,
+      idleTimeout: 0,
+      development: false,
+      tls: { cert: opts.doorCert.cert, key: opts.doorCert.key },
+      fetch(req) {
+        try {
+          const u = new URL(req.url)
+          if (req.method === 'GET' && u.pathname === '/probe' && req.headers.get('x-probe-nonce') === nonce) {
+            return Response.json({ ok: true, nonce })
+          }
+        } catch {}
+        return Response.json({ ok: false }, { status: 404 })
+      },
+    })
+    const probePort = srv.port
+    if (!probePort) return { ok: false }
+    const urls = opts.addresses.map(ip => formatDirectHttpsUrl(ip, probePort))
+    const r = await fetchJson<{ ok: boolean; host?: string }>(
+      opts.targetLink,
+      '/api/node/handover/probe',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ urls, nonce, cert: opts.doorCert.cert }),
+      },
+      15_000,
+    )
+    if (r.ok && r.data.ok && r.data.host) {
+      return { ok: true, host: r.data.host, url: formatDirectHttpsUrl(r.data.host, opts.nodePort) }
+    }
+    return { ok: false }
+  } catch {
+    return { ok: false }
+  } finally {
+    await srv?.stop(true).catch(() => {})
+  }
+}
+
+const isLoopbackDirectLink = (link: LinkConfig | null | undefined): boolean => {
+  if (link?.kind !== 'direct') return false
+  try {
+    const h = new URL(link.url).hostname.replace(/^\[|\]$/g, '').toLowerCase()
+    return h === '127.0.0.1' || h === 'localhost' || h === '::1'
+  } catch {
+    return false
+  }
 }
 
 function canRollbackState(state: HandoverStateRecord | null): { can: boolean; reason?: string } {
@@ -207,6 +290,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
   let lastPlan: HandoverPlan | null = null
   let lastVerify: HandoverVerifyResult | null = null
   let lastError: string | null = null
+  let lastNeed: 'sudoPassword' | undefined
   let rolledBack = false
   let busy = false
 
@@ -225,6 +309,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
       canRollback: rb.can,
       rollbackNeedsConfirm: state?.role === 'new-master' && state.phase === 'committed',
       ...(rb.reason && { rollbackReason: rb.reason }),
+      ...(lastNeed && { need: lastNeed }),
       state,
     }
   }
@@ -237,6 +322,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
     plan: HandoverPlan
     carryBackupKey: boolean
   }> {
+    lastNeed = undefined
     const host = hostFn()
     const nCfg = nodesConfig(o.cfg.nodes, host)
     const rawCfg = readConfigFile() ?? (structuredClone(o.cfg) as unknown as Record<string, unknown>)
@@ -434,44 +520,119 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
 
     // Reverse link check
     const existingNode = nodeConfig(rawCfg.node)
-    const rev = parseReverseLinkSpec({
-      spec: opts.reverseLink ?? null,
-      oldMasterId: nCfg.id,
-      oldMasterNodePort: opts.nodePort ?? existingNode?.port ?? NODE_PORT,
-      existingSocket: existingNode?.relay?.socket ?? null,
-      targetLink: targetDev?.link ?? null,
-      hasRelay: nCfg.relay !== null,
-    })
     let reverseLink: LinkConfig | null = null
-    if (!rev.ok) {
-      failCheck('reverseLink', rev.error)
-    } else {
-      reverseLink = rev.link
-      if (reverseLink.kind === 'relay') {
-        const hasMasterRelay = existsSync(relayKeyPath('master')) && existsSync(relayKeyPath('enrol'))
-        if (!hasMasterRelay) {
-          failCheck('reverseLink', 'relay reverse link selected, but master relay keys are missing')
-          reverseLink = null
-        } else {
-          passCheck('reverseLink', `relay socket ${reverseLink.socket} (NAT transport)`)
-        }
-      } else if (reverseLink.kind === 'ssh') {
-        if (!existsSync(store.keyPath(nCfg.id))) {
-          failCheck(
-            'reverseLink',
-            `ssh reverse link requires ${store.keyPath(nCfg.id)} so ${targetId} can connect back to ${nCfg.id} (use relay/direct or pre-install the SSH link key)`,
-          )
+    let relaySetup: HandoverPlan['relaySetup']
+
+    if (opts.reverseLink || isLoopbackDirectLink(targetDev?.link) || nCfg.relay !== null) {
+      const rev = parseReverseLinkSpec({
+        spec: opts.reverseLink ?? null,
+        oldMasterId: nCfg.id,
+        oldMasterNodePort: opts.nodePort ?? existingNode?.port ?? NODE_PORT,
+        existingSocket: existingNode?.relay?.socket ?? null,
+        targetLink: targetDev?.link ?? null,
+        hasRelay: nCfg.relay !== null,
+      })
+      if (!rev.ok) {
+        failCheck('reverseLink', rev.error)
+      } else {
+        reverseLink = rev.link
+        if (reverseLink.kind === 'relay') {
+          const hasMasterRelay = existsSync(relayKeyPath('master')) && existsSync(relayKeyPath('enrol'))
+          if (!hasMasterRelay) {
+            failCheck('reverseLink', 'relay reverse link selected, but master relay keys are missing')
+            reverseLink = null
+          } else {
+            passCheck('reverseLink', `relay socket ${reverseLink.socket} (NAT transport)`)
+          }
+        } else if (reverseLink.kind === 'ssh') {
+          if (!existsSync(store.keyPath(nCfg.id))) {
+            failCheck(
+              'reverseLink',
+              `ssh reverse link requires ${store.keyPath(nCfg.id)} so ${targetId} can connect back to ${nCfg.id} (use relay/direct or pre-install the SSH link key)`,
+            )
+          } else {
+            passCheck(
+              'reverseLink',
+              `ssh ${reverseLink.user}@${reverseLink.host}:${reverseLink.sshPort} (door ${reverseLink.port})`,
+            )
+          }
         } else {
           passCheck(
             'reverseLink',
-            `ssh ${reverseLink.user}@${reverseLink.host}:${reverseLink.sshPort} (door ${reverseLink.port})`,
+            reverseLink.kind === 'direct' ? `direct ${reverseLink.url}` : `${reverseLink.kind} reverse link`,
           )
         }
-      } else {
-        passCheck(
+      }
+    } else if (!targetDev?.link || !link || !linkOnline || !targetCheck) {
+      failCheck('reverseLink', `${targetId} must be online to detect reverse connectivity`)
+    } else {
+      const doorPort = opts.nodePort ?? existingNode?.port ?? NODE_PORT
+      const doorCert = ensureDoorCert(nCfg.id, nodeDir())
+      const addrs = collectDirectProbeAddresses((o.ownAddresses ?? systemOwnAddresses)())
+      const direct = await (o.probeDirect ?? defaultProbeDirect)({
+        targetLink: link,
+        addresses: addrs,
+        doorCert,
+        nodePort: doorPort,
+      })
+      if (direct.ok) {
+        reverseLink = { kind: 'direct', url: direct.url }
+        passCheck('reverseLink', `direct TLS ${direct.url}`)
+      } else if (targetCheck.platform !== 'linux') {
+        failCheck(
           'reverseLink',
-          reverseLink.kind === 'direct' ? `direct ${reverseLink.url}` : `${reverseLink.kind} reverse link`,
+          `${targetId} runs ${targetCheck.platform} and cannot host a relay (requires a Linux server or direct reachability)`,
         )
+      } else {
+        const ep = relayTargetEndpoint(targetDev.link)
+        const stem = relaySocketStem(existingNode?.relay?.socket || nCfg.id)
+        if (!ep) {
+          failCheck(
+            'reverseLink',
+            `${targetId} has no SSH host for hosting a relay (use direct reachability or --reverse-link)`,
+          )
+        } else if (!stem) {
+          failCheck('reverseLink', `cannot derive relay socket name from ${nCfg.id}`)
+        } else {
+          const rc = await fetchJson<{ ok: boolean; user?: string; need?: string }>(
+            link,
+            '/api/node/handover/relay',
+            {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({
+                op: 'check',
+                host: ep.host,
+                sshPort: ep.sshPort,
+                ...(opts.sudoPassword !== undefined && { sudoPassword: opts.sudoPassword }),
+              }),
+            },
+            60_000,
+          )
+          if (!rc.ok) {
+            if (rc.need === 'sudoPassword') {
+              lastNeed = 'sudoPassword'
+              relaySetup = {
+                host: ep.host,
+                sshPort: ep.sshPort,
+                user: RELAY_MASTER_USER,
+                needsSudoPassword: true,
+              }
+              reverseLink = { kind: 'relay', socket: stem }
+            }
+            failCheck('reverseLink', rc.error)
+          } else {
+            const user = rc.data.user || RELAY_MASTER_USER
+            relaySetup = {
+              host: ep.host,
+              sshPort: ep.sshPort,
+              user,
+              needsSudoPassword: false,
+            }
+            reverseLink = { kind: 'relay', socket: stem }
+            passCheck('reverseLink', `relay will be set up on ${targetId} (${ep.host}:${ep.sshPort})`)
+          }
+        }
       }
     }
 
@@ -518,6 +679,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
         otherNodes,
         carryBackupServer,
         normalizeTunnelKey: collected.normalizedTunnelKey,
+        ...(relaySetup && { relaySetup }),
         errors,
         warnings,
       },
@@ -528,6 +690,9 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
     id: string
     targetLink: Pick<Link, 'fetch'> | null
     targetPrepared: boolean
+    relayApplied: boolean
+    relayEndpoint: { host: string; sshPort: number } | null
+    sudoPassword?: string
     localBackupTaken: boolean
     pairedOthers: { id: string; masterId: string }[]
     enrolledSocket: string | null
@@ -540,6 +705,23 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ id: ctx.id }),
       }).catch(() => {})
+    }
+    if (ctx.relayApplied && ctx.targetLink && ctx.relayEndpoint) {
+      await fetchJson(
+        ctx.targetLink,
+        '/api/node/handover/relay',
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            op: 'undo',
+            host: ctx.relayEndpoint.host,
+            sshPort: ctx.relayEndpoint.sshPort,
+            ...(ctx.sudoPassword !== undefined && { sudoPassword: ctx.sudoPassword }),
+          }),
+        },
+        180_000,
+      ).catch(() => {})
     }
     for (const p of ctx.pairedOthers) {
       const peer = linkFor(p.id)
@@ -577,6 +759,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
       lastPlan = null
       lastVerify = null
       lastError = null
+      lastNeed = undefined
       rolledBack = false
       return currentView()
     },
@@ -622,7 +805,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
           phase = 'failed'
           step = null
           lastError = plan.errors[0] ?? 'handover preflight checks failed'
-          return { ok: false, error: lastError, plan }
+          return { ok: false, error: lastError, ...(lastNeed && { need: lastNeed }), plan }
         }
 
         const id = stampId(now())
@@ -645,12 +828,42 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
 
         let targetPrepared = false
         let localBackupTaken = false
+        let relayApplied = false
+        let relayTargetHostKeys: string[] = []
+        const relayEndpoint = plan.relaySetup
+          ? { host: plan.relaySetup.host, sshPort: plan.relaySetup.sshPort, user: plan.relaySetup.user }
+          : null
         const pairedOthers: { id: string; masterId: string; token: string }[] = []
         let enrolledSocket: string | null = null
         let oldNodeCfg: Parameters<typeof buildOldMasterNodeConfig>[1]['nodeConfig'] | null = null
         let verify: HandoverVerifyResult | null = null
 
         try {
+          if (plan.relaySetup && relayEndpoint) {
+            step = 'relay'
+            const rr = await fetchJson<{ ok: boolean; user?: string; hostKeys?: string[] }>(
+              targetLink,
+              '/api/node/handover/relay',
+              {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: JSON.stringify({
+                  op: 'apply',
+                  host: relayEndpoint.host,
+                  sshPort: relayEndpoint.sshPort,
+                  ...(opts.sudoPassword !== undefined && { sudoPassword: opts.sudoPassword }),
+                }),
+              },
+              180_000,
+            )
+            if (!rr.ok) {
+              if (rr.need === 'sudoPassword') lastNeed = 'sudoPassword'
+              throw new Error(`relay setup on ${plan.to} failed: ${rr.error}`)
+            }
+            relayApplied = true
+            if (Array.isArray(rr.data.hostKeys)) relayTargetHostKeys = rr.data.hostKeys
+          }
+
           // Step 2: Freeze old master, run DB backup to configured targets, take local backup, prepare target.
           step = 'freeze'
           o.setFreeze(true)
@@ -699,7 +912,8 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
           let reverseCert: string | undefined
 
           if (plan.reverseLink.kind === 'relay') {
-            if (!nCfg.relay) throw new Error('nodes.relay missing for relay reverse link')
+            const effectiveRelay = relayEndpoint ?? nCfg.relay
+            if (!effectiveRelay) throw new Error('nodes.relay missing for relay reverse link')
             const doorCert = ensureDoorCert(plan.from, nodeDir())
             reverseCert = doorCert.cert
             const dialKey = nodeRelayKeyPath(nodeDir())
@@ -714,9 +928,36 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
             const khSrc = knownHostsFile()
             const khDst = nodeRelayKnownHostsReady(nodeDir())
             if (existsSync(khSrc) && !existsSync(khDst)) copyFileSync(khSrc, khDst)
+            if (relayTargetHostKeys.length > 0) {
+              pinKnownHostKeys(
+                khDst,
+                [{ host: effectiveRelay.host, sshPort: effectiveRelay.sshPort }],
+                relayTargetHostKeys,
+              )
+            }
 
-            const enr = await enrolAdd(nCfg.relay, plan.reverseLink.socket, dialPub)
-            if (!enr.ok) throw new Error(`cannot enrol relay socket for old master: ${enr.error}`)
+            if (relayEndpoint) {
+              const enr = await fetchJson<{ ok: boolean }>(
+                targetLink,
+                '/api/node/handover/relay',
+                {
+                  method: 'POST',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({
+                    op: 'enrol-add',
+                    host: relayEndpoint.host,
+                    sshPort: relayEndpoint.sshPort,
+                    socket: plan.reverseLink.socket,
+                    publicKey: dialPub,
+                  }),
+                },
+                30_000,
+              )
+              if (!enr.ok) throw new Error(`cannot enrol relay socket for old master: ${enr.error}`)
+            } else {
+              const enr = await enrolAdd(effectiveRelay, plan.reverseLink.socket, dialPub)
+              if (!enr.ok) throw new Error(`cannot enrol relay socket for old master: ${enr.error}`)
+            }
             enrolledSocket = plan.reverseLink.socket
             writeHandoverState({
               v: 1,
@@ -728,6 +969,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
               peerId: plan.to,
               otherNodes: plan.otherNodes.filter(n => n.online).map(n => n.id),
               enrolledSocket,
+              ...(relayApplied && { relayApplied: true }),
               at: now(),
             })
             oldNodeCfg = {
@@ -736,7 +978,17 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
               workRoot: existingNode?.workRoot ?? '~',
               listen: 'loopback',
               tls: true,
-              relay: buildOldMasterRelayNodeConfig(nCfg.relay, plan.reverseLink.socket),
+              relay: buildOldMasterRelayNodeConfig(effectiveRelay, plan.reverseLink.socket),
+            }
+          } else if (plan.reverseLink.kind === 'direct' && plan.reverseLink.url.startsWith('https://')) {
+            const doorCert = ensureDoorCert(plan.from, nodeDir())
+            reverseCert = doorCert.cert
+            oldNodeCfg = {
+              id: plan.from,
+              port: nodePort,
+              workRoot: existingNode?.workRoot ?? '~',
+              listen: 'tailnet',
+              tls: true,
             }
           } else {
             oldNodeCfg = {
@@ -789,6 +1041,13 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
             targetId: plan.to,
             oldMasterTitle: isRecord(nCfg.devices[LOCAL]) ? (nCfg.devices[LOCAL].title as string) : hostFn(),
             reverseLink: plan.reverseLink,
+            ...(relayEndpoint && {
+              relay: {
+                host: relayEndpoint.host,
+                ...(relayEndpoint.sshPort !== 22 ? { sshPort: relayEndpoint.sshPort } : {}),
+                user: relayEndpoint.user,
+              },
+            }),
           })
 
           // node/handover.ts apply merges oldConfig + flippedNodes onto target's local config.json
@@ -848,6 +1107,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
                 normalizeTunnelKey: collected.normalizedTunnelKey,
                 carryBackupServer: plan.carryBackupServer,
                 keepTargetBackupKey: !carryBackupKey,
+                ...(relayApplied && { relayApplied: true }),
               }),
             },
             60_000,
@@ -956,15 +1216,28 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
             id,
             targetLink,
             targetPrepared,
+            relayApplied,
+            relayEndpoint,
+            ...(opts.sudoPassword !== undefined && { sudoPassword: opts.sudoPassword }),
             localBackupTaken,
             pairedOthers: pairedOthers.map(p => ({ id: p.id, masterId: p.masterId })),
             enrolledSocket,
-            relayCfg: nCfg.relay,
+            relayCfg: relayEndpoint ? null : nCfg.relay,
           })
           rolledBack = true
           phase = 'rolled-back'
           step = null
-          return { ok: false, id, from: plan.from, to: plan.to, rolledBack: true, error, plan, verify: lastVerify }
+          return {
+            ok: false,
+            id,
+            from: plan.from,
+            to: plan.to,
+            rolledBack: true,
+            error,
+            ...(lastNeed && { need: lastNeed }),
+            plan,
+            verify: lastVerify,
+          }
         }
 
         // Post-commit point of no return: persist committed state immediately before unpairing peers
@@ -980,6 +1253,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
             peerId: plan.to,
             otherNodes: pairedOthers.map(p => p.id),
             ...(enrolledSocket && { enrolledSocket }),
+            ...(relayApplied && { relayApplied: true }),
             at: now(),
           })
 
@@ -1030,10 +1304,22 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
       if (busy) return { ok: false, error: 'handover already in progress' }
       busy = true
       step = 'rollback'
+      lastNeed = undefined
       try {
         const state = readHandoverState()
         const id = opts.id ?? state?.id ?? latestHandoverBackupId()
         if (!id) return { ok: false, error: 'no handover backup found to roll back' }
+
+        const localRelayEndpoint = (): { host: string; sshPort: number } => {
+          const r = nodesConfig(o.cfg.nodes, hostFn())?.relay
+          return { host: r?.host ?? hostFn(), sshPort: r?.sshPort ?? 22 }
+        }
+        const undoRelay = async (uo: {
+          host: string
+          sshPort: number
+          sudoPassword?: string
+        }): Promise<LocalRelayAnswer> =>
+          o.undoLocalRelay ? o.undoLocalRelay(uo) : { ok: false, error: 'local relay undo unavailable' }
 
         if (opts.localOnly) {
           if (state?.role === 'new-master' && state.phase === 'committed' && !opts.discardSinceCommit) {
@@ -1042,6 +1328,16 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
               id,
               error:
                 'handover is already committed; rolling back will discard all changes written on this master since commit (pass --discard-since-commit to confirm)',
+            }
+          }
+          if (state?.relayApplied) {
+            const ur = await undoRelay({
+              ...localRelayEndpoint(),
+              ...(opts.sudoPassword !== undefined && { sudoPassword: opts.sudoPassword }),
+            })
+            if (!ur.ok) {
+              if (ur.need === 'sudoPassword') lastNeed = 'sudoPassword'
+              return { ok: false, id, ...(ur.need && { need: ur.need }), error: ur.error }
             }
           }
           const scope =
@@ -1092,6 +1388,16 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
               error: `cannot reach previous master ${state.peerId} to roll back both devices (pass --local-only to restore only this device)`,
             }
           }
+          if (state.relayApplied && o.checkLocalRelay) {
+            const chk = await o.checkLocalRelay({
+              ...localRelayEndpoint(),
+              ...(opts.sudoPassword !== undefined && { sudoPassword: opts.sudoPassword }),
+            })
+            if (!chk.ok) {
+              if (chk.need === 'sudoPassword') lastNeed = 'sudoPassword'
+              return { ok: false, id, ...(chk.need && { need: chk.need }), error: chk.error }
+            }
+          }
           o.setFreeze(true)
           const remoteRb = await fetchJson<{ ok: boolean }>(oldMasterLink, '/api/node/handover/rollback', {
             method: 'POST',
@@ -1117,6 +1423,13 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
               await enrolRemove(curNodes.relay, state.enrolledSocket).catch(() => {})
             }
           }
+          if (state.relayApplied) {
+            const ur = await undoRelay({
+              ...localRelayEndpoint(),
+              ...(opts.sudoPassword !== undefined && { sudoPassword: opts.sudoPassword }),
+            })
+            if (!ur.ok) o.log(`handover ${id}: local relay undo failed: ${ur.error}`)
+          }
           await o.beforeDbReplace()
           let res: { restored: number; removed: number }
           try {
@@ -1141,6 +1454,25 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({ id }),
             }).catch(() => {})
+            if (state.relayApplied) {
+              const targetEp = relayTargetEndpoint(nodesConfig(o.cfg.nodes, hostFn())?.devices[state.peerId]?.link)
+              const ep = targetEp ?? localRelayEndpoint()
+              await fetchJson(
+                peerLink,
+                '/api/node/handover/relay',
+                {
+                  method: 'POST',
+                  headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({
+                    op: 'undo',
+                    host: ep.host,
+                    sshPort: ep.sshPort,
+                    ...(opts.sudoPassword !== undefined && { sudoPassword: opts.sudoPassword }),
+                  }),
+                },
+                180_000,
+              ).catch(() => {})
+            }
           }
         }
         const preScope = state?.role === 'old-master' ? 'old-master-precommit' : 'all'

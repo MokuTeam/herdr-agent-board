@@ -4,18 +4,23 @@ import {
   buildOldMasterNodeConfig,
   buildOldMasterRelayNodeConfig,
   buildTargetMasterConfig,
+  collectDirectProbeAddresses,
   flipNodesConfig,
+  formatDirectHttpsUrl,
   formatHandoverPlan,
   formatHandoverResult,
   HANDOVER_VERSION,
   type HandoverManifest,
   isBackupTargetSelf,
+  isDirectProbeIp,
   isSafeHandoverRelPath,
   packHandoverBundle,
   parseMasterCliArgs,
   parseReverseLinkSpec,
+  relayTargetEndpoint,
   unpackHandoverBundle,
 } from '../../src/core/master-handover.ts'
+import { nodesConfig } from '../../src/core/nodes.ts'
 
 const sha = (b: Uint8Array): string => createHash('sha256').update(b).digest('hex')
 
@@ -434,5 +439,75 @@ describe('core/master-handover (#697)', () => {
       verify: { ok: true, checks: [{ name: 'nodes', ok: true, detail: '1 node(s) online' }] },
     })
     expect(resLines[0]).toContain('ok · handover ho-1 complete')
+  })
+
+  test('direct probe helpers, relay endpoint, flipNodesConfig with relay, and relay dry-run output (#740)', () => {
+    expect(isDirectProbeIp('127.0.0.1')).toBe(false)
+    expect(isDirectProbeIp('::1')).toBe(false)
+    expect(isDirectProbeIp('169.254.1.2')).toBe(false)
+    expect(isDirectProbeIp('fe80::1')).toBe(false)
+    expect(isDirectProbeIp('100.88.1.2')).toBe(true)
+    expect(isDirectProbeIp('192.168.1.10')).toBe(true)
+    expect(
+      collectDirectProbeAddresses(['127.0.0.1', '192.168.1.10', '203.0.113.5', '100.88.1.2', '100.88.1.2']),
+    ).toEqual(['100.88.1.2', '192.168.1.10', '203.0.113.5'])
+    expect(formatDirectHttpsUrl('100.88.1.2', 12430)).toBe('https://100.88.1.2:12430')
+    expect(formatDirectHttpsUrl('fd7a:115c:a1e0::1', 12430)).toBe('https://[fd7a:115c:a1e0::1]:12430')
+
+    expect(
+      relayTargetEndpoint({ kind: 'ssh', host: 'atlas.example.com', sshPort: 2222, user: 'agent-board', port: 12430 }),
+    ).toEqual({ host: 'atlas.example.com', sshPort: 2222 })
+    expect(relayTargetEndpoint({ kind: 'direct', url: 'https://192.168.1.50:12430' })).toEqual({
+      host: '192.168.1.50',
+      sshPort: 22,
+    })
+    expect(relayTargetEndpoint({ kind: 'direct', url: 'http://127.0.0.1:12430' })).toBeNull()
+    expect(relayTargetEndpoint({ kind: 'relay', socket: 'node-1' })).toBeNull()
+
+    const flipped = flipNodesConfig(
+      {
+        id: 'laptop',
+        order: ['local', 'server-1'],
+        devices: {
+          local: { title: 'Anna Laptop' },
+          'server-1': {
+            title: 'Atlas',
+            link: { kind: 'ssh', host: 'atlas.example.com', sshPort: 2222, user: 'agent-board', port: 12430 },
+          },
+        },
+      },
+      {
+        oldMasterId: 'laptop',
+        targetId: 'server-1',
+        reverseLink: { kind: 'relay', socket: 'laptop' },
+        relay: { host: 'atlas.example.com', sshPort: 2222, user: 'agent-board-relay-m' },
+      },
+    )
+    const parsed = nodesConfig(flipped)
+    expect(parsed?.problems).toEqual([])
+    expect(parsed?.relay).toEqual({ host: 'atlas.example.com', sshPort: 2222, user: 'agent-board-relay-m' })
+
+    const lines = formatHandoverPlan({
+      ok: true,
+      from: 'laptop',
+      to: 'server-1',
+      targetTitle: 'Atlas',
+      commit: 'abc12345',
+      reverseLink: { kind: 'relay', socket: 'laptop' },
+      checks: [{ id: 'reverseLink', ok: true, detail: 'relay will be set up on server-1', blocking: true }],
+      items: [{ category: 'db', files: 1, bytes: 4096 }],
+      totalFiles: 1,
+      totalBytes: 4096,
+      requiredFreeMb: 64,
+      targetFreeMb: 2000,
+      rekey: { dbChanges: 0, scheduleEntries: 0, watchEntries: 0, ownerWatchSessions: 0 },
+      otherNodes: [],
+      carryBackupServer: false,
+      normalizeTunnelKey: false,
+      relaySetup: { host: 'atlas.example.com', sshPort: 2222, user: 'agent-board-relay-m', needsSudoPassword: false },
+      errors: [],
+      warnings: [],
+    })
+    expect(lines.some(l => l.includes('relay') && l.includes('atlas.example.com:2222'))).toBe(true)
   })
 })

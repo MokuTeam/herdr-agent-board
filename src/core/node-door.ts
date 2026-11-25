@@ -121,6 +121,8 @@ export const DOOR_ROUTES: readonly DoorRoute[] = [
   { method: 'POST', path: '/api/node/handover/rollback', door: true },
   { method: 'POST', path: '/api/node/handover/pair', door: true },
   { method: 'POST', path: '/api/node/handover/unpair', door: true },
+  { method: 'POST', path: '/api/node/handover/probe', door: true },
+  { method: 'POST', path: '/api/node/handover/relay', door: true },
 ]
 
 const allows = (r: DoorRoute, method: string, rawPath: string, path: string): boolean =>

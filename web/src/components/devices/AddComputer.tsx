@@ -2,6 +2,7 @@
 // Generates a 10-minute one-line sh command for a Linux/macOS computer behind NAT, polls the
 // relay until the computer answers with a verified proof, and claims it on Approve.
 import { useCallback, useEffect, useState } from 'react'
+import type { BoardDevice } from '../../../../src/core/payload.ts'
 import { ApiError, api, errorText } from '../../api/client.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import {
@@ -9,6 +10,7 @@ import {
   type ComputerSetupView,
   computerStepTitle,
   isComputerSetupView,
+  validateComputerStart,
 } from '../../models/computer-setup.ts'
 import { loggedOut, stateWord, textOf } from '../../models/node-setup.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
@@ -17,13 +19,15 @@ import { classNames } from '../class-names.ts'
 
 export interface AddComputerProps {
   open?: boolean
+  devices?: readonly BoardDevice[]
+  hasRelay?: boolean
   initial?: ComputerSetupView
 }
 
 const POLL_MS = 1000
 const isReply = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null
 
-export function AddComputer({ open: panelOpen = true, initial }: AddComputerProps) {
+export function AddComputer({ open: panelOpen = true, devices, hasRelay, initial }: AddComputerProps) {
   const t = useT()
   const { canEdit, toast } = useBoardContext()
   const [open, setOpen] = useState(!!initial)
@@ -31,6 +35,7 @@ export function AddComputer({ open: panelOpen = true, initial }: AddComputerProp
   const [deviceId, setDeviceId] = useState(initial?.found?.id ?? '')
   const [port, setPort] = useState('')
   const [said, setSaid] = useState('')
+  const [needRelay, setNeedRelay] = useState(false)
   const [sending, setSending] = useState<string | null>(null)
   const live = open && panelOpen && !initial
 
@@ -57,7 +62,12 @@ export function AddComputer({ open: panelOpen = true, initial }: AddComputerProp
     if (panelOpen || initial) return
     setOpen(false)
     setSaid('')
+    setNeedRelay(false)
   }, [panelOpen, initial])
+
+  useEffect(() => {
+    if (hasRelay) setNeedRelay(false)
+  }, [hasRelay])
 
   const foundId = view?.found?.id ?? ''
   useEffect(() => {
@@ -70,9 +80,11 @@ export function AddComputer({ open: panelOpen = true, initial }: AddComputerProp
     setSending(String(body.op))
     try {
       await api.post('/api/nodes/computer/setup', body, isReply)
+      setNeedRelay(false)
       return true
     } catch (err) {
       if (err instanceof ApiError) {
+        if (err.reply.need === 'relay') setNeedRelay(true)
         setSaid(typeof err.reply.error === 'string' && err.reply.error ? err.reply.error : errorText(err, t))
       } else {
         toast(errorText(err, t), true)
@@ -85,11 +97,19 @@ export function AddComputer({ open: panelOpen = true, initial }: AddComputerProp
   }
 
   const start = () => {
+    const problem = validateComputerStart(
+      { id: deviceId, port },
+      (devices ?? []).map(d => d.id),
+    )
+    if (problem) {
+      setSaid(textOf(problem, t))
+      return
+    }
     const n = port.trim()
     void send({
       op: 'start',
       ...(deviceId.trim() && { id: deviceId.trim() }),
-      ...(n && { port: /^\d+$/.test(n) ? Number(n) : n }),
+      ...(n && { port: Number(n) }),
     })
   }
   const approve = () => {
@@ -116,51 +136,65 @@ export function AddComputer({ open: panelOpen = true, initial }: AddComputerProp
 
   const v = view
   const working = sending !== null || phase === 'claiming' || phase === 'finishing'
+  const showRelayGate = hasRelay === false || needRelay
 
   return (
     <section className="devices-section devices-add devices-computer" data-phase={phase}>
       <h3 className="devices-head">{t('node.computer.title')}</h3>
       <p className="sheet-meta">{t('node.computer.about')}</p>
+      <p className="sheet-meta">{t('node.computer.platformNote')}</p>
 
-      {(phase === 'idle' || phase === 'expired' || phase === 'failed') && (
+      {phase === 'idle' && showRelayGate ? (
         <div className="access-fields">
-          <details className="access-keyfile">
-            <summary className="access-summary">{t('node.add.more')}</summary>
-            <div className="access-entry">
-              <label className="access-field">
-                <span>{t('node.add.id')}</span>
-                <input
-                  type="text"
-                  className="path-add access-input"
-                  name="computer-id"
-                  value={deviceId}
-                  placeholder={t('node.add.idHint')}
-                  disabled={!canEdit || working}
-                  onChange={e => setDeviceId(e.currentTarget.value)}
-                />
-              </label>
-            </div>
-            <div className="access-entry">
-              <label className="access-field">
-                <span>{t('node.add.port')}</span>
-                <input
-                  type="text"
-                  className="path-add access-input"
-                  name="computer-port"
-                  value={port}
-                  placeholder="12430"
-                  disabled={!canEdit || working}
-                  onChange={e => setPort(e.currentTarget.value)}
-                />
-              </label>
-            </div>
-          </details>
-          <div className="access-actions">
-            <button type="button" className="button primary" disabled={!canEdit || working} onClick={start}>
-              {sending === 'start' ? t('node.computer.creating') : t('node.computer.start')}
-            </button>
-          </div>
+          <p className="access-caution">{t('node.computer.needRelay')}</p>
         </div>
+      ) : (
+        (phase === 'idle' || phase === 'expired' || phase === 'failed') && (
+          <div className="access-fields">
+            <details className="access-keyfile">
+              <summary className="access-summary">{t('node.add.more')}</summary>
+              <div className="access-entry">
+                <label className="access-field">
+                  <span>{t('node.add.id')}</span>
+                  <input
+                    type="text"
+                    className="path-add access-input"
+                    name="computer-id"
+                    value={deviceId}
+                    placeholder={t('node.add.idHint')}
+                    disabled={!canEdit || working}
+                    onChange={e => {
+                      setDeviceId(e.currentTarget.value)
+                      if (said) setSaid('')
+                    }}
+                  />
+                </label>
+              </div>
+              <div className="access-entry">
+                <label className="access-field">
+                  <span>{t('node.add.port')}</span>
+                  <input
+                    type="text"
+                    className="path-add access-input"
+                    name="computer-port"
+                    value={port}
+                    placeholder="12430"
+                    disabled={!canEdit || working}
+                    onChange={e => {
+                      setPort(e.currentTarget.value)
+                      if (said) setSaid('')
+                    }}
+                  />
+                </label>
+              </div>
+            </details>
+            <div className="access-actions">
+              <button type="button" className="button primary" disabled={!canEdit || working} onClick={start}>
+                {sending === 'start' ? t('node.computer.creating') : t('node.computer.start')}
+              </button>
+            </div>
+          </div>
+        )
       )}
 
       {phase === 'expired' && <p className="access-caution">{v?.error || t('node.computer.expired')}</p>}

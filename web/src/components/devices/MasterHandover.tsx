@@ -1,7 +1,7 @@
 // Settings, Devices -> "Move master role" (#697):
 // Closed by default (zero fetches on DevicesPanel mount). Opens on click to pick a target node,
 // run a dry-run preflight check, execute guided handover, and roll back if needed.
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { BoardDevice } from '../../../../src/core/payload.ts'
 import { ApiError, api, errorText } from '../../api/client.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
@@ -28,6 +28,7 @@ export function MasterHandover({ open: panelOpen = true, devices, initial }: Mas
   const [sending, setSending] = useState<string | null>(null)
   const [confirmRollback, setConfirmRollback] = useState(false)
   const [said, setSaid] = useState('')
+  const sudoRef = useRef<HTMLInputElement>(null)
   const live = open && panelOpen && !initial
 
   const refresh = useCallback(() => {
@@ -49,16 +50,20 @@ export function MasterHandover({ open: panelOpen = true, devices, initial }: Mas
     if (panelOpen || initial) return
     setOpen(false)
     setSaid('')
+    if (sudoRef.current) sudoRef.current.value = ''
   }, [panelOpen, initial])
 
   async function send(body: Record<string, unknown>): Promise<void> {
     if (!canEdit || sending !== null) return
     setSaid('')
     setSending(String(body.op))
+    const pw = sudoRef.current?.value
+    const payload = pw ? { ...body, sudoPassword: pw } : body
     try {
-      const r = await api.post('/api/nodes/handover', body, isReply)
+      const r = await api.post('/api/nodes/handover', payload, isReply)
       if (isHandoverView(r.view)) setView(r.view)
       else refresh()
+      if (sudoRef.current) sudoRef.current.value = ''
     } catch (err) {
       if (err instanceof ApiError) {
         if (isHandoverView(err.reply.view)) setView(err.reply.view)
@@ -134,6 +139,21 @@ export function MasterHandover({ open: panelOpen = true, devices, initial }: Mas
               </label>
             </div>
           </details>
+          {(v?.need === 'sudoPassword' || plan?.relaySetup?.needsSudoPassword) && (
+            <div className="access-entry">
+              <label className="access-field">
+                <span>{t('node.handover.sudoPassword')}</span>
+                <input
+                  ref={sudoRef}
+                  type="password"
+                  className="path-add access-input"
+                  name="handover-sudo-password"
+                  disabled={!canEdit || working}
+                />
+              </label>
+              <p className="sheet-meta">{t('node.handover.sudoNote')}</p>
+            </div>
+          )}
           <div className="access-actions">
             <button
               type="button"
@@ -152,7 +172,18 @@ export function MasterHandover({ open: panelOpen = true, devices, initial }: Mas
             <button
               type="button"
               className="button primary"
-              disabled={!canEdit || working || !target || (plan !== null && plan.to === target && !plan.ok)}
+              disabled={
+                !canEdit ||
+                working ||
+                !target ||
+                (plan !== null &&
+                  plan.to === target &&
+                  !plan.ok &&
+                  !(
+                    plan.relaySetup?.needsSudoPassword &&
+                    plan.checks.every(c => c.ok || !c.blocking || c.id === 'reverseLink')
+                  ))
+              }
               onClick={() =>
                 void send({
                   op: 'run',
@@ -249,6 +280,15 @@ export function MasterHandover({ open: panelOpen = true, devices, initial }: Mas
               </li>
             ))}
           </ol>
+          {plan.relaySetup && (
+            <p className="sheet-meta">
+              {t('node.handover.relayStep', {
+                to: plan.to,
+                host: plan.relaySetup.host,
+                port: String(plan.relaySetup.sshPort),
+              })}
+            </p>
+          )}
           <p className="sheet-meta">
             {t('node.handover.willMove', { files: plan.totalFiles, kb: Math.ceil(plan.totalBytes / 1024) })}
           </p>

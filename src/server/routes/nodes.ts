@@ -196,6 +196,17 @@ export function handoverRoutes(handover: () => MasterHandover): Route[] {
       async handle(_req, ctx) {
         const body = await ctx.body()
         const h = handover()
+        let sudoPassword: string | undefined
+        if (body.sudoPassword !== undefined) {
+          if (
+            typeof body.sudoPassword !== 'string' ||
+            /[\r\n]/.test(body.sudoPassword) ||
+            body.sudoPassword.length > 1024
+          ) {
+            return json(400, { ok: false, error: 'sudoPassword' })
+          }
+          if (body.sudoPassword) sudoPassword = body.sudoPassword
+        }
         if (body.op === 'check') {
           if (typeof body.to !== 'string' || !body.to) return json(400, { ok: false, error: 'missing target device' })
           try {
@@ -204,8 +215,10 @@ export function handoverRoutes(handover: () => MasterHandover): Route[] {
               ...(typeof body.reverseLink === 'string' && { reverseLink: body.reverseLink }),
               ...(typeof body.nodePort === 'number' && { nodePort: body.nodePort }),
               ...(body.allowOfflineNodes === true && { allowOfflineNodes: true }),
+              ...(sudoPassword !== undefined && { sudoPassword }),
             })
-            return json(200, { ok: true, plan, view: h.view() })
+            const view = h.view()
+            return json(200, { ok: true, plan, ...(view.need && { need: view.need }), view })
           } catch (err) {
             return json(409, { ok: false, error: err instanceof Error ? err.message : String(err), view: h.view() })
           }
@@ -217,6 +230,7 @@ export function handoverRoutes(handover: () => MasterHandover): Route[] {
             ...(typeof body.reverseLink === 'string' && { reverseLink: body.reverseLink }),
             ...(typeof body.nodePort === 'number' && { nodePort: body.nodePort }),
             ...(body.allowOfflineNodes === true && { allowOfflineNodes: true }),
+            ...(sudoPassword !== undefined && { sudoPassword }),
           })
           return json(res.ok ? 200 : 409, { ...res, view: h.view() })
         }
@@ -225,6 +239,7 @@ export function handoverRoutes(handover: () => MasterHandover): Route[] {
             ...(typeof body.id === 'string' && { id: body.id }),
             ...(body.localOnly === true && { localOnly: true }),
             ...(body.discardSinceCommit === true && { discardSinceCommit: true }),
+            ...(sudoPassword !== undefined && { sudoPassword }),
           })
           return json(res.ok ? 200 : 409, { ...res, view: h.view() })
         }
@@ -302,6 +317,7 @@ export function nodesRoutes(
       noToken: panel ? devices.filter(d => d.kind !== null && !panel.hasToken(d.id)).map(d => d.id) : [],
       next: (await panel?.next(cfg).catch(() => null)) ?? null,
       ...secretsOf(devices),
+      ...(cfg?.relay && { relay: { host: cfg.relay.host, sshPort: cfg.relay.sshPort } }),
     }
   }
   /** Per linked device with any, the secrets given and to give (#604), from the last syncs: names only. */
