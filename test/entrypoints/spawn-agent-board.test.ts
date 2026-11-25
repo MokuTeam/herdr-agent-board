@@ -362,11 +362,37 @@ test('--resume, --fork and --pane go as without nodes, and so does a Workdesk wo
   assert.deepEqual(board.requests, [])
 }, 60_000)
 
-test('--trust, a board with a launcher of its own, a hidden profile not the caller’s, a refusal on stale data: as without nodes', async () => {
+test('--trust goes with the start the board places (#798): posted as trust: true; one without it posts no such key', async () => {
+  const queuedOf = () =>
+    fakeBoard({
+      payload: (_polls, posted) =>
+        posted
+          ? {
+              items: [caller],
+              launches: [
+                own({ state: 'queued', place: { wait: { device: 'server-1', kind: 'sessions', busy: 3, max: 3 } } }),
+              ],
+            }
+          : { items: [caller], launches: [] },
+    })
+  const trusted = queuedOf()
+  const a = await startBox({ port: trusted.port, nodes: {} })
+  const q = await runSpawn(a.box, ['--name', 'Acme invoices', '--cwd', a.dir, '--workspace', 'wA', '--trust'])
+  assert.equal(q.code, 0, q.stderr)
+  assert.equal(q.stdout.trim(), 'queued=abcd1234 name=Acme invoices waiting=server-1:sessions')
+  assert.equal(trusted.posted()?.trust, true)
+  assert.deepEqual(a.box.calls(), [])
+  const plainOne = queuedOf()
+  const b = await startBox({ port: plainOne.port, nodes: {} })
+  assert.equal((await runSpawn(b.box, ['--name', 'Acme invoices', '--cwd', b.dir, '--workspace', 'wA'])).code, 0)
+  assert.equal('trust' in (plainOne.posted() ?? {}), false)
+}, 30_000)
+
+test('--trust with another agent, a board with a launcher of its own, a hidden profile not the caller’s, a refusal on stale data: as without nodes', async () => {
   const board = fakeBoard({ payload: () => ({ items: [], launches: [] }) })
   const cfg = { port: board.port, nodes: {} }
-  // The board's starts do not answer the trust dialog for the agent: a start with --trust stays here.
-  const trust = await twins(cfg, dir => [...plain(dir), '--trust'])
+  // With another agent than Claude, --trust stays spawn-agent's (Antigravity's own dialog, #648): the start stays here.
+  const trust = await twins(cfg, dir => [...plain(dir), '--trust', '--agent', 'pi'])
   assert.equal(trust.main.code, 0, trust.main.stderr)
   assert.deepEqual(trust.ours, trust.main)
   // The board would start it with the owner's launcher, not this path.

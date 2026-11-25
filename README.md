@@ -352,6 +352,14 @@ goes to the board as `POST /api/reveal` with `{ "pane": "<id>" }` or `{ "key": "
     the call and runs the fork on the board's computer over ssh. A phone, or a computer without
     that MokuPilot, has nothing for the link: the board stays as it was.
 
+    The browser asks before it hands a `mokupilot://` link to MokuPilot ("Open Python?" in Chrome
+    on Windows, after the program that handles the link). To be asked once: tick "Always allow
+    <the board's address> to open links of this type" in that dialog (offered on an `https` page,
+    so on the board's own domain or `tailscale serve`, not on `http://127.0.0.1`). An owner who
+    sets the browser up by policy can allow the board's origin for the scheme ahead
+    (`AutoLaunchProtocolsFromOrigins` in Chrome and Edge:
+    `[{"protocol": "mokupilot", "allowed_origins": ["https://board.example.com"]}]`).
+
   The button is offered under Auto and The computer you're viewing from whether MokuPilot is on
   the board's computer or not (under Auto, a call asked at the board's computer without it says
   so and points to the panel); under This machine only with MokuPilot found there. Settings →
@@ -993,7 +1001,7 @@ on a model (`modelWant`) is written once the brief went in; the output line ends
 
 which is how the board knows who started whom. With `nodes` in config.json (a board with other
 devices to place sessions on) and the board answering on its port, a new session (no
-`--resume`, `--fork`, `--pane`, `--session-id` or `--trust`) is the board's to place: it posts the
+`--resume`, `--fork`, `--pane` or `--session-id`) is the board's to place: it posts the
 start to `POST /api/launch` as an agent's (`byHand: false`) and prints the same line when the
 session runs here, `pane=@<device>:<pane> name=<Name> agent=@<device>:<session> device=<device>
 session=<id>` when it runs on a node, or `queued=<launch id> name=<Name> waiting=<device>:<kind>`
@@ -1018,7 +1026,10 @@ the folder is not there, Claude is not ready in time, or Claude waits for a dial
 folder trust): answer it in that tab, then name and brief the session there. `--trust` answers
 two such dialogs with Yes instead: the folder-trust one when it names `--cwd` itself, and "Allow
 external CLAUDE.md file imports?" when every file it lists is in the user's own Claude folders.
-Any other dialog still stops the start. A brief that does not get through fails it too, saying
+Any other dialog still stops the start. A placed start (#798) takes `--trust` along: the board
+that runs it, the master or a node, answers the folder-trust dialog for the start's own folder,
+and any other dialog waits on its card; with `--agent` other than Claude, `--trust` keeps the
+start on this computer, as before. A brief that does not get through fails it too, saying
 so: the session runs, send the brief by hand rather than start another. A `/rename` that does
 not take is only a warning, unless its line stays in Claude's input box: then the brief is not
 typed after it (the two would go as one, the name taking the brief) and the start fails as a brief

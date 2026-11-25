@@ -124,7 +124,7 @@ export interface UplinkRunnerOptions {
    * spawn-agent's start from a node's session (#760, spawn-from.ts): this board's launches, profiles
    * and herdr. Absent: such a call is refused, and the node starts the session itself.
    */
-  spawn?: Pick<SpawnFromDeps, 'start' | 'profiles' | 'workspaces' | 'herdrName'> & {
+  spawn?: Pick<SpawnFromDeps, 'start' | 'profiles' | 'workspaces' | 'herdrName' | 'dismiss'> & {
     /** Tests: the board's payload; `GET /api/board` on the web port by default. */
     payload?: SpawnFromDeps['payload']
   }
@@ -1052,6 +1052,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
       online: online,
       workspaces: s.workspaces,
       herdrName: s.herdrName,
+      ...(s.dismiss && { dismiss: s.dismiss }),
       // Sent again before it was answered (this board started over meanwhile): not a second start.
       taken: () => {
         try {

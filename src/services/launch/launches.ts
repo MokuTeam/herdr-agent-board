@@ -84,6 +84,11 @@ export interface StartOptions {
    * request's profile is the node's own id, which this board does not have.
    */
   origin?: { device: string; facts: NodeFolderFacts; nodeProfile?: boolean } | null
+  /**
+   * spawn-agent --trust (#798): from a node's session (spawn-from.ts), or a master's start for this
+   * node (services/node/launch.ts). The board answers the folder-trust dialog for the launch's folder.
+   */
+  trust?: boolean
 }
 
 /** How a launch went, for a start of the server's own that waits on it (a verifier, #492); null once it is gone. */
@@ -243,6 +248,7 @@ export function createLaunches({
       remote = null,
       codexFork,
       origin = null,
+      trust = false,
     }: StartOptions = {},
   ): Promise<StartResult> {
     if (frozen()) {
@@ -303,6 +309,7 @@ export function createLaunches({
     const request = resume ? { ...r.launch, message: '' } : fork ? { ...r.launch, worktree: null } : r.launch
     const l = newLaunch(request, items, resume, fork)
     if (origin) l.originFacts = origin.facts
+    if (trust && !resume && !fork) l.trust = true
     if (node) {
       l.id = node.session
       l.sessionGiven = node.session

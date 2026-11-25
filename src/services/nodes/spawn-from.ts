@@ -42,6 +42,11 @@ export interface SpawnFromDeps {
   /** herdr's name for the agent in a pane of this computer. */
   herdrName(pane: string): Promise<string>
   /**
+   * Take this board's launch off it (launches.dismiss, #798): a start refused before anything ran
+   * goes back to the node, which starts it itself, so its failed card here would only be a stray.
+   */
+  dismiss?: (id: string) => void
+  /**
    * The start was taken (the board has its launch): told before it is followed, so a call sent again
    * meanwhile (this board started over) is not a second start.
    */
@@ -156,6 +161,7 @@ export async function spawnFrom(
     started = await d.start(body, {
       byHand: false,
       ...(req.facts !== null && { origin: { device, facts: req.facts, ...(nodeProfile && { nodeProfile: true }) } }),
+      ...(req.trust && { trust: true }),
     })
   } catch (err) {
     return failed(
@@ -174,7 +180,12 @@ export async function spawnFrom(
     if (payload) {
       const r = outcomeOf(payload, f, t)
       if (r.kind === 'printed') return { code: 0, out: [r.line], err: [] }
-      if (r.kind === 'failed') return refusedBefore(payload, f.id) ? notStarted(r.error) : failed(r.error)
+      if (r.kind === 'failed') {
+        if (!refusedBefore(payload, f.id)) return failed(r.error)
+        // Nothing ran: the node starts it (no --device) or says why, and no card of it stays here.
+        d.dismiss?.(f.id)
+        return notStarted(r.error)
+      }
       if (r.kind === 'here') {
         const sid = f.session ?? ''
         return {

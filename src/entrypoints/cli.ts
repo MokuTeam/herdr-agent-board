@@ -1931,6 +1931,11 @@ async function archive(): Promise<void> {
     throw new Error(
       `"${target}" fits ${found.length} sessions on the board (${found.map(i => `${i.name} in ${i.pane}`).join(', ')}); give its session id or pane`,
     )
+  // On a node (#798), none of this computer's: another machine's by its id or name, through the master.
+  if (!found.length && node) {
+    const up = await foreignTargetUp(target, node.id)
+    if (up) return archiveUp(up)
+  }
   const item = found[0]
   if (!item) throw new Error(`no session "${target}" on the board`)
   const from = await ownSession()
@@ -1961,6 +1966,40 @@ async function archive(): Promise<void> {
   console.log(
     `ok · archived ${item.name}: ${state}; the user can bring it back from the board's archive (Archive on the toolbar)${held}`,
   )
+}
+
+/**
+ * On a node (#798): the session of another machine that `target` names by its id or name, as the
+ * master's `board agents --json` lists them (asked as this session, through the uplink), in this
+ * node's terms (`@<device>:<key>`); null when none does, or the master cannot be asked.
+ */
+async function foreignTargetUp(target: string, self: string): Promise<string | null> {
+  const from = await ownSession().catch(() => null)
+  if (!from?.key) return null
+  const [{ callBoard }, { boardCall, foreignMatch }] = await Promise.all([
+    import('./node-call.ts'),
+    import('./node-remote-cli.ts'),
+  ])
+  const answer = await callBoard(cfg.port)({
+    cmd: 'agents',
+    argv: ['--json'],
+    session: from.key,
+    lane: null,
+    files: [],
+  })
+  if (answer?.state !== 'answered' || answer.code !== 0) return null
+  let views: unknown
+  try {
+    views = JSON.parse(answer.out.join('\n'))
+  } catch {
+    return null
+  }
+  // The master's own sessions go by its id, which this node's payload carries (core/board-slices.ts).
+  const relayed = (await boardCall(cfg.port, '/api/board', { ms: 5000 }))?.body.relayedDevices
+  const masterId = isRecord(relayed) && typeof relayed.master === 'string' ? relayed.master : ''
+  const m = foreignMatch(views, target, self, masterId)
+  if (m && 'error' in m) throw new Error(m.error)
+  return m?.key ?? null
 }
 
 /** `board archive` of another machine's session from a node (#786): through the master, which hands it on. */

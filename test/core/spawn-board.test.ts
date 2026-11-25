@@ -25,7 +25,7 @@ const launch = (more: Record<string, unknown>) => ({
   ...more,
 })
 
-test('a new session is placeable; a resume, a fork, a pane, a session id, a profile folder, a Workdesk worker and --trust are not', () => {
+test('a new session is placeable; a resume, a fork, a pane, a session id, a profile folder and a Workdesk worker are not', () => {
   expect(placeable(opts())).toBe(true)
   expect(placeable(opts('--model', 'opus', '--agent', 'pi', '--label', 'x'))).toBe(true)
   for (const more of [
@@ -36,9 +36,19 @@ test('a new session is placeable; a resume, a fork, a pane, a session id, a prof
     ['--config-dir', '/p'],
     ['--keep-env'],
     ['--workdesk-worker'],
-    ['--trust'],
   ])
     expect([more[0], placeable(opts(...more))]).toEqual([more[0], false])
+})
+
+test('--trust goes with a placed Claude start (#798); with another agent the start stays here', () => {
+  expect(placeable(opts('--trust'))).toBe(true)
+  expect(placeable(opts('--trust', '--agent', 'claude'))).toBe(true)
+  expect(placeable(opts('--trust', '--agent', 'pi'))).toBe(false)
+  expect(placeable(opts('--trust', '--agent', 'agy'))).toBe(false)
+  const facts = { cwd: '/w', message: '', workspace: { id: 'w1' } }
+  expect(launchBody(opts('--trust'), facts).trust).toBe(true)
+  // Without it the request is as before: no trust key at all.
+  expect('trust' in launchBody(opts(), facts)).toBe(false)
 })
 
 test('the caller is found by its Claude id, else by its pane, never among a node’s items', () => {

@@ -46,6 +46,8 @@ export interface SpawnCall {
   profile?: string
   /** --device: a device id of the master's, or `local` for the master itself. */
   device?: string
+  /** --trust (#798): the board that runs it answers Claude's folder-trust dialog for its folder. */
+  trust?: true
   timeoutSec: number
   /** The herdr workspace label it opens in: the caller's, as the node shows it. */
   workspace: string
@@ -99,7 +101,7 @@ export function spawnCallOf(argv: readonly string[]): SpawnCall | null {
     return null
   }
   if (!isObject(raw)) return null
-  const { name, cwd, label, message, model, agent, profile, device, timeoutSec, workspace } = raw
+  const { name, cwd, label, message, model, agent, profile, device, timeoutSec, workspace, trust } = raw
   if (!text(name, 60) || !name.trim() || !text(cwd, 4096) || !cwd.trim()) return null
   if (typeof message !== 'string' || message.length > 64 * 1024) return null
   if (label !== undefined && !text(label, 200)) return null
@@ -108,6 +110,7 @@ export function spawnCallOf(argv: readonly string[]): SpawnCall | null {
   if (profile !== undefined && !text(profile, 64)) return null
   if (device !== undefined && (typeof device !== 'string' || (device !== LOCAL && !DEVICE_ID.test(device)))) return null
   if (typeof timeoutSec !== 'number' || !Number.isFinite(timeoutSec) || timeoutSec <= 0) return null
+  if (trust !== undefined && trust !== true) return null
   if (!text(workspace, 200)) return null
   const facts = factsOf(raw.facts)
   if (facts === undefined) return null
@@ -123,6 +126,7 @@ export function spawnCallOf(argv: readonly string[]): SpawnCall | null {
     ...(agent !== undefined && { agent: agent as SpawnCall['agent'] & string }),
     ...(profile !== undefined && { profile }),
     ...(device !== undefined && { device }),
+    ...(trust === true && { trust: true as const }),
   }
 }
 

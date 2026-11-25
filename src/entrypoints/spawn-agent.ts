@@ -31,7 +31,8 @@
 //
 // --trust answers two startup dialogs with Yes instead of stopping there: the folder-trust dialog
 // for --cwd itself, and "Allow external CLAUDE.md file imports?" when every file it lists is in
-// the user's own Claude folders. Any other dialog still stops the start.
+// the user's own Claude folders. Any other dialog still stops the start. A placed start (#798) takes it
+// along: the board that runs it answers the folder-trust dialog for its folder.
 //
 // --model starts the session on that model: `--model <id>` after the start command and the
 // profile's arguments (pi's own --model for pi), so the profile's default stays as it is; typing

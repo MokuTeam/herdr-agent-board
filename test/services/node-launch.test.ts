@@ -455,3 +455,58 @@ test('a key the clone has twice is replaced whole (#611)', async () => {
   assert.equal(git(dir, 'config', '--local', '--get-all', 'user.email'), AUTHOR.email)
   assert.deepEqual(await repoIdentity(dir), AUTHOR)
 })
+
+// ---------------------------------------------------------------- spawn-agent --trust (#798)
+
+test('trust is read as a boolean: true is kept, false or none leaves no key, any other type is refused as trust (#798)', () => {
+  const plain = launchRequestOf(repoBody())
+  assert.deepEqual(launchRequestOf(repoBody({ trust: true })), { ...plain, trust: true })
+  for (const body of [repoBody(), repoBody({ trust: false })]) {
+    const r = launchRequestOf(body)
+    assert.equal('trust' in r, false)
+    assert.deepEqual(r, plain)
+  }
+  const field = (trust: unknown) => (launchRequestOf(repoBody({ trust })) as { field?: string }).field
+  for (const trust of ['true', 'yes', 1, 0, null, {}, []]) assert.equal(field(trust), 'trust', JSON.stringify(trust))
+})
+
+test('a start with trust gives the node’s own pipeline the option; with none of it the call has two arguments, as before (#798)', async () => {
+  const root = tmp()
+  const calls: unknown[][] = []
+  const { deps } = nodeWith(root, {
+    start: async (...args: unknown[]): Promise<StartResult> => {
+      calls.push(args)
+      return { ok: true, id: String(args[1]) }
+    },
+  })
+  const launch = createNodeLaunch(deps)
+  const [third, fourth, fifth] = [3, 4, 5].map(n => `5d0c6a1e-1111-4222-8333-00000000000${n}`) as [
+    string,
+    string,
+    string,
+  ]
+  const path = { kind: 'path', cwd: root, worktree: null }
+  const answer = (id: string, more: Record<string, unknown> = {}) =>
+    launch.answer(repoBody({ id, source: path, ...more }))
+
+  assert.equal((await answer(ID, { trust: true })).status, 202)
+  assert.equal((await answer(OTHER, { exactSession: true, trust: true })).status, 202)
+  assert.equal((await answer(third, { exactSession: true })).status, 202)
+  assert.equal((await answer(fourth)).status, 202)
+  assert.equal((await answer(fifth, { trust: false })).status, 202)
+  assert.equal(calls.length, 5)
+
+  assert.deepEqual(
+    calls.map(c => c[1]),
+    [ID, OTHER, third, fourth, fifth],
+  )
+  assert.deepEqual(calls[0]?.[2], { trust: true })
+  assert.deepEqual(calls[1]?.[2], { exactSession: true, trust: true })
+  // The starts without trust are the calls they were before: one option for the exact session, none otherwise.
+  assert.deepEqual(calls[2]?.[2], { exactSession: true })
+  assert.equal(calls[3]?.length, 2)
+  assert.equal(calls[4]?.length, 2)
+  // The start's body is the same with or without trust: it is an option of the start, not a field of it.
+  assert.deepEqual(calls[0]?.[0], calls[3]?.[0])
+  assert.equal('trust' in ((calls[0]?.[0] ?? {}) as object), false)
+})

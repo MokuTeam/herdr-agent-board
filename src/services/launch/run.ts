@@ -555,6 +555,12 @@ export function launchRunner({
     l.state = 'trust'
     l.error = ''
     step(l, 'trust')
+    // spawn-agent --trust (#798): answered here, as spawn-agent answers it; one that does not take
+    // (the cursor not found) is the owner's on the card, as without it.
+    if (l.trust) {
+      const a = await answerTrust(l)
+      if (!a.ok) deps.log(`launch ${l.name}: --trust: ${a.error}`)
+    }
     const deadline = Date.now() + 30 * 60_000
     while (Date.now() < deadline && !l.dismissed && !l.closed) {
       await pause(1500)
@@ -593,7 +599,13 @@ export function launchRunner({
       // holds nothing: it is skipped as before.
       const empty = (await inputEmpty(pane)) || (!!l.message && (await pastDialog(l, pane, 'rename')).draft === '')
       try {
-        if (empty && (await claudeRename(pane, l.name)) && nameAgent) {
+        let renamed = empty && (await claudeRename(pane, l.name))
+        // Right after a dialog (the folder trust, #798) Claude can drop the line while it draws its
+        // first screen: once more when its box is empty again (a dialog waited out first), else the
+        // session keeps herdr's own name for it.
+        if (empty && !renamed && (await pastDialog(l, pane, 'rename')).draft === '')
+          renamed = await claudeRename(pane, l.name)
+        if (renamed && nameAgent) {
           const taken = await takenNames()
           await herdr(['agent', 'rename', pane, uniqueSlug(agentSlug(l), taken)])
         }

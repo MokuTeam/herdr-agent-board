@@ -47,3 +47,54 @@ export function relayLine(r: { status: number; body: Record<string, unknown> }):
     return r.body.message
   return null
 }
+
+/** A session of the master's `board agents --json` (core/agent-send.ts AgentView), as far as it is read here. */
+interface ForeignView {
+  key: string
+  names: string[]
+  device: string | null
+}
+
+const viewsOf = (raw: unknown): ForeignView[] =>
+  Array.isArray(raw)
+    ? raw.flatMap(v => {
+        if (typeof v !== 'object' || v === null) return []
+        const r = v as Record<string, unknown>
+        if (typeof r.key !== 'string' || !r.key) return []
+        const names = [r.name, ...(Array.isArray(r.names) ? r.names : [])].filter(
+          (n): n is string => typeof n === 'string' && n !== '',
+        )
+        return [{ key: r.key, names, device: typeof r.device === 'string' && r.device ? r.device : null }]
+      })
+    : []
+
+/**
+ * Another machine's session that `target` names (#798), among the master's `board agents --json`
+ * views: by its key or session id (with or without the device's prefix), else by its name, as
+ * `board archive` finds one of this computer's. Its key in this node's terms: `@<device>:<key>`,
+ * the master's own sessions under the master's id (`masterId`). This node's own sessions (`self`)
+ * are not among them: they were looked for here first. null when none fits; an error when several do
+ * or the master's own one fits and its id is not known.
+ */
+export function foreignMatch(
+  raw: unknown,
+  target: string,
+  self: string,
+  masterId: string,
+): { key: string } | { error: string } | null {
+  const want = target.toLowerCase()
+  const views = viewsOf(raw).filter(v => v.device !== self)
+  const bare = (v: ForeignView): string => (parseNodeKey(v.key)?.key ?? v.key).toLowerCase()
+  let found = views.filter(v => v.key.toLowerCase() === want || bare(v) === want)
+  if (!found.length) found = views.filter(v => v.names.some(n => n.toLowerCase() === want))
+  if (found.length > 1)
+    return {
+      error: `"${target}" fits ${found.length} sessions of other machines (${found.map(v => v.key).join(', ')}); give its key`,
+    }
+  const one = found[0]
+  if (!one) return null
+  if (one.device !== null) return { key: parseNodeKey(one.key) ? one.key : `@${one.device}:${one.key}` }
+  if (!masterId)
+    return { error: `"${target}" is a session of the board's computer, whose id this computer does not know yet` }
+  return { key: `@${masterId}:${one.key}` }
+}

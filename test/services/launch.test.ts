@@ -1181,6 +1181,81 @@ test('Claude asks to trust a new folder: the launch waits on its card, and on re
   noEnv(box)
 }, 40_000)
 
+// spawn-agent --trust (#798): a start the board places carries it, and the board that runs it answers
+// the folder-trust dialog for the launch's own folder, as spawn-agent does. Read only while the
+// board places (`nodes`): a board without it takes no such word from a request.
+const trustedStart = (dir: string, rename: { text: string }[]) => ({
+  ...HERDR,
+  'agent start': { code: 'agent_not_ready', error: 'agent_not_ready: blocked during startup' },
+  'agent get': idle,
+  'pane read': {
+    seq: [
+      { text: trustScreen(dir, { selected: 'no', width: 30 }) },
+      { text: trustScreen(dir, { selected: 'no', width: 30 }) },
+      { text: trustScreen(dir, { selected: 'yes', width: 30 }) },
+      ...rename,
+    ],
+  },
+})
+
+test('#798: a placed start with --trust has its folder trusted by the board itself, then is named and briefed', async () => {
+  const { box, launched, started } = await boardServer({ ...VIA_HERDR, nodes: {} })
+  const dir = join(box.dir, 'a placed project')
+  mkdirSync(dir)
+  box.state(trustedStart(dir, [{ text: 'Session renamed to: Fresh one' }]))
+  const id = await started({
+    name: 'Fresh one',
+    cwd: dir,
+    category: 'acme',
+    workspace: { id: 'wA' },
+    message: 'Say hello.',
+    trust: true,
+  })
+  const l = await launched(id)
+  assert.equal(l.state, 'done', l.error)
+  assert.deepEqual(keysSent(box), ['wA:p9 down', 'wA:p9 enter'])
+  assert.deepEqual(promptsSent(box), ['wA:p9 /rename Fresh one', 'wA:p9 Say hello.'])
+}, 40_000)
+
+test('#798: a /rename Claude drops right after the trust dialog is typed once more, so the start keeps its name', async () => {
+  const { box, launched, started } = await boardServer({ ...VIA_HERDR, nodes: {} })
+  const dir = join(box.dir, 'a placed project')
+  mkdirSync(dir)
+  // Ten reads with no "Session renamed": the first /rename went nowhere; the second one takes.
+  const nothing = Array.from({ length: 10 }, () => ({ text: 'Claude Code' }))
+  box.state(trustedStart(dir, [...nothing, { text: 'Session renamed to: Fresh one' }]))
+  const id = await started({
+    name: 'Fresh one',
+    cwd: dir,
+    category: 'acme',
+    workspace: { id: 'wA' },
+    message: 'Say hello.',
+    trust: true,
+  })
+  const l = await launched(id)
+  assert.equal(l.state, 'done', l.error)
+  assert.deepEqual(promptsSent(box), ['wA:p9 /rename Fresh one', 'wA:p9 /rename Fresh one', 'wA:p9 Say hello.'])
+}, 40_000)
+
+test('#798: without nodes a request that says trust is as before: the card asks, no key goes', async () => {
+  const { box, board, started } = await boardServer(VIA_HERDR)
+  const dir = join(box.dir, 'a fresh project')
+  mkdirSync(dir)
+  box.state({ ...trustedStart(dir, []), 'agent get': blocked })
+  const id = await started({
+    name: 'Fresh one',
+    cwd: dir,
+    category: 'acme',
+    workspace: { id: 'wA' },
+    message: 'Say hello.',
+    trust: true,
+  })
+  await launchState(board, id, l => l?.state === 'trust', 'never asked to trust')
+  await sleep(300)
+  assert.deepEqual(keysSent(box), [])
+  assert.deepEqual(promptsSent(box), [])
+}, 40_000)
+
 // A dialog Claude draws after herdr called it ready (#602): on the owner's first node the Code Mode
 // notice came up once the folder was trusted, and its chosen answer, "❯ No, start without it", was
 // taken for text typed into the prompt: the launch failed its first message.

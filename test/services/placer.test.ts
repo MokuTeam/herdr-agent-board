@@ -394,6 +394,41 @@ test('the same id posted twice to a node’s door is one session there', async (
   assert.equal(anon.status, 401)
 }, 60_000)
 
+/** The bodies of the starts a node's door was sent, in order. */
+const launchBodies = (node: Pair['nodes'][0]): Record<string, unknown>[] =>
+  node.proxy.received.filter(r => r.request === 'POST /api/node/launch').map(r => JSON.parse(r.body))
+
+test('a start with trust is sent to the node’s door with trust: true; one without it sends no trust key (#798)', async () => {
+  const pair = await placing({ count: 1, nodes: { order: ['server-1', 'local'] } })
+  const node = pair.nodes[0] as Pair['nodes'][0]
+  await startAt(pair.master.url, pair.checkout, 'atlas plain')
+  await until(() => launchBodies(node).length === 1, 20_000)
+  await startAt(pair.master.url, pair.checkout, 'atlas trusted', { trust: true })
+  await until(() => launchBodies(node).length === 2, 20_000)
+  await startAt(pair.master.url, pair.checkout, 'atlas not trusted', { trust: false })
+  await until(() => launchBodies(node).length === 3, 20_000)
+  const [plain, trusted, off] = launchBodies(node) as [
+    Record<string, unknown>,
+    Record<string, unknown>,
+    Record<string, unknown>,
+  ]
+  assert.equal(trusted.name, 'atlas trusted')
+  assert.equal(trusted.trust, true)
+  // What a start without --trust sends is what it sent before: the same fields, none of them trust.
+  for (const body of [plain, off]) {
+    assert.equal('trust' in body, false, JSON.stringify(body))
+    assert.deepEqual(
+      Object.keys(body).sort(),
+      Object.keys(trusted)
+        .filter(k => k !== 'trust')
+        .sort(),
+    )
+  }
+  assert.deepEqual({ ...trusted, id: '', name: '', trust: undefined }, { ...plain, id: '', name: '', trust: undefined })
+  assert.equal(plain.name, 'atlas plain')
+  await settled(pair.master.url)
+}, 60_000)
+
 test('a node that answers full sends the start to the next device; its card says who turned it away', async () => {
   const pair = await placing({ nodes: { order: ['server-1', 'server-2', 'local'], whenFull: 'wait' } })
   const [one, two] = pair.nodes as [Pair['nodes'][0], Pair['nodes'][0]]

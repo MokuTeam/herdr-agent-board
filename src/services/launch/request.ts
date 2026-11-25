@@ -81,6 +81,11 @@ export interface LaunchRequest {
   remote?: string
   /** Codex's reasoning effort (`-c model_reasoning_effort=…`), one its model supports. */
   effort?: string
+  /**
+   * spawn-agent --trust (#798): the board that runs it answers Claude's folder-trust dialog for the
+   * launch's own folder instead of asking on its card. Read only while the board places.
+   */
+  trust?: true
 }
 
 /** "Where" in a launch request (#504): a device of `nodes` (`local` for this computer), or a tag. */
@@ -230,6 +235,7 @@ export async function checkRequest(
     message,
     worktree,
     parent,
+    ...(pins && b.trust === true && { trust: true as const }),
   }
   const none = { profile: '', profileDir: '', configDir: null, profileArgs: [], profileCommand: null }
   if (codexFork) return { ok: true, launch: { ...common, codexFork, agent: CODEX_AGENT, model: null, ...none } }

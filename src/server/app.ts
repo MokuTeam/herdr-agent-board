@@ -1930,6 +1930,7 @@ export async function startServer({
       start: (body, session, o) =>
         launches.start(body, board.items(), {
           node: { session, ...(o?.exactSession && { exactSession: true }) },
+          ...(o?.trust && { trust: true }),
         }),
       launch: id => launches.list().find(l => l.id === id),
       profiles: () => deps.profiles(),
@@ -2429,6 +2430,9 @@ export async function startServer({
         profiles: () => deps.profiles(),
         workspaces: () => workspaceList(8000),
         herdrName: async pane => (await import('../services/launch/spawn-board.ts')).herdrName(pane),
+        dismiss: id => {
+          launches.dismiss(id)
+        },
       },
     })
     const masterCheckouts = createCheckouts()

@@ -541,6 +541,8 @@ export function createPlacer(o: PlacerOptions): Placer {
           ? { kind: 'path', cwd: l.cwd, worktree: l.worktree }
           : h.source,
       ...(l.exactSession && { exactSession: true }),
+      // spawn-agent --trust (#798): the node answers the folder-trust dialog for its folder.
+      ...(l.trust && { trust: true }),
     }
   }
 

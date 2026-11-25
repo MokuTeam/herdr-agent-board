@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseArgs, type SpawnOptions } from '../../src/core/launch/spawn-args.ts'
-import { type SpawnCall, spawnCallOf } from '../../src/core/launch/spawn-node.ts'
+import { type SpawnCall, spawnCallArgv, spawnCallOf } from '../../src/core/launch/spawn-node.ts'
 import type { NodeConfig } from '../../src/core/nodes.ts'
 import type { NodeCall, NodeCallAnswer } from '../../src/entrypoints/node-call.ts'
 import { type AskMasterDeps, askMaster } from '../../src/services/launch/spawn-node.ts'
@@ -174,5 +174,78 @@ describe('a node’s spawn-agent asks its master (#760)', () => {
     expect(await askMaster(opts(folder()), node, d)).toBeNull()
     expect(calls).toEqual([])
     expect(logs[0]).toContain('this session is not on the board')
+  })
+
+  test('--trust goes up in the call as trust: true; a start without it sends a call with no trust key (#798)', async () => {
+    const cwd = folder()
+    const line = `pane=@server-2:w5:p1 name=Atlas worker agent=atlas device=server-2 session=${SID}`
+    const trusted = deps(answered(0, [line]))
+    expect(await askMaster(opts(cwd, '--trust'), node, trusted.d)).toBe(line)
+    expect(spawnCallOf((trusted.calls[0] as NodeCall).argv)).toEqual({
+      name: 'Atlas worker',
+      cwd,
+      message: 'Fix the parser.',
+      timeoutSec: 120,
+      workspace: 'Atlas',
+      facts,
+      profile: 'default',
+      trust: true,
+    } satisfies SpawnCall)
+    // With --device the same: trust rides with the machine named.
+    const pinned = deps(answered(0, [line]))
+    await askMaster(opts(cwd, '--trust', '--device', 'server-2'), node, pinned.d)
+    expect(spawnCallOf((pinned.calls[0] as NodeCall).argv)).toMatchObject({ device: 'server-2', trust: true })
+    // Without it the call is the one it was before: no trust key in what goes up the uplink.
+    const plain = deps(answered(0, [line]))
+    await askMaster(opts(cwd), node, plain.d)
+    const sent = JSON.parse((plain.calls[0] as NodeCall).argv[0] ?? '{}') as Record<string, unknown>
+    expect(Object.keys(sent).sort()).toEqual(['cwd', 'facts', 'message', 'name', 'profile', 'timeoutSec', 'workspace'])
+    expect(spawnCallOf((plain.calls[0] as NodeCall).argv)).not.toHaveProperty('trust')
+  })
+
+  test('a start with --trust that the master turned away or could not place still starts here, asking nothing more of it (#798)', async () => {
+    const turned = deps(answered(3, [], ['No device can take it: server-1 is paused']))
+    expect(await askMaster(opts(folder(), '--trust'), node, turned.d)).toBeNull()
+    expect(turned.calls.length).toBe(1)
+    expect(spawnCallOf((turned.calls[0] as NodeCall).argv)?.trust).toBe(true)
+    expect(turned.logs.join('\n')).toContain('starting it on this computer')
+    const unreachable = deps({ state: 'unreachable' })
+    expect(await askMaster(opts(folder(), '--trust'), node, unreachable.d)).toBeNull()
+    await expect(
+      askMaster(opts(folder(), '--trust', '--device', 'server-2'), node, deps({ state: 'unreachable' }).d),
+    ).rejects.toThrow("--device server-2: the board's computer is not reachable")
+  })
+})
+
+describe('the call a node sends its master, trust (#798)', () => {
+  const base: SpawnCall = {
+    name: 'Atlas worker',
+    cwd: '/home/anna/work/atlas',
+    message: 'Fix the parser.',
+    timeoutSec: 120,
+    workspace: 'Atlas',
+    facts,
+  }
+  const read = (more: Record<string, unknown>) => spawnCallOf([JSON.stringify({ ...base, ...more })])
+
+  test('trust: true is kept; a call without it reads back with no trust key', () => {
+    expect(read({ trust: true })).toEqual({ ...base, trust: true })
+    const plain = read({})
+    expect(plain).toEqual(base)
+    expect(plain).not.toHaveProperty('trust')
+    expect(spawnCallOf(spawnCallArgv({ ...base, trust: true }))).toEqual({ ...base, trust: true })
+  })
+
+  test('a trust that is there and is not true is no call: false, a string, a number, null, an object', () => {
+    for (const trust of [false, 'true', 'yes', 1, 0, null, {}, []])
+      expect(read({ trust }), JSON.stringify(trust)).toBeNull()
+    // The rest of the call is read as before.
+    expect(read({ name: '' })).toBeNull()
+    expect(read({ device: 'laptop', profile: 'default', model: 'opus' })).toEqual({
+      ...base,
+      device: 'laptop',
+      profile: 'default',
+      model: 'opus',
+    })
   })
 })

@@ -237,3 +237,112 @@ test('the start is noted as taken before it is followed, never when refused; a W
   await spawnFrom('laptop', who, ask(), b.d)
   expect(taken).toBe(false)
 })
+
+/** What the board's own launch shows once the placer failed it before anything ran. */
+const failedAt =
+  (place: Record<string, unknown>, error = '') =>
+  () => ({
+    items: [],
+    launches: [{ id: 'abcd1234', name: 'Atlas worker', state: 'failed', error, place }],
+  })
+/** The ids the board is asked to take off its list (launches.dismiss, #798). */
+const dismissing = (d: SpawnFromDeps): string[] => {
+  const ids: string[] = []
+  d.dismiss = id => {
+    ids.push(id)
+  }
+  return ids
+}
+
+describe('a node’s start with --trust on its master (#798)', () => {
+  test('trust goes on to the board’s start as an option; a start without it has no trust key, body or options', async () => {
+    const trusted = deps({ payload: onNode('server-1') })
+    expect((await spawnFrom('laptop', who, ask({ trust: true }), trusted.d)).code).toBe(0)
+    expect(trusted.started[0]?.options).toEqual({ byHand: false, origin: { device: 'laptop', facts }, trust: true })
+    const plain = deps({ payload: onNode('server-1') })
+    expect((await spawnFrom('laptop', who, ask(), plain.d)).code).toBe(0)
+    expect(Object.keys(plain.started[0]?.options ?? {}).sort()).toEqual(['byHand', 'origin'])
+    // The body is the same either way: --trust is the start's option, never one of the request's fields.
+    expect(trusted.started[0]?.body).toEqual(plain.started[0]?.body)
+    expect('trust' in (plain.started[0]?.body ?? {})).toBe(false)
+    expect('trust' in (trusted.started[0]?.body ?? {})).toBe(false)
+  })
+
+  test('with no folder on the node, a device named takes it with trust; without it the options hold byHand only', async () => {
+    const trusted = deps({ payload: onNode('server-1') })
+    expect(
+      (await spawnFrom('laptop', who, ask({ facts: null, device: 'server-1', trust: true }), trusted.d)).code,
+    ).toBe(0)
+    expect(trusted.started[0]?.options).toEqual({ byHand: false, trust: true })
+    const plain = deps({ payload: onNode('server-1') })
+    expect((await spawnFrom('laptop', who, ask({ facts: null, device: 'server-1' }), plain.d)).code).toBe(0)
+    expect(Object.keys(plain.started[0]?.options ?? {})).toEqual(['byHand'])
+  })
+
+  test('a trust that is not true is no call the board reads: refused before anything starts (exit 3)', async () => {
+    const { d, started } = deps()
+    for (const trust of [false, 'yes', 1, null]) {
+      const argv = [JSON.stringify({ ...JSON.parse(ask().argv[0] ?? '{}'), trust })]
+      expect((await spawnFrom('laptop', who, { ...ask(), argv }, d)).code).toBe(3)
+    }
+    expect(started).toEqual([])
+  })
+
+  test('a start refused in placement is taken off the board, with or without trust; one the board cannot take off still answers exit 3', async () => {
+    for (const trust of [true, undefined]) {
+      for (const place of [
+        { refuse: { kind: 'unfit', devices: [{ device: 'server-1', kind: 'paused' }] } },
+        { queueFull: true },
+        { checkout: 'could not clone it' },
+      ]) {
+        const { d } = deps({ payload: failedAt(place) })
+        const dismissed = dismissing(d)
+        const r = await spawnFrom('laptop', who, ask(trust ? { trust } : {}), d)
+        expect(r.code, JSON.stringify(place)).toBe(3)
+        expect(dismissed, JSON.stringify(place)).toEqual(['abcd1234'])
+      }
+    }
+    // A board that gives no way to take it off (an older caller) answers the same.
+    const bare = deps({ payload: failedAt({ queueFull: true }) })
+    expect((await spawnFrom('laptop', who, ask(), bare.d)).code).toBe(3)
+  })
+
+  test('a start that failed after the board took it is not taken off its card: exit 1, the card stays', async () => {
+    // The board's own launch failed with an error of its own, none of placement's.
+    const own = deps({ payload: failedAt({}, 'claude exited') })
+    const ids = dismissing(own.d)
+    expect(await spawnFrom('laptop', who, ask(), own.d)).toEqual({ code: 1, out: [], err: ['claude exited'] })
+    expect(ids).toEqual([])
+    // The node's launch, once it shows it, failed there.
+    const away = deps()
+    const gone = dismissing(away.d)
+    let n = 0
+    away.d.payload = async () =>
+      n++ < 1
+        ? { items: [], launches: [{ id: 'abcd1234', state: 'starting', place: { device: 'server-1' } }] }
+        : {
+            items: [],
+            launches: [{ id: `@server-1:${SID}`, device: 'server-1', state: 'failed', error: 'claude exited' }],
+          }
+    expect((await spawnFrom('laptop', who, ask({ device: 'server-1', trust: true }), away.d)).code).toBe(1)
+    expect(gone).toEqual([])
+    // A launch the board still holds in a state that is not a failure is left alone too.
+    const waiting = deps({
+      payload: () => ({ items: [], launches: [{ id: 'abcd1234', state: 'trust', place: { device: 'laptop' } }] }),
+    })
+    const kept = dismissing(waiting.d)
+    expect((await spawnFrom('laptop', who, ask({ trust: true }), waiting.d)).code).toBe(1)
+    expect(kept).toEqual([])
+  })
+
+  test('a start the board itself turns away dismisses nothing: there is no launch to take off', async () => {
+    const { d } = deps({ refuse: 'no folder there' })
+    const dismissed = dismissing(d)
+    expect(await spawnFrom('laptop', who, ask({ trust: true }), d)).toEqual({
+      code: 3,
+      out: [],
+      err: ['no folder there (cwd)'],
+    })
+    expect(dismissed).toEqual([])
+  })
+})

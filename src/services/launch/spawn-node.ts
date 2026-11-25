@@ -153,6 +153,7 @@ export async function askMaster(o: SpawnOptions, node: NodeConfig, d: AskMasterD
     ...(o.agent !== undefined && { agent: o.agent }),
     ...(target.profile && { profile: target.profile.id }),
     ...(o.device !== undefined && { device: o.device }),
+    ...(o.trust && { trust: true as const }),
   }
   const argv = spawnCallArgv(req)
   if ((argv[0] ?? '').length > CALL_CHARS) return here("the brief is too long to send to the board's computer")

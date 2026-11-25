@@ -303,7 +303,8 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
       ...(sessionId !== undefined ? ['--session-id'] : []),
       ...(configDir !== undefined ? ['--config-dir'] : []),
       ...(keepEnv ? ['--keep-env'] : []),
-      ...(trust ? ['--trust'] : []),
+      // --trust goes with a placed Claude start (#798); with another agent the start stays here.
+      ...(trust && (pi || agy || codex) ? ['--trust'] : []),
       ...(workdeskWorker ? ['--workdesk-worker'] : []),
       ...(thread ? ['--thread'] : []),
     ]

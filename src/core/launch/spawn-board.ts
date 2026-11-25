@@ -10,8 +10,9 @@ import type { SpawnOptions } from './spawn-args.ts'
 /**
  * Whether the placer may take this start: a new session an agent asks for. Not a resume, a fork,
  * a start in a pane, a Workdesk worker, nor a start that names its session id or its profile
- * folder (the board's own launcher calling, --session-id, --config-dir, --keep-env). Nor one with
- * --trust: the board's starts do not answer the trust dialog for the agent, its card asks the owner.
+ * folder (the board's own launcher calling, --session-id, --config-dir, --keep-env). --trust goes
+ * with the start (#798): the board that runs it answers the folder-trust dialog for its own folder,
+ * as spawn-agent does; with another agent than Claude (Antigravity's own dialog, #648) it stays here.
  */
 export const placeable = (o: SpawnOptions): boolean =>
   o.resume === undefined &&
@@ -21,7 +22,7 @@ export const placeable = (o: SpawnOptions): boolean =>
   o.sessionId === undefined &&
   o.configDir === undefined &&
   !o.keepEnv &&
-  !o.trust
+  (!o.trust || o.agent === undefined)
 
 /** The session that runs spawn-agent, as the board shows it: by its Claude or Antigravity id, else by its herdr pane. */
 export function callerOf(items: readonly Item[], env: Record<string, string | undefined>): Item | undefined {
@@ -61,6 +62,8 @@ export function launchBody(o: SpawnOptions, f: BoardStartFacts): Record<string, 
     ...(f.parent && { parent: f.parent }),
     ...(o.model && { model: o.model }),
     ...(o.agent && { agent: o.agent }),
+    // --trust (#798): read only while the board places.
+    ...(o.trust && { trust: true }),
     // --device (#760): the board's "Where", read only while it has `nodes`.
     ...(o.device && { pin: { device: o.device } }),
     byHand: false,

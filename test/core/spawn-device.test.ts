@@ -31,13 +31,19 @@ describe('--device on the command line', () => {
       ['--session-id', uuid],
       ['--config-dir', '/x'],
       ['--keep-env'],
-      ['--trust'],
       ['--workdesk-worker'],
       ['--thread', 'atlas-12'],
     ] as string[][])
       expect(() => parsed('--device', 'server-2', flag as string, ...rest)).toThrow(
         new RegExp(`--device places a new session: give it no ${flag}`),
       )
+  })
+
+  test('--trust goes with a placed Claude start (#798); with another agent it is refused', () => {
+    expect(parsed('--device', 'server-2', '--trust').trust).toBe(true)
+    expect(() => parsed('--device', 'server-2', '--trust', '--agent', 'pi')).toThrow(
+      /--device places a new session: give it no --trust/,
+    )
   })
 
   test('the board is asked to pin the start to it; without it the request is as before', () => {

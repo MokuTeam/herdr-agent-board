@@ -55,6 +55,8 @@ export interface NodeLaunchRequest {
   workspace: string
   /** True when `id` must be used as the exact Claude session id (a verifier, #675). */
   exactSession?: boolean
+  /** spawn-agent --trust (#798): this board answers Claude's folder-trust dialog for the folder. */
+  trust?: boolean
   source:
     | {
         kind: 'repo'
@@ -77,7 +79,7 @@ export type NodeLaunchAnswer =
 export interface NodeLaunchDeps {
   node: () => NodeConfig | null
   /** The node's own launches.start, with the session id the master picked. */
-  start: (body: unknown, session: string, options?: { exactSession?: boolean }) => Promise<StartResult>
+  start: (body: unknown, session: string, options?: { exactSession?: boolean; trust?: boolean }) => Promise<StartResult>
   /** The node's launch by its id now, for the answer to an id it has. */
   launch: (id: string) => LaunchView | undefined
   profiles: () => ProfileSet
@@ -120,6 +122,7 @@ export function launchRequestOf(raw: unknown): NodeLaunchRequest | { field: stri
   const s = b.source
   if (!isObject(s)) return { field: 'source' }
   if (b.exactSession !== undefined && typeof b.exactSession !== 'boolean') return { field: 'exactSession' }
+  if (b.trust !== undefined && typeof b.trust !== 'boolean') return { field: 'trust' }
   const worktree = worktreeOf(s.worktree)
   if (worktree === undefined) return { field: 'source.worktree' }
   let source: NodeLaunchRequest['source']
@@ -151,6 +154,7 @@ export function launchRequestOf(raw: unknown): NodeLaunchRequest | { field: stri
     message: str(b.message),
     workspace: str(b.workspace).trim(),
     ...(b.exactSession === true && { exactSession: true }),
+    ...(b.trust === true && { trust: true }),
     source,
   }
 }
@@ -242,7 +246,9 @@ export function createNodeLaunch(d: NodeLaunchDeps): NodeLaunch {
           model: r.model,
         },
         r.id,
-        ...(r.exactSession ? [{ exactSession: true }] : []),
+        ...(r.exactSession || r.trust
+          ? [{ ...(r.exactSession && { exactSession: true }), ...(r.trust && { trust: true }) }]
+          : []),
       )
     } catch (err) {
       started = { ok: false, field: 'launch', error: err instanceof Error ? err.message : String(err) }
