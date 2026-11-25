@@ -116,6 +116,8 @@ describe('the door takes what 6.2 lists', () => {
       ['POST', String(/^\/api\/node\/master-relay\/res\/[A-Za-z0-9_-]{8,64}$/)],
       ['POST', String(/^\/api\/node\/master-relay\/stream\/[A-Za-z0-9_-]{8,64}$/)],
       ['POST', '/api/node/master-flags'],
+      ['GET', '/api/node/desk'],
+      ['POST', '/api/node/desk-toast'],
       ['POST', '/api/node/relay-key'],
       ['POST', '/api/node/telegram'],
       ['GET', '/api/node/handover/check'],

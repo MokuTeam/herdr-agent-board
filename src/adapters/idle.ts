@@ -119,6 +119,18 @@ async function linux(env: Env, x: Exec, now: () => number): Promise<Observation>
   return combine(parts)
 }
 
+/**
+ * Whether this computer has a desktop the owner could sit at (#788): Windows and macOS do; Linux
+ * only with a graphical session (an X or Wayland display, or a session logind calls graphical). A
+ * server reached by ssh has none, so a master there is no desk of the owner's.
+ */
+export function hasDesktop(platform: NodeJS.Platform = process.platform, env: Env = process.env): boolean {
+  if (platform === 'win32' || platform === 'darwin') return true
+  if (env.DISPLAY || env.WAYLAND_DISPLAY) return true
+  const type = (env.XDG_SESSION_TYPE ?? '').toLowerCase()
+  return type === 'x11' || type === 'wayland'
+}
+
 /** What the computer says now. */
 export async function observe(
   platform: NodeJS.Platform = process.platform,

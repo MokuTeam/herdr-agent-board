@@ -111,6 +111,8 @@ if (mode === 'open') {
     // Never this computer's idle time: presence detection hears nothing unless a test says so
     // (TEST_PRESENCE_OBS: a file with the observation), every TEST_PRESENCE_MS when given.
     ...(Number(process.env.TEST_PRESENCE_MS) > 0 && { presenceIntervalMs: Number(process.env.TEST_PRESENCE_MS) }),
+    // TEST_PRESENCE_DESKTOP=0: a computer without a desktop (a headless master, #788); a desktop otherwise.
+    presenceDesktop: () => process.env.TEST_PRESENCE_DESKTOP !== '0',
     presenceObserve: async () => {
       const file = process.env.TEST_PRESENCE_OBS
       return file && existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : { idleSec: null, locked: null }

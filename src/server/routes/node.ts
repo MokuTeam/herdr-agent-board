@@ -22,6 +22,7 @@ import {
 import type { MoveIn } from '../../services/move-in.ts'
 import type { MoveOut } from '../../services/move-out.ts'
 import type { Answer, NodeBundle } from '../../services/node/bundle.ts'
+import type { NodeDesk } from '../../services/node/desk.ts'
 import type { NodeHandover } from '../../services/node/handover.ts'
 import type { NodeLaunchAnswer } from '../../services/node/launch.ts'
 import type { NodeMasterFlags } from '../../services/node/master-flags.ts'
@@ -72,6 +73,8 @@ export interface NodeDoorSources {
   masterRelay?: MasterRelay
   /** `POST /api/node/master-flags` (#775, services/node/master-flags.ts): the master's feature flags. */
   masterFlags?: Pick<NodeMasterFlags, 'take'>
+  /** `GET /api/node/desk` and `POST /api/node/desk-toast` (#788, services/node/desk.ts): the owner's desk. */
+  desk?: NodeDesk
   /** `POST /api/node/relay-key` (#513): activates a staged fresh relay dial key after claim. */
   relayKey?(publicKey: string): Promise<Answer>
   /** `POST /api/node/telegram` (#701): routes a Telegram topic batch on this node. */
@@ -218,6 +221,7 @@ export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
     ...(o.pilotBridge ? pilotBridgeDoorRoutes(o.pilotBridge) : []),
     ...(o.masterRelay ? masterRelayDoorRoutes(o.masterRelay) : []),
     ...(o.masterFlags ? [masterFlagsDoorRoute(o.masterFlags)] : []),
+    ...(o.desk ? deskDoorRoutes(o.desk) : []),
     ...(relayKey
       ? [
           {
@@ -478,6 +482,22 @@ function masterFlagsDoorRoute(flags: Pick<NodeMasterFlags, 'take'>): Route {
       return answer(flags.take(body))
     },
   }
+}
+
+/** The owner's desk (#788): the master's ask for this computer's idle time, and its notifications. */
+function deskDoorRoutes(desk: NodeDesk): Route[] {
+  return [
+    { method: 'GET', path: '/api/node/desk', handle: async () => json(200, await desk.answer()) },
+    {
+      method: 'POST',
+      path: '/api/node/desk-toast',
+      async handle(req) {
+        const body = await jsonUpTo(req, 16 * 1024)
+        if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+        return answer(desk.toast(body))
+      },
+    },
+  ]
 }
 
 /** The door's side of the relay to the master (#764, services/node/master-relay.ts): the master's stream and its answers. */

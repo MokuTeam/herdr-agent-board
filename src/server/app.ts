@@ -33,6 +33,7 @@ import {
   writeHandoverState,
 } from '../adapters/handover-store.ts'
 import { workspaceList } from '../adapters/herdr.ts'
+import { hasDesktop, observe as observeComputer } from '../adapters/idle.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { activateNodeRelayKey, createNodeJoinStore, stageNodeRelayKey } from '../adapters/node-join-store.ts'
 import {
@@ -147,7 +148,8 @@ import { watchesConfig } from '../core/watches.ts'
 import { threadsConfig, verifyKeptOff } from '../core/work-threads.ts'
 import { workdeskConfig } from '../core/workdesk.ts'
 import { workdeskEventsConfig } from '../core/workdesk-events.ts'
-import { teamDesktop } from '../integrations/team-toast.ts'
+import { type ReminderDesktop, reminderDesktop } from '../integrations/reminder-toast.ts'
+import { type TeamDesktop, teamDesktop } from '../integrations/team-toast.ts'
 import { createAccess } from '../services/access.ts'
 import { askArchive } from '../services/archive.ts'
 import { backupView, startBackups } from '../services/backup.ts'
@@ -168,6 +170,7 @@ import { createMoveIn, type MoveIn } from '../services/move-in.ts'
 import { createMoveOut, type MoveOut } from '../services/move-out.ts'
 import { createNodeBundle, nodeBundleDeps } from '../services/node/bundle.ts'
 import { createCheckouts } from '../services/node/checkout.ts'
+import { createNodeDesk } from '../services/node/desk.ts'
 import { createNodeGit } from '../services/node/git-access.ts'
 import { createLocalRelayOps, createNodeHandover } from '../services/node/handover.ts'
 import { createNodeLaunch } from '../services/node/launch.ts'
@@ -192,6 +195,7 @@ import {
   probeComputerDoor,
   readRelayHostKey,
 } from '../services/nodes/computer-setup-io.ts'
+import { createDesks } from '../services/nodes/desks.ts'
 import { createMasterHandover, type MasterHandover } from '../services/nodes/handover.ts'
 import { createNodeLinks, linkTimes, type NodeLinks } from '../services/nodes/links.ts'
 import { masterFlagsFor } from '../services/nodes/master-flags.ts'
@@ -401,6 +405,8 @@ export interface ServerOptions {
   presenceObserve?: () => Promise<Observation>
   /** How often detection asks (30 s); tests ask sooner. */
   presenceIntervalMs?: number
+  /** Whether this computer has a desktop (adapters/idle.ts hasDesktop, #788); tests say. */
+  presenceDesktop?: () => boolean
 }
 
 /** The forms that add a device to this board (Settings → Devices), a master's alone. */
@@ -418,6 +424,7 @@ export async function startServer({
   wakeStarter,
   presenceObserve,
   presenceIntervalMs,
+  presenceDesktop,
 }: ServerOptions): Promise<BoardServer> {
   const { cfg, log } = deps
   const initialNoFileCfg = readConfigFile() === null ? structuredClone(cfg) : null
@@ -769,11 +776,35 @@ export async function startServer({
   })
   // A master's nodes hear of a change of the user's presence (#775); set once the relay runner is made.
   let presenceToNodes = (): void => {}
+  // This computer's desk (#788): its idle time and its own notifiers, made when first used.
+  const desktopHere = presenceDesktop ?? (() => hasDesktop())
+  const observeHere = presenceObserve ?? (() => observeComputer())
+  let ownReminders: ReminderDesktop | undefined
+  let ownTeam: TeamDesktop | undefined
+  const localReminders = (): ReminderDesktop => (ownReminders ??= reminderDesktop(log))
+  const localTeam = (): TeamDesktop => (ownTeam ??= teamDesktop(log))
+  // A master's desks (#788, services/nodes/desks.ts): with `nodes` on, presence reads the most
+  // recently active of its nodes' computers and its own (only where it has a desktop), and the
+  // reminders and Team's notifications go to that one. Without `nodes` none of it is asked: the
+  // board reads its own computer and shows its own notifications, as before.
+  const desks = createDesks({
+    on: () => nodesConfig(cfg.nodes) !== null,
+    links: () => nodeLinks,
+    deviceIds: () => Object.keys(nodesConfig(cfg.nodes)?.devices ?? {}).filter(id => id !== LOCAL),
+    ownerAllowed(id) {
+      const d = nodesConfig(cfg.nodes, hostname())?.devices[id]
+      return !!d && !d.revoked && d.owner !== false && id !== LOCAL
+    },
+    desktopHere,
+    observeHere,
+    local: { reminder: localReminders, team: localTeam },
+    log,
+  })
   // The user's presence (#172): nothing is read, asked or shown while config.json has no `presence`.
   const presence = createPresence({
     cfg,
     log,
-    ...(presenceObserve && { observe: presenceObserve }),
+    observe: () => (desks.on() ? desks.observe() : observeHere()),
     ...(presenceIntervalMs && { intervalMs: presenceIntervalMs }),
     onChange: () => {
       board.publish()
@@ -800,7 +831,7 @@ export async function startServer({
   let teamNotify: TeamNotify | null = null
   const notifyOf = (): TeamNotify =>
     (teamNotify ??= createTeamNotify({
-      desktop: teamDesktop(log),
+      desktop: { show: toast => (desks.on() ? desks.team : localTeam()).show(toast) },
       // The service's own name for a peer (roster, pins, the key's start), one line, cut.
       nameOf: peer => toastBody(team.nameOf(peer), MAX_NAME),
     }))
@@ -980,7 +1011,15 @@ export async function startServer({
   })
   // Its reminders (#335): while the calendar and its reminders are on, one timer for the next one
   // due, the desktop's notification and the payload's reminders on show; off, no timer.
-  const reminders = createCalendarReminders({ cfg, log, onChange: () => board.publish() })
+  const reminders = createCalendarReminders({
+    cfg,
+    log,
+    onChange: () => board.publish(),
+    desktop: {
+      show: toast => (desks.on() ? desks.reminder : localReminders()).show(toast),
+      clear: id => (desks.on() ? desks.reminder : localReminders()).clear(id),
+    },
+  })
   // The line's revision moves with every copy written and every board event changed, an agent's
   // `board cal push` or `add` too: the reminders look again then.
   let calendarRev = ''
@@ -1955,6 +1994,8 @@ export async function startServer({
             return answer
           },
         },
+        // The owner's desk (#788): the master asks this computer's idle time and sends its notifications here.
+        desk: createNodeDesk({ desktop: desktopHere, observe: observeHere, reminder: localReminders, team: localTeam }),
         telegram: nodeTelegram,
         relayKey: async publicKey => {
           const r = activateNodeRelayKey(publicKey, nodeDir())

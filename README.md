@@ -2417,6 +2417,17 @@ Detection asks the computer every 30 seconds (`src/adapters/idle.ts`), only whil
 
 `detects` in `GET /api/presence` says whether this computer told the board anything at its last ask.
 
+With devices (a master with `nodes`), the board does not read only its own computer. Each ask goes
+to every online device the owner's mesh counts as well (its door's `GET /api/node/desk`), and the
+master's own computer joins only where it has a desktop (Windows, macOS, or Linux with a display
+or a graphical session). The most recently active desk stands for you: you count as away once every
+desk is idle past the limit or locked (a desk that stops answering, its lid closed, counts as idle
+since you last touched it there), and a headless master with no desk heard from changes
+nothing by itself. Calendar reminders and Team notifications go to that one desk, once, shown with
+its own notifier; when no desk answers, the master shows them only if it has a desktop
+(`src/core/desk.ts`, `src/services/nodes/desks.ts`, `src/services/node/desk.ts`). A board
+without devices reads its own computer and shows its own notifications, as before.
+
 MokuPilot's calls: while a call runs, MokuPilot keeps `call.json` in its state folder
 (`~/.meeting-copilot`), with its process id and the call's start, and takes it away when the call
 ends. Detection reads it on each ask. A file whose process is gone (MokuPilot ended without taking

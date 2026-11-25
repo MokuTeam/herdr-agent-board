@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import {
   combine,
   type Exec,
+  hasDesktop,
   observe,
   parseIoreg,
   parseLoginctl,
@@ -110,4 +111,15 @@ test('Linux: xprintidle on X11 only, GNOME over D-Bus, logind, a running locker'
     idleSec: null,
     locked: false,
   })
+})
+
+test('hasDesktop (#788): Windows and macOS do; Linux only with a display or a graphical session', () => {
+  assert.equal(hasDesktop('win32', {}), true)
+  assert.equal(hasDesktop('darwin', {}), true)
+  assert.equal(hasDesktop('linux', { DISPLAY: ':0' }), true)
+  assert.equal(hasDesktop('linux', { WAYLAND_DISPLAY: 'wayland-1' }), true)
+  assert.equal(hasDesktop('linux', { XDG_SESSION_TYPE: 'wayland' }), true)
+  // A server reached by ssh: a tty session, no display.
+  assert.equal(hasDesktop('linux', { XDG_SESSION_TYPE: 'tty', SSH_CONNECTION: '10.0.0.2 5 10.0.0.1 22' }), false)
+  assert.equal(hasDesktop('linux', {}), false)
 })
