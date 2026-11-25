@@ -155,6 +155,8 @@ export function decisionsRoutes(app: DecisionsApp): Route[] {
     withDecisionsDb(db =>
       closeCardDecision(db, key, { answer: text, answeredBy: 'owner', via, at: now() }, { id, ask: true, by: 'owner' }),
     )
+    // The payload at once (#784): a node's page asks the master's decisions as soon as this answers.
+    app.changed?.()
     app.refresh()
     // The answer is in the session and the record; its going out to the peers waits for the passkey.
     if (wait) return wait
@@ -189,6 +191,8 @@ export function decisionsRoutes(app: DecisionsApp): Route[] {
           } catch (err) {
             return refused(err)
           }
+          // The payload at once (#784): a node's page asks the master's decisions as soon as this answers.
+          app.changed?.()
           app.refresh()
           return json(200, { ok: true })
         }

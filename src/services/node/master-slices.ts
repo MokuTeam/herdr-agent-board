@@ -6,7 +6,7 @@
 // whose banner (#744) says the master is offline; a master whose owner turned this computer off
 // (`owner: false`) leaves none. Made by server/app.ts only once config.json has
 // `node`; nothing of it runs on any other board.
-import { pace } from '../../adapters/pacing.ts'
+import { knobMs, pace } from '../../adapters/pacing.ts'
 import { type BoardSlices, boardSlicesOf } from '../../core/board-slices.ts'
 import type { MasterFlags } from '../../core/master-flags.ts'
 import { BOARD_SLICES_PATH, RELAY_ERRORS } from '../../core/master-relay.ts'
@@ -30,6 +30,7 @@ export interface NodeMasterSlicesDeps {
   everyMs?: number
 }
 
+// BOARD_NODE_SLICES_MS: tests only (a poke that must not wait for the next round).
 const EVERY_MS = 15_000
 
 export function createNodeMasterSlices(deps: NodeMasterSlicesDeps): NodeMasterSlices {
@@ -86,7 +87,10 @@ export function createNodeMasterSlices(deps: NodeMasterSlicesDeps): NodeMasterSl
     }
   }
 
-  const timer = setInterval(() => void ask(), Math.max(50, Math.round((deps.everyMs ?? EVERY_MS) * pace())))
+  const timer = setInterval(
+    () => void ask(),
+    Math.max(50, Math.round((deps.everyMs ?? knobMs('BOARD_NODE_SLICES_MS', EVERY_MS)) * pace())),
+  )
 
   return {
     current: () => last,

@@ -39,11 +39,13 @@ interface Board {
 
 const board = async (url: string): Promise<Board> => (await (await fetch(`${url}/api/board`)).json()) as Board
 
-test("a node's page shows the question its master holds as the master has it; the owner's typed answer is the master's record", async () => {
+/** A master and a node whose session asked a question with options up the uplink; its card carries it. */
+async function askedOnNode(nodeEnv: Record<string, string> = {}) {
   const pair = await nodePair({
     count: 1,
     masterCfg: { decisions: true },
     masterPanes: () => [],
+    nodeEnv: () => nodeEnv,
     panes: (_id, box) => [
       { pane_id: 'p1', agent: 'claude', agent_session: { value: S }, agent_status: 'idle', cwd: box.dir },
     ],
@@ -85,6 +87,11 @@ test("a node's page shows the question its master holds as the master has it; th
     JSON.stringify({ key: S, ask: QUESTION, askSince: Date.now(), by: 'agent', decision: masterHeld(asked) }),
   )
 
+  return { pair, node, master, remote, asked }
+}
+
+test("a node's page shows the question its master holds as the master has it; the owner's typed answer is the master's record", async () => {
+  const { pair, node, master, remote, asked } = await askedOnNode()
   // The node's page: the master's question with its default, on the card and in the queue.
   const open = await until('the node page shows the master question', async () => {
     const b = await board(node.url)
@@ -131,3 +138,30 @@ test("a node's page shows the question its master holds as the master has it; th
     (await board(node.url)).decisions?.items.some(r => r.key === S) === false ? true : null,
   )
 }, 90_000)
+
+test("Hold from the node's page shows there at once, well before the next round of the master's parts (#784)", async () => {
+  // The node asks its master's parts every 20 s here (BOARD_NODE_SLICES_MS times the test pace).
+  const { node, asked } = await askedOnNode({ BOARD_NODE_SLICES_MS: '1000000' })
+  await until('the node page shows the master question', async () =>
+    (await board(node.url)).decisions?.items.some(r => r.key === S && r.id === asked.id) ? true : null,
+  )
+  const at = Date.now()
+  const hold = await fetch(`${node.url}/api/decisions`, {
+    method: 'POST',
+    headers: HEADERS,
+    body: JSON.stringify({ op: 'hold', key: S, id: asked.id }),
+  })
+  expect(hold.status).toBe(200)
+  const held = await until(
+    'the node page shows it held',
+    async () => {
+      const b = await board(node.url)
+      const row = b.decisions?.items.find(r => r.key === S && r.id === asked.id)
+      return row?.held ? { row, item: b.items.find(i => i.key === S) } : null
+    },
+    3000,
+  )
+  expect(Date.now() - at).toBeLessThan(3000)
+  expect(held.row.defaultAt).toBeNull()
+  expect(held.item?.decision?.held).toBeDefined()
+}, 60_000)
