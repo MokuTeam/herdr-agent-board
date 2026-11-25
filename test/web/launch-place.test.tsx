@@ -290,6 +290,9 @@ test('renamed device titles appear on launch cards, blockers, refusals and turne
   )
   expect(refusedHtml).toContain('No device can take it: Atlas Box is paused')
 
-  // #752: when local has selfId and no custom title, deviceName uses selfId instead of "this computer".
-  expect(deviceName('local', en, [{ id: 'local', title: 'local', selfId: 'server-2' }])).toBe('server-2')
+  // #752, #758: "local" (any case) normalises to selfId for local and to id for remote devices.
+  expect(deviceName('local', en, [{ id: 'local', title: 'Local', selfId: 'server-2' }])).toBe('server-2')
+  expect(deviceName('laptop', en, [{ id: 'laptop', title: 'LOCAL' }])).toBe('laptop')
+  expect(deviceName('laptop', en, { laptop: ' Local ' })).toBe('laptop')
+  expect(deviceName('local', en, { local: 'LOCAL' })).toBe('this computer')
 })

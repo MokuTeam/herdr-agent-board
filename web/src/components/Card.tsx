@@ -50,7 +50,7 @@ import { useBoardContext } from '../state/BoardProvider.tsx'
 import { AlarmBadge } from './AlarmBadge.tsx'
 import { classNames } from './class-names.ts'
 import { DecisionButtons } from './decisions/DecisionButtons.tsx'
-import { CardIdentity } from './devices/DeviceChip.tsx'
+import { CardDevice } from './devices/DeviceChip.tsx'
 import { HelpersChip, Relations } from './helpers/CardHelpers.tsx'
 import {
   CheckGlyph,
@@ -168,8 +168,6 @@ function CardContent({ item, launch, folding }: { item: Item; launch: LaunchSlot
   return (
     <>
       <CardTop item={item} />
-      {/* A card of another device (#502): its identity row with the device; none for this computer's. */}
-      <CardIdentity item={item} />
       {item.agent === 'codex' && item.model && item.effort && (
         <div className="card-meter">
           {item.model} · {item.effort}
@@ -200,8 +198,9 @@ function ChecklistEdge({ checklist }: { checklist: CardChecklist }) {
 
 function CardTop({ item }: { item: Item }) {
   const t = useT()
-  const { ui, now } = useBoardContext()
+  const { ui, data, now } = useBoardContext()
   const age = cardAge(item, now, t)
+  const node = nodeLook(item, data?.devices, now, t)
   const renamed = item.name !== item.autoName && !!item.autoName
   const was = renamed ? t('rename.was', { name: item.autoName }) : undefined
   return (
@@ -234,9 +233,16 @@ function CardTop({ item }: { item: Item }) {
         </span>
       )}
       <AlarmBadge item={item} />
-      <span className="age" title={age.title || undefined}>
-        {age.text}
-      </span>
+      {node && <CardDevice node={node} />}
+      {node?.offline ? (
+        <span className="device-as-of" title={node.why || age.title || undefined}>
+          {node.asOf}
+        </span>
+      ) : (
+        <span className="age" title={age.title || undefined}>
+          {age.text}
+        </span>
+      )}
     </div>
   )
 }

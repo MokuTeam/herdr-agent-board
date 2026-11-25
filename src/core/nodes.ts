@@ -323,7 +323,7 @@ function deviceOf(
   }
   const defaultTitle = id === LOCAL ? selfId : id
   const rawTitle = o.title === undefined ? defaultTitle : typeof o.title === 'string' ? o.title.trim() : ''
-  const title = id === LOCAL && rawTitle === LOCAL ? defaultTitle : rawTitle
+  const title = rawTitle.toLowerCase() === LOCAL ? defaultTitle : rawTitle
   if (!isText(title, 200)) flag('title', 'type')
   const profiles = bare<string>()
   if (o.profiles !== undefined) {
@@ -913,7 +913,13 @@ export function applyNodesEdit(
     for (const [key, v] of Object.entries(edit.values))
       if (key === 'title') {
         const trimmed = v === null ? '' : (v as string).trim()
-        if (trimmed === '' || trimmed === edit.id || (edit.id === LOCAL && trimmed === selfId)) delete entry.title
+        if (
+          trimmed === '' ||
+          trimmed === edit.id ||
+          trimmed.toLowerCase() === LOCAL ||
+          (edit.id === LOCAL && trimmed === selfId)
+        )
+          delete entry.title
         else entry.title = trimmed
       } else if (key === 'giveSecrets' && v === true) delete entry[key]
       else if (key === 'pilotBridge' && v === true) delete entry[key]

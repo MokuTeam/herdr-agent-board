@@ -469,4 +469,35 @@ describe('Verified done section in SettingsPanel (#680)', () => {
 
     await unmount()
   })
+
+  test('normalises "local" (any case) on remote and master devices in VerifySettings (#758)', async () => {
+    const view = makeView({ model: 'opus', profile: { local: 'work', laptop: 'default' } }, true)
+    answers([200, view], [200, view])
+
+    const [masterDev, remoteDev] = DEVICES
+    if (!masterDev || !remoteDev) throw new Error('missing devices')
+    const localTitledDevices: BoardDevice[] = [
+      { ...masterDev, title: 'Local', selfId: 'server-2' },
+      { ...remoteDev, id: 'laptop', title: 'LOCAL' },
+    ]
+    const { host, unmount } = await mountSettings(
+      payload({
+        profiles: PROFILES,
+        categories: CATEGORIES,
+        devices: localTitledDevices,
+        threads: { rev: 1, needsOwner: 0 },
+      }),
+    )
+    await click(host.querySelectorAll('.set-tab')[2])
+    await click(host.querySelector('.set-verify-btn'))
+    await act(async () => {
+      await Bun.sleep(10)
+    })
+
+    const sec = host.querySelector('#set-verify-section')
+    if (!sec) throw new Error('expected #set-verify-section')
+    const devLabels = [...sec.querySelectorAll('.set-verify-dev')].map(el => el.textContent)
+    expect(devLabels.slice(0, 2)).toEqual(['server-2', 'laptop'])
+    await unmount()
+  })
 })

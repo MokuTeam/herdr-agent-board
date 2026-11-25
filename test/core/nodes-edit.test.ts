@@ -266,11 +266,17 @@ describe('title (#601)', () => {
     expect(applied({ op: 'set', id: 'local', title: null }, bare).r).toEqual({ changed: false })
   })
 
-  test('setting local title to nodes.id deletes title and falls back to nodes.id (#752)', () => {
+  test('setting local title to nodes.id or "local" (any case) deletes title and falls back to id (#752, #758)', () => {
     const base: Record<string, unknown> = { id: 'server-2', devices: { local: { title: 'Main Server' } } }
     expect(applied({ op: 'set', id: 'local', title: 'server-2' }, base).r).toEqual({ changed: true })
     expect(devices(base).local).toBeUndefined()
     expect(nodesConfig(base, 'laptop')?.devices.local?.title).toBe('server-2')
+
+    const remoteBase = section()
+    devices(remoteBase)['server-1'] = { ...devices(remoteBase)['server-1'], title: 'Atlas Box' }
+    expect(applied({ op: 'set', id: 'server-1', title: 'Local' }, remoteBase).r).toEqual({ changed: true })
+    expect('title' in (devices(remoteBase)['server-1'] ?? {})).toBe(false)
+    expect(nodesConfig(remoteBase, 'laptop')?.devices['server-1']?.title).toBe('server-1')
   })
 
   test('unchanged title returns changed: false; invalid or unknown device is refused without writing', () => {

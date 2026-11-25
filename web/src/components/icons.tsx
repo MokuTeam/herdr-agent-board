@@ -580,3 +580,11 @@ export const PencilIcon = () => (
     <path d="M13.8 3.6a1.8 1.8 0 0 1 2.6 2.6l-8.5 8.5-3.6.9.9-3.6Z" />
   </Icon>
 )
+
+/** A quiet computer glyph for a card's machine label (#758). */
+export const DeviceGlyph = () => (
+  <svg className="card-device-icon" viewBox="0 0 20 20" aria-hidden="true">
+    <rect x="3" y="4" width="14" height="9.5" rx="2" />
+    <path d="M7.5 16.5h5M10 13.5v3" />
+  </svg>
+)

@@ -1099,8 +1099,8 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
           const rawLocalTitle = typeof rawLocal?.title === 'string' ? rawLocal.title.trim() : ''
           const hostTitle = hostFn().trim()
           const oldMasterTitle =
-            (rawLocalTitle && rawLocalTitle !== LOCAL ? rawLocalTitle : '') ||
-            (hostTitle && hostTitle !== LOCAL ? hostTitle : '') ||
+            (rawLocalTitle && rawLocalTitle.toLowerCase() !== LOCAL ? rawLocalTitle : '') ||
+            (hostTitle && hostTitle.toLowerCase() !== LOCAL ? hostTitle : '') ||
             plan.from
 
           const flippedNodes = flipNodesConfig(rawNodes, {

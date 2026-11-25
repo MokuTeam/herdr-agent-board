@@ -588,18 +588,16 @@ export function flipNodesConfig(
 
   const nextDevices: Record<string, unknown> = {}
   const nextLocalEntry = pickDeviceLimits(targetRaw)
-  if (typeof nextLocalEntry.title === 'string' && nextLocalEntry.title.trim() === LOCAL) {
+  if (typeof nextLocalEntry.title === 'string' && nextLocalEntry.title.trim().toLowerCase() === LOCAL) {
     delete nextLocalEntry.title
   }
   nextDevices[LOCAL] = nextLocalEntry
 
   const oldMasterEntry = pickDeviceLimits(oldLocalRaw)
   const rawOldTitle = typeof oldMasterEntry.title === 'string' ? oldMasterEntry.title.trim() : ''
-  const cleanOldTitle = rawOldTitle && rawOldTitle !== LOCAL ? rawOldTitle : ''
-  const fallbackTitle =
-    typeof oldMasterTitle === 'string' && oldMasterTitle.trim() && oldMasterTitle.trim() !== LOCAL
-      ? oldMasterTitle.trim()
-      : ''
+  const cleanOldTitle = rawOldTitle && rawOldTitle.toLowerCase() !== LOCAL ? rawOldTitle : ''
+  const trimmedFallback = typeof oldMasterTitle === 'string' ? oldMasterTitle.trim() : ''
+  const fallbackTitle = trimmedFallback && trimmedFallback.toLowerCase() !== LOCAL ? trimmedFallback : ''
   if (cleanOldTitle) oldMasterEntry.title = cleanOldTitle
   else if (fallbackTitle) oldMasterEntry.title = fallbackTitle
   else delete oldMasterEntry.title

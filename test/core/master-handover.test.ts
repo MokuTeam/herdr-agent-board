@@ -245,16 +245,18 @@ describe('core/master-handover (#697)', () => {
         id: 'laptop',
         order: ['local', 'server-1'],
         devices: {
-          'server-1': { title: 'Atlas', link: { kind: 'direct', url: 'http://127.0.0.1:12430' } },
+          local: { title: 'Local' },
+          'server-1': { title: 'LOCAL', link: { kind: 'direct', url: 'http://127.0.0.1:12430' } },
         },
       },
       {
         oldMasterId: 'laptop',
         targetId: 'server-1',
-        oldMasterTitle: 'local',
+        oldMasterTitle: 'LOCAL',
         reverseLink: { kind: 'relay', socket: 'laptop' },
       },
     )
+    expect((literalLocalFallback.devices as Record<string, Record<string, unknown>>).local).toEqual({})
     expect((literalLocalFallback.devices as Record<string, Record<string, unknown>>).laptop).toEqual({
       link: { kind: 'relay', socket: 'laptop' },
     })

@@ -51,13 +51,15 @@ describe("the card's Device", () => {
   test('master row built with deviceTitle uses its name instead of "local" or "This computer", and master cards keep focus and reveal (#752)', () => {
     const ru = translator('ru')
     const rawDevices: Pick<BoardDevice, 'id' | 'title' | 'kind' | 'selfId'>[] = [
-      { id: 'local', title: 'local', kind: null, selfId: 'server-2' },
+      { id: 'local', title: 'Local', kind: null, selfId: 'server-2' },
+      { id: 'laptop', title: 'LOCAL', kind: 'ssh' },
       { id: 'server-1', title: 'Atlas Box', kind: 'ssh' },
     ]
     const menuDevices = rawDevices.map(d => ({ id: d.id, title: deviceTitle(d, ru), why: '' }))
     const masterMenu = cardMenu(it, { ...ctx, t: ru, devices: menuDevices, deviceAt: 'local' })
     expect(find(masterMenu, 'device')?.submenu).toEqual([
       { id: 'device:local', label: 'server-2', checked: true },
+      { id: 'device:laptop', label: 'laptop', checked: false },
       { id: 'device:server-1', label: 'Atlas Box', checked: false },
     ])
     expect(find(masterMenu, 'focus')).toBeDefined()

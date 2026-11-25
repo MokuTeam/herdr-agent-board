@@ -8,20 +8,25 @@ import type { Translator } from '../types.ts'
 /** Device titles keyed by device id, or the payload's device rows. */
 export type DeviceTitles = Readonly<Record<string, string>> | readonly { id: string; title: string; selfId?: string }[]
 
+const isLocalTitle = (s: string): boolean => s.trim().toLowerCase() === 'local'
+
 function titleOf(id: string, titles?: DeviceTitles): string {
   if (!titles) return ''
   if (Array.isArray(titles)) {
     const d = titles.find(x => x.id === id)
     if (!d) return ''
-    return id === 'local' && (!d.title || d.title === 'local') ? (d.selfId ?? '') : d.title
+    const raw = d.title.trim()
+    if (!raw || isLocalTitle(raw)) return id === 'local' ? (d.selfId ?? '') : ''
+    return raw
   }
-  return Object.hasOwn(titles, id) ? ((titles as Readonly<Record<string, string>>)[id] ?? '') : ''
+  const raw = Object.hasOwn(titles, id) ? ((titles as Readonly<Record<string, string>>)[id] ?? '').trim() : ''
+  return isLocalTitle(raw) ? '' : raw
 }
 
 /** A device as the launch card names it: `local` is this computer unless given a title of its own. */
 export const deviceName = (id: string, t: Translator, titles?: DeviceTitles): string => {
   const custom = titleOf(id, titles)
-  if (id === 'local') return custom && custom !== 'local' ? custom : t('place.local')
+  if (id === 'local') return custom || t('place.local')
   return custom || id
 }
 

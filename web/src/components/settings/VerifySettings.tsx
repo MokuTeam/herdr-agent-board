@@ -458,7 +458,7 @@ export function VerifySettings({ verifyOn, canEdit, onToggle }: VerifySettingsPr
                       const nodeProfiles = dev.status?.profiles ?? []
                       return (
                         <div key={dev.id} className="set-verify-list-row">
-                          <span className="set-verify-dev">{dev.title || dev.id}</span>
+                          <span className="set-verify-dev">{deviceTitle(dev, t)}</span>
                           {nodeProfiles.length > 0 ? (
                             <select
                               className="set-select"

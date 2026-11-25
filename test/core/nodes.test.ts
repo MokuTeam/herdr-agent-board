@@ -143,6 +143,16 @@ describe('nodesConfig', () => {
 
     const legacyLocalTitle = conf({ id: 'server-2', devices: { local: { title: 'local' } } })
     assert.equal(legacyLocalTitle.devices.local?.title, 'server-2')
+
+    const mixedCaseLocalTitle = conf({
+      id: 'server-2',
+      devices: {
+        local: { title: ' Local ' },
+        laptop: { link: ssh, title: 'LOCAL' },
+      },
+    })
+    assert.equal(mixedCaseLocalTitle.devices.local?.title, 'server-2')
+    assert.equal(mixedCaseLocalTitle.devices.laptop?.title, 'laptop')
   })
 
   test('link defaults: ssh port 22, the door 12430', () => {

@@ -513,12 +513,17 @@ describe('what the owner reads (#510, polish)', () => {
     )
     const ruHere = rowsOf(ruNodes).find(r => r.attrs.get('data-id') === 'local')
     expect(text(findAll([ruHere as Node], el => hasClass(el, 'devices-name')))).toBe('server-2мастер')
-    // An owner who named it keeps the name; without title/selfId/status falls back to master/мастер.
+    // An owner who named it keeps the name; "local" (any case) normalises to device id (#758);
+    // without title/selfId/status falls back to master/мастер.
     expect(deviceTitle({ id: 'local', title: 'Workstation', kind: null }, t)).toBe('Workstation')
     expect(deviceTitle({ id: 'local', title: 'local', kind: null, selfId: 'server-2' }, t)).toBe('server-2')
-    expect(deviceTitle({ id: 'local', title: 'local', kind: null }, t)).toBe('master')
+    expect(deviceTitle({ id: 'local', title: ' Local ', kind: null, selfId: 'server-2' }, t)).toBe('server-2')
+    expect(deviceTitle({ id: 'local', title: 'LOCAL', kind: null }, t)).toBe('master')
     expect(deviceTitle({ id: 'local', title: 'local', kind: null }, ru)).toBe('мастер')
     expect(deviceTitle({ id: 'server-1', title: 'server-1', kind: 'ssh' }, t)).toBe('server-1')
+    expect(deviceTitle({ id: 'laptop', title: 'local', kind: 'ssh' }, t)).toBe('laptop')
+    expect(deviceTitle({ id: 'laptop', title: 'Local', kind: 'ssh' }, t)).toBe('laptop')
+    expect(deviceTitle({ id: 'laptop', title: 'LOCAL', kind: 'ssh' }, ru)).toBe('laptop')
     // A revoked device with no link has no kind either: still its own title.
     expect(deviceTitle({ id: 'server-1', title: 'server-1', kind: null }, t)).toBe('server-1')
   })
@@ -748,14 +753,21 @@ describe('rename a device (#601)', () => {
     expect(deviceTitleEdited('local', 'Work Laptop', 'server-2', 'server-2')).toBe('')
     expect(deviceTitleEdited('local', '', 'server-2', 'server-2')).toBeNull()
     expect(deviceTitleEdited('local', '', '', 'server-2')).toBeNull()
+    expect(deviceTitleEdited('laptop', 'Work Laptop', 'Local')).toBe('')
+    expect(deviceTitleEdited('laptop', '', 'LOCAL')).toBeNull()
 
     const rows = deviceRows(
-      [device('server-1', { title: 'Server 1' }), device('local', { selfId: 'server-2' })],
+      [
+        device('server-1', { title: 'Server 1' }),
+        device('laptop', { title: 'Local' }),
+        device('local', { title: 'LOCAL', selfId: 'server-2' }),
+      ],
       NOW,
       t,
     )
     expect(rows[0]).toMatchObject({ title: 'Server 1', rawTitle: 'Server 1', defaultTitle: 'server-1' })
-    expect(rows[1]).toMatchObject({ title: 'server-2', rawTitle: '', defaultTitle: 'server-2' })
+    expect(rows[1]).toMatchObject({ title: 'laptop', rawTitle: '', defaultTitle: 'laptop' })
+    expect(rows[2]).toMatchObject({ title: 'server-2', rawTitle: '', defaultTitle: 'server-2' })
 
     expect(refusedText(400, 'title', t)).toBe('Not saved: Name does not check out')
     expect(refusedText(400, 'title', ru)).toBe('Не сохранено: Название не подходит')

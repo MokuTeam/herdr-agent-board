@@ -239,7 +239,8 @@ test('refusals use the device title when renamed (#601)', async () => {
     id: 'server-2',
     devices: {
       ...NODES.devices,
-      local: { id: 'local', title: 'local', link: null, profiles: {} },
+      'server-1': { id: 'server-1', title: 'Local', link: { kind: 'direct', url: 'http://x' }, profiles: {} },
+      local: { id: 'local', title: 'LOCAL', link: null, profiles: {} },
     },
   } as unknown as NodesConfig
   const alreadyUnnamed = await moveToDevice(
@@ -256,4 +257,22 @@ test('refusals use the device title when renamed (#601)', async () => {
     'local',
   )
   expect(alreadyUnnamed[0]).toMatchObject({ result: 'refused', why: 'it is on server-2 already' })
+
+  const remoteLocalTitleOffline = await moveToDevice(
+    {
+      nodes: () => unnamedNodes,
+      link: () => ({
+        state: () => ({ state: 'offline', since: 0 }) as unknown as LinkStatus,
+        fetch: async () => ok({}),
+      }),
+      out: {} as MoveOut,
+      in: {} as MoveIn,
+      items: () => [{ key: S, session: S, name: 'Atlas', agent: 'claude' } as Item],
+      rekeyThreads: () => {},
+      log: () => {},
+    },
+    [S],
+    'server-1',
+  )
+  expect(remoteLocalTitleOffline[0]).toMatchObject({ result: 'refused', why: 'server-1 is not reachable now' })
 })

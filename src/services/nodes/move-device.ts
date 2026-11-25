@@ -236,8 +236,9 @@ export async function moveToDevice(
   const refuseAll = (why: string): DeviceMoveOutcome[] => asked.map(target => ({ target, result: 'refused', why }))
   if (!cfg) return refuseAll('a move to another device is made from the master: this board has no devices')
   const labelOf = (id: string): string => {
-    const title = cfg.devices[id]?.title
-    if (id === LOCAL) return title && title !== LOCAL ? title : cfg.id
+    const raw = cfg.devices[id]?.title?.trim() ?? ''
+    const title = raw && raw.toLowerCase() !== LOCAL ? raw : ''
+    if (id === LOCAL) return title || cfg.id
     return title || id
   }
   const sideOf = (id: string): MoveSide | string => {

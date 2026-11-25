@@ -16,7 +16,7 @@ import {
   stepText,
   turnedText,
 } from '../../models/launch.ts'
-import { DeviceFacts } from '../devices/DeviceChip.tsx'
+import { CardDevice } from '../devices/DeviceChip.tsx'
 import { WaitIcon, WarnIcon } from '../icons.tsx'
 
 /** What a card's launch lines need besides the launch: the texts, the command's name, the buttons pressed. */
@@ -50,13 +50,9 @@ export function LaunchCard({ launch: l, look }: { launch: LaunchView; look: Laun
           <span className="dot work launching" style={{ '--c': 'var(--green)' }} />
         )}
         <span className="name">{l.name}</span>
+        {node && <CardDevice node={node} />}
         <span className="age">{t(l.resume ? 'archive.returnLabel' : l.fork ? 'fork.label' : 'launch.new')}</span>
       </div>
-      {node && (
-        <div className="card-ident">
-          <DeviceFacts node={node} />
-        </div>
-      )}
       <div className="said" title={l.cwd}>
         {launchWhere(l, t)}
       </div>

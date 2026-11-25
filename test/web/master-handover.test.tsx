@@ -120,6 +120,37 @@ describe('web/MasterHandover (#697)', () => {
     expect(allText).toContain('1 node(s) online')
     const rbButtons = findAll(nodes, el => el.tag === 'button' && text([el]) === 'Rollback handover')
     expect(rbButtons).toHaveLength(1)
+
+    // #758: a target device whose stored title is "local" (any case) shows its id, never "local (id)".
+    const [masterDev, remoteDev] = DEVICES
+    if (!masterDev || !remoteDev) throw new Error('missing devices')
+    const localTitled = renderInBoard(
+      <PanelProvider viewport={() => VP}>
+        <MasterHandover
+          open={true}
+          devices={[
+            masterDev,
+            { ...remoteDev, id: 'laptop', title: 'Local' },
+            { ...remoteDev, id: 'server-2', title: 'LOCAL' },
+          ]}
+          initial={{
+            phase: 'idle',
+            step: null,
+            id: null,
+            target: 'laptop',
+            plan: null,
+            verify: null,
+            error: null,
+            rolledBack: false,
+            canRollback: false,
+            rollbackNeedsConfirm: false,
+          }}
+        />
+      </PanelProvider>,
+      board({ data: payload({ devices: DEVICES }), canEdit: true, now: NOW }),
+    )
+    const options = findAll(localTitled, el => el.tag === 'option').map(o => text([o]))
+    expect(options).toEqual(['laptop', 'server-2'])
   })
 
   test('post-commit rollback shows inline confirmation before posting discardSinceCommit: true', async () => {

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { BoardDevice } from '../../../../src/core/payload.ts'
 import { ApiError, api, errorText } from '../../api/client.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
+import { deviceTitle } from '../../models/devices.ts'
 import { type HandoverView, isHandoverView } from '../../models/master-handover.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
@@ -114,11 +115,14 @@ export function MasterHandover({ open: panelOpen = true, devices, initial }: Mas
                 disabled={!canEdit || working}
                 onChange={e => setTarget(e.currentTarget.value)}
               >
-                {targets.map(d => (
-                  <option key={d.id} value={d.id}>
-                    {d.title || d.id} ({d.id})
-                  </option>
-                ))}
+                {targets.map(d => {
+                  const name = deviceTitle(d, t)
+                  return (
+                    <option key={d.id} value={d.id}>
+                      {name !== d.id ? `${name} (${d.id})` : d.id}
+                    </option>
+                  )
+                })}
               </select>
             </label>
           </div>

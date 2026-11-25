@@ -2862,7 +2862,9 @@ function identityLine(done: unknown): string {
 function deviceLine(d: Record<string, unknown>, masterId?: string): string {
   const defaultTitle =
     d.id === 'local' ? (typeof d.selfId === 'string' && d.selfId ? d.selfId : (masterId ?? 'local')) : String(d.id)
-  const head = `${String(d.id)}${typeof d.title === 'string' && d.title && d.title !== d.id && d.title !== defaultTitle ? ` "${d.title}"` : ''}`
+  const rawTitle = typeof d.title === 'string' ? d.title.trim() : ''
+  const shownTitle = rawTitle && rawTitle.toLowerCase() !== 'local' ? rawTitle : ''
+  const head = `${String(d.id)}${shownTitle && shownTitle !== d.id && shownTitle !== defaultTitle ? ` "${shownTitle}"` : ''}`
   const link = isRecord(d.link) ? d.link : null
   // A revoked device (#510): its link is gone once the node was told, or its credentials dropped.
   const revoked = isRecord(d.revoked) ? d.revoked : null
