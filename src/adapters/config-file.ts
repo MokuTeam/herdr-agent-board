@@ -53,6 +53,7 @@ import {
 } from '../core/work-threads.ts'
 import { allCards, writeCard } from './cards.ts'
 import { isRecord, readJson, replaceFile, withLock } from './json-store.ts'
+import { masterOwnedEdit } from './master-flags-store.ts'
 import { configDir } from './paths.ts'
 import { findProfileDirs } from './profiles.ts'
 
@@ -326,6 +327,9 @@ export function editPresence(body: unknown): EditResult {
   )
     return { ok: false, error: t('err.presenceMinutes', { max: MAX_IDLE_MINUTES }) }
   return editConfig(raw => {
+    // On a node it is set on the master (#775).
+    const owned = masterOwnedEdit(raw)
+    if (owned) return owned
     const now = presenceConfig(raw.presence)
     if (b.on === false || (b.on === undefined && !now && b.mode === undefined && b.idleMinutes === undefined)) {
       delete raw.presence
@@ -348,6 +352,8 @@ export function editTodos(body: unknown): EditResult {
   const mode = isRecord(body) ? body.mode : undefined
   if (!isTodoMode(mode)) return { ok: false, error: t('todo.err.mode') }
   return editConfig(raw => {
+    const owned = masterOwnedEdit(raw)
+    if (owned) return owned
     if (mode === 'none') delete raw.todos
     else raw.todos = mode === 'agents' ? true : mode === 'auto' ? { autoClose: true } : { agents: false }
     return { ok: true }
@@ -406,6 +412,8 @@ export function editThreads(body: unknown): EditResult & { on?: boolean } {
     return { ok: false, error: t('thread.err.mode') }
   let on = false
   const r = editConfig(raw => {
+    const owned = masterOwnedEdit(raw)
+    if (owned) return owned
     if (change.mode === undefined && !threadsConfig(raw.threads)) return { ok: false, error: t('thread.err.off') }
     let next = touched ? threadsSetting(raw.threads, change) : raw.threads
     if (next !== undefined) {
@@ -441,6 +449,8 @@ export function editFeatures(body: unknown): EditResult {
   const given = FEATURE_SWITCHES.filter(k => b[k] !== undefined)
   if (!given.length || given.some(k => typeof b[k] !== 'boolean')) return { ok: false, error: t('feature.err.setting') }
   return editConfig(raw => {
+    const owned = masterOwnedEdit(raw)
+    if (owned) return owned
     for (const key of ['watches', 'decisions', 'journal'] as const) {
       if (typeof b[key] !== 'boolean') continue
       const next = switched(raw[key], b[key])

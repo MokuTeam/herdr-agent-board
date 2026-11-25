@@ -24,6 +24,7 @@ import type { MoveOut } from '../../services/move-out.ts'
 import type { Answer, NodeBundle } from '../../services/node/bundle.ts'
 import type { NodeHandover } from '../../services/node/handover.ts'
 import type { NodeLaunchAnswer } from '../../services/node/launch.ts'
+import type { NodeMasterFlags } from '../../services/node/master-flags.ts'
 import type { MasterRelay } from '../../services/node/master-relay.ts'
 import type { NodePilotBridge } from '../../services/node/pilot-bridge.ts'
 import type { NodePilotCall } from '../../services/node/pilot-call.ts'
@@ -69,6 +70,8 @@ export interface NodeDoorSources {
   pilotBridge?: NodePilotBridge
   /** `/api/node/master-relay...` (#764): the stream the master holds for this node's requests to it, and their answers. */
   masterRelay?: MasterRelay
+  /** `POST /api/node/master-flags` (#775, services/node/master-flags.ts): the master's feature flags. */
+  masterFlags?: Pick<NodeMasterFlags, 'take'>
   /** `POST /api/node/relay-key` (#513): activates a staged fresh relay dial key after claim. */
   relayKey?(publicKey: string): Promise<Answer>
   /** `POST /api/node/telegram` (#701): routes a Telegram topic batch on this node. */
@@ -214,6 +217,7 @@ export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
     ...(o.pilotCall ? pilotCallDoorRoutes(o.pilotCall) : []),
     ...(o.pilotBridge ? pilotBridgeDoorRoutes(o.pilotBridge) : []),
     ...(o.masterRelay ? masterRelayDoorRoutes(o.masterRelay) : []),
+    ...(o.masterFlags ? [masterFlagsDoorRoute(o.masterFlags)] : []),
     ...(relayKey
       ? [
           {
@@ -462,6 +466,19 @@ function pilotBridgeDoorRoutes(pb: NodePilotBridge): Route[] {
 const MASTER_RELAY_BODY = /^\/api\/node\/master-relay\/req\/([A-Za-z0-9_-]{8,64})\/body$/
 const MASTER_RELAY_RES = /^\/api\/node\/master-relay\/res\/([A-Za-z0-9_-]{8,64})$/
 const MASTER_RELAY_STREAM = /^\/api\/node\/master-relay\/stream\/([A-Za-z0-9_-]{8,64})$/
+
+/** The master's feature flags (#775): a small JSON body, kept by the node beside its config. */
+function masterFlagsDoorRoute(flags: Pick<NodeMasterFlags, 'take'>): Route {
+  return {
+    method: 'POST',
+    path: '/api/node/master-flags',
+    async handle(req) {
+      const body = await jsonUpTo(req, 16 * 1024)
+      if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+      return answer(flags.take(body))
+    },
+  }
+}
 
 /** The door's side of the relay to the master (#764, services/node/master-relay.ts): the master's stream and its answers. */
 function masterRelayDoorRoutes(relay: MasterRelay): Route[] {

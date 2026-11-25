@@ -4989,6 +4989,31 @@ one whose stream came last.
 Boards without `node` (standalone and masters without one) have no such route and no stream, and
 answer as before. The MokuPilot bridge (#700) keeps its own stream for now.
 
+### A node reads its master's feature flags
+
+The handover takes the master-owned sections (threads, time, calendar, decisions, journal,
+presence, team, watches, todos, workdesk, remote, tunnel) out of a node's config.json, so a node
+used to read every one of them as off. Now the master posts which of them are on, with the few
+fields the gates read (whether agents use threads or tasks, case files, whether a decision's default
+may answer), to each node's door when the relay's stream opens and again whenever its config.json
+changes (`POST /api/node/master-flags`). Names and switches only: no hub, key or calendar source
+leaves the master.
+
+The node keeps them in `<state>/node/master-flags.json` with the time they came, never in
+config.json. While the master is away they stay as they last came: nothing turns off because the
+link went.
+
+- Watches, tasks and decisions run on the node for its own sessions: its board (the scheduler, the
+  routes, the cards) and its `board` command (`todo`, `wait --probe`, `ask --option`) read them
+  as on via the master, unless the node's own config.json says otherwise.
+- The master-run features are not started on the node; its sessions' briefs (Claude Code, Codex,
+  Antigravity) tell of threads, the calendar, watches, decisions, tasks and presence again.
+- Settings on the node shows these features as set on the master and refuses to write them to
+  the node's config.json ("Set on the master <name>"); that includes Settings → Calendar and
+  Settings → Time.
+
+A board without `node` reads no flags file, and a master without nodes posts nothing.
+
 ## Development
 
 [Bun](https://bun.com/docs/installation) 1.4.3 or newer and git on PATH, in a clone with the

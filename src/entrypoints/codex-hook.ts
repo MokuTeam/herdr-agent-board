@@ -4,10 +4,12 @@ import { type CardPatch, readCard, writeCard } from '../adapters/cards.ts'
 import { loadConfig } from '../adapters/config-file.ts'
 import { agentGet } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
-import { presenceForBrief, presenceNews } from '../adapters/presence-store.ts'
+import { nodeMasterFlags } from '../adapters/master-flags-store.ts'
+import { currentPresence, presenceForBrief, presenceNews } from '../adapters/presence-store.ts'
 import { readStdin } from '../adapters/stdin.ts'
 import { brief, CODEX_BRIEF_VERSION, waitReminder } from '../core/brief.ts'
 import { CODEX_AGENT, isCodexSession } from '../core/codex.ts'
+import { briefFlags } from '../core/master-flags.ts'
 import { isNotice } from '../core/notices.ts'
 import { threadsConfig } from '../core/work-threads.ts'
 
@@ -34,7 +36,9 @@ async function main(): Promise<void> {
   let context: string | null = null
   if (event === 'SessionStart' || Number(card?.briefV ?? 0) < CODEX_BRIEF_VERSION) {
     const cfg = loadConfig()
-    const presence = presenceForBrief(cfg)
+    // On a node (#775): threads and presence as its master has them; without `node` nothing is read.
+    const via = briefFlags(nodeMasterFlags(cfg))
+    const presence = presenceForBrief(cfg) ?? (via.presence ? currentPresence() : null)
     context = [
       brief(
         cfg,
@@ -46,7 +50,7 @@ async function main(): Promise<void> {
         null,
         [],
         false,
-        threadsConfig(cfg.threads),
+        threadsConfig(cfg.threads) ?? threadsConfig(via.threads),
       ),
       `Use \`board --session ${sid} <command>\` for the commands above, so a tool's shell targets this session even when it does not inherit the pane environment.`,
     ].join('\n')

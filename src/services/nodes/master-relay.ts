@@ -57,6 +57,11 @@ export interface MasterRelayRunnerOptions {
   maxStreamsPerDevice?: number
   /** How many writes' answers are remembered per device. */
   ledgerMax?: number
+  /**
+   * This board's feature flags for its nodes (#775, services/nodes/master-flags.ts): posted to a
+   * node's door when its stream opens, and again when they change.
+   */
+  flags?(): unknown
 }
 
 interface Recorded {
@@ -148,6 +153,10 @@ export function createMasterRelayRunner(o: MasterRelayRunnerOptions): MasterRela
   const maxInflight = Math.max(1, o.maxInflightPerDevice ?? DEFAULT_MAX_INFLIGHT)
   const maxStreams = Math.max(1, o.maxStreamsPerDevice ?? DEFAULT_MAX_STREAMS)
   const ledgerMax = Math.max(1, o.ledgerMax ?? DEFAULT_LEDGER_MAX)
+  /** Per device, the flags last posted (as JSON), so an unchanged config posts nothing. */
+  const sentFlags = new Map<string, string>()
+  /** The devices whose stream is open now: a change of the flags goes to those. */
+  const streaming = new Set<string>()
   let closed = false
 
   const online = (id: string): boolean => o.links.link(id)?.state().state === 'online'
@@ -176,6 +185,7 @@ export function createMasterRelayRunner(o: MasterRelayRunnerOptions): MasterRela
     } else {
       held?.ac.abort()
       endDevice(id)
+      sentFlags.delete(id)
       // A device gone from config.json takes its ledger with it.
       if (!o.links.link(id)) ledgers.delete(id)
     }
@@ -194,6 +204,17 @@ export function createMasterRelayRunner(o: MasterRelayRunnerOptions): MasterRela
     } catch {
       return false
     }
+  }
+
+  /** The flags to a node's door (#775); `again`: even when they are the ones it was sent last. */
+  async function sendFlags(id: string, link: Link, signal: AbortSignal, again: boolean): Promise<void> {
+    const flags = o.flags?.()
+    if (flags === undefined) return
+    const text = JSON.stringify(flags)
+    if (!again && sentFlags.get(id) === text) return
+    sentFlags.set(id, text)
+    // A node without the route (an older version) or a link that went: sent again on the next change or stream.
+    if (!(await post(link, '/api/node/master-flags', flags, signal)) && sentFlags.get(id) === text) sentFlags.delete(id)
   }
 
   const postHead = (link: Link, id: string, head: RelayHead, signal: AbortSignal): Promise<boolean> =>
@@ -393,6 +414,8 @@ export function createMasterRelayRunner(o: MasterRelayRunnerOptions): MasterRela
           if (res.status === 404) wait = NONE_MS
           if (!res.ok || !res.body) await res.body?.cancel().catch(() => {})
           else {
+            streaming.add(id)
+            void sendFlags(id, link, ac.signal, true)
             const reader = res.body.getReader()
             const decoder = new TextDecoder()
             const stop = (): void => void reader.cancel().catch(() => {})
@@ -430,6 +453,7 @@ export function createMasterRelayRunner(o: MasterRelayRunnerOptions): MasterRela
                 }
               }
             } finally {
+              streaming.delete(id)
               ac.signal.removeEventListener('abort', stop)
               await reader.cancel().catch(() => {})
             }
@@ -453,6 +477,10 @@ export function createMasterRelayRunner(o: MasterRelayRunnerOptions): MasterRela
     sync() {
       if (closed) return
       for (const id of new Set([...following.keys(), ...(o.deviceIds?.() ?? [])])) changed(id)
+      for (const [id, held] of following) {
+        const link = o.links.link(id)
+        if (link && streaming.has(id) && !held.ac.signal.aborted) void sendFlags(id, link, held.ac.signal, false)
+      }
     },
     async close() {
       closed = true

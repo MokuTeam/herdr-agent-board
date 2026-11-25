@@ -167,6 +167,7 @@ import {
 import { cygpath, takeGitBashArgs } from '../adapters/git-bash.ts'
 import { asSnapshot, type HerdrPane, herdr, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
+import { readMasterFlags } from '../adapters/master-flags-store.ts'
 import { findPiSession } from '../adapters/pi-home.ts'
 import { currentPresence, setPresence } from '../adapters/presence-store.ts'
 import { runHere } from '../adapters/process.ts'
@@ -192,6 +193,7 @@ import { switchedOff } from '../core/feature-switch.ts'
 import { translator } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
 import { agyCommand } from '../core/launch/agents.ts'
+import { withMasterFlags } from '../core/master-flags.ts'
 import { parseMoveAny } from '../core/move-device.ts'
 import { isKeptCall, UPLINK_REFUSED } from '../core/node-uplink.ts'
 import { nodeConfig } from '../core/nodes.ts'
@@ -251,7 +253,7 @@ const OWN_HELP: ReadonlySet<string> = new Set(['thread', 'time', 'cal', 'spend']
 const WATCH_FLAGS = '[--probe "<command>" [--every 10m] [--timeout 20s] [--silence 3d]]'
 /** The usage line as this board has it: with the watch flags while watches are on, else as before. */
 const usageText = (): string =>
-  watchesConfig(cfg.watches) ? USAGE.replace('| wait <text> |', `| wait <text> ${WATCH_FLAGS} |`) : USAGE
+  watchesConfig(gate.watches) ? USAGE.replace('| wait <text> |', `| wait <text> ${WATCH_FLAGS} |`) : USAGE
 
 function usageOf(command: string): string {
   const usage = usageText()
@@ -324,6 +326,12 @@ const text = words.join(' ').replace(/\s+/g, ' ').trim()
 const helpAsked = flagWords.includes('--help') || flagWords.includes('-h')
 const cfg = loadConfig()
 const deps = defaultDeps(cfg)
+/**
+ * What this board's gates read (#775): the config, and on a node the card-level features its master
+ * has on (watches, tasks, decisions; core/master-flags.ts), which run here for this computer's
+ * sessions. Without `node` it is `cfg` itself and nothing more is read. Never written back.
+ */
+const gate = withMasterFlags(cfg, nodeConfig(cfg.node) ? readMasterFlags() : null)
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -818,7 +826,7 @@ function line(key: string, cwd: string): string {
 function todo(key: string): void {
   const usage =
     'usage: board todo add [--mine] [--ref <ticket|file|link>] [--why "<what it waits on>"] "<text>" | board todo done <key> [--why "<what settled it>"] | board todo list'
-  const conf = todosConfig(cfg.todos)
+  const conf = todosConfig(gate.todos)
   if (!conf) throw new Error(t('todo.err.off'))
   if (!conf.agents) throw new Error(t('todo.err.agentsOff'))
   const [sub = 'list', ...args] = rest
@@ -1369,7 +1377,7 @@ async function main(): Promise<void> {
   // Case files (#488): a session that holds a case whose state is behind its work hears so; read before done clears doingAt.
   const nudge = (cmd === 'wait' || cmd === 'done') && !target ? await caseNudge(s.key) : ''
   // Decisions (#487): only while config.json turns them on; `tail` is what `board ask` adds to the card's line.
-  const decisionsOn = decisionsConfig(cfg.decisions)
+  const decisionsOn = decisionsConfig(gate.decisions)
   let tail = ''
   switch (cmd) {
     case 'show':
@@ -1397,7 +1405,7 @@ async function main(): Promise<void> {
       break
     case 'wait': {
       // With watches on (#486), --probe before a `--` makes a watch (entrypoints/watch-cli.ts).
-      if (watchesConfig(cfg.watches) && flagWords.includes('--probe')) {
+      if (watchesConfig(gate.watches) && flagWords.includes('--probe')) {
         // Only for the caller's own wait: a command one session sets would otherwise run unattended
         // in another session's folder.
         if (target && (await ownSession())?.key !== s.key)
@@ -1421,7 +1429,7 @@ async function main(): Promise<void> {
       writeCard(s.key, { wait: text, waitSince: now, by: 'agent' })
       ended = await endWatch(s)
       // Watches off (#486): --probe is words of the text, as before; said only where it was given.
-      if (!watchesConfig(cfg.watches) && flagWords.includes('--probe'))
+      if (!watchesConfig(gate.watches) && flagWords.includes('--probe'))
         ended = ' · note: watches are off in config.json, so --probe is part of the wait text and nothing will check it'
       break
     }
@@ -1514,7 +1522,7 @@ async function main(): Promise<void> {
  * key names this pane; not known, none.
  */
 async function takenOver(s: Session): Promise<string[]> {
-  if (!watchesConfig(cfg.watches) || !s.pane) return []
+  if (!watchesConfig(gate.watches) || !s.pane) return []
   const there = listWatches().filter(w => w.key !== s.key && w.pane === s.pane)
   if (!there.length) return []
   try {
@@ -1527,7 +1535,7 @@ async function takenOver(s: Session): Promise<string[]> {
 
 /** Ends the session's watch while watches are on (#486); the words its line gets for that. */
 async function endWatch(s: Session): Promise<string> {
-  if (!watchesConfig(cfg.watches)) return ''
+  if (!watchesConfig(gate.watches)) return ''
   const gone = endWatches(s.key, await takenOver(s))
   return gone.length ? ` · watch ${gone.map(w => w.id).join(', ')} ended` : ''
 }
@@ -1535,7 +1543,7 @@ async function endWatch(s: Session): Promise<string> {
 /** The lines of watches in `board schedule` (entrypoints/watch-cli.ts). */
 async function watchLines(list: WatchEntry[], withSession: boolean): Promise<string[]> {
   const { watchLine } = await import('./watch-cli.ts')
-  const on = !!watchesConfig(cfg.watches)
+  const on = !!watchesConfig(gate.watches)
   return list.map(w => watchLine(w, Date.now(), withSession, on))
 }
 

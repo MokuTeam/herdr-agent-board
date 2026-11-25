@@ -36,6 +36,7 @@ import type {
   BoardProfile,
   CalendarPayload,
   JournalPayload,
+  MasterFlagsPayload,
   NodeMasterPayload,
   ThreadsPayload,
   TimePayload,
@@ -149,6 +150,8 @@ interface Options {
   allowCallParent?: (device: string, parentKey: string) => boolean
   /** Master info for a node's local web board (#744); null on non-node or unpaired boards. */
   nodeMaster?: () => NodeMasterPayload | null
+  /** A node's master-owned features as its master sent them (#775); null elsewhere. */
+  masterFlags?: () => MasterFlagsPayload | null
 }
 
 // The colors the category editor offers (aliases left out).
@@ -305,6 +308,7 @@ export function createBoardState({
   turnResume,
   allowCallParent,
   nodeMaster,
+  masterFlags,
 }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
@@ -511,6 +515,11 @@ export function createBoardState({
       ...(nodeConfig(cfg.node) !== null && { machine: process.env.COMPUTERNAME || hostname() }),
       // nodeMaster: only on a pure node with at least one paired master (#744).
       ...nodeMasterOf(nodeMaster),
+      // masterFlags: only on a node whose master sent its flags (#775).
+      ...(() => {
+        const f = masterFlags?.() ?? null
+        return f ? { masterFlags: f } : {}
+      })(),
     }
   }
 

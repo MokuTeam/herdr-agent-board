@@ -27,13 +27,15 @@ import { type CardPatch, readCard, writeCard } from '../adapters/cards.ts'
 import { loadConfig } from '../adapters/config-file.ts'
 import { agentGet } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
-import { presenceForBrief, presenceNews } from '../adapters/presence-store.ts'
+import { nodeMasterFlags } from '../adapters/master-flags-store.ts'
+import { currentPresence, presenceForBrief, presenceNews } from '../adapters/presence-store.ts'
 import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
 import { readStdin } from '../adapters/stdin.ts'
 import { BRIEF_VERSION, brief, waitReminder } from '../core/brief.ts'
 import { calendarConfig } from '../core/calendar.ts'
 import { decisionsConfig } from '../core/decisions.ts'
 import { heldQuestionOf } from '../core/held-question.ts'
+import { briefFlags, withMasterFlags } from '../core/master-flags.ts'
 import { isNotice } from '../core/notices.ts'
 import { type Profile, profileReport } from '../core/profiles.ts'
 import { secretsConfig, usableSinks } from '../core/secrets.ts'
@@ -164,12 +166,17 @@ async function main(): Promise<void> {
   const briefed = card?.briefV ?? (card?.briefedAt ? 1 : 0)
   if (event === 'SessionStart' || (event === 'UserPromptSubmit' && Number(briefed) < BRIEF_VERSION)) {
     cfg = loadConfig()
-    // The user's presence (#172), only where config.json turned it on.
-    const presence = presenceForBrief(cfg)
+    // On a node (#775): the features its master has on, which config.json there no longer has.
+    // Without `node` nothing is read: `gated` is cfg and `via` says nothing.
+    const flags = nodeMasterFlags(cfg)
+    const gated = withMasterFlags(cfg, flags)
+    const via = briefFlags(flags)
+    // The user's presence (#172), only where config.json (or a node's master) turned it on.
+    const presence = presenceForBrief(cfg) ?? (via.presence ? currentPresence() : null)
     // The secret sinks (#273), only where config.json has any: else the brief is as it was.
     const sinks = cfg.secrets === undefined ? [] : usableSinks(secretsConfig(cfg.secrets, { home: homedir() }))
     // The calendar (#328), only while config.json turns it on: else the brief is as it was.
-    const calendar = calendarConfig(cfg.calendar) !== null
+    const calendar = calendarConfig(cfg.calendar) !== null || via.calendar
     context = brief(
       cfg,
       card,
@@ -177,15 +184,15 @@ async function main(): Promise<void> {
       process.env,
       'Claude',
       presence,
-      todosConfig(cfg.todos),
+      todosConfig(gated.todos),
       sinks,
       calendar,
       // Threads (#379), only while config.json turns them on: else the brief is as it was.
-      threadsConfig(cfg.threads),
+      threadsConfig(cfg.threads) ?? threadsConfig(via.threads),
       // Watches (#486), only while config.json turns them on: else the brief is as it was.
-      watchesConfig(cfg.watches) !== null,
+      watchesConfig(gated.watches) !== null,
       // Decisions (#487), likewise.
-      decisionsConfig(cfg.decisions),
+      decisionsConfig(gated.decisions),
     )
     Object.assign(patch, { briefedAt: Date.now(), briefV: BRIEF_VERSION })
     if (presence) patch.presenceSeen = presence.since
@@ -205,7 +212,9 @@ async function main(): Promise<void> {
   const start = event === 'SessionStart'
   if ((start || event === 'UserPromptSubmit') && (card?.todos !== undefined || card?.todosSeen !== undefined)) {
     cfg ??= loadConfig()
-    const tasks = todosConfig(cfg.todos)?.agents ? todosNews(start && card ? { ...card, todosSeen: '' } : card) : null
+    const tasks = todosConfig(withMasterFlags(cfg, nodeMasterFlags(cfg)).todos)?.agents
+      ? todosNews(start && card ? { ...card, todosSeen: '' } : card)
+      : null
     if (tasks) {
       if (tasks.line) context = context ? `${context}\n${tasks.line}` : tasks.line
       patch.todosSeen = tasks.seen

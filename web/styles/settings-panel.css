@@ -89,6 +89,14 @@
   color: var(--label-3);
 }
 
+/* A node's master-owned features (#775): set on the master, shown read-only here. */
+.set-owned {
+  display: block;
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--label-2);
+}
+
 .set-group {
   border: 1px solid var(--border);
   border-radius: var(--r-md);

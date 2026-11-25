@@ -222,6 +222,13 @@ export function SettingsPanel({
   const presenceMode: PresenceMode | 'none' = data?.presence?.mode ?? 'none'
   const idleMinutes = data?.presence?.idleMinutes ?? 15
   const todosMode: TodoMode = todoModeOf(data?.todos ?? null)
+  // A node's master-owned features (#775): shown as they are, set on the master, not here.
+  const masterOwned = data?.masterFlags ?? null
+  const ownedNote = masterOwned ? (
+    <small className="set-owned" title={new Date(masterOwned.at).toLocaleString()}>
+      {t('node.masterOwned', { name: masterOwned.master })}
+    </small>
+  ) : null
   const threadsInfo = data && canAdmin ? threadsNow(data) : null
   const features = data && canAdmin ? featuresNow(data) : null
   const compact = data?.compactDefault
@@ -298,7 +305,7 @@ export function SettingsPanel({
       </div>
       <Segmented
         label={t('set.todos')}
-        disabled={!canEdit}
+        disabled={!canEdit || !!masterOwned}
         value={todosMode}
         options={TODO_MODES.map(id => ({ value: id, label: t(`set.todos.${id}`) }))}
         onChange={pickTodos}
@@ -468,12 +475,14 @@ export function SettingsPanel({
                   <div className="set-row">
                     <div className="set-lbl">
                       <b>{t('set.presence')}</b>
-                      <small>{t('set.presence.note')}</small>
+                      <small>
+                        {masterOwned ? t('node.masterOwned', { name: masterOwned.master }) : t('set.presence.note')}
+                      </small>
                     </div>
                     <select
                       className="set-select"
                       aria-label={t('set.presence')}
-                      disabled={!canEdit}
+                      disabled={!canEdit || !!masterOwned}
                       value={presenceMode}
                       onChange={e => {
                         const v = e.currentTarget.value as PresenceMode | 'none'
@@ -496,7 +505,7 @@ export function SettingsPanel({
                     <select
                       className="set-select"
                       aria-label={t('set.presence.idleLabel')}
-                      disabled={!canEdit}
+                      disabled={!canEdit || !!masterOwned}
                       value={idleMinutes}
                       onChange={e => pickPresence({ on: true, idleMinutes: Number(e.currentTarget.value) })}
                     >
@@ -557,6 +566,7 @@ export function SettingsPanel({
                 <h3>{t('set.sec.features')}</h3>
                 <span className="set-scope">{t('set.scope.board')}</span>
               </div>
+              {ownedNote}
               <div className="set-group">
                 {todosRow}
                 {threadsInfo && (
@@ -568,7 +578,7 @@ export function SettingsPanel({
                       </div>
                       <Segmented
                         label={t('set.threads')}
-                        disabled={!canEdit}
+                        disabled={!canEdit || !!masterOwned}
                         value={threadsInfo.mode}
                         options={THREAD_MODES.map(id => ({ value: id, label: t(`set.threads.${id}`) }))}
                         onChange={mode => pickThreads({ mode })}
@@ -582,7 +592,7 @@ export function SettingsPanel({
                               <label className="set-chk">
                                 <input
                                   type="checkbox"
-                                  disabled={!canEdit}
+                                  disabled={!canEdit || !!masterOwned}
                                   checked={threadsInfo.share}
                                   onChange={e => pickThreads({ share: e.currentTarget.checked })}
                                 />
@@ -593,7 +603,7 @@ export function SettingsPanel({
                               <label className="set-chk" title={t('set.cases.note')}>
                                 <input
                                   type="checkbox"
-                                  disabled={!canEdit}
+                                  disabled={!canEdit || !!masterOwned}
                                   checked={features.threadsCases}
                                   onChange={e => pickThreads({ cases: e.currentTarget.checked })}
                                 />
@@ -605,7 +615,7 @@ export function SettingsPanel({
                         {features?.threadsVerify !== undefined && (
                           <VerifySettings
                             verifyOn={features.threadsVerify}
-                            canEdit={canEdit}
+                            canEdit={canEdit && !masterOwned}
                             onToggle={next => pickThreads({ verify: next })}
                           />
                         )}
@@ -629,7 +639,7 @@ export function SettingsPanel({
                           <label className="set-chk">
                             <input
                               type="checkbox"
-                              disabled={!canEdit}
+                              disabled={!canEdit || !!masterOwned}
                               checked={features.decisionsDefaults}
                               onChange={e => pickFeature({ decisionsDefaults: e.currentTarget.checked })}
                             />
@@ -638,7 +648,7 @@ export function SettingsPanel({
                         )}
                         <Switch
                           checked={!!features.decisions}
-                          disabled={!canEdit}
+                          disabled={!canEdit || !!masterOwned}
                           label={t('set.decisions')}
                           onToggle={() => pickFeature({ decisions: !features.decisions })}
                         />
@@ -655,7 +665,7 @@ export function SettingsPanel({
                       </div>
                       <Switch
                         checked={!!features.watches}
-                        disabled={!canEdit}
+                        disabled={!canEdit || !!masterOwned}
                         label={t('set.watches')}
                         onToggle={() => pickFeature({ watches: !features.watches })}
                       />
@@ -671,7 +681,7 @@ export function SettingsPanel({
                       </div>
                       <Switch
                         checked={!!features.journal}
-                        disabled={!canEdit}
+                        disabled={!canEdit || !!masterOwned}
                         label={t('set.journal')}
                         onToggle={() => pickFeature({ journal: !features.journal })}
                       />

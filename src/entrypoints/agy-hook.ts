@@ -7,12 +7,14 @@ import { type CardPatch, readCard, writeCard } from '../adapters/cards.ts'
 import { loadConfig } from '../adapters/config-file.ts'
 import { agentGet } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
-import { presenceForBrief, presenceNews } from '../adapters/presence-store.ts'
+import { nodeMasterFlags } from '../adapters/master-flags-store.ts'
+import { currentPresence, presenceForBrief, presenceNews } from '../adapters/presence-store.ts'
 import { readStdin } from '../adapters/stdin.ts'
 import { AGY_AGENT, isAgySession } from '../core/agy.ts'
 import { BRIEF_VERSION, brief, waitReminder } from '../core/brief.ts'
 import { calendarConfig } from '../core/calendar.ts'
 import { decisionsConfig } from '../core/decisions.ts'
+import { briefFlags, withMasterFlags } from '../core/master-flags.ts'
 import { isNotice } from '../core/notices.ts'
 import { secretsConfig, usableSinks } from '../core/secrets.ts'
 import { todosConfig, todosNews } from '../core/todos.ts'
@@ -81,10 +83,14 @@ async function main(): Promise<void> {
   }
 
   const cfg = loadConfig()
-  const todos = todosConfig(cfg.todos)
+  // On a node (#775): the features its master has on; without `node` nothing is read and these are cfg's own.
+  const flags = nodeMasterFlags(cfg)
+  const gated = withMasterFlags(cfg, flags)
+  const via = briefFlags(flags)
+  const todos = todosConfig(gated.todos)
   let context: string | null = null
   if (event === 'SessionStart' || Number(card?.briefV ?? 0) < BRIEF_VERSION) {
-    const presence = presenceForBrief(cfg)
+    const presence = presenceForBrief(cfg) ?? (via.presence ? currentPresence() : null)
     const cwd =
       typeof input.cwd === 'string' && input.cwd
         ? input.cwd
@@ -92,10 +98,10 @@ async function main(): Promise<void> {
           ? input.workspacePaths[0]
           : ''
     const sinks = cfg.secrets === undefined ? [] : usableSinks(secretsConfig(cfg.secrets, { home: homedir() }))
-    const calendar = calendarConfig(cfg.calendar) !== null
-    const threads = threadsConfig(cfg.threads)
-    const watches = watchesConfig(cfg.watches) !== null
-    const decisions = decisionsConfig(cfg.decisions)
+    const calendar = calendarConfig(cfg.calendar) !== null || via.calendar
+    const threads = threadsConfig(cfg.threads) ?? threadsConfig(via.threads)
+    const watches = watchesConfig(gated.watches) !== null
+    const decisions = decisionsConfig(gated.decisions)
     context = [
       brief(cfg, card, cwd, process.env, 'Antigravity', presence, todos, sinks, calendar, threads, watches, decisions),
       `Use \`board --session ${sid} <command>\` for the commands above if a tool shell does not inherit the herdr pane environment.`,

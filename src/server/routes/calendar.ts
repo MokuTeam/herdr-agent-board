@@ -18,6 +18,7 @@
 import { addBoardEvent, CalError, editBoardEvent, removeBoardEvent } from '../../adapters/calendar-store.ts'
 import { DbError } from '../../adapters/db.ts'
 import { isRecord } from '../../adapters/json-store.ts'
+import { masterOwnedEdit } from '../../adapters/master-flags-store.ts'
 import { isInstant } from '../../core/calendar.ts'
 import { REMINDER_ACTS, REMINDER_ID, type ReminderAct } from '../../core/calendar-reminders.ts'
 import { t } from '../../core/lang.ts'
@@ -225,6 +226,9 @@ export function calendarRoutes(cfg: Config, sync: CalendarSync, rem?: ReminderRo
       async handle(_req, ctx) {
         const body = await ctx.rawBody()
         if (isRecord(body) && body.op === 'test') return json(200, await testSource(body))
+        // On a node the calendar is set on the master (#775).
+        const owned = masterOwnedEdit((await import('../../adapters/config-file.ts')).readConfigFile())
+        if (owned) return json(409, owned)
         const r = editCalendarSettings(body)
         if (r.ok) {
           // the live config follows a moment later; the board's sync and line follow now

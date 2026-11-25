@@ -19,9 +19,10 @@
 // GET and POST /api/time-settings are Settings → Time (services/time-settings.ts): on this
 // computer's board only (core/remote.ts localOnly), as Settings → Backup… is.
 import { existsSync } from 'node:fs'
-import { freshTime } from '../../adapters/config-file.ts'
+import { freshTime, readConfigFile } from '../../adapters/config-file.ts'
 import { type BoardDb, DbError, dbFile, openDb } from '../../adapters/db.ts'
 import { isRecord } from '../../adapters/json-store.ts'
+import { masterOwnedEdit } from '../../adapters/master-flags-store.ts'
 import {
   addEntry,
   editEntry,
@@ -501,6 +502,9 @@ export function timeRoutes(cfg: Config): Route[] {
       path: '/api/time-settings',
       guard: ['board-header', 'origin'],
       async handle(_req, ctx) {
+        // On a node time is set on the master (#775).
+        const owned = masterOwnedEdit(readConfigFile())
+        if (owned) return json(409, owned)
         const r = editTimeSettings(await ctx.rawBody(), withDb)
         // the next change (an entry added at once) is checked against what was just written
         if (r.ok) freshTime(cfg)

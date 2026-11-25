@@ -215,9 +215,21 @@ export interface BoardPayload {
    * one paired master (`node` set, `nodes` unset).
    */
   nodeMaster?: NodeMasterPayload
+  /**
+   * A node's master-owned features as its master last sent them (#775): Settings shows these as
+   * set on the master `master` (its name), not on this computer. Only on a node that has them.
+   */
+  masterFlags?: MasterFlagsPayload
 }
 
 export type { NodeMasterPayload }
+
+/** The master-owned features on at a node's master (#775, core/master-flags.ts), and when they came (ms). */
+export interface MasterFlagsPayload {
+  master: string
+  at: number
+  on: string[]
+}
 
 /**
  * A device as the master's payload shows it (#500): its link and its last status as `GET

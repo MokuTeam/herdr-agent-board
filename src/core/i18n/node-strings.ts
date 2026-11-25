@@ -475,6 +475,10 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.banner.text': 'This is node {id}. The shared board is on master {name}',
     'node.banner.offline': "master is unreachable, showing only this machine's sessions",
     'node.banner.open': 'Open shared board',
+    // A node's master-owned features (#775)
+    'node.masterOwned': 'Set on the master {name}',
+    'node.masterOwnedNone': 'Set on the master board',
+    'node.masterOwned.since': 'as the master last said {when}',
   },
   ru: {
     'node.step.check': 'Проверить сервер',
@@ -952,5 +956,9 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.banner.text': 'Это нода {id}. Общая доска на мастере {name}',
     'node.banner.offline': 'мастер недоступен, показаны только сессии этой машины',
     'node.banner.open': 'Открыть общую доску',
+    // A node's master-owned features (#775)
+    'node.masterOwned': 'Настраивается на мастере {name}',
+    'node.masterOwnedNone': 'Настраивается на мастере',
+    'node.masterOwned.since': 'как мастер сказал {when}',
   },
 }
