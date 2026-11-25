@@ -313,6 +313,7 @@ describe('handover direct probe & automatic relay setup (#740)', () => {
         expect(addresses).toEqual(['100.88.1.2'])
         return { ok: true, host: '100.88.1.2', url: `https://100.88.1.2:${nodePort}` }
       },
+      portFree: () => true,
       hostName: () => 'anna-laptop',
       log: () => {},
     })
@@ -436,6 +437,7 @@ describe('handover direct probe & automatic relay setup (#740)', () => {
       reloadConfig: async () => {},
       ownAddresses: () => ['127.0.0.1'],
       probeDirect: async () => ({ ok: false }),
+      portFree: () => true,
       generateKey: async () => ({ ok: true, publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDialPubKey test' }),
       hostName: () => 'anna-laptop',
       log: () => {},
@@ -558,6 +560,7 @@ describe('handover direct probe & automatic relay setup (#740)', () => {
       afterDbReplace: () => {},
       reloadConfig: async () => {},
       probeDirect: async () => ({ ok: false }),
+      portFree: () => true,
       generateKey: async () => ({ ok: true, publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDialPubKey test' }),
       hostName: () => 'laptop',
       log: t => logs.push(t),
@@ -683,6 +686,7 @@ describe('handover direct probe & automatic relay setup (#740)', () => {
       afterDbReplace: () => {},
       reloadConfig: async () => {},
       probeDirect: async () => ({ ok: false }),
+      portFree: () => true,
       generateKey: async () => ({ ok: true, publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDialPubKey test' }),
       hostName: () => 'laptop',
       log: () => {},
@@ -816,6 +820,7 @@ describe('handover direct probe & automatic relay setup (#740)', () => {
         touchedProbeOrRelay = true
         return { ok: false }
       },
+      portFree: () => true,
       hostName: () => 'laptop',
       log: () => {},
     })
@@ -852,6 +857,7 @@ describe('handover direct probe & automatic relay setup (#740)', () => {
         touchedProbeOrRelay = true
         return { ok: false }
       },
+      portFree: () => true,
       hostName: () => 'laptop',
       log: () => {},
     })
@@ -982,6 +988,7 @@ describe('handover direct probe & automatic relay setup (#740)', () => {
       afterDbReplace: () => {},
       reloadConfig: async () => {},
       probeDirect: async () => ({ ok: false }),
+      portFree: () => true,
       generateKey: async () => ({ ok: true, publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDialPubKey test' }),
       hostName: () => 'laptop',
       log: t => logs.push(t),
@@ -1185,6 +1192,7 @@ describe('handover direct probe & automatic relay setup (#740)', () => {
       afterDbReplace: () => {},
       reloadConfig: async () => {},
       probeDirect: async () => ({ ok: false }),
+      portFree: () => true,
       generateKey: async () => ({ ok: true, publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDialPubKey test' }),
       hostName: () => 'laptop',
       log: () => {},

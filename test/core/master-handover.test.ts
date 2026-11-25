@@ -5,6 +5,7 @@ import {
   buildOldMasterRelayNodeConfig,
   buildTargetMasterConfig,
   collectDirectProbeAddresses,
+  describeOldMasterLinkProblem,
   flipNodesConfig,
   formatDirectHttpsUrl,
   formatHandoverPlan,
@@ -13,11 +14,13 @@ import {
   type HandoverManifest,
   isBackupTargetSelf,
   isDirectProbeIp,
+  isNodeListedOffline,
   isSafeHandoverRelPath,
   packHandoverBundle,
   parseMasterCliArgs,
   parseReverseLinkSpec,
   relayTargetEndpoint,
+  resolveHandoverDoorPort,
   unpackHandoverBundle,
 } from '../../src/core/master-handover.ts'
 import { nodesConfig } from '../../src/core/nodes.ts'
@@ -509,5 +512,101 @@ describe('core/master-handover (#697)', () => {
       warnings: [],
     })
     expect(lines.some(l => l.includes('relay') && l.includes('atlas.example.com:2222'))).toBe(true)
+  })
+
+  test('resolveHandoverDoorPort checks bindability, auto-picks when default is taken, and refuses explicit taken port (#742)', async () => {
+    expect(await resolveHandoverDoorPort({ preferred: 12430, isFree: () => true })).toEqual({
+      ok: true,
+      port: 12430,
+      preferred: 12430,
+      autoPicked: false,
+      alreadyListening: false,
+    })
+
+    // Taken default skips 12430 and reserved board ports 12421/12422
+    const taken = new Set([12420, 12421, 12422, 12423])
+    expect(await resolveHandoverDoorPort({ preferred: 12420, isFree: p => !taken.has(p) })).toEqual({
+      ok: true,
+      port: 12424,
+      preferred: 12420,
+      autoPicked: true,
+      alreadyListening: false,
+    })
+
+    // Explicit taken port refuses with plain sentence naming the port
+    const explicitTaken = await resolveHandoverDoorPort({ explicit: 12430, preferred: 12430, isFree: () => false })
+    expect(explicitTaken).toEqual({
+      ok: false,
+      error: 'node door port 12430 on 127.0.0.1 is already in use',
+    })
+
+    // Own door already listening passes without invoking isFree
+    let probed = false
+    expect(
+      await resolveHandoverDoorPort({
+        preferred: 12430,
+        ownListeningPort: 12430,
+        isFree: () => {
+          probed = true
+          return false
+        },
+      }),
+    ).toEqual({
+      ok: true,
+      port: 12430,
+      preferred: 12430,
+      autoPicked: false,
+      alreadyListening: true,
+    })
+    expect(probed).toBe(false)
+
+    // Range exhausted
+    expect(await resolveHandoverDoorPort({ preferred: 12430, range: 2, isFree: () => false })).toEqual({
+      ok: false,
+      error: 'no free node door port on 127.0.0.1 (tried 12430-12432)',
+    })
+  })
+
+  test('isNodeListedOffline and describeOldMasterLinkProblem identify exact nodes and local door/relay causes (#742)', () => {
+    expect(isNodeListedOffline('not online: laptop (connecting), server-2 (offline)', 'laptop')).toBe(true)
+    expect(isNodeListedOffline('missing: laptop; not online: server-2 (connecting)', 'laptop')).toBe(true)
+    expect(isNodeListedOffline('not online: laptop-2 (connecting)', 'laptop')).toBe(false)
+    expect(isNodeListedOffline('master node links are not active', 'laptop')).toBe(false)
+
+    expect(
+      describeOldMasterLinkProblem(
+        { listening: null, error: 'Cannot listen on 127.0.0.1:12430: EADDRINUSE', relay: null },
+        { port: 12430, usesRelay: true },
+      ),
+    ).toBe('door not listening on port 12430 (Cannot listen on 127.0.0.1:12430: EADDRINUSE)')
+
+    expect(
+      describeOldMasterLinkProblem(
+        { listening: 12430, error: null, relay: { state: 'off', idleReason: 'no relay key at /s/node/relay-key' } },
+        { port: 12430, usesRelay: true },
+      ),
+    ).toBe('relay dial not started (no relay key at /s/node/relay-key)')
+
+    expect(
+      describeOldMasterLinkProblem(
+        {
+          listening: 12430,
+          error: null,
+          relay: { state: 'error', error: 'ssh line 1\nPermission denied (publickey).' },
+        },
+        { port: 12430, usesRelay: true },
+      ),
+    ).toBe('relay dial ssh exited: Permission denied (publickey).')
+
+    expect(
+      describeOldMasterLinkProblem(
+        { listening: 12430, error: null, relay: { state: 'connected' } },
+        { port: 12430, usesRelay: true },
+      ),
+    ).toBeNull()
+
+    expect(
+      describeOldMasterLinkProblem({ listening: 12430, error: null, relay: null }, { port: 12430, usesRelay: false }),
+    ).toBeNull()
   })
 })

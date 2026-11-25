@@ -209,9 +209,12 @@ describe('createRelayDial supervisor lifecycle', () => {
   test('without relay, without tls, or without relay-key: spawns no ssh and creates no pid record', async () => {
     const wNoRelay = dialWorld({ ...NODE_CFG, relay: null })
     await wNoRelay.dial.sync()
+    await wNoRelay.dial.sync()
     expect(wNoRelay.spawns).toHaveLength(0)
     expect(wNoRelay.record).toBeNull()
     expect(wNoRelay.dial.status().state).toBe('off')
+    expect(wNoRelay.dial.idleReason()).toBe('node.relay is not configured')
+    expect(wNoRelay.logs.filter(l => l.includes('node.relay is not configured'))).toHaveLength(1)
 
     const wNoTls = dialWorld({ ...NODE_CFG, tls: false })
     await wNoTls.dial.sync()
@@ -224,10 +227,36 @@ describe('createRelayDial supervisor lifecycle', () => {
     const wNoKey = dialWorld(NODE_CFG)
     wNoKey.hasKey = false
     await wNoKey.dial.sync()
+    await wNoKey.dial.sync()
     expect(wNoKey.spawns).toHaveLength(0)
     expect(wNoKey.record).toBeNull()
     expect(wNoKey.dial.status().state).toBe('off')
-    expect(wNoKey.logs.some(l => l.includes('no relay key'))).toBe(true)
+    expect(wNoKey.logs.filter(l => l.includes('no relay key'))).toHaveLength(1)
+
+    // Door not listening logs once per state change, clears when listening, and logs once again if door drops (#742)
+    const wNoDoor = dialWorld(NODE_CFG)
+    wNoDoor.doorPort = null
+    await wNoDoor.dial.sync()
+    await wNoDoor.dial.sync()
+    expect(wNoDoor.spawns).toHaveLength(0)
+    expect(wNoDoor.dial.idleReason()).toBe('node door is not listening on port 12430')
+    expect(wNoDoor.logs.filter(l => l.includes('node door is not listening on port 12430'))).toHaveLength(1)
+    wNoDoor.doorPort = 12430
+    await wNoDoor.dial.sync()
+    expect(wNoDoor.spawns).toHaveLength(1)
+    expect(wNoDoor.dial.idleReason()).toBeNull()
+    wNoDoor.doorPort = null
+    await wNoDoor.dial.sync()
+    expect(wNoDoor.logs.filter(l => l.includes('node door is not listening on port 12430'))).toHaveLength(2)
+    await wNoDoor.dial.close()
+
+    // Invalid socket name logs once per state change (#742)
+    const wBadSock = dialWorld({ ...NODE_CFG, relay: { ...RELAY, socket: '../evil' } })
+    await wBadSock.dial.sync()
+    await wBadSock.dial.sync()
+    expect(wBadSock.spawns).toHaveLength(0)
+    expect(wBadSock.dial.idleReason()).toContain('invalid relay socket name')
+    expect(wBadSock.logs.filter(l => l.includes('invalid relay socket name'))).toHaveLength(1)
   })
 
   test('backoff grows on exits, resets after 60 s connected, and lasting errors retry every 60 s', async () => {

@@ -110,6 +110,8 @@ export interface RelayDial {
   sync(): Promise<void>
   restart(): Promise<void>
   status(): TunnelStatus
+  /** Reason `plan()` last returned null while `node` is configured, or null. */
+  idleReason(): string | null
   running(): boolean
   killNow(): void
   close(): Promise<void>
@@ -126,39 +128,51 @@ export function createRelayDial(o: RelayDialOptions): RelayDial {
   const socketsDir = o.socketsDir ?? relaySocketsDir
   const bin = o.bin ?? (() => sshBin())
   const pidFile = nodeRelayPidFile()
-  let warnedMissingKey = false
-  let warnedNoTls = false
+  let lastReasonKey: string | null = null
+  let lastIdleReason: string | null = null
+
+  const idle = (key: string, reason: string | null, logLine?: string): null => {
+    lastIdleReason = reason
+    if (key !== lastReasonKey) {
+      lastReasonKey = key
+      if (logLine) o.log(logLine)
+    }
+    return null
+  }
 
   const supervisor: Supervisor = createSupervisor({
     label: 'relay dial',
     pace: o.pace ?? pace(),
     plan: () => {
       const n = o.node()
-      const port = o.doorPort()
-      if (!n?.relay || port === null || port <= 0) {
-        warnedMissingKey = false
-        warnedNoTls = false
-        return null
+      if (!n) return idle('no-node', null)
+      if (!n.relay) {
+        return idle(
+          'no-relay',
+          'node.relay is not configured',
+          'relay dial: not started (node.relay is not configured)',
+        )
       }
       if (!n.tls) {
-        warnedMissingKey = false
-        if (!warnedNoTls) {
-          warnedNoTls = true
-          o.log('relay dial: refusing to forward plaintext door (node.tls must be true)')
-        }
-        return null
+        return idle(
+          'no-tls',
+          'refusing to forward plaintext door (node.tls must be true)',
+          'relay dial: refusing to forward plaintext door (node.tls must be true)',
+        )
       }
-      warnedNoTls = false
+      const port = o.doorPort()
+      if (port === null || port <= 0) {
+        return idle(
+          `no-door:${n.port}`,
+          `node door is not listening on port ${n.port}`,
+          `relay dial: not started (node door is not listening on port ${n.port})`,
+        )
+      }
       const key = keyPath()
       if (!keyExists(key)) {
-        if (!warnedMissingKey) {
-          warnedMissingKey = true
-          o.log(`relay dial: no relay key at ${key}`)
-        }
-        return null
+        return idle(`no-key:${key}`, `no relay key at ${key}`, `relay dial: no relay key at ${key}`)
       }
-      warnedMissingKey = false
-      return relayDialPlan({
+      const built = relayDialPlan({
         node: n,
         doorPort: port,
         key,
@@ -166,6 +180,16 @@ export function createRelayDial(o: RelayDialOptions): RelayDial {
         socketsDir: socketsDir(),
         bin: bin() ?? 'ssh',
       })
+      if (!built) {
+        return idle(
+          `bad-socket:${n.relay.socket}`,
+          `invalid relay socket name ${JSON.stringify(n.relay.socket)}`,
+          `relay dial: invalid relay socket name ${JSON.stringify(n.relay.socket)}`,
+        )
+      }
+      lastReasonKey = null
+      lastIdleReason = null
+      return built
     },
     spawn: o.spawn ?? spawnSsh,
     stray: o.stray ?? {
@@ -186,6 +210,7 @@ export function createRelayDial(o: RelayDialOptions): RelayDial {
     sync: () => supervisor.sync(),
     restart: () => supervisor.restart(),
     status: () => supervisor.status(),
+    idleReason: () => lastIdleReason,
     running: () => supervisor.running(),
     killNow: () => supervisor.killNow(),
     close: () => supervisor.close(),

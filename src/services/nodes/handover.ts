@@ -40,6 +40,7 @@ import {
   buildOldMasterNodeConfig,
   buildOldMasterRelayNodeConfig,
   collectDirectProbeAddresses,
+  describeOldMasterLinkProblem,
   flipNodesConfig,
   formatDirectHttpsUrl,
   HANDOVER_DISK_MULTIPLIER,
@@ -54,10 +55,13 @@ import {
   type HandoverVerifyResult,
   type HandoverView,
   isBackupTargetSelf,
+  isNodeListedOffline,
   MAX_HANDOVER_BUNDLE_BYTES,
   MIN_HANDOVER_FREE_MB,
+  type OldMasterDoorDiag,
   parseReverseLinkSpec,
   relayTargetEndpoint,
+  resolveHandoverDoorPort,
 } from '../../core/master-handover.ts'
 
 import { LOCAL } from '../../core/node-key.ts'
@@ -130,8 +134,12 @@ export interface MasterHandoverOptions {
   }) => Promise<{ ok: true; host: string; url: string } | { ok: false }>
   /** Pre-check local relay sudo readiness on committed new-master rollback. */
   checkLocalRelay?: (opts: { host: string; sshPort: number; sudoPassword?: string }) => Promise<LocalRelayAnswer>
-  /** Override local relay undo on committed/localOnly rollback (tests). */
+  /** Overrides local relay setup/undo on committed/localOnly rollback (tests). */
   undoLocalRelay?: (opts: { host: string; sshPort: number; sudoPassword?: string }) => Promise<LocalRelayAnswer>
+  /** Tests whether a local TCP port on 127.0.0.1 is free to bind (tests). */
+  portFree?: (port: number) => Promise<boolean> | boolean
+  /** Snapshot of the old master's local node door and relay dialer state for verify diagnostics. */
+  localDoor?: () => OldMasterDoorDiag
   generateKey?: (
     comment: string,
     path: string,
@@ -172,6 +180,25 @@ interface TargetCheckResponse {
 }
 
 const msg = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
+async function defaultPortFree(port: number): Promise<boolean> {
+  let srv: ReturnType<typeof Bun.serve> | null = null
+  try {
+    srv = Bun.serve({
+      hostname: '127.0.0.1',
+      port,
+      idleTimeout: 0,
+      development: false,
+      reusePort: false,
+      fetch: () => new Response(''),
+    })
+    return true
+  } catch {
+    return false
+  } finally {
+    await srv?.stop(true).catch(() => {})
+  }
+}
 
 const stampId = (at: number): string => {
   const iso = new Date(at).toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15)
@@ -518,8 +545,30 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
       }
     }
 
-    // Reverse link check
+    // Node door port check (bind test on 127.0.0.1, auto-pick if default is taken)
     const existingNode = nodeConfig(rawCfg.node)
+    const preferredPort = existingNode?.port ?? NODE_PORT
+    const doorRes = await resolveHandoverDoorPort({
+      ...(opts.nodePort !== undefined && { explicit: opts.nodePort }),
+      preferred: preferredPort,
+      ownListeningPort: o.localDoor?.().listening ?? null,
+      isFree: o.portFree ?? defaultPortFree,
+    })
+    let resolvedDoorPort = opts.nodePort ?? preferredPort
+    if (!doorRes.ok) {
+      failCheck('doorPort', doorRes.error)
+    } else {
+      resolvedDoorPort = doorRes.port
+      if (doorRes.autoPicked) {
+        passCheck('doorPort', `127.0.0.1:${doorRes.preferred} is in use; auto-picked ${doorRes.port}`)
+      } else if (doorRes.alreadyListening) {
+        passCheck('doorPort', `node door already listening on 127.0.0.1:${doorRes.port}`)
+      } else {
+        passCheck('doorPort', `127.0.0.1:${doorRes.port} is free`)
+      }
+    }
+
+    // Reverse link check
     let reverseLink: LinkConfig | null = null
     let relaySetup: HandoverPlan['relaySetup']
 
@@ -527,7 +576,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
       const rev = parseReverseLinkSpec({
         spec: opts.reverseLink ?? null,
         oldMasterId: nCfg.id,
-        oldMasterNodePort: opts.nodePort ?? existingNode?.port ?? NODE_PORT,
+        oldMasterNodePort: resolvedDoorPort,
         existingSocket: existingNode?.relay?.socket ?? null,
         targetLink: targetDev?.link ?? null,
         hasRelay: nCfg.relay !== null,
@@ -566,7 +615,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
     } else if (!targetDev?.link || !link || !linkOnline || !targetCheck) {
       failCheck('reverseLink', `${targetId} must be online to detect reverse connectivity`)
     } else {
-      const doorPort = opts.nodePort ?? existingNode?.port ?? NODE_PORT
+      const doorPort = resolvedDoorPort
       const doorCert = ensureDoorCert(nCfg.id, nodeDir())
       const addrs = collectDirectProbeAddresses((o.ownAddresses ?? systemOwnAddresses)())
       const direct = await (o.probeDirect ?? defaultProbeDirect)({
@@ -668,6 +717,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
         to: targetId,
         targetTitle,
         commit: ownCommit,
+        nodePort: resolvedDoorPort,
         reverseLink,
         checks,
         items: collected.summary,
@@ -915,7 +965,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
           const oldNodeStore = createNodeStore({ dir: nodeDir() })
           const { token: reverseToken } = oldNodeStore.add(plan.to, 'hand')
           const existingNode = nodeConfig(rawCfg.node)
-          const nodePort = opts.nodePort ?? existingNode?.port ?? NODE_PORT
+          const nodePort = plan.nodePort ?? opts.nodePort ?? existingNode?.port ?? NODE_PORT
           let reverseCert: string | undefined
 
           if (plan.reverseLink.kind === 'relay') {
@@ -1143,6 +1193,24 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
               if (verify.ok) break
             }
             if (Date.now() >= deadline) {
+              const oldMasterReason =
+                verify && oldNodeCfg
+                  ? describeOldMasterLinkProblem(o.localDoor?.(), {
+                      port: oldNodeCfg.port,
+                      usesRelay: Boolean(oldNodeCfg.relay),
+                    })
+                  : null
+              if (verify && oldMasterReason) {
+                verify = {
+                  ...verify,
+                  checks: verify.checks.map(c =>
+                    c.name === 'nodes' && !c.ok && isNodeListedOffline(c.detail, plan.from)
+                      ? { ...c, detail: `${c.detail}; ${plan.from}: ${oldMasterReason}` }
+                      : c,
+                  ),
+                }
+                lastVerify = verify
+              }
               const detail = verify
                 ? verify.checks
                     .filter(c => !c.ok)

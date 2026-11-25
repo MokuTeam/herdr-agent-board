@@ -10,6 +10,8 @@ export const HANDOVER_VERSION = 1
 export const MIN_HANDOVER_FREE_MB = 64
 export const HANDOVER_DISK_MULTIPLIER = 3
 export const MAX_HANDOVER_BUNDLE_BYTES = 256 * 1024 * 1024
+export const HANDOVER_DOOR_PORT_RANGE = 20
+const RESERVED_BOARD_PORTS = new Set([12421, 12422])
 
 export const HANDOVER_CATEGORIES = [
   'db',
@@ -27,7 +29,17 @@ export const HANDOVER_CATEGORIES = [
 export type HandoverCategory = (typeof HANDOVER_CATEGORIES)[number]
 
 export interface HandoverCheckItem {
-  id: 'master' | 'target' | 'online' | 'commit' | 'targetRole' | 'backup' | 'disk' | 'reverseLink' | 'otherNodes'
+  id:
+    | 'master'
+    | 'target'
+    | 'online'
+    | 'commit'
+    | 'targetRole'
+    | 'backup'
+    | 'disk'
+    | 'doorPort'
+    | 'reverseLink'
+    | 'otherNodes'
   ok: boolean
   detail: string
   blocking: boolean
@@ -71,6 +83,7 @@ export interface HandoverPlan {
   to: string
   targetTitle: string
   commit: string
+  nodePort?: number
   reverseLink: LinkConfig | null
   checks: HandoverCheckItem[]
   items: HandoverSummaryItem[]
@@ -311,6 +324,108 @@ export function isBackupTargetSelf(serverHost: string, selfNames: readonly strin
 }
 
 const PORT_OK = (n: number): boolean => Number.isInteger(n) && n > 0 && n < 65536
+
+export type DoorPortResolution =
+  | { ok: true; port: number; preferred: number; autoPicked: boolean; alreadyListening: boolean }
+  | { ok: false; error: string }
+
+/**
+ * Checks whether the old master's node door port is free on 127.0.0.1.
+ * When `explicit` is omitted and `preferred` is in use, picks the next free port in a small range.
+ * When `explicit` is given and in use, refuses with a plain message naming the port.
+ */
+export async function resolveHandoverDoorPort(o: {
+  explicit?: number
+  preferred: number
+  ownListeningPort?: number | null
+  isFree: (port: number) => Promise<boolean> | boolean
+  range?: number
+}): Promise<DoorPortResolution> {
+  if (o.explicit !== undefined) {
+    if (!PORT_OK(o.explicit)) return { ok: false, error: `invalid node door port ${o.explicit}` }
+    if (o.ownListeningPort === o.explicit) {
+      return { ok: true, port: o.explicit, preferred: o.explicit, autoPicked: false, alreadyListening: true }
+    }
+    if (await o.isFree(o.explicit)) {
+      return { ok: true, port: o.explicit, preferred: o.explicit, autoPicked: false, alreadyListening: false }
+    }
+    return { ok: false, error: `node door port ${o.explicit} on 127.0.0.1 is already in use` }
+  }
+
+  const start = PORT_OK(o.preferred) ? o.preferred : NODE_PORT
+  if (o.ownListeningPort === start) {
+    return { ok: true, port: start, preferred: start, autoPicked: false, alreadyListening: true }
+  }
+  if (await o.isFree(start)) {
+    return { ok: true, port: start, preferred: start, autoPicked: false, alreadyListening: false }
+  }
+  const span = o.range ?? HANDOVER_DOOR_PORT_RANGE
+  const end = Math.min(65535, start + span)
+  for (let p = start + 1; p <= end; p++) {
+    if (RESERVED_BOARD_PORTS.has(p)) continue
+    if (o.ownListeningPort === p) {
+      return { ok: true, port: p, preferred: start, autoPicked: true, alreadyListening: true }
+    }
+    if (await o.isFree(p)) {
+      return { ok: true, port: p, preferred: start, autoPicked: true, alreadyListening: false }
+    }
+  }
+  return { ok: false, error: `no free node door port on 127.0.0.1 (tried ${start}-${end})` }
+}
+
+export interface OldMasterDoorDiag {
+  listening: number | null
+  error: string | null
+  relay?: {
+    state: 'off' | 'connecting' | 'connected' | 'reconnecting' | 'error'
+    error?: string
+    idleReason?: string | null
+  } | null
+}
+
+/** True when a failing `nodes` verify detail lists `nodeId` as missing or not online. */
+export function isNodeListedOffline(detail: string, nodeId: string): boolean {
+  if (!detail || !nodeId) return false
+  for (const part of detail.split(';')) {
+    const trimmed = part.trim()
+    const colon = trimmed.indexOf(':')
+    if (colon < 0) continue
+    const prefix = trimmed.slice(0, colon).trim()
+    if (prefix !== 'missing' && prefix !== 'not online') continue
+    for (const raw of trimmed.slice(colon + 1).split(',')) {
+      const token = raw.trim().split(/[\s(]/, 1)[0]
+      if (token === nodeId) return true
+    }
+  }
+  return false
+}
+
+/**
+ * Formats why the old master failed to link back to the new master during verify,
+ * when the old master's own door or relay dialer knows the reason.
+ */
+export function describeOldMasterLinkProblem(
+  diag: OldMasterDoorDiag | null | undefined,
+  expected: { port: number; usesRelay: boolean },
+): string | null {
+  if (!diag) return null
+  if (diag.listening !== expected.port) {
+    return diag.error
+      ? `door not listening on port ${expected.port} (${diag.error})`
+      : `door not listening on port ${expected.port}`
+  }
+  if (!expected.usesRelay) return null
+  if (!diag.relay) return 'relay dial not started'
+  if (diag.relay.state === 'off') {
+    return diag.relay.idleReason ? `relay dial not started (${diag.relay.idleReason})` : 'relay dial not started'
+  }
+  if (diag.relay.state === 'reconnecting' || diag.relay.state === 'error') {
+    const errLine = diag.relay.error?.trim().split(/\r?\n/).filter(Boolean).at(-1)
+    return errLine ? `relay dial ssh exited: ${errLine}` : `relay dial ${diag.relay.state}`
+  }
+  if (diag.relay.state === 'connecting') return 'relay dial still connecting'
+  return null
+}
 
 /**
  * Resolves the reverse link the new master will use to dial the old master after handover.

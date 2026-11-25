@@ -20,6 +20,7 @@ export interface HandoverPlan {
   to: string
   targetTitle: string
   commit: string
+  nodePort?: number
   checks: HandoverCheckItem[]
   items: HandoverSummaryItem[]
   totalFiles: number

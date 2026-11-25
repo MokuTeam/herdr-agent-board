@@ -1619,8 +1619,8 @@ export async function startServer({
       log,
       onChange: () => void relayDial?.sync(),
     })
-    relayDialFollows()
     void door.sync()
+    relayDialFollows()
   }
 
   // The master's links to its nodes (#499, services/nodes/links.ts) and `/api/nodes` on this board
@@ -1794,6 +1794,17 @@ export async function startServer({
             log,
             createSetup: deps => createRelaySetup(deps as never),
           }).undo(uo),
+        localDoor: () => ({
+          listening: door?.listening() ?? null,
+          error: door?.error() ?? null,
+          relay: relayDial
+            ? {
+                state: relayDial.status().state,
+                ...(relayDial.status().error && { error: relayDial.status().error }),
+                idleReason: relayDial.idleReason(),
+              }
+            : null,
+        }),
         log,
       })),
   )
@@ -2252,7 +2263,8 @@ export async function startServer({
     for (const k of Object.keys(cfg)) delete (cfg as unknown as Record<string, unknown>)[k]
     Object.assign(cfg, next)
     await runRefresh()
-    await Promise.all([door?.sync(), relayDial?.sync(), nodeLinks?.follow()])
+    await door?.sync()
+    await Promise.all([relayDial?.sync(), nodeLinks?.follow()])
   }
 
   return {

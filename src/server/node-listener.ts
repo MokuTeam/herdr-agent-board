@@ -66,6 +66,8 @@ export interface NodeListener {
   configChanged(): void
   /** The port it listens on, or null. */
   listening(): number | null
+  /** Last bind or listen error while not listening, or null. */
+  error(): string | null
   close(): Promise<void>
 }
 
@@ -362,6 +364,7 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
       void sync()
     },
     listening: () => bound,
+    error: () => error,
     async close() {
       closed = true
       clearTimeout(retry)
