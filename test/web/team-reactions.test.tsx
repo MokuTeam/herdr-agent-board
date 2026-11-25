@@ -112,6 +112,19 @@ describe('TeamMessage reactions UI (#687)', () => {
       expect(chips[1]?.getAttribute('aria-pressed')).toBe('false')
       expect(chips[1]?.getAttribute('title')).toBe('cleo')
 
+      // '+' chip sits at the end of .team-reactions and opens the picker
+      const addChip = m.host.querySelector('.team-reactions > button.team-react-add:last-child')
+      expect(addChip).toBeTruthy()
+      act(() => {
+        addChip?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+      expect(m.host.querySelector('.team-emoji-picker')).toBeTruthy()
+      act(() => {
+        addChip?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+      expect(m.host.querySelector('.team-emoji-picker')).toBeNull()
+
+      // Click own chip -> remove = true; click other's chip -> remove = false
       act(() => {
         chips[0]?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
         chips[1]?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
@@ -125,8 +138,9 @@ describe('TeamMessage reactions UI (#687)', () => {
     }
   })
 
-  test('desktop react button opens quick row + searchable picker, filters emoji, picks one, and closes on Escape', () => {
+  test('desktop floating hover bar offers quick 1-click emoji + searchable picker + reply, closes on Escape', () => {
     const calls: Array<[string, string, boolean]> = []
+    const replied: string[] = []
     const m = mount()
     try {
       m.draw(
@@ -137,10 +151,32 @@ describe('TeamMessage reactions UI (#687)', () => {
           named={false}
           quote={null}
           onQuote={() => {}}
+          onReply={id => {
+            replied.push(id)
+          }}
           onReact={(id, emoji, remove) => calls.push([id, emoji, remove])}
         />,
       )
-      const reactBtn = m.host.querySelector('button.team-msg-react')
+      const bar = m.host.querySelector('.team-msg-bar')
+      expect(bar).toBeTruthy()
+      const barEmojis = [...(bar?.querySelectorAll('button.team-bar-emoji') ?? [])]
+      expect(barEmojis).toHaveLength(4)
+      // Clicking a quick emoji on the floating bar reacts immediately in 1 click
+      act(() => {
+        barEmojis[1]?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+      expect(calls).toEqual([['m2', '👀', false]])
+      expect(m.host.querySelector('.team-emoji-picker')).toBeNull()
+
+      // Reply button inside the floating bar still works
+      const replyBtn = bar?.querySelector('button.team-msg-reply')
+      expect(replyBtn).toBeTruthy()
+      act(() => {
+        replyBtn?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+      expect(replied).toEqual(['m2'])
+
+      const reactBtn = bar?.querySelector('button.team-msg-react')
       expect(reactBtn).toBeTruthy()
       act(() => {
         reactBtn?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
@@ -165,7 +201,10 @@ describe('TeamMessage reactions UI (#687)', () => {
           .find(b => b.getAttribute('aria-label') === 'rocket')
           ?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
       })
-      expect(calls).toEqual([['m2', '🚀', false]])
+      expect(calls).toEqual([
+        ['m2', '👀', false],
+        ['m2', '🚀', false],
+      ])
       expect(m.host.querySelector('.team-emoji-picker')).toBeNull()
 
       // Re-open and press Escape -> closes picker
@@ -240,6 +279,6 @@ describe('TeamMessage reactions UI (#687)', () => {
     )
     expect(findAll(tree, n => hasClass(n, 'team-reactions'))).toHaveLength(0)
     expect(findAll(tree, n => hasClass(n, 'team-msg-react'))).toHaveLength(0)
-    expect(findAll(tree, n => hasClass(n, 'team-msg-actions'))).toHaveLength(0)
+    expect(findAll(tree, n => hasClass(n, 'team-msg-bar'))).toHaveLength(0)
   })
 })

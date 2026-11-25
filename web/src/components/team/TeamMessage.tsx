@@ -13,6 +13,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { QUICK_REACTIONS } from '../../../../src/core/team-reactions.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { delivery, type ThreadLine } from '../../models/team.ts'
 import { agentMark, bubbleTime, deliveryOf, fullWhen, type Quote, senderName, toneOf } from '../../models/team-chat.ts'
@@ -20,6 +21,9 @@ import { classNames } from '../class-names.ts'
 import { MessageText } from '../sheet/MessageText.tsx'
 import { TeamFile } from './TeamFile.tsx'
 import { EmojiPicker, QuickReactions, ReactionChips } from './TeamReactions.tsx'
+
+/** Quick reactions in the Slack-style floating hover bar (#687). */
+const BAR_REACTIONS = QUICK_REACTIONS.slice(0, 4)
 
 /** How long a touch holds before it counts as a long press (ms), and how far it may wander (px). */
 const LONG_PRESS_MS = 450
@@ -84,6 +88,7 @@ export function TeamMessage({
         line.held && 'held',
         flash && 'flash',
         open && 'open',
+        picker && 'picker-open',
       )}
       data-line={line.id}
     >
@@ -116,32 +121,58 @@ export function TeamMessage({
             <Delivery line={line} />
           </span>
         </div>
-        {(onReact || onReply) && (
-          <div className={classNames('team-msg-actions', picker && 'open')}>
-            {onReact && (
+        {onReact ? (
+          <div className={classNames('team-msg-bar', picker && 'open')}>
+            {BAR_REACTIONS.map(emoji => (
               <button
+                key={emoji}
                 type="button"
-                className="team-icon-button team-msg-react"
-                aria-label={t('team.react')}
-                title={t('team.react')}
-                aria-expanded={picker}
-                onClick={() => setPicker(p => !p)}
+                className={classNames('team-bar-emoji', active.has(emoji) && 'me')}
+                aria-pressed={active.has(emoji)}
+                aria-label={emoji}
+                title={emoji}
+                onClick={() => toggleReaction(emoji)}
               >
-                <ReactGlyph />
+                {emoji}
               </button>
-            )}
+            ))}
+            <button
+              type="button"
+              className="team-bar-btn team-msg-react"
+              aria-label={t('team.react')}
+              title={t('team.react')}
+              aria-expanded={picker}
+              onClick={() => setPicker(p => !p)}
+            >
+              <ReactGlyph />
+            </button>
             {onReply && (
-              <button
-                type="button"
-                className="team-icon-button team-msg-reply"
-                aria-label={t('team.reply')}
-                title={t('team.reply')}
-                onClick={() => onReply(line.id)}
-              >
-                <ReplyGlyph />
-              </button>
+              <>
+                <span className="team-bar-sep" aria-hidden="true" />
+                <button
+                  type="button"
+                  className="team-bar-btn team-msg-reply"
+                  aria-label={t('team.reply')}
+                  title={t('team.reply')}
+                  onClick={() => onReply(line.id)}
+                >
+                  <ReplyGlyph />
+                </button>
+              </>
             )}
           </div>
+        ) : (
+          onReply && (
+            <button
+              type="button"
+              className="team-icon-button team-msg-reply"
+              aria-label={t('team.reply')}
+              title={t('team.reply')}
+              onClick={() => onReply(line.id)}
+            >
+              <ReplyGlyph />
+            </button>
+          )
         )}
       </div>
       {reactions.length > 0 && (
