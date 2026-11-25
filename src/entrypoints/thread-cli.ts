@@ -368,9 +368,20 @@ export async function threadCmd(rest: readonly string[], ctx: ThreadCmdContext):
       else out(usageText(cfg))
       return 0
     }
+    const base = `http://127.0.0.1:${typeof ctx.cfg.port === 'number' ? ctx.cfg.port : 12422}/`
     // On a node every command goes to the master, which holds the threads (#508): this computer's
     // database is not opened. Without `node` the command runs here, as it always has.
     if (nodeConfig(ctx.cfg.node)) {
+      // MokuPilot on a node checks `board thread link --base` without a session (#759): answer with
+      // the node's local board URL, which proxies threads reads from the master.
+      if (sub === 'link') {
+        const a = parseArgs(sub, args)
+        if (a.has('--base')) {
+          if (json) out(JSON.stringify({ ok: true, url: base, threads: true, agents: true, day_watches: true }))
+          else out(`${base} · threads on`)
+          return 0
+        }
+      }
       // Decisions (#487) are this computer's in phase 1: the master holds no question of a node's session.
       if (ctx.decisions && sub === 'ask' && DECISION_FLAGS.some(f => beforeDashes(args).includes(f)))
         throw new ThreadError(
@@ -380,7 +391,6 @@ export async function threadCmd(rest: readonly string[], ctx: ThreadCmdContext):
       return await forward(sub, args, ctx, out, json)
     }
     const a = parseArgs(sub, args, !!cfg?.cases, { decisions: !!ctx.decisions, verify: !!cfg?.verify })
-    const base = `http://127.0.0.1:${typeof ctx.cfg.port === 'number' ? ctx.cfg.port : 12422}/`
 
     // How MokuPilot finds the board (9.1): its address and whether threads are on, on or off.
     if (sub === 'link' && a.has('--base')) {

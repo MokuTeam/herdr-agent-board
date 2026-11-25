@@ -82,7 +82,7 @@ import {
   sshVersion,
   writePidRecord,
 } from '../adapters/ssh.ts'
-import { rekeySession } from '../adapters/work-thread-store.ts'
+import { rekeySession, threadsRev } from '../adapters/work-thread-store.ts'
 import { connectWorkdeskEvents } from '../adapters/workdesk-events.ts'
 import { NODE_PROGRAMS } from '../core/bundle.ts'
 import { answerText, decisionsConfig } from '../core/decisions.ts'
@@ -156,6 +156,7 @@ import { createRelayDial, type RelayDial } from '../services/node/relay-dial.ts'
 import { createNodeSecrets } from '../services/node/secrets.ts'
 import { createNodeStatus } from '../services/node/status.ts'
 import { createNodeTelegram } from '../services/node/telegram.ts'
+import { createNodeThreadsProxy, type NodeThreadsProxy } from '../services/node/threads-proxy.ts'
 import { createNodeUpdate, type NodeUpdate } from '../services/node/update.ts'
 import { createNodeUplink, type NodeUplink } from '../services/node/uplink.ts'
 import { createNodeAggregate, type NodeAggregate } from '../services/nodes/aggregate.ts'
@@ -179,6 +180,7 @@ import { createRelaySetup, type RelaySetup } from '../services/nodes/relay-setup
 import { createRevoker, type Revoker } from '../services/nodes/revoke.ts'
 import { createNodeSetup, type NodeSetup } from '../services/nodes/setup.ts'
 import { createNodesTelegram } from '../services/nodes/telegram.ts'
+import { createThreadsProxyRunner, type ThreadsProxyRunner } from '../services/nodes/threads-proxy.ts'
 import { createNodeUpdater, type NodeUpdater } from '../services/nodes/update.ts'
 import { createUplinkRunner, type UplinkRunner } from '../services/nodes/uplink.ts'
 import { tellOwnerWatchers } from '../services/owner-watch.ts'
@@ -233,7 +235,7 @@ import { launchRoutes } from './routes/launch.ts'
 import { linksRoutes } from './routes/links.ts'
 import { mokupilotRoutes } from './routes/mokupilot.ts'
 import { moveRoute } from './routes/move.ts'
-import { nodeCallRoutes, nodeDoorRoutes } from './routes/node.ts'
+import { nodeCallRoutes, nodeDoorRoutes, nodeThreadsProxyRoutes } from './routes/node.ts'
 import { createNodeProxy, type NodeProxy } from './routes/node-proxy.ts'
 import { computerSetupRoutes, handoverRoutes, nodeSetupRoutes, nodesRoutes, relaySetupRoutes } from './routes/nodes.ts'
 import { pageLogRoute } from './routes/page-log.ts'
@@ -993,6 +995,12 @@ export async function startServer({
   // Declared before createBoardState so board.publish() never hits TDZ before doorFollows() runs.
   let door: NodeListener | null = null
   let doorStore: NodeStore | null = null
+  let nodeThreadsProxy: NodeThreadsProxy | null = null
+  let localThreadsProxyRoutes: Route[] | null = null
+  let threadsProxyRunner: ThreadsProxyRunner | null = null
+  let unsubThreadRevs: (() => void) | null = null
+  const isNodeThreadsProxy = (): boolean =>
+    nodeThreadsProxy !== null && nodeConfig(cfg.node) !== null && nodesConfig(cfg.nodes) === null
   const board = createBoardState({
     deps,
     launches,
@@ -1034,7 +1042,12 @@ export async function startServer({
     // the owner (two queries a refresh); off, nothing is read.
     threads: () => {
       const line = threadsPayload(cfg)
-      if (line) threadRevs.moved(line.rev)
+      if (line) {
+        threadRevs.moved(line.rev)
+        threadsProxyRunner?.notifyRev(true, line.rev)
+      } else {
+        threadsProxyRunner?.notifyRev(false, 0)
+      }
       // An entry's way to the hub moved (#394): the page reads its thread again.
       const out = work.rev()
       return line && out ? { ...line, out } : line
@@ -1106,6 +1119,58 @@ export async function startServer({
     },
   })
 
+  // Threads (#392): the page's, MokuPilot's and the MCP adapter's reads and the owner's writes.
+  const boardThreadsRoutes = threadsRoutes(
+    {
+      cfg,
+      changed: () => board.publish(),
+      async tell(key, text) {
+        if (parseNodeKey(key) && nodeProxy) {
+          const r = await nodeProxy.send(key, text, { requestId: randomUUID(), idle: false, noWake: false })
+          return r.ok ? { ok: true } : { ok: false, error: r.error }
+        }
+        const { t } = await import('../core/lang.ts')
+        const { collect } = await import('../services/board.ts')
+        const { send } = await import('../services/actions.ts')
+        const item = (await collect(deps)).find(i => i.key === key)
+        if (!item) return { ok: false, error: t('err.gone') }
+        const r = await send(deps, item, text)
+        return r.ok ? { ok: true } : { ok: false, error: String(r.error ?? '') }
+      },
+      async clearAsk(key, question, answer) {
+        const { readCard, writeCard } = await import('../adapters/cards.ts')
+        const card = readCard(key)
+        if (card?.ask !== question) return
+        // A decision it carried (#487) closes with it, as the owner's answer in the thread.
+        if (card.decision !== undefined) {
+          const { closeCardDecision, withDecisionsDb } = await import('../services/decisions.ts')
+          try {
+            withDecisionsDb(db =>
+              closeCardDecision(
+                db,
+                key,
+                { answer: answer ? answerText(answer) : null, answeredBy: 'owner', via: 'text', at: Date.now() },
+                { by: 'owner' },
+              ),
+            )
+          } catch {}
+        }
+        writeCard(key, { ask: '', askSince: '' })
+      },
+      work,
+      confirm: teamConfirm,
+      // Case files (#488): a case's sessions as the board sees them now (its items, the nodes' items
+      // where it is a master with them, the archive).
+      caseLive: keys => liveOf(keys, board.stale() ? null : caseItems(board.items(), nodeAggregate?.part() ?? null)),
+      // Settings turned them on (#410): the skill where the install action puts it.
+      skill: () => installThreadsSkill(deps.profiles().list),
+    },
+    threadRevs,
+  )
+  const masterThreadsReadRoutes = boardThreadsRoutes.filter(
+    r => r.method === 'GET' && r.path !== '/api/threads-settings' && r.path !== '/api/threads/events',
+  )
+
   // The order of main's `if` chain: the first route that answers wins.
   routes.push(
     setupRoute(setup),
@@ -1123,7 +1188,15 @@ export async function startServer({
     ...linksRoutes(board),
     ...fsRoutes(),
     ...uploadRoutes(),
-    revealRoute(board, events, reveals, word => threadReveal({ cfg }, events, threadShown, word)),
+    revealRoute(board, events, reveals, word =>
+      isNodeThreadsProxy() && nodeThreadsProxy
+        ? nodeThreadsProxy.reveal(word, key => {
+            threadShown.asked(key)
+            events.event('thread-open', { key })
+            return json(200, { ok: true, thread: key, pages: events.size() })
+          })
+        : threadReveal({ cfg }, events, threadShown, word),
+    ),
     settingsRoute(),
     // Settings → Watches, Decisions, Away journal (#596), on this computer only.
     featureSettingsRoute(),
@@ -1152,54 +1225,7 @@ export async function startServer({
       shown: teamShown,
       changed: () => board.publish(),
     }),
-    // Threads (#392): the page's, MokuPilot's and the MCP adapter's reads and the owner's writes.
-    ...threadsRoutes(
-      {
-        cfg,
-        changed: () => board.publish(),
-        async tell(key, text) {
-          if (parseNodeKey(key) && nodeProxy) {
-            const r = await nodeProxy.send(key, text, { requestId: randomUUID(), idle: false, noWake: false })
-            return r.ok ? { ok: true } : { ok: false, error: r.error }
-          }
-          const { t } = await import('../core/lang.ts')
-          const { collect } = await import('../services/board.ts')
-          const { send } = await import('../services/actions.ts')
-          const item = (await collect(deps)).find(i => i.key === key)
-          if (!item) return { ok: false, error: t('err.gone') }
-          const r = await send(deps, item, text)
-          return r.ok ? { ok: true } : { ok: false, error: String(r.error ?? '') }
-        },
-        async clearAsk(key, question, answer) {
-          const { readCard, writeCard } = await import('../adapters/cards.ts')
-          const card = readCard(key)
-          if (card?.ask !== question) return
-          // A decision it carried (#487) closes with it, as the owner's answer in the thread.
-          if (card.decision !== undefined) {
-            const { closeCardDecision, withDecisionsDb } = await import('../services/decisions.ts')
-            try {
-              withDecisionsDb(db =>
-                closeCardDecision(
-                  db,
-                  key,
-                  { answer: answer ? answerText(answer) : null, answeredBy: 'owner', via: 'text', at: Date.now() },
-                  { by: 'owner' },
-                ),
-              )
-            } catch {}
-          }
-          writeCard(key, { ask: '', askSince: '' })
-        },
-        work,
-        confirm: teamConfirm,
-        // Case files (#488): a case's sessions as the board sees them now (its items, the nodes' items
-        // where it is a master with them, the archive).
-        caseLive: keys => liveOf(keys, board.stale() ? null : caseItems(board.items(), nodeAggregate?.part() ?? null)),
-        // Settings turned them on (#410): the skill where the install action puts it.
-        skill: () => installThreadsSkill(deps.profiles().list),
-      },
-      threadRevs,
-    ),
+    ...boardThreadsRoutes,
     // Tasks (#202): points pinned on the board, done, reopened, removed; turned on or off.
     ...todosRoutes({ cfg, find: board.find, refresh }),
     // Decisions (#487): an option or the owner's words typed in, Hold, the record; the phone too.
@@ -1358,6 +1384,9 @@ export async function startServer({
       }
       if (req.method !== 'GET' && path.startsWith('/api/') && path !== '/api/presence' && ownOrigin(req))
         presence.touch()
+      const isThreadsReadPath =
+        req.method === 'GET' &&
+        (path === '/api/threads' || path === '/api/threads/events' || /^\/api\/threads\/[^/]+$/.test(url.pathname))
       const selected =
         path === '/api/board-events' || path === '/api/board-events/ack'
           ? localEventRoutes
@@ -1367,17 +1396,19 @@ export async function startServer({
               ? localCallRoutes
               : path.startsWith('/api/mokupilot/node-call/') && localPilotCallRoutes
                 ? localPilotCallRoutes
-                : path === '/api/nodes/telegram' && localTelegramRoutes
-                  ? localTelegramRoutes
-                  : path === '/api/nodes/setup'
-                    ? localSetupRoutes
-                    : path === '/api/nodes/relay/setup'
-                      ? localRelaySetupRoutes
-                      : path === '/api/nodes/computer/setup'
-                        ? localComputerSetupRoutes
-                        : path === '/api/nodes/handover' && hasHandoverRoute()
-                          ? localHandoverRoutes
-                          : routes
+                : isThreadsReadPath && localThreadsProxyRoutes && isNodeThreadsProxy()
+                  ? localThreadsProxyRoutes
+                  : path === '/api/nodes/telegram' && localTelegramRoutes
+                    ? localTelegramRoutes
+                    : path === '/api/nodes/setup'
+                      ? localSetupRoutes
+                      : path === '/api/nodes/relay/setup'
+                        ? localRelaySetupRoutes
+                        : path === '/api/nodes/computer/setup'
+                          ? localComputerSetupRoutes
+                          : path === '/api/nodes/handover' && hasHandoverRoute()
+                            ? localHandoverRoutes
+                            : routes
       return await dispatch(selected, req, url, path, guards, () => peerOf(srv, req))
     } catch (err) {
       // The path only: a query can carry the page's token.
@@ -1471,6 +1502,7 @@ export async function startServer({
     if (door) {
       door.configChanged()
       nodePilotBridge?.sync()
+      nodeThreadsProxy?.sync()
       relayDialFollows()
       return
     }
@@ -1543,6 +1575,8 @@ export async function startServer({
     const uplink = createNodeUplink({ log })
     nodeUplink = uplink
     localCallRoutes = nodeCallRoutes(uplink)
+    nodeThreadsProxy = createNodeThreadsProxy({ cfg, log })
+    localThreadsProxyRoutes = nodeThreadsProxyRoutes(nodeThreadsProxy)
     const pilotCall = ensureLocalPilotCall()
     nodePilotBridge = createNodePilotBridge({
       cfg,
@@ -1641,6 +1675,7 @@ export async function startServer({
         move: movers(),
         pilotCall,
         pilotBridge: nodePilotBridge,
+        threadsProxy: nodeThreadsProxy,
         telegram: nodeTelegram,
         relayKey: async publicKey => {
           const r = activateNodeRelayKey(publicKey, nodeDir())
@@ -1998,8 +2033,37 @@ export async function startServer({
       log,
       webPort: () => Number(server.port) || Number(cfg.port) || 12422,
       setPresence: (state, from) => presence.set(state, from),
+      onThreadChange: () => board.publish(),
       frozen: () => handoverFrozen,
     })
+    threadsProxyRunner = createThreadsProxyRunner({
+      links: nodeLinks,
+      handleRead: async req => {
+        const target = new URL(`http://127.0.0.1:${server.port ?? port}${req.path}${req.query}`)
+        let decodedPath: string
+        try {
+          decodedPath = decodeURIComponent(target.pathname)
+        } catch {
+          return json(400, { error: 'path' })
+        }
+        return await dispatch(
+          masterThreadsReadRoutes,
+          new Request(target, { method: 'GET' }),
+          target,
+          decodedPath,
+          guards,
+        )
+      },
+      currentRev: () => {
+        if (!threadsConfig(cfg.threads)) return { on: false, rev: 0 }
+        return { on: true, rev: withThreadsDb(false, db => (db ? threadsRev(db) : 0)) }
+      },
+      log,
+    })
+    unsubThreadRevs =
+      threadRevs.subscribe?.(rev => {
+        if (threadsConfig(cfg.threads)) threadsProxyRunner?.notifyRev(true, rev)
+      }) ?? null
     const placer = createPlacer({
       cfg,
       links: nodeLinks,
@@ -2355,6 +2419,9 @@ export async function startServer({
       await door?.close()
       nodePilotBridge?.close()
       await pilotBridgeRunner?.close()
+      unsubThreadRevs?.()
+      nodeThreadsProxy?.close()
+      await threadsProxyRunner?.close()
       if (nodePilotCall) {
         nodePilotCall.closeAll()
         process.off('exit', nodePilotCall.closeAll)

@@ -38,7 +38,7 @@ export function revealRoute(
   board: Pick<BoardState, 'find' | 'items'>,
   events: Pick<Broadcaster, 'event' | 'size'>,
   state: Pick<RevealState, 'asked'>,
-  thread?: (word: unknown) => Response,
+  thread?: (word: unknown) => Response | Promise<Response>,
 ): Route {
   return {
     method: 'POST',
@@ -47,7 +47,7 @@ export function revealRoute(
     async handle(_req, ctx) {
       const body = await ctx.body()
       if (thread && body.thread !== undefined && body.key === undefined && body.pane === undefined)
-        return thread(body.thread)
+        return await thread(body.thread)
       const item = body.key
         ? board.find(String(body.key))
         : body.pane

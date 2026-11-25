@@ -97,6 +97,8 @@ export interface UplinkRunnerOptions {
   webPort?: () => number
   /** Live presence setter from the running board's PresenceService. */
   setPresence?: (state: PresenceState, from: PresenceSource) => { presence: Presence; changed: boolean }
+  /** Called when a thread write succeeds so rev listeners update immediately (#759). */
+  onThreadChange?: () => void
   /** Tests: the command's entry (entrypoints/thread-cli.ts threadCmd by default). */
   run?: (argv: readonly string[], ctx: ThreadCmdContext) => Promise<number>
   /** Tests: `board time`'s entry (entrypoints/time-cli.ts timeCmd by default). */
@@ -516,6 +518,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
         ...(verdictSelf && { self: verdictSelf }),
         ...(cases && { cases }),
       })
+      if (code === 0 && isRememberedCall(call.cmd, call.argv)) o.onThreadChange?.()
       return { code, out, err }
     } catch (err) {
       return failed(messageOf(err))

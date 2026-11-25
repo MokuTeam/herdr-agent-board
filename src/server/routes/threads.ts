@@ -149,17 +149,21 @@ export interface RevStream {
   moved(rev: number): void
   /** A new client, told the revision as it is now; the others are told first if it moved. */
   response(req: Request, rev: number): Response
+  /** Subscribe to revision changes (#759). */
+  subscribe?(fn: (rev: number) => void): () => void
   close(): void
 }
 
 export function revStream(): RevStream {
   let last = -1
   let stream: (Broadcaster & { close(): void }) | null = null
+  const listeners = new Set<(rev: number) => void>()
   return {
     moved(rev) {
       if (rev === last) return
       last = rev
       stream?.event('rev', { rev })
+      for (const fn of [...listeners]) fn(rev)
     },
     response(req, rev) {
       stream ??= createBroadcaster(() => JSON.stringify({ rev: last }), {
@@ -168,7 +172,14 @@ export function revStream(): RevStream {
       this.moved(rev)
       return stream.response(req)
     },
+    subscribe(fn) {
+      listeners.add(fn)
+      return () => {
+        listeners.delete(fn)
+      }
+    },
     close() {
+      listeners.clear()
       stream?.close()
       stream = null
     },

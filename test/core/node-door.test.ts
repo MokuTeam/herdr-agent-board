@@ -111,6 +111,9 @@ describe('the door takes what 6.2 lists', () => {
       ['GET', String(/^\/api\/node\/pilot-bridge\/req\/[A-Za-z0-9_-]{8,64}\/body$/)],
       ['POST', String(/^\/api\/node\/pilot-bridge\/res\/[A-Za-z0-9_-]{8,64}$/)],
       ['POST', String(/^\/api\/node\/pilot-bridge\/stream\/[A-Za-z0-9_-]{8,64}$/)],
+      ['GET', '/api/node/threads-proxy'],
+      ['POST', String(/^\/api\/node\/threads-proxy\/res\/[A-Za-z0-9_-]{8,64}$/)],
+      ['POST', '/api/node/threads-proxy/rev'],
       ['POST', '/api/node/relay-key'],
       ['POST', '/api/node/telegram'],
       ['GET', '/api/node/handover/check'],
@@ -181,6 +184,19 @@ describe('the door takes what 6.2 lists', () => {
     // Not as a GET, nor spelled otherwise.
     expect(refusal('GET', '/api/node/launch')).toEqual(NOT_FOUND)
     expect(refusal('POST', '/api/node/%6Caunch')).toEqual(NOT_FOUND)
+    // Threads proxy door routes (#759): exact methods, valid id, no encoded bypasses.
+    expect(refusal('GET', '/api/node/threads-proxy')).toBeNull()
+    expect(refusal('POST', '/api/node/threads-proxy/res/req-12345678')).toBeNull()
+    expect(refusal('POST', '/api/node/threads-proxy/rev')).toBeNull()
+    for (const [method, raw] of [
+      ['POST', '/api/node/threads-proxy'],
+      ['GET', '/api/node/threads-proxy/rev'],
+      ['GET', '/api/node/threads-proxy/res/req-12345678'],
+      ['POST', '/api/node/threads-proxy/res/short'],
+      ['POST', '/api/node/threads-proxy/res/..%2F..%2Fetc'],
+      ['GET', '/api/node/%74hreads-proxy'],
+    ] as const)
+      expect([method, raw, refusal(method, raw)]).toEqual([method, raw, NOT_FOUND])
   })
 
   test("the bundle's routes (#506): each by its method only, a blob by a SHA-256 only", () => {

@@ -11,6 +11,7 @@
 import { MAX_BLOB_BYTES } from '../../adapters/bundle-files.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { t } from '../../core/lang.ts'
+import { MAX_THREADS_PROXY_RESPONSE_BYTES } from '../../core/node-threads-proxy.ts'
 import {
   MAX_BRIDGE_RESPONSE_BYTES,
   MAX_BRIDGE_STREAM_BATCH_BYTES,
@@ -27,6 +28,7 @@ import type { NodePilotBridge } from '../../services/node/pilot-bridge.ts'
 import type { NodePilotCall } from '../../services/node/pilot-call.ts'
 import type { NodeSecrets } from '../../services/node/secrets.ts'
 import type { NodeTelegram } from '../../services/node/telegram.ts'
+import type { NodeThreadsProxy } from '../../services/node/threads-proxy.ts'
 import type { NodeUpdate } from '../../services/node/update.ts'
 import type { NodeUplink } from '../../services/node/uplink.ts'
 import { json, type Route } from '../http.ts'
@@ -65,6 +67,8 @@ export interface NodeDoorSources {
   pilotCall?: NodePilotCall
   /** `/api/node/pilot-bridge...` (#700): reverse bridge for MokuPilot running on this node. */
   pilotBridge?: NodePilotBridge
+  /** `/api/node/threads-proxy...` (#759): reverse threads read proxy over the master's link. */
+  threadsProxy?: Pick<NodeThreadsProxy, 'stream' | 'respond' | 'pushRev'>
   /** `POST /api/node/relay-key` (#513): activates a staged fresh relay dial key after claim. */
   relayKey?(publicKey: string): Promise<Answer>
   /** `POST /api/node/telegram` (#701): routes a Telegram topic batch on this node. */
@@ -209,6 +213,7 @@ export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
     ...(update ? updateRoutes(update) : []),
     ...(o.pilotCall ? pilotCallDoorRoutes(o.pilotCall) : []),
     ...(o.pilotBridge ? pilotBridgeDoorRoutes(o.pilotBridge) : []),
+    ...(o.threadsProxy ? threadsProxyDoorRoutes(o.threadsProxy) : []),
     ...(relayKey
       ? [
           {
@@ -450,6 +455,61 @@ function pilotBridgeDoorRoutes(pb: NodePilotBridge): Route[] {
         if (body === undefined) return json(413, { ok: false, error: 'too-big' })
         return answer(await pb.streamChunk(ctx.params[0] ?? '', body, req.signal))
       },
+    },
+  ]
+}
+
+const THREADS_PROXY_RES = /^\/api\/node\/threads-proxy\/res\/([A-Za-z0-9_-]{8,64})$/
+
+/** Node door routes for proxying threads reads from a node's local board to its master (#759). */
+function threadsProxyDoorRoutes(tp: Pick<NodeThreadsProxy, 'stream' | 'respond' | 'pushRev'>): Route[] {
+  return [
+    {
+      method: 'GET',
+      path: '/api/node/threads-proxy',
+      handle: req => tp.stream(req),
+    },
+    {
+      method: 'POST',
+      path: THREADS_PROXY_RES,
+      async handle(req, ctx) {
+        const body = await jsonUpTo(req, MAX_THREADS_PROXY_RESPONSE_BYTES + 4096)
+        if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+        return answer(tp.respond(ctx.params[0] ?? '', body))
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/node/threads-proxy/rev',
+      async handle(req) {
+        const body = await jsonUpTo(req, 4096)
+        if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+        return answer(tp.pushRev(body))
+      },
+    },
+  ]
+}
+
+/** Loopback-only threads read routes served on a node's local web board (#759). */
+export function nodeThreadsProxyRoutes(tp: Pick<NodeThreadsProxy, 'read' | 'events'>): Route[] {
+  return [
+    {
+      method: 'GET',
+      path: '/api/threads',
+      guard: ['origin'],
+      handle: (_req, ctx) => tp.read('/api/threads', ctx.url.search),
+    },
+    {
+      method: 'GET',
+      path: '/api/threads/events',
+      guard: ['origin'],
+      handle: req => tp.events(req),
+    },
+    {
+      method: 'GET',
+      path: /^\/api\/threads\/([^/]+)$/,
+      guard: ['origin'],
+      handle: (_req, ctx) => tp.read(ctx.rawPath, ctx.url.search),
     },
   ]
 }

@@ -449,3 +449,75 @@ test('case files on a node: --ref, --state and brief go to the master as typed; 
   expect(r.calls[0]?.files).toEqual([resolve('r.md')])
   expect(nothingWritten()).toBe(true)
 })
+
+test('on a node, board thread link --base works without --session and returns the local board URL (#759)', async () => {
+  isolatedHome()
+  const fetched: string[] = []
+  globalThis.fetch = (async (url: string | URL | Request) => {
+    fetched.push(String(url))
+    return new Response('{}')
+  }) as typeof fetch
+
+  // Outside a session (actor: owner) with default and custom port, text and --json.
+  const textRes = await run(['link', '--base'], { actor: { kind: 'owner' } })
+  expect(textRes).toMatchObject({
+    code: 0,
+    out: ['http://127.0.0.1:12422/ · threads on'],
+    err: [],
+    calls: [],
+  })
+
+  const jsonRes = await run(['link', '--base', '--json'], {
+    actor: { kind: 'owner' },
+    cfg: { node: NODE, port: 12499 },
+  })
+  expect(jsonRes.code).toBe(0)
+  expect(jsonRes.calls).toEqual([])
+  expect(jsonRes.err).toEqual([])
+  expect(JSON.parse(jsonRes.out[0] ?? '{}')).toEqual({
+    ok: true,
+    url: 'http://127.0.0.1:12499/',
+    threads: true,
+    agents: true,
+    day_watches: true,
+  })
+
+  // Also works when called from a session, without forwarding over uplink.
+  const sessionRes = await run(['link', '--base', '--json'], {
+    actor: me,
+    cfg: { node: NODE, port: 12422 },
+  })
+  expect(sessionRes.code).toBe(0)
+  expect(sessionRes.calls).toEqual([])
+  expect(JSON.parse(sessionRes.out[0] ?? '{}')).toEqual({
+    ok: true,
+    url: 'http://127.0.0.1:12422/',
+    threads: true,
+    agents: true,
+    day_watches: true,
+  })
+
+  // Other link/read commands without --session still fail with no_session.
+  const keyLink = await run(['link', 'atlas-1', '--json'], { actor: { kind: 'owner' } })
+  expect(keyLink.code).toBe(1)
+  expect(JSON.parse(keyLink.out[0] ?? '{}').error).toBe('no_session')
+  const listOwner = await run(['list', '--json'], { actor: { kind: 'owner' } })
+  expect(listOwner.code).toBe(1)
+  expect(JSON.parse(listOwner.out[0] ?? '{}').error).toBe('no_session')
+
+  // Without `node`, link --base follows local threads config unchanged.
+  const localOff = await run(['link', '--base', '--json'], {
+    actor: { kind: 'owner' },
+    cfg: { threads: false, port: 12455 },
+  })
+  expect(localOff.code).toBe(0)
+  expect(JSON.parse(localOff.out[0] ?? '{}')).toEqual({
+    ok: true,
+    url: 'http://127.0.0.1:12455/',
+    threads: false,
+    agents: false,
+    day_watches: true,
+  })
+  expect(fetched).toEqual([])
+  expect(nothingWritten()).toBe(true)
+})

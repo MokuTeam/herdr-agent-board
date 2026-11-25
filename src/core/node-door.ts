@@ -110,6 +110,10 @@ export const DOOR_ROUTES: readonly DoorRoute[] = [
   { method: 'GET', path: /^\/api\/node\/pilot-bridge\/req\/[A-Za-z0-9_-]{8,64}\/body$/, door: true },
   { method: 'POST', path: /^\/api\/node\/pilot-bridge\/res\/[A-Za-z0-9_-]{8,64}$/, door: true },
   { method: 'POST', path: /^\/api\/node\/pilot-bridge\/stream\/[A-Za-z0-9_-]{8,64}$/, door: true },
+  // Node-to-master threads read proxy (#759): reverse read RPC + rev push over the master's link.
+  { method: 'GET', path: '/api/node/threads-proxy', door: true },
+  { method: 'POST', path: /^\/api\/node\/threads-proxy\/res\/[A-Za-z0-9_-]{8,64}$/, door: true },
+  { method: 'POST', path: '/api/node/threads-proxy/rev', door: true },
   // Activate a newly staged relay dial key after claim rotation (#513).
   { method: 'POST', path: '/api/node/relay-key', door: true },
   // Telegram message routing from the master (#701).
