@@ -531,7 +531,8 @@ export function createBoardState({
       // devices: only while config.json makes this board a master (#500).
       ...(devices && { devices }),
       // deviceMarker (#789): only beside devices, and only once Settings, Devices moved it off today's corner.
-      ...deviceMarkerPart(devices ? nodesConfig(cfg.nodes, hostname())?.marker : undefined), // machine: only on a node board, so the master can match Telegram X-Herdr-Pane hints (#701).
+      ...deviceMarkerPart(devices ? nodesConfig(cfg.nodes, hostname())?.marker : undefined),
+      // machine: only on a node board, so the master can match Telegram X-Herdr-Pane hints (#701).
       ...(nodeConfig(cfg.node) !== null && { machine: process.env.COMPUTERNAME || hostname() }),
       // nodeMaster: only on a pure node with at least one paired master (#744).
       ...nodeMasterOf(nodeMaster),

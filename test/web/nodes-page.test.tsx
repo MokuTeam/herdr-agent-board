@@ -750,9 +750,10 @@ describe('nodes.css (#502, #758)', () => {
     expect(body('.card-device-corner.at-top-left')).toContain('top: 0; left: 0;')
     expect(body('.card-device-stripe:focus-visible::after')).toContain('content: attr(data-tip);')
     // Top-right steps aside while the card's buttons show there.
-    expect(css).toContain('.card:hover > .card-device-corner.at-top-right,')
+    expect(css).toContain('.card:hover > .card-device-corner.at-top-right:has(~ .card-actions),')
+    expect(css).toContain('.card-device-corner ~ .card-actions,\n.card-device-stripe ~ .card-actions { z-index: 2; }')
     expect(css).toMatch(
-      /@media \(hover: none\) \{\n {2}\.card:hover > \.card-device-corner\.at-top-right \{ opacity: 1; \}/,
+      /@media \(hover: none\) \{\n {2}\.card:hover > \.card-device-corner\.at-top-right:has\(~ \.card-actions\) \{ opacity: 1; \}/,
     )
     // Reduced motion and forced colours cover the stripe too.
     expect(css).toMatch(/prefers-reduced-motion: reduce\) \{[^}]*\.card-device-stripe,/)

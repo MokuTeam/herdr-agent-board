@@ -63,12 +63,16 @@
 .card-device-corner.at-top-right:focus-visible::after { top: calc(100% + 4px); bottom: auto; }
 .card-device-corner.at-top-left:focus-visible::after,
 .card-device-corner.at-bottom-left:focus-visible::after { left: 0; right: auto; }
-/* Top-right is where the card's buttons show on hover: the corner steps aside for them. */
-.card:hover > .card-device-corner.at-top-right,
-.card:focus-visible > .card-device-corner.at-top-right { opacity: 0; }
+/* Top-right is where the card's buttons show on hover: the corner steps aside for them (a launch
+   card has none, so its corner stays). */
+.card:hover > .card-device-corner.at-top-right:has(~ .card-actions),
+.card:focus-visible > .card-device-corner.at-top-right:has(~ .card-actions) { opacity: 0; }
 @media (hover: none) {
-  .card:hover > .card-device-corner.at-top-right { opacity: 1; }
+  .card:hover > .card-device-corner.at-top-right:has(~ .card-actions) { opacity: 1; }
 }
+/* The card's buttons stay above any marker and its pointer margin, so none of their pixels is lost to it. */
+.card-device-corner ~ .card-actions,
+.card-device-stripe ~ .card-actions { z-index: 2; }
 
 /* The stripe (#789): a thin rounded line just inside one side of the card, clear of its rounded
    corners; zero text, zero height impact, the same tooltip as the corner. */

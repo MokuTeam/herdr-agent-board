@@ -277,6 +277,11 @@
 /* Card corner keyboard tooltip in Terminal style (#758): outlined box, no shadow. */
 :root[data-look="terminal"] .card-device-corner:focus-visible::after,
 :root[data-look="terminal"] .card-device-stripe:focus-visible::after { border-radius: var(--radius); background: var(--bg); box-shadow: 0 0 0 1px var(--accent); }
+/* The stripe (#789) on the edge itself: Terminal cards are square and a compact one has 3px of padding. */
+:root[data-look="terminal"] .card-device-stripe.at-left { left: 0; }
+:root[data-look="terminal"] .card-device-stripe.at-right { right: 0; }
+:root[data-look="terminal"] .card-device-stripe.at-top { top: 0; }
+:root[data-look="terminal"] .card-device-stripe.at-bottom { bottom: 0; }
 
 /* The body: one line each. What it does in the text color, what it said dim, the rest in color. */
 :root[data-look="terminal"] .what,
