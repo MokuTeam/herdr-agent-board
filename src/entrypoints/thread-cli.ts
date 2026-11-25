@@ -40,7 +40,13 @@ import {
   verifyingThreads,
   watchesOf,
 } from '../adapters/work-thread-store.ts'
-import { type AskSpec, askSpec, type DecisionsConfig, type ReservedDecision } from '../core/decisions.ts'
+import {
+  type AskSpec,
+  askSpec,
+  type CardDecision,
+  type DecisionsConfig,
+  type ReservedDecision,
+} from '../core/decisions.ts'
 import { KEPT_SUBS } from '../core/node-uplink.ts'
 import { nodeConfig, parseNodeKey } from '../core/nodes.ts'
 import { OWNER } from '../core/owner-watch.ts'
@@ -159,9 +165,20 @@ const FLAGS: Record<string, { values: readonly string[]; bare: readonly string[]
 const EVERY = ['--json', '--help']
 // Decisions' flags on `ask` (#487).
 const DECISION_FLAGS = ['--option', '--recommend', '--default-after']
-/** The words before a lone `--`: after it everything is text. */
-const beforeDashes = (args: readonly string[]): readonly string[] =>
-  args.includes('--') ? args.slice(0, args.indexOf('--')) : args
+/** The words without decisions' flags and their values before a lone `--` (#781): the question's own. */
+function withoutDecisionFlags(args: readonly string[]): string[] {
+  const out: string[] = []
+  const cut = args.indexOf('--')
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i] as string
+    if ((cut < 0 || i < cut) && DECISION_FLAGS.includes(a)) {
+      i++
+      continue
+    }
+    out.push(a)
+  }
+  return out
+}
 
 /** The flags case files add (#488), only while they are on: off, every command takes what it took. */
 const CASE_FLAGS: Record<string, { values: readonly string[]; bare: readonly string[] }> = {
@@ -277,6 +294,11 @@ export interface ThreadCmdContext {
    */
   reserveAsk?: (spec: AskSpec) => Promise<ReservedDecision | undefined>
   releaseAsk?: (reserved: ReservedDecision) => void | Promise<void>
+  /**
+   * On a node (#781): puts the question on the session's card with the decision its master holds for
+   * it, so the master's board and this one show its options; `setAsk` without it.
+   */
+  setNodeAsk?: (question: string, decision: CardDecision) => void
   /** Whether the session it writes as is the one running the command (`--session` names another). */
   own?: () => Promise<boolean>
   /** config.json's `decisions` (#487), read: null while off. */
@@ -370,15 +392,8 @@ export async function threadCmd(rest: readonly string[], ctx: ThreadCmdContext):
     }
     // On a node every command goes to the master, which holds the threads (#508): this computer's
     // database is not opened. Without `node` the command runs here, as it always has.
-    if (nodeConfig(ctx.cfg.node)) {
-      // Decisions (#487) are this computer's in phase 1: the master holds no question of a node's session.
-      if (ctx.decisions && sub === 'ask' && DECISION_FLAGS.some(f => beforeDashes(args).includes(f)))
-        throw new ThreadError(
-          'decisions',
-          "decisions are for this computer's sessions in phase 1: ask without --option, --recommend and --default-after",
-        )
-      return await forward(sub, args, ctx, out, json)
-    }
+    // Decisions (#781): a question with options goes too, and the master holds it.
+    if (nodeConfig(ctx.cfg.node)) return await forward(sub, args, ctx, out, json)
     const a = parseArgs(sub, args, !!cfg?.cases, { decisions: !!ctx.decisions, verify: !!cfg?.verify })
     const base = `http://127.0.0.1:${typeof ctx.cfg.port === 'number' ? ctx.cfg.port : 12422}/`
 
@@ -462,16 +477,20 @@ async function forward(
   }
   const answer = await (ctx.call ?? callBoard(ctx.cfg.port))(body)
   if (!answer) return fail('board', 'the board does not run on this computer: nothing was sent')
-  // The question on this session's card, as a local ask puts it there; the card rides to the master.
+  // The question on this session's card, as a local ask puts it there; the card rides to the master,
+  // with the decision the master holds for it when it asked with options (#781).
+  const answered = answer.state === 'answered' ? (answer.decision ?? null) : null
   const asked = (): void => {
     if (sub !== 'ask') return
-    const question = args
+    const question = withoutDecisionFlags(args)
       .filter(a => a !== '--json' && a !== '--')
       .slice(1)
       .join(' ')
       .replace(/\s+/g, ' ')
       .trim()
-    if (question) ctx.setAsk?.(question)
+    if (!question) return
+    if (answered && ctx.setNodeAsk) ctx.setNodeAsk(question, answered)
+    else ctx.setAsk?.(question)
   }
   if (answer.state === 'answered') {
     for (const line of answer.out) out(line)

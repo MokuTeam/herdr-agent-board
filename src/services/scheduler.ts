@@ -283,7 +283,9 @@ export function startScheduler({
         }
         // A decision's default (#487, services/decisions.ts): only while its question is still open.
         if (entry.decision !== undefined) {
-          const open = defaultDue(entry, cfg, Date.now())
+          // A node session's (#781): against its card as the master sees it, only while there are nodes.
+          const theirs = parseNodeKey(entry.key) && remoteItems ? remoteItems() : null
+          const open = defaultDue(entry, cfg, Date.now(), theirs ? { item: k => theirs.find(i => i.key === k) } : {})
           if (open === 'wait') continue
           if (open === 'drop') {
             removeEntry(entry.id, 'cancelled')

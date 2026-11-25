@@ -94,16 +94,23 @@ export interface AskInput {
   schedule?: DecisionSchedule
   /** Its id and default, reserved before (reserveDecision). */
   reserved?: ReservedDecision
+  /**
+   * A node's session (#781), asked through the node's uplink: the master holds its question for the
+   * prefixed key (core/nodes.ts nodeKey). Only services/nodes/uplink.ts sets it.
+   */
+  device?: boolean
 }
 
 /**
  * A question's id and its default in the schedule, before anything else is written: at the
  * session's cap this refuses with nothing changed. `board thread ask` takes it before it writes the
  * thread's question (releaseDecision gives it back when that write fails); `board ask` through
- * askDecision. A device's session (#501) asks on its own board: decisions are this computer's.
+ * askDecision. A device's key is taken only from its node's uplink (#781, `device`).
  */
-export function reserveDecision(a: Pick<AskInput, 'key' | 'name' | 'spec' | 'now' | 'schedule'>): ReservedDecision {
-  if (parseNodeKey(a.key)) throw new DecisionError('device', "a device's session asks on its own board")
+export function reserveDecision(
+  a: Pick<AskInput, 'key' | 'name' | 'spec' | 'now' | 'schedule' | 'device'>,
+): ReservedDecision {
+  if (parseNodeKey(a.key) && !a.device) throw new DecisionError('device', "a device's session asks on its own board")
   const schedule = a.schedule ?? fileSchedule
   const id = randomBytes(4).toString('hex')
   const { spec } = a
@@ -133,8 +140,8 @@ export const releaseDecision = (r: ReservedDecision, schedule: DecisionSchedule 
  * A question with its options: the default goes into the schedule first (refused at the session's
  * cap, which leaves everything as it was); then an open one of the same card is withdrawn (replaced)
  * and its default taken back; then the card, then the row (a queue built between the two finds the
- * card's id with no row yet, which it leaves alone). A device's session (#501) asks on its own
- * board: decisions are this computer's.
+ * card's id with no row yet, which it leaves alone). A node's session (#781) asks through its
+ * node's uplink: the card written here is the master's copy for the prefixed key.
  */
 export function askDecision(db: BoardDb, a: AskInput): { id: string; defaultAt: number | null } {
   const schedule = a.schedule ?? fileSchedule
@@ -312,13 +319,6 @@ export function markAnswering(
 }
 
 /**
- * The scheduler, before a default goes (and again right before it is typed): 'go'; 'wait' while
- * the owner's answer is being typed in; 'drop' once the question is answered, withdrawn, replaced
- * or held (the owner's prompt cleared the card's ask: no prompt from the owner since, or it does
- * not go), or defaults are off in the live config. An entry for a device's session (#501) is not
- * this board's to decide: decisions are this computer's, and `board ask` never puts one there.
- */
-/**
  * Whether the thread still asks the decision's own question: its open ask is the entry the decision
  * was asked with (one asked before that was kept: by the session that asked). Another session's
  * question on the same thread, or none, is not this decision's to answer.
@@ -330,19 +330,57 @@ export function ownThreadAsk(db: BoardDb, thread: NonNullable<CardDecision['thre
   return thread.ask ? ask.id === thread.ask : ask.author.kind === 'session' && ask.author.key === key
 }
 
+// A node's card takes a while to show the master a decision the master just wrote for it (the node
+// writes it once the uplink answers, its payload comes every few seconds): until then a card without
+// it is not taken for one that dropped it.
+export const NODE_SETTLE_MS = 60_000
+
+/**
+ * A node session's open decision (#781) against its card as the node shows it: 'open' while that
+ * card carries the same decision; 'gone' once it no longer does (an answer typed in at the node, a
+ * `board doing`, another question); 'unknown' while the card is not seen, or just asked.
+ */
+export function nodeDecisionState(
+  item: Pick<Item, 'decision'> | undefined,
+  id: string,
+  askedAt: number,
+  now: number,
+): 'open' | 'gone' | 'unknown' {
+  if (!item) return 'unknown'
+  if (cardDecisionOf(item.decision)?.id === id) return 'open'
+  return now - askedAt < NODE_SETTLE_MS ? 'unknown' : 'gone'
+}
+
+/**
+ * The scheduler, before a default goes (and again right before it is typed): 'go'; 'wait' while
+ * the owner's answer is being typed in; 'drop' once the question is answered, withdrawn, replaced
+ * or held (the owner's prompt cleared the card's ask: no prompt from the owner since, or it does
+ * not go), or defaults are off in the live config. An entry for a node's session (#781) goes only
+ * with `o.item` (the master's view of the nodes' cards), while that card still carries the
+ * decision: without it, as before, it is not this board's to decide.
+ */
 export function defaultDue(
   entry: ScheduleEntry,
   cfg: { decisions?: unknown } | undefined,
   now: number,
+  o: { item?: (key: string) => Item | undefined } = {},
 ): 'go' | 'wait' | 'drop' {
   const id = typeof entry.decision === 'string' ? entry.decision : ''
-  if (parseNodeKey(entry.key)) return 'drop'
+  const node = parseNodeKey(entry.key) !== null
+  if (node && !o.item) return 'drop'
   // Defaults turned off (or decisions altogether) since it was asked: nothing decides by itself.
   if (cfg && !decisionsConfig(cfg.decisions)?.defaults) return 'drop'
   const card = readCard(entry.key)
   const cd = cardDecisionOf(card?.decision)
   if (!id || !card?.ask || cd?.id !== id || cd.held !== undefined || cd.defaultAt === undefined) return 'drop'
   if (answeringOf(card, now)) return 'wait'
+  if (node && o.item) {
+    const askedAt = typeof card.askSince === 'number' ? card.askSince : 0
+    const state = nodeDecisionState(o.item(entry.key), id, askedAt, now)
+    if (state === 'gone') return 'drop'
+    // Just asked and not on the node's card yet: it goes once the card shows it, or drops.
+    if (state === 'unknown' && o.item(entry.key)) return 'wait'
+  }
   const row = readDecisionsDb(db => getDecision(db, id), null)
   if (row && row.answeredAt !== null) return 'drop'
   // A thread's question the thread no longer asks (another session asked on it since): not its default.
@@ -489,6 +527,54 @@ function settleLeftOvers(db: BoardDb, cards: ReadonlyMap<string, Card>, now: num
   }
 }
 
+/**
+ * Node sessions' open decisions (#781) their node's card no longer carries (answered at the node,
+ * withdrawn by `board doing`, replaced by a plain ask): withdrawn here, with this board's copy of
+ * the card's ask, and their default taken back. A card the master does not see is left as it is.
+ */
+export function settleNodeDecisions(
+  db: BoardDb,
+  items: readonly Item[],
+  cards: ReadonlyMap<string, Card>,
+  now: number,
+  schedule: DecisionSchedule = fileSchedule,
+): void {
+  const byKey = new Map(items.map(i => [i.key, i]))
+  for (const [key, card] of cards) {
+    if (!parseNodeKey(key)) continue
+    const cd = cardDecisionOf(card.decision)
+    if (!cd || !card.ask) continue
+    const askedAt = typeof card.askSince === 'number' ? card.askSince : 0
+    if (nodeDecisionState(byKey.get(key), cd.id, askedAt, now) !== 'gone') continue
+    try {
+      closeCardDecision(
+        db,
+        key,
+        { answer: null, answeredBy: 'withdrawn', via: 'cleared', at: now },
+        { id: cd.id, ask: true, schedule },
+      )
+    } catch {}
+  }
+}
+
+/**
+ * Node sessions' cards (#781) as this board shows them: a decision only while this board holds it
+ * open, as this board has it (held, answering, its default); none while decisions are off here.
+ */
+export function nodeItemsDecisions<T extends Pick<Item, 'key' | 'decision'>>(
+  items: readonly T[],
+  cards: ReadonlyMap<string, Card>,
+  on: boolean,
+): T[] {
+  return items.map(item => {
+    if (item.decision === undefined) return item
+    const { decision, ...rest } = item
+    const held = cards.get(item.key)
+    const kept = on && held?.ask ? cardDecisionOf(held.decision) : null
+    return (kept && kept.id === cardDecisionOf(decision)?.id ? { ...rest, decision: kept } : rest) as T
+  })
+}
+
 /** One waiting card as the queue shows it. */
 function viewOf(key: string, who: string, card: Card | undefined, question: string): DecisionView {
   const cd = card?.ask ? cardDecisionOf(card.decision) : null
@@ -525,11 +611,16 @@ export function decisionsPayload(
   cards: ReadonlyMap<string, Card>,
   o: { now: number; defaults: boolean; seen?: number },
 ): DecisionsPayload {
+  // A node's card (#781) is in the queue only while this board holds a question of it: its plain asks
+  // stay on its card, as before.
+  const own = items.filter(i => !parseNodeKey(i.key) || cardDecisionOf(cards.get(i.key)?.decision))
   const items_ = orderQueue(
-    cardsWaiting(items, cards).map(w => viewOf(w.card?.key ?? '', w.who, cards.get(w.card?.key ?? ''), w.text)),
+    cardsWaiting(own, cards).map(w => viewOf(w.card?.key ?? '', w.who, cards.get(w.card?.key ?? ''), w.text)),
   )
   const seen = o.seen ?? seenAt()
   const defaulted = readDecisionsDb(db => {
+    // Only a master with nodes' cards in view has any (#781).
+    if (items.some(i => parseNodeKey(i.key))) settleNodeDecisions(db, items, cards, o.now)
     settleLeftOvers(db, cards, o.now)
     return defaultedOf(db, seen)
   }, [] as DefaultedView[])

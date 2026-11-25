@@ -39,10 +39,16 @@ describe("relayMatch: the threads group and other machines' sessions, nothing el
     expect(events?.kind === 'table' && events.entry.stream).toBe(true)
   })
 
-  test("what stays local is not the relay's: decisions (#781), other settings, local sessions, other methods", () => {
+  test("decisions (#781) are the table: the master holds the node sessions' questions", () => {
+    for (const method of ['GET', 'POST'] as const) {
+      const m = relayMatch(method, '/api/decisions', none)
+      expect(m?.kind === 'table' && m.entry.group).toBe('decisions')
+    }
+    expect(relayMatch('GET', '/api/decisions/x', none)).toBeNull()
+  })
+
+  test("what stays local is not the relay's: other settings, local sessions, other methods", () => {
     for (const [method, path] of [
-      ['GET', '/api/decisions'],
-      ['POST', '/api/decisions'],
       ['POST', '/api/settings'],
       ['POST', '/api/todos'],
       ['POST', '/api/profiles'],

@@ -90,7 +90,15 @@ import { NODE_PROGRAMS } from '../core/bundle.ts'
 import { answerText, decisionsConfig } from '../core/decisions.ts'
 import { journalConfig } from '../core/journal.ts'
 import { t } from '../core/lang.ts'
-import { BOARD_SLICES_PATH, NODE_CLI_PATH, ownerCliOf, type RelayWho, relayOwnerSetting } from '../core/master-relay.ts'
+import {
+  BOARD_SLICES_PATH,
+  DECISIONS_PATH,
+  NODE_CLI_PATH,
+  ownerCliOf,
+  type RelayWho,
+  relayedDecisions,
+  relayOwnerSetting,
+} from '../core/master-relay.ts'
 import { messageGate } from '../core/message-gate.ts'
 import { isRoutableNodeAddress } from '../core/mokupilot-mode.ts'
 import { dropMovedCards } from '../core/node-items.ts'
@@ -143,7 +151,7 @@ import { createCalendarReminders } from '../services/calendar-reminders.ts'
 import { caseItems, liveOf } from '../services/case-sessions.ts'
 import { startCompactor } from '../services/compactor.ts'
 import { dayWatchTick } from '../services/day-watches.ts'
-import { decisionsPayload } from '../services/decisions.ts'
+import { decisionsPayload, nodeItemsDecisions } from '../services/decisions.ts'
 import type { Deps } from '../services/deps.ts'
 import { createHousekeeping } from '../services/housekeeping.ts'
 import { createJournal } from '../services/journal.ts'
@@ -1139,6 +1147,11 @@ export async function startServer({
       const on = decisionsConfig(cfg.decisions)
       return on ? decisionsPayload(items, allCards(), { now: Date.now(), defaults: on.defaults }) : null
     },
+    // Nodes' cards (#781): a decision shows as this board holds it; the cards are read only for one that has any.
+    nodeDecisions: items =>
+      items.some(i => i.decision !== undefined)
+        ? nodeItemsDecisions(items, allCards(), decisionsConfig(cfg.decisions) !== null)
+        : [...items],
   })
   board.publish()
   // A pi day's task board copied into threads (#393), before each refresh: a change of pi's file is in
@@ -1300,7 +1313,8 @@ export async function startServer({
     // Decisions (#487): an option or the owner's words typed in, Hold, the record; the phone too.
     ...decisionsRoutes({
       cfg,
-      find: board.find,
+      // A node's session too (#781): its questions with options are this board's.
+      find: key => board.findAny(key),
       log,
       refresh,
       changed: () => board.publish(),
@@ -1309,6 +1323,12 @@ export async function startServer({
       confirm: teamConfirm,
       async tell(key, text) {
         const { t } = await import('../core/lang.ts')
+        // A node's session (#781): through its node, as the scheduler's delivery goes; only with `nodes`.
+        if (parseNodeKey(key)) {
+          if (!nodeProxy) return { ok: false, error: t('err.gone') }
+          const r = await nodeProxy.send(key, text, { requestId: randomUUID(), idle: false, noWake: false })
+          return r.ok ? { ok: true } : { ok: false, error: r.error }
+        }
         const { collect } = await import('../services/board.ts')
         const { send } = await import('../services/actions.ts')
         const item = (await collect(deps)).find(i => i.key === key)
@@ -1497,8 +1517,9 @@ export async function startServer({
    * and the guards see a remote caller. This board's own relay route, when it is a node too, is
    * left out: what a node asks of it is answered here.
    */
-  async function replayRelayed(req: Request, from?: { device: string; who: RelayWho }): Promise<Response> {
-    const url = new URL(req.url)
+  async function replayRelayed(incoming: Request, from?: { device: string; who: RelayWho }): Promise<Response> {
+    let req = incoming
+    let url = new URL(req.url)
     const raw = url.pathname
     const path = decoded(raw)
     if (path === null) return json(400, { error: 'path' })
@@ -1516,6 +1537,18 @@ export async function startServer({
       if (!call) return json(400, { ok: false, error: 'call' })
       if (!uplinkRunner) return json(503, { ok: false, error: 'uplink' })
       return json(200, await uplinkRunner.ownerCall(from.device, call))
+    }
+    // A node's page answers its own sessions' questions here (#781): their keys as this board names them.
+    if (raw === DECISIONS_PATH && from) {
+      const body = req.method === 'POST' ? await req.json().catch(() => null) : undefined
+      const next = relayedDecisions(req.method, url, body, from.device)
+      if (!next) return json(400, { ok: false, error: 'key' })
+      url = next.url
+      req = new Request(url, {
+        method: req.method,
+        headers: req.headers,
+        ...(req.method === 'POST' && { body: JSON.stringify(next.body) }),
+      })
     }
     // The settings of the features the master runs for every machine (#780), which a remote
     // listener keeps on this computer (localOnly), are the owner's on each of its paired devices

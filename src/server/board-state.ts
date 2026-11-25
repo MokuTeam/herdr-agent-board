@@ -133,6 +133,8 @@ interface Options {
   threads?: () => ThreadsPayload | null
   /** Decisions' queue (#487) from the board's items; null while they are off. */
   decisions?: (items: readonly Item[]) => DecisionsPayload | null
+  /** Nodes' cards with the decisions this board holds for them (#781, services/decisions.ts nodeItemsDecisions). */
+  nodeDecisions?: (items: readonly Item[]) => Item[]
   workdesk?: () => WorkdeskPayload | null
   workdeskDialog?: () => DialogStatus | null
   observeSessions?: NonNullable<Parameters<typeof collect>[1]>['observed']
@@ -306,6 +308,7 @@ export function createBoardState({
   calendar,
   threads,
   decisions,
+  nodeDecisions: decideNodes,
   workdesk,
   workdeskDialog,
   observeSessions,
@@ -320,6 +323,9 @@ export function createBoardState({
   masterSlices,
 }: Options): BoardState {
   const { cfg, log } = deps
+  /** Nodes' cards as this board shows their decisions (#781); as they came without the option. */
+  const nodeDecisions = <T extends Item>(list: T[] | undefined): T[] | undefined =>
+    list && decideNodes ? (decideNodes(list) as T[]) : list
   let items: Item[] = []
   let stale = true
   let lastSuccessfulRefreshAt: number | null = null
@@ -377,7 +383,9 @@ export function createBoardState({
       launches.decorate(todos && own ? { ...rest, todos: own } : rest),
     )
     // Another device's cards carry their tasks only while this board's config turns them on, as its own.
-    const theirs = others?.items.map(({ todos: own, ...rest }) => (todos && own ? { ...rest, todos: own } : rest))
+    const theirs = nodeDecisions(
+      others?.items.map(({ todos: own, ...rest }) => (todos && own ? { ...rest, todos: own } : rest)),
+    )
     // A call agent started for a cross-device session (#618, #700) has call.parent naming that
     // card: inherit its parent's lane/workspace/title when unset and sit right beside the parent card.
     const combined = (() => {
@@ -505,7 +513,8 @@ export function createBoardState({
       // journal: only while config.json turns it on (#489)
       ...journalOf(journal),
       // decisions: only while config.json turns them on (#487)
-      ...decisionsOf(decisions, items),
+      // A node's sessions' too (#781): their questions with options are this board's.
+      ...decisionsOf(decisions, others?.items.length ? [...items, ...others.items] : items),
       ...(workdeskLine && { workdesk: workdeskLine }),
       ...(dialogLine && { workdeskDialog: dialogLine }),
       // accessRev: the panel's cue to fetch the Remote access view again (never the view itself).

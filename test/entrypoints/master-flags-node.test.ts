@@ -135,18 +135,69 @@ test('board todo on a node: on via the master; off without its flags, as before'
   expect(on.code).toBe(0)
 })
 
-test('board ask with options on a node: a decision on the card via the master; a plain ask without its flags', async () => {
+test('board ask with options on a node: the master holds it and the card gets its decision (#781); a plain ask without its flags', async () => {
   const box = await sandbox()
-  config(box, { node: NODE })
-  writeCard(box)
-  const plain = await run(box, 'cli.ts', ['ask', 'Which one?', '--option', 'A', '--option', 'B', '--session', SID])
-  expect(plain.out).toContain('decisions are off')
-  expect(cardOf(box)?.decision).toBeUndefined()
-  flags(box)
-  const asked = await run(box, 'cli.ts', ['ask', 'Which one?', '--option', 'A', '--option', 'B', '--session', SID])
-  expect(asked.code).toBe(0)
-  expect(asked.out).not.toContain('decisions are off')
-  expect(cardOf(box)?.decision).toMatchObject({ options: ['A', 'B'] })
+  const calls: Record<string, unknown>[] = []
+  let answer: unknown = { state: 'unreachable' }
+  // This node's board: POST /api/node/call, which hands the call to the master.
+  const board = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    async fetch(req) {
+      if (req.method !== 'POST' || new URL(req.url).pathname !== '/api/node/call')
+        return new Response(null, { status: 404 })
+      calls.push((await req.json()) as Record<string, unknown>)
+      return Response.json(answer)
+    },
+  })
+  try {
+    config(box, { node: NODE, port: board.port })
+    writeCard(box)
+    const plain = await run(box, 'cli.ts', ['ask', 'Which one?', '--option', 'A', '--option', 'B', '--session', SID])
+    expect(plain.out).toContain('decisions are off')
+    expect(cardOf(box)?.decision).toBeUndefined()
+    expect(calls).toEqual([])
+    flags(box)
+    const held = { id: 'd1', options: ['A', 'B'], recommend: 1 }
+    answer = { state: 'answered', code: 0, out: [' · decision d1'], err: [], decision: held }
+    const asked = await run(box, 'cli.ts', [
+      'ask',
+      'Which one?',
+      '--option',
+      'A',
+      '--option',
+      'B',
+      '--recommend',
+      '1',
+      '--session',
+      SID,
+    ])
+    expect(asked.code).toBe(0)
+    expect(asked.out).toContain('decision d1')
+    expect(calls.map(c => [c.cmd, c.argv, c.session])).toEqual([
+      ['ask', ['Which one?', '--option', 'A', '--option', 'B', '--recommend', '1', '--'], SID],
+    ])
+    expect(cardOf(box)?.ask).toBe('Which one?')
+    expect(cardOf(box)?.decision).toEqual({ ...held, master: true })
+    // board done: the decision leaves the card, and this computer's database is not made for it.
+    expect((await run(box, 'cli.ts', ['done', '--session', SID])).code).toBe(0)
+    expect(cardOf(box)?.decision).toBeUndefined()
+    expect(existsSync(join(box.env.LOCALAPPDATA as string, 'herdr/plugins/agent-board/board.db'))).toBe(false)
+    // The master not reachable: the question still goes on the card, without options, and says so.
+    answer = { state: 'unreachable' }
+    const away = await run(box, 'cli.ts', ['ask', 'Which one?', '--option', 'A', '--option', 'B', '--session', SID])
+    expect(away.code).toBe(0)
+    expect(away.out).toContain("the board's computer is not reachable, so this asks without options")
+    expect(cardOf(box)?.ask).toBe('Which one?')
+    expect(cardOf(box)?.decision).toBeUndefined()
+    // A plain question stays this card's, with no call.
+    calls.length = 0
+    expect((await run(box, 'cli.ts', ['ask', 'Plain?', '--session', SID])).code).toBe(0)
+    expect(calls).toEqual([])
+    expect(cardOf(box)?.ask).toBe('Plain?')
+  } finally {
+    board.stop(true)
+  }
 })
 
 test('board wait --probe on a node: a watch via the master; words of the wait text without its flags', async () => {

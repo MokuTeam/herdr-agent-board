@@ -33,7 +33,7 @@ import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
 import { readStdin } from '../adapters/stdin.ts'
 import { BRIEF_VERSION, brief, waitReminder } from '../core/brief.ts'
 import { calendarConfig } from '../core/calendar.ts'
-import { decisionsConfig } from '../core/decisions.ts'
+import { decisionsConfig, heldByMaster } from '../core/decisions.ts'
 import { heldQuestionOf } from '../core/held-question.ts'
 import { briefFlags, staleFlagsLine, withMasterFlags } from '../core/master-flags.ts'
 import { isNotice } from '../core/notices.ts'
@@ -149,6 +149,9 @@ async function main(): Promise<void> {
   if (event === 'UserPromptSubmit' && !fromBoard) {
     for (const c of [card, boardKey ? boardCard : null]) {
       if (!c?.ask || c.decision === undefined) continue
+      // A node's card (#781) carries the decision its master holds: the card loses it below, which
+      // the master reads as answered or withdrawn; this computer's database is not opened for it.
+      if (heldByMaster(c.decision)) continue
       const { closeOnPrompt } = await import('../services/decisions.ts')
       try {
         closeOnPrompt(c, input.prompt, Date.now())

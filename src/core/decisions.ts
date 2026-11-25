@@ -241,6 +241,16 @@ export function orderQueue<T extends Pick<DecisionView, 'defaultAt' | 'held' | '
   })
 }
 
+/**
+ * A decision as a node's card keeps it (#781): its master holds the question, and the mark tells
+ * this computer's hook and `board` not to look for it in their own database.
+ */
+export const masterHeld = (d: CardDecision): CardDecision => ({ ...d, master: true }) as CardDecision
+
+/** Whether a card's raw decision is one its master holds (masterHeld). */
+export const heldByMaster = (raw: unknown): boolean =>
+  typeof raw === 'object' && raw !== null && (raw as Record<string, unknown>).master === true
+
 /** A card's decision as kept, when it reads as one. */
 export function cardDecisionOf(raw: unknown): CardDecision | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null

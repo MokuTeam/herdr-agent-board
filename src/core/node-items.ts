@@ -14,6 +14,7 @@
 // - Without one: the same check, keys as the node has them. That is what the offline copy keeps.
 import { type BgTaskSummary, MAX_BG_TASK_DETAIL } from './bg-task.ts'
 import { checklistActive, MAX_CHECKLIST_ITEMS, MAX_CHECKLIST_TEXT } from './checklist.ts'
+import { linkDecisionOf } from './node-uplink.ts'
 import { nodeKey, parseNodeKey } from './nodes.ts'
 import { MAX_REPORT, type ScheduleEntry } from './schedule-rules.ts'
 import type { Item, LaunchView } from './types.ts'
@@ -412,6 +413,8 @@ const ITEM: Record<string, Check> = {
     ['kind', 'resetsAt', 'at'],
   ),
   tgKey: nonEmpty(LEN.path),
+  // Its open question's decision (#781): the master shows its own copy while the card carries this.
+  decision: v => linkDecisionOf(v) ?? undefined,
 }
 
 /** One item of a node, or null when it has no usable key or name, or is not the node's own. */

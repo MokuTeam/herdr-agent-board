@@ -116,3 +116,23 @@ for (const [what, text] of [
     expect(rowOf(box, id)).toMatchObject({ answer: null, answeredBy: 'withdrawn', via: 'cleared' })
   })
 }
+
+test("a node's card (#781): the decision its master holds leaves with the ask; this computer's database is not made for it", async () => {
+  const box = await sandbox()
+  const dir = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(
+    join(dir, 'config.json'),
+    JSON.stringify({ language: 'en', node: { id: 'server-1', port: 12430, workRoot: '/tmp' } }),
+  )
+  mkdirSync(box.cards, { recursive: true })
+  const decision = { id: 'd1', options: ['yes', 'no'], recommend: 1, master: true }
+  writeFileSync(
+    join(box.cards, `${SID}.json`),
+    JSON.stringify({ key: SID, ask: 'Merge now?', askSince: Date.now() - 60_000, decision, briefV: 99, briefedAt: 1 }),
+  )
+  await prompt(box, 'yes')
+  expect(cardOf(box)?.ask).toBeUndefined()
+  expect(cardOf(box)?.decision).toBeUndefined()
+  expect(existsSync(join(box.env.LOCALAPPDATA as string, 'herdr/plugins/agent-board/board.db'))).toBe(false)
+})

@@ -33,6 +33,7 @@
 //   whole mesh (RELAY_OWNER_SETTINGS, #780), each write of them in the master's admin log.
 // - never a Team peer, nor a caller through the node's own remote listeners (403 master-relay-remote).
 import { keyedPath } from './node-proxy.ts'
+import { nodeKey, parseNodeKey } from './nodes.ts'
 import { hasUnprintable } from './team.ts'
 
 export type RelayMethod = 'GET' | 'POST'
@@ -55,7 +56,8 @@ export interface RelayEntry {
 /**
  * The master-owned paths a node relays. A write (POST) carries an idempotency key; a session may
  * use the GETs only. T4a (#780): time, calendar, journal, presence, these features' settings and
- * the categories. Decisions stay on the node until its sessions' questions live on the master (#781).
+ * the categories. Decisions (#781): the master holds the node sessions' questions with options, so the
+ * node's page answers them there (relayedDecisions names the node's own sessions as the master does).
  */
 export const RELAY_TABLE: readonly RelayEntry[] = [
   { group: 'threads', method: 'GET', path: /^\/api\/threads$/ },
@@ -76,6 +78,8 @@ export const RELAY_TABLE: readonly RelayEntry[] = [
   { group: 'journal', method: 'POST', path: /^\/api\/journal$/ },
   { group: 'presence', method: 'GET', path: /^\/api\/presence$/ },
   { group: 'presence', method: 'POST', path: /^\/api\/presence$/ },
+  { group: 'decisions', method: 'GET', path: /^\/api\/decisions$/ },
+  { group: 'decisions', method: 'POST', path: /^\/api\/decisions$/ },
   { group: 'settings', method: 'POST', path: /^\/api\/feature-settings$/ },
   { group: 'settings', method: 'GET', path: /^\/api\/threads-settings$/ },
   { group: 'settings', method: 'POST', path: /^\/api\/threads-settings$/ },
@@ -83,6 +87,48 @@ export const RELAY_TABLE: readonly RelayEntry[] = [
   { group: 'payload', method: 'GET', path: /^\/api\/board-slices$/, relayOnly: true },
   { group: 'cli', method: 'POST', path: /^\/api\/node-cli$/, relayOnly: true },
 ]
+
+/** The decisions' path (#781), whose session keys the master reads as the node's own (relayedDecisions). */
+export const DECISIONS_PATH = '/api/decisions'
+
+/**
+ * A key as the node's page names it, as the master names it (#781): the node's own session's bare
+ * key gets the device's prefix; one with a prefix already (another machine's) stays. Null: not a key.
+ */
+export function relayedSessionKey(key: string, device: string): string | null {
+  if (!key || key.length > 1024 || hasUnprintable(key)) return null
+  if (parseNodeKey(key)) return key
+  try {
+    return nodeKey(device, key)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * `/api/decisions` from node `device`'s page (#781): the body's `key` (a POST) or the query's
+ * `session` (a GET) as the master names that session; the rest as it came. Null when the key is
+ * not one.
+ */
+export function relayedDecisions(
+  method: string,
+  url: URL,
+  body: unknown,
+  device: string,
+): { url: URL; body: unknown } | null {
+  if (method === 'GET') {
+    const session = url.searchParams.get('session')
+    if (session === null) return { url, body }
+    const key = relayedSessionKey(session, device)
+    if (!key) return null
+    const next = new URL(url)
+    next.searchParams.set('session', key)
+    return { url: next, body }
+  }
+  if (!isObject(body) || typeof body.key !== 'string') return { url, body }
+  const key = relayedSessionKey(body.key, device)
+  return key ? { url, body: { ...body, key } } : null
+}
 
 /** The relay-only paths (RelayEntry.relayOnly), as the master answers them. */
 export const BOARD_SLICES_PATH = '/api/board-slices'

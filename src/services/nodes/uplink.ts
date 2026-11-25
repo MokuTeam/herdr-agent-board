@@ -26,6 +26,7 @@ import { createHash } from 'node:crypto'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
+import { readCard } from '../../adapters/cards.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { createDeviceStore, type DeviceStore } from '../../adapters/node-store.ts'
 import { pace } from '../../adapters/pacing.ts'
@@ -33,7 +34,13 @@ import { currentPresence, setPresence } from '../../adapters/presence-store.ts'
 import { addEntry, getEntry, removeEntry } from '../../adapters/schedule-store.ts'
 import { formatListLines } from '../../core/board-list.ts'
 import { categoryInfo } from '../../core/categories.ts'
-import { DecisionError, decisionsConfig } from '../../core/decisions.ts'
+import {
+  type CardDecision,
+  cardDecisionOf,
+  DecisionError,
+  decisionsConfig,
+  durationWords,
+} from '../../core/decisions.ts'
 import { takeEvents } from '../../core/event-stream.ts'
 import { t } from '../../core/lang.ts'
 import {
@@ -146,6 +153,16 @@ const messageOf = (err: unknown): string => (err instanceof Error ? err.message 
 const said = (v: string): string => v.replace(/\p{Cc}/gu, ' ').slice(0, 64)
 const failed = (line: string): UplinkResult => ({ code: 1, out: [], err: [line] })
 
+/** What a question with options adds to its line, as a local `board ask` says it (entrypoints/decisions-cli.ts). */
+const decisionLine = (id: string, defaultAt: number | null, defaultMs: number | null | undefined): string =>
+  `decision ${id}${defaultAt !== null && defaultMs ? ` · default in ${durationWords(defaultMs)}` : ''}`
+
+/** The decision this board holds on its copy of a node session's card (#781), when it is `id`. */
+function heldDecision(key: string, id: string): CardDecision | null {
+  const d = cardDecisionOf(readCard(key)?.decision)
+  return d?.id === id ? d : null
+}
+
 /**
  * The result as the node takes it (core/node-uplink.ts uplinkResultOf): each line at most
  * RESULT_LINE_MAX characters, RESULT_CHARS in all and RESULT_LINES_MAX lines with a last one saying
@@ -167,12 +184,14 @@ function fit(r: UplinkResult): UplinkResult {
   }
   const out = cut(r.out)
   const err = cut(r.err)
-  if (!out.dropped && !err.dropped) return { code: r.code, out: out.kept, err: err.kept }
+  const decision = r.decision ? { decision: r.decision } : {}
+  if (!out.dropped && !err.dropped) return { code: r.code, out: out.kept, err: err.kept, ...decision }
   const more = out.dropped + err.dropped
   return {
     code: r.code,
     out: out.kept,
     err: [...err.kept, `${more} more lines left out: too long to send to the node`],
+    ...decision,
   }
 }
 
@@ -469,6 +488,8 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
         return unscheduleFrom(id, call)
       case 'spawn':
         return spawnCall(id, call)
+      case 'ask':
+        return askFrom(id, call)
     }
     const sub = call.argv[0] ?? 'help'
     const not = Object.hasOwn(NOT_FROM_NODE, sub) ? NOT_FROM_NODE[sub] : undefined
@@ -520,11 +541,14 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
                 }
               }
           : undefined
+      // Decisions (#781): a node session's own question with options is held here, for its prefixed key.
+      const decided = sub === 'ask' ? await threadDecisions(key, name, lane) : null
       const code = await (o.run ?? threadCmd)(argv, {
         cfg: { threads: o.cfg.threads, port: o.cfg.port },
         actor,
         lane,
         idle: false,
+        ...(decided?.ctx ?? {}),
         findSession: async word => findSession(word),
         out: l => out.push(l),
         err: l => err.push(l),
@@ -532,11 +556,98 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
         ...(verdictSelf && { self: verdictSelf }),
         ...(cases && { cases }),
       })
-      return { code, out, err }
+      const decision = code === 0 ? decided?.asked() : null
+      return { code, out, err, ...(decision && { decision }) }
     } catch (err) {
       return failed(messageOf(err))
     } finally {
       rmSync(folder, { recursive: true, force: true })
+    }
+  }
+
+  /**
+   * `board thread ask` of a node's session with decisions on here (#781): the question's id and
+   * default reserved and written for its prefixed key, as a local `board thread ask` does for this
+   * computer's; `asked` gives what the node puts on its own card. Null while decisions are off.
+   */
+  async function threadDecisions(
+    key: string,
+    name: string,
+    lane: string | null,
+  ): Promise<{ ctx: Partial<ThreadCmdContext>; asked(): CardDecision | null } | null> {
+    const on = decisionsConfig(o.cfg.decisions)
+    if (!on) return null
+    const svc = await import('../decisions.ts')
+    let id: string | null = null
+    const ctx: Partial<ThreadCmdContext> = {
+      decisions: on,
+      // The call is the session's own: the node sends only its own key.
+      own: async () => true,
+      // Options make it a decision here; a plain question stays the node card's ask alone, as before.
+      reserveAsk: async spec =>
+        spec.options.length ? svc.reserveDecision({ key, name, spec, now: Date.now(), device: true }) : undefined,
+      releaseAsk: reserved => svc.releaseDecision(reserved),
+      setAsk: (question, d) => {
+        if (!d?.spec.options.length) return undefined
+        const r = svc.withDecisionsDb(db =>
+          svc.askDecision(db, {
+            key,
+            name,
+            lane,
+            spec: d.spec,
+            ask: question,
+            thread: d.thread,
+            now: Date.now(),
+            device: true,
+            ...(d.reserved && { reserved: d.reserved }),
+          }),
+        )
+        id = r.id
+        return decisionLine(r.id, r.defaultAt, d.spec.defaultMs)
+      },
+    }
+    return { ctx, asked: () => (id ? heldDecision(key, id) : null) }
+  }
+
+  /**
+   * `board ask "<q>" --option ...` in a session of the node (#781): the question with its options
+   * held here for the session's prefixed key (this board's copy of its card's ask and decision, the
+   * record, the default in this board's schedule); the node puts the decision it gets back on its own
+   * card. The words as the node's `board` had them: the flags, then after a lone `--` the text.
+   */
+  async function askFrom(id: string, call: UplinkCall): Promise<UplinkResult> {
+    const who = sessionOf(id, call.session)
+    if (!who) return refused('not a session of the node')
+    const on = decisionsConfig(o.cfg.decisions)
+    if (!on) return failed("decisions are off on the board's computer: ask without --option")
+    const cut = call.argv.indexOf('--')
+    const before = cut < 0 ? call.argv : call.argv.slice(0, cut)
+    const after = cut < 0 ? [] : call.argv.slice(cut + 1)
+    try {
+      const { parseAsk } = await import('../../core/decisions.ts')
+      const svc = await import('../decisions.ts')
+      const spec = parseAsk(before, after, on)
+      const lane = who.lane || call.lane || null
+      const r = svc.withDecisionsDb(db =>
+        svc.askDecision(db, {
+          key: who.key,
+          name: who.name,
+          lane,
+          spec,
+          ask: spec.question,
+          now: Date.now(),
+          device: true,
+        }),
+      )
+      const decision = heldDecision(who.key, r.id)
+      return {
+        code: 0,
+        out: [` · ${decisionLine(r.id, r.defaultAt, spec.defaultMs)}`],
+        err: [],
+        ...(decision && { decision }),
+      }
+    } catch (err) {
+      return failed(messageOf(err))
     }
   }
 

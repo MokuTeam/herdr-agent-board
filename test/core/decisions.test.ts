@@ -209,7 +209,7 @@ test('the brief with watches (#486) on too: both lines, each where it goes; with
     expect(block.length).toBeLessThanOrEqual(BRIEF_MAX)
 })
 
-test("a device's card on the master (#501): its decision is not carried, so the master draws no buttons for it", () => {
+test("a device's card on the master (#781): its decision is carried, so the master can show its own copy of it", () => {
   const sid = '1f0e3c1a-5b7d-4c2e-9a10-3c4b5d6e7f80'
   const part = nodePart(
     {
@@ -234,5 +234,12 @@ test("a device's card on the master (#501): its decision is not carried, so the 
   const item = part?.items[0]
   expect(item?.key).toBe(`@studio:${sid}`)
   expect(item?.question).toBe('Merge now?')
-  expect(item && 'decision' in item).toBe(false)
+  expect(item?.decision).toEqual({ id: 'd1', options: ['yes', 'no'], recommend: 1, defaultAt: 1 })
+  // One that does not read as a decision (no options, a label with a control character) is left out.
+  for (const decision of [{ id: 'd2', options: [] }, { id: 'd3', options: ['a\u0007', 'b'] }, 'd4']) {
+    const raw = { key: sid, session: sid, pane: 'w1:p1', workspace: 'w1', status: 'idle', name: 'atlas 12', decision }
+    const bad = nodePart({ items: [raw] }, 'studio')?.items[0]
+    expect(bad?.key).toBe(`@studio:${sid}`)
+    expect(bad && 'decision' in bad).toBe(false)
+  }
 })

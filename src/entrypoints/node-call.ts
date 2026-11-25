@@ -1,5 +1,6 @@
 // Shared client helper for CLI commands forwarded from a node to its master over the uplink (#508, #698).
 import { randomUUID } from 'node:crypto'
+import type { CardDecision } from '../core/decisions.ts'
 import { SPAWN_FOLLOW_MAX_SEC } from '../core/launch/spawn-node.ts'
 import { NODE_CLI_PATH, OWNER_CLI_COMMANDS, RELAY_ERRORS } from '../core/master-relay.ts'
 import { isRememberedCall, UPLINK_REFUSED, uplinkResultOf } from '../core/node-uplink.ts'
@@ -25,6 +26,7 @@ export interface NodeCall {
     | 'every'
     | 'unschedule'
     | 'spawn'
+    | 'ask'
   argv: string[]
   session: string
   lane: string | null
@@ -38,7 +40,7 @@ export interface NodeCall {
 
 /** What the node's board answered (services/node/uplink.ts CallAnswer); null when it did not. */
 export type NodeCallAnswer =
-  | { state: 'answered'; code: number; out: string[]; err: string[] }
+  | { state: 'answered'; code: number; out: string[]; err: string[]; decision?: CardDecision }
   | { state: 'kept'; id: string }
   | { state: 'unreachable' }
   | null

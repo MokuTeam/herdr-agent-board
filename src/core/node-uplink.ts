@@ -7,10 +7,11 @@
 // and its result comes back as `{ code, out, err }`. Both are read here field by field: neither
 // side trusts what the other sends.
 
+import { type CardDecision, cardDecisionOf } from './decisions.ts'
 import { hasUnprintable } from './team.ts'
 import { FILE_MAX_BYTES, FILES_MAX } from './work-threads.ts'
 
-/** The commands a master takes from a node: `board thread` (stage 1, 10 item 6), `board send` (#619), `board agents` (#628), `board time` (#644), shared-state commands (#698), and spawn-agent's start (#760, `spawn`). */
+/** The commands a master takes from a node: `board thread` (stage 1, 10 item 6), `board send` (#619), `board agents` (#628), `board time` (#644), shared-state commands (#698), spawn-agent's start (#760, `spawn`), and `board ask` with options (#781, `ask`). */
 export const UPLINK_COMMANDS: ReadonlySet<string> = new Set([
   'thread',
   'threads',
@@ -29,6 +30,7 @@ export const UPLINK_COMMANDS: ReadonlySet<string> = new Set([
   'every',
   'unschedule',
   'spawn',
+  'ask',
 ])
 
 /** The exit code of a call the master does not take, whatever the node sent. */
@@ -103,6 +105,8 @@ export function isRememberedCall(cmd: string, argv: readonly string[]): boolean 
   if (cmd === 'send' || cmd === 'away' || cmd === 'remind' || cmd === 'every' || cmd === 'unschedule') return true
   // spawn-agent's start (#760): a call sent again on a new stream must not start a second session.
   if (cmd === 'spawn') return true
+  // A node session's question with options (#781): sent again, it must not open a second decision.
+  if (cmd === 'ask') return true
   if (cmd === 'time') return TIME_WRITE_SUBS.has(sub)
   if (cmd === 'cal') return CAL_WRITE_SUBS.has(sub)
   if (cmd === 'team') {
@@ -187,6 +191,25 @@ export interface UplinkResult {
   code: number
   out: string[]
   err: string[]
+  /**
+   * A node session's question with options as the master wrote it (#781: `board ask`, `board thread
+   * ask`): the node puts it on its own card, which shows the master it is still open.
+   */
+  decision?: CardDecision
+}
+
+/** The most options, and characters in one, a decision from the master carries. */
+const DECISION_OPTIONS_MAX = 10
+const DECISION_LABEL_MAX = 500
+
+/** A decision as the other side sent it, or null: cut to what a card's decision carries. */
+export function linkDecisionOf(raw: unknown): CardDecision | null {
+  const d = cardDecisionOf(raw)
+  if (!d || d.id.length > 64 || !d.options.length || d.options.length > DECISION_OPTIONS_MAX) return null
+  if (d.options.some(o => o.length > DECISION_LABEL_MAX || hasUnprintable(o))) return null
+  if (d.thread && (d.thread.id.length > 256 || d.thread.key.length > 256 || (d.thread.ask?.length ?? 0) > 256))
+    return null
+  return d
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -248,7 +271,9 @@ export function uplinkResultOf(raw: unknown): UplinkResult | null {
   const lines = (v: unknown): v is string[] =>
     Array.isArray(v) && v.length <= RESULT_LINES_MAX && v.every(l => isText(l, RESULT_LINE_MAX))
   if (!lines(out) || !lines(err)) return null
-  return { code: code as number, out, err }
+  // A decision that does not read as one is left out: the result itself still holds (#781).
+  const decision = raw.decision === undefined ? null : linkDecisionOf(raw.decision)
+  return { code: code as number, out, err, ...(decision && { decision }) }
 }
 
 /** A file too large for an uplink call, in the words a local command uses. */

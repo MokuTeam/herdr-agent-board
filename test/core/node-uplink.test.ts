@@ -92,6 +92,7 @@ test('what the master takes, what a node keeps, and what is never run for a node
     'every',
     'unschedule',
     'spawn',
+    'ask',
   ])
   expect(UPLINK_COMMANDS.has('spend')).toBe(false)
   expect([...KEPT_SUBS].sort()).toEqual(['ask', 'done', 'new', 'post', 'set', 'unwatch', 'watch'])

@@ -1,7 +1,7 @@
 // `board thread ask` with decisions (#487), in this process: options and a default only on the
 // session's own question; the default goes into the schedule before the thread's question is
 // written, so at the session's cap nothing is written and the open question keeps its buttons; on a
-// node the flags are refused in words before anything goes to the master.
+// node the flags go to the master, which holds the question (#781).
 import { expect, test } from 'bun:test'
 import { readCard } from '../../src/adapters/cards.ts'
 import { getDecision } from '../../src/adapters/decision-store.ts'
@@ -148,14 +148,50 @@ test('a thread question the thread refuses gives its reserved default back', asy
   expect(readCard(ANNA)).toBeNull()
 })
 
-test('on a node the flags are refused in words before anything goes to the master; a plain question goes', async () => {
+test('on a node the flags go to the master with the question, and its decision goes on the card (#781)', async () => {
   isolatedHome()
   const node = { node: { id: 'server-1', port: 12430, workRoot: '/srv/work' }, port: 12422 }
-  const r = await run(['ask', 'atlas-1', 'Ship it?', '--option', 'yes', '--option', 'no'], { cfg: node })
-  expect(r.code).toBe(1)
-  expect(r.err.join('\n')).toContain("decisions are for this computer's sessions in phase 1")
-  expect(r.err.join('\n').split('\n')).toHaveLength(1)
-  expect(r.calls).toEqual([])
+  const held = { id: 'd1', options: ['yes', 'no'], recommend: 1 }
+  const plain: string[] = []
+  const carded: [string, unknown][] = []
+  const sides = {
+    setAsk: async (q: string) => {
+      plain.push(q)
+      return undefined
+    },
+    setNodeAsk: (q: string, d: unknown) => {
+      carded.push([q, d])
+    },
+  }
+  const r = await run(['ask', 'atlas-1', 'Ship it?', '--option', 'yes', '--option', 'no', '--recommend', '1'], {
+    cfg: node,
+    ...sides,
+    call: async body => {
+      expect(body.argv).toEqual(['ask', 'atlas-1', 'Ship it?', '--option', 'yes', '--option', 'no', '--recommend', '1'])
+      return { state: 'answered', code: 0, out: ['ok · atlas-1 · owner', 'decision d1'], err: [], decision: held }
+    },
+  })
+  expect(r.code).toBe(0)
+  expect(r.out).toEqual(['ok · atlas-1 · owner', 'decision d1'])
+  // The question without the flags, with the master's decision; nothing of it in this computer's schedule.
+  expect(carded).toEqual([['Ship it?', held]])
+  expect(plain).toEqual([])
+  expect(listEntries()).toEqual([])
+  // The master kept no decision (an older one, or decisions off there): a plain ask, as before.
+  carded.length = 0
+  const old = await run(['ask', 'atlas-1', 'Ship it?', '--option', 'yes'], { cfg: node, ...sides })
+  expect(old.code).toBe(0)
+  expect(plain).toEqual(['Ship it?'])
+  expect(carded).toEqual([])
+  // Kept for later (the master away): a plain ask on the card; the master withdraws what it writes then.
+  const kept = await run(['ask', 'atlas-1', 'Later?', '--option', 'a', '--option', 'b'], {
+    cfg: node,
+    ...sides,
+    call: async () => ({ state: 'kept', id: 'k1' }),
+  })
+  expect(kept.code).toBe(0)
+  expect(plain).toEqual(['Ship it?', 'Later?'])
+  expect(carded).toEqual([])
   // Decisions off on the node: it goes to the master as on main, which answers as on main.
   const off = await run(['ask', 'atlas-1', 'Ship it?', '--option', 'yes'], { cfg: node, decisions: null })
   expect(off.calls.map(c => c.argv)).toEqual([['ask', 'atlas-1', 'Ship it?', '--option', 'yes']])

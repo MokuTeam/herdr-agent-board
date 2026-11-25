@@ -188,7 +188,7 @@ import { AGY_AGENT, isAgyItem } from '../core/agy.ts'
 import { formatListLines } from '../core/board-list.ts'
 import { withBoardPaths } from '../core/board-paths.ts'
 import { categoryFor, categoryInfo } from '../core/categories.ts'
-import { DECISION_FLAGS, type DecisionView, decisionsConfig, orderQueue } from '../core/decisions.ts'
+import { DECISION_FLAGS, type DecisionView, decisionsConfig, masterHeld, orderQueue } from '../core/decisions.ts'
 import { switchedOff } from '../core/feature-switch.ts'
 import { translator } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
@@ -456,6 +456,69 @@ async function tryNodeRead(cmd: 'cats' | 'list', fallbackNote: string): Promise<
   }
   console.error(fallbackNote)
   return false
+}
+
+/**
+ * `board doing / done / clear` with decisions on: the card's open decision withdrawn. On a node
+ * (#781) its master holds it: it leaves this card, and the master, seeing the card without it,
+ * withdraws it there; this computer's database is not opened.
+ */
+async function withdraw(key: string, now: number): Promise<void> {
+  if (!nodeConfig(cfg.node)) return (await import('./decisions-cli.ts')).withdrawDecision(key, now)
+  if (readCard(key)?.decision !== undefined) writeCard(key, { decision: '' })
+}
+
+/**
+ * `board ask` in a session on a node with decisions on (#781). With options its master holds the
+ * question (the uplink's `ask`) and this card gets the decision it holds, which the master's board
+ * shows and answers; a plain one is this card's ask, as without decisions. A master that is not
+ * reachable, or does not take it yet: the question still goes on the card, without options, and
+ * the line says so. What goes after the card's line.
+ */
+async function askOnNode(
+  on: NonNullable<ReturnType<typeof decisionsConfig>>,
+  s: Session,
+  own: boolean,
+  now: number,
+): Promise<string> {
+  const plain = (question: string, note = ''): string => {
+    writeCard(s.key, { ask: question, askSince: now, by: 'agent', decision: '' })
+    return note
+  }
+  if (!DECISION_FLAGS.some(f => flagWords.includes(f))) {
+    if (!text) throw new Error('usage: board ask <question>')
+    return plain(text)
+  }
+  const after = dashes < 0 ? [] : argv.slice(dashes + 1)
+  const { DecisionError, parseAsk } = await import('../core/decisions.ts')
+  // Read here first, so a question the master would refuse is refused without a call.
+  const spec = parseAsk(flagWords, after, on)
+  if (!own)
+    throw new DecisionError(
+      'other',
+      "--option and --default-after are for the session's own question: ask another session's card without them",
+    )
+  const card = readCard(s.key)
+  const lane = (typeof card?.category === 'string' && card.category) || categoryFor(cfg, s.cwd) || null
+  const { callBoard } = await import('./node-call.ts')
+  const answer = await callBoard(cfg.port)({
+    cmd: 'ask',
+    argv: [...flagWords, '--', ...after],
+    session: s.key,
+    lane,
+    files: [],
+  })
+  if (answer?.state === 'answered' && answer.code === 0 && answer.decision) {
+    writeCard(s.key, { ask: spec.question, askSince: now, by: 'agent', decision: masterHeld(answer.decision) })
+    return answer.out.join(' ')
+  }
+  if (answer?.state === 'answered' && answer.code !== 0 && answer.code !== UPLINK_REFUSED)
+    throw new Error(answer.err.join('\n') || "the board's computer did not take the question")
+  const why = answer?.state === 'answered' ? 'does not take questions with options yet' : 'is not reachable'
+  return plain(
+    spec.question,
+    ` · note: the board's computer ${why}, so this asks without options and no default will answer it`,
+  )
 }
 
 /** Merge master and local node decisions on `board decisions [--done] [--json]` (#698). */
@@ -1394,7 +1457,7 @@ async function main(): Promise<void> {
     }
     case 'doing':
       if (!text) throw new Error('usage: board doing <text>')
-      if (decisionsOn) (await import('./decisions-cli.ts')).withdrawDecision(s.key, now)
+      if (decisionsOn) await withdraw(s.key, now)
       // Back at work: whatever it waited for has arrived, whatever it asked is settled.
       writeCard(s.key, { doing: text, wait: '', waitSince: '', ask: '', askSince: '', result: '', by: 'agent' })
       ended = await endWatch(s)
@@ -1431,6 +1494,12 @@ async function main(): Promise<void> {
     }
     case 'ask':
       // Decisions (#487): options, a recommendation and a default, only while config.json turns them on.
+      // On a node (#781) a question with options is its master's: up the uplink, and on this card with
+      // the decision the master holds; a plain one stays this card's ask, as without decisions.
+      if (decisionsOn && nodeConfig(cfg.node)) {
+        tail = await askOnNode(decisionsOn, s, target ? (await ownSession())?.key === s.key : true, now)
+        break
+      }
       if (decisionsOn) {
         const { askCommand } = await import('./decisions-cli.ts')
         const card = readCard(s.key)
@@ -1453,12 +1522,12 @@ async function main(): Promise<void> {
       }
       break
     case 'done':
-      if (decisionsOn) (await import('./decisions-cli.ts')).withdrawDecision(s.key, now)
+      if (decisionsOn) await withdraw(s.key, now)
       writeCard(s.key, { doing: '', wait: '', waitSince: '', ask: '', askSince: '', result: text, by: 'agent' })
       ended = await endWatch(s)
       break
     case 'clear':
-      if (decisionsOn) (await import('./decisions-cli.ts')).withdrawDecision(s.key, now)
+      if (decisionsOn) await withdraw(s.key, now)
       writeCard(s.key, { doing: '', wait: '', waitSince: '', ask: '', askSince: '', result: '' })
       ended = await endWatch(s)
       break
@@ -3148,6 +3217,10 @@ async function threadContext(c: typeof cfg = cfg): Promise<ThreadCmdContext> {
       }
       const { askThreadDecision } = await import('./decisions-cli.ts')
       return askThreadDecision({ key, name, lane }, question, decision, Date.now())
+    },
+    // On a node (#781): the decision its master holds for this question, on this session's card.
+    setNodeAsk: (question, decision) => {
+      if (key) writeCard(key, { ask: question, askSince: Date.now(), by: 'agent', decision: masterHeld(decision) })
     },
     // Case files (#488): where a case's sessions are now and their reminders, from the board's items
     // (asked of herdr once), the archive and the schedule; asked only by brief, and by show of a
