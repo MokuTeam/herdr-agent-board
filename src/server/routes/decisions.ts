@@ -10,6 +10,7 @@ import { isRecord } from '../../adapters/json-store.ts'
 import { threadByKey } from '../../adapters/work-thread-store.ts'
 import { DecisionError, decisionsConfig } from '../../core/decisions.ts'
 import { t } from '../../core/lang.ts'
+import { NODE_OFFLINE_WHY } from '../../core/schedule-rules.ts'
 import type { Config, Item } from '../../core/types.ts'
 import { cleanText, threadsConfig } from '../../core/work-threads.ts'
 import {
@@ -121,7 +122,8 @@ export function decisionsRoutes(app: DecisionsApp): Route[] {
       .finally(() => clearInterval(renew))
     if (!told.ok) {
       markAnswering(key, id, null, now())
-      return json(409, { ok: false, error: told.error })
+      // A node's session whose node is away (#781): in words, not the node proxy's code.
+      return json(409, { ok: false, error: told.error === NODE_OFFLINE_WHY ? t('node.offlineAny') : told.error })
     }
     let shared: string | undefined
     let wait: Response | null = null

@@ -180,6 +180,21 @@ test("the answering mark is renewed while the send runs: the default waits past 
   expect(defaultDue(entry, undefined, Date.now())).toBe('drop')
 })
 
+test("a node's session whose node is away (#784): the plain words, never the node proxy's code; another failure as it came", async () => {
+  isolatedHome()
+  const r = ask()
+  const away = await route(async () => ({ ok: false, error: 'node-offline' }))({
+    op: 'answer',
+    key: ANNA,
+    id: r.id,
+    option: 1,
+  })
+  expect(away.status).toBe(409)
+  expect(away.body.error).toBe('The device is not reachable')
+  expect(away.body.error).not.toContain('node-offline')
+  expect(row(r.id)?.answeredAt).toBeNull()
+})
+
 test('a send that failed lets the default wait no more', async () => {
   isolatedHome()
   const r = ask()

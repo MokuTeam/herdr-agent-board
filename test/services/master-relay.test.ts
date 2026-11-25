@@ -56,6 +56,7 @@ function masterBoard() {
   let failNext = 0
   const routes: Route[] = [
     { method: 'GET', path: '/api/threads', handle: () => json(200, { ok: true, threads: [{ key: 'atlas-1' }] }) },
+    { method: 'POST', path: '/api/decisions', handle: () => json(200, { ok: true }) },
     {
       method: 'GET',
       path: '/api/threads/events',
@@ -181,14 +182,21 @@ interface Rig {
 }
 
 async function rig(
-  o: { owner?: boolean; master?: boolean; node?: boolean; headMs?: number; sessions?: string[] } = {},
+  o: {
+    owner?: boolean
+    master?: boolean
+    node?: boolean
+    headMs?: number
+    sessions?: string[]
+    relayed?: (method: string, rawPath: string, status: number) => void
+  } = {},
 ): Promise<Rig> {
   const cfg = (o.node === false ? {} : { node: { id: 'server-1', port: NODE_PORT, workRoot: '/tmp' } }) as Config
   const items = (o.sessions ?? ['pane-p1']).map(nodeItem)
   const relay = createMasterRelay({ cfg, items: () => items, log: () => {}, ...(o.headMs && { headMs: o.headMs }) })
   onTestFinished(() => relay.close())
   const master = masterBoard()
-  const route = masterRelayRoute(relay)
+  const route = masterRelayRoute(relay, o.relayed)
   const ask = async (path: string, init: RequestInit & { remote?: boolean } = {}): Promise<Response> => {
     const { remote, ...rest } = init
     const req = new Request(`http://127.0.0.1:${NODE_PORT}${path}`, rest)
@@ -252,6 +260,19 @@ describe('the threads group crosses to the master', () => {
     expect(seen.who).toEqual({ kind: 'owner' })
     expect(seen.headers.cookie).toBeUndefined()
     expect(seen.headers.origin).toBeUndefined()
+  })
+
+  test("what went up is told with the master's answer (#784: a decision's change refreshes the page); a local path is not", async () => {
+    const told: [string, string, number][] = []
+    const r = await rig({ relayed: (m, p, s) => told.push([m, p, s]) })
+    told.length = 0
+    expect((await r.ask('/api/decisions', post({ op: 'hold', key: 'pane-p1', id: 'd1' }))).status).toBe(200)
+    expect((await r.ask('/api/threads')).status).toBe(200)
+    expect((await r.ask('/api/session/pane-p1/send', post({ text: 'x' }))).status).toBe(409)
+    expect(told).toEqual([
+      ['POST', '/api/decisions', 200],
+      ['GET', '/api/threads', 200],
+    ])
   })
 
   test('a thread by key, its encoded spelling kept', async () => {

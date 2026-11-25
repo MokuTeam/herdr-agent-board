@@ -1915,7 +1915,10 @@ export async function startServer({
     })
     nodeSlices = upSlices
     masterRelay = upRelay
-    masterRelayFirst = masterRelayRoute(upRelay)
+    // An answer or a Hold the master took (#784): its decisions again at once, so the page shows it.
+    masterRelayFirst = masterRelayRoute(upRelay, (method, rawPath, status) => {
+      if (method === 'POST' && rawPath === DECISIONS_PATH && status === 200) upSlices.poke()
+    })
     routes.unshift(masterRelayFirst)
     const nodeTelegram = createNodeTelegram({ cfg, profiles: () => deps.profiles(), log, refresh })
     refreshLocalPilotCallRoutes()

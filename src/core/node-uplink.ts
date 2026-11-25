@@ -85,10 +85,22 @@ export function teamRefusal(argv: readonly string[]): string | null {
   return null
 }
 
+/** Decisions' flags (#487) on an ask. */
+export const DECISION_FLAG_WORDS: readonly string[] = ['--option', '--recommend', '--default-after']
+
+/** Whether an ask's words carry decisions' flags before a lone `--` (after it everything is text). */
+export function hasDecisionFlags(argv: readonly string[]): boolean {
+  const cut = argv.indexOf('--')
+  return (cut < 0 ? argv : argv.slice(0, cut)).some(a => DECISION_FLAG_WORDS.includes(a))
+}
+
 /**
  * Whether a call is kept in the node's outbox when the master is unreachable (#508, #698).
  */
 export function isKeptCall(cmd: string, argv: readonly string[]): boolean {
+  // A question with options (#781) is held by the master, which the node's card must hear back
+  // from: with the master away it is refused, never kept to be asked later without them (#784).
+  if ((cmd === 'thread' || cmd === 'threads') && argv[0] === 'ask' && hasDecisionFlags(argv)) return false
   if (cmd === 'thread' || cmd === 'threads') return KEPT_SUBS.has(argv[0] ?? '')
   return cmd === 'team' && (argv[0] ?? '') === 'draft'
 }
@@ -101,7 +113,8 @@ const TEAM_WRITE_SUBS: ReadonlySet<string> = new Set(['draft', 'post', 'reply', 
 export function isRememberedCall(cmd: string, argv: readonly string[]): boolean {
   if (isKeptCall(cmd, argv)) return true
   const sub = argv[0] ?? ''
-  if (cmd === 'thread' || cmd === 'threads') return sub === 'verdict'
+  // A thread ask with options (#781), not kept (isKeptCall): sent again, still one decision.
+  if (cmd === 'thread' || cmd === 'threads') return sub === 'verdict' || sub === 'ask'
   if (cmd === 'send' || cmd === 'away' || cmd === 'remind' || cmd === 'every' || cmd === 'unschedule') return true
   // spawn-agent's start (#760): a call sent again on a new stream must not start a second session.
   if (cmd === 'spawn') return true

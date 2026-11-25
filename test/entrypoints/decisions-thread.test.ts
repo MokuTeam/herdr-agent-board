@@ -183,13 +183,32 @@ test('on a node the flags go to the master with the question, and its decision g
   expect(old.code).toBe(0)
   expect(plain).toEqual(['Ship it?'])
   expect(carded).toEqual([])
-  // Kept for later (the master away): a plain ask on the card; the master withdraws what it writes then.
-  const kept = await run(['ask', 'atlas-1', 'Later?', '--option', 'a', '--option', 'b'], {
+  // The master away (#784): refused in words, nothing on the card, never kept to go later without
+  // its options; a plain thread ask is still kept.
+  for (const answer of [{ state: 'kept', id: 'k1' }, { state: 'unreachable' }] as const) {
+    const away = await run(['ask', 'atlas-1', 'Later?', '--option', 'a', '--option', 'b'], {
+      cfg: node,
+      ...sides,
+      call: async () => answer,
+    })
+    expect(away.code).toBe(1)
+    expect(away.out).toEqual([])
+    expect(away.err).toEqual(['the head is not reachable, ask again later'])
+  }
+  const awayJson = await run(['ask', 'atlas-1', 'Later?', '--default-after', '1h', '--json'], {
     cfg: node,
     ...sides,
-    call: async () => ({ state: 'kept', id: 'k1' }),
+    call: async () => ({ state: 'unreachable' }),
   })
-  expect(kept.code).toBe(0)
+  expect(awayJson.out.map(l => JSON.parse(l))).toEqual([
+    { ok: false, error: 'unreachable', message: 'the head is not reachable, ask again later' },
+  ])
+  const keptPlain = await run(['ask', 'atlas-1', 'Later?'], {
+    cfg: node,
+    ...sides,
+    call: async () => ({ state: 'kept', id: 'k2' }),
+  })
+  expect(keptPlain.code).toBe(0)
   expect(plain).toEqual(['Ship it?', 'Later?'])
   expect(carded).toEqual([])
   // Decisions off on the node: it goes to the master as on main, which answers as on main.

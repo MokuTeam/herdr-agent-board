@@ -107,6 +107,13 @@ test('what the master takes, what a node keeps, and what is never run for a node
   expect(teamRefusal(['loop', 'anna'])).toBeNull()
   expect(teamRefusal(['loop', 'anna', '5'])).toContain('owner to confirm')
   expect(isKeptCall('thread', ['post', 'k'])).toBe(true)
+  // A thread ask with options (#784): never kept to go later without them; still one decision when sent again.
+  expect(isKeptCall('thread', ['ask', 'k', 'q'])).toBe(true)
+  expect(isKeptCall('thread', ['ask', 'k', 'q', '--option', 'a', '--option', 'b'])).toBe(false)
+  expect(isKeptCall('thread', ['ask', 'k', 'q', '--default-after', '1h'])).toBe(false)
+  expect(isKeptCall('thread', ['ask', 'k', '--', 'q with --option x'])).toBe(true)
+  expect(isRememberedCall('thread', ['ask', 'k', 'q', '--option', 'a'])).toBe(true)
+  expect(isRememberedCall('thread', ['ask', 'k', 'q'])).toBe(true)
   expect(isKeptCall('team', ['draft', 'anna', 'hi'])).toBe(true)
   expect(isKeptCall('team', ['post', 'anna', 'hi'])).toBe(false)
   expect(isRememberedCall('cal', ['add'])).toBe(true)

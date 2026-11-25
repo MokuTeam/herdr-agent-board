@@ -531,17 +531,24 @@ function masterRelayDoorRoutes(relay: MasterRelay): Route[] {
  * The master relay's route on a node (#764): first in the board's own route table, which the phones'
  * listener and the tunnel share; a request that is not the relay's goes on to the next route.
  */
-export function masterRelayRoute(relay: MasterRelay): Route {
+export function masterRelayRoute(
+  relay: MasterRelay,
+  /** What went up and how the master answered it (#784: a decision's change shows on the page at once). */
+  relayed?: (method: string, rawPath: string, status: number) => void,
+): Route {
   return {
     method: 'ANY',
     path: /^\/api\//,
-    handle: (req, ctx) =>
-      relay.relay(req, {
+    async handle(req, ctx) {
+      const res = await relay.relay(req, {
         rawPath: ctx.rawPath,
         search: ctx.url.search,
         remote: ctx.remote,
         refuse: guard => ctx.refuse(guard),
-      }),
+      })
+      if (res && relayed) relayed(req.method, ctx.rawPath, res.status)
+      return res
+    },
   }
 }
 

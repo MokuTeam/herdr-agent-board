@@ -47,7 +47,7 @@ import {
   type DecisionsConfig,
   type ReservedDecision,
 } from '../core/decisions.ts'
-import { KEPT_SUBS } from '../core/node-uplink.ts'
+import { hasDecisionFlags, KEPT_SUBS } from '../core/node-uplink.ts'
 import { nodeConfig, parseNodeKey } from '../core/nodes.ts'
 import { OWNER } from '../core/owner-watch.ts'
 import { parseTaskFile, TaskFileError } from '../core/thread-import.ts'
@@ -498,6 +498,9 @@ async function forward(
     if (answer.code === 0) asked()
     return answer.code
   }
+  // A question with options (#784) needs the master now: never kept to go later without its options.
+  const withOptions = sub === 'ask' && hasDecisionFlags(argv)
+  if (withOptions) return fail('unreachable', 'the head is not reachable, ask again later')
   if (answer.state === 'kept') {
     asked()
     if (json) out(JSON.stringify({ ok: true, kept: true, id: answer.id }))
