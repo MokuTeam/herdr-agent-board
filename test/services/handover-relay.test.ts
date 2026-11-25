@@ -17,9 +17,10 @@ import { NODE_API } from '../../src/core/node-door.ts'
 import { nodesConfig } from '../../src/core/nodes.ts'
 import type { Config } from '../../src/core/types.ts'
 import { createNodeListener } from '../../src/server/node-listener.ts'
-import { createNodeHandover, type LocalRelayOps } from '../../src/services/node/handover.ts'
+import { createLocalRelayOps, createNodeHandover, type LocalRelayOps } from '../../src/services/node/handover.ts'
 import { createMasterHandover } from '../../src/services/nodes/handover.ts'
 import { createLink } from '../../src/services/nodes/link.ts'
+import { createRelaySetup } from '../../src/services/nodes/relay-setup.ts'
 
 setDefaultTimeout(20_000)
 
@@ -859,5 +860,346 @@ describe('handover direct probe & automatic relay setup (#740)', () => {
     expect(planLoopback.relaySetup).toBeUndefined()
     expect(planLoopback.reverseLink).toEqual({ kind: 'direct', url: 'http://127.0.0.1:12430' })
     expect(touchedProbeOrRelay).toBe(false)
+  })
+
+  test('--local-only rollback on old-master skips local relay undo even when relayApplied is set (#741 review)', async () => {
+    withIsolatedEnv()
+    const rawCfg = makeCfg({
+      nodes: {
+        id: 'laptop',
+        order: ['server-1', 'local'],
+        devices: { local: { title: 'Laptop' } },
+      },
+    })
+    mkdirSync(dirname(configFile()), { recursive: true })
+    writeFileSync(configFile(), JSON.stringify(rawCfg, null, 2))
+    takeLocalBackup('ho-old-local', Date.now())
+    writeHandoverState({
+      v: 1,
+      id: 'ho-old-local',
+      role: 'old-master',
+      phase: 'committed',
+      from: 'laptop',
+      to: 'server-1',
+      peerId: 'server-1',
+      otherNodes: [],
+      enrolledSocket: 'laptop',
+      relayApplied: true,
+      at: Date.now(),
+    })
+
+    let undoCalled = false
+    const ho = createMasterHandover({
+      cfg: rawCfg,
+      links: () => null,
+      commit: async () => COMMIT,
+      setFreeze: () => {},
+      beforeDbReplace: () => {},
+      afterDbReplace: () => {},
+      reloadConfig: async () => {},
+      undoLocalRelay: async () => {
+        undoCalled = true
+        return { ok: false, error: 'must not run on old-master' }
+      },
+      log: () => {},
+    })
+    const res = await ho.rollback({ localOnly: true })
+    expect(res.ok).toBe(true)
+    expect(undoCalled).toBe(false)
+    expect(readHandoverState()?.phase).toBe('rolled-back')
+  })
+
+  test('failed target relay undo in autoRollback and pre-commit manual rollback is logged, reported, and not treated as rolled back (#741 review)', async () => {
+    withIsolatedEnv()
+    const rawCfg = makeCfg({
+      nodes: {
+        id: 'laptop',
+        order: ['server-1', 'local'],
+        devices: {
+          local: { title: 'Laptop' },
+          'server-1': {
+            title: 'Atlas',
+            link: { kind: 'ssh', host: 'atlas.example.com', sshPort: 2222, user: 'agent-board', port: 12430 },
+          },
+        },
+      },
+    })
+    mkdirSync(dirname(configFile()), { recursive: true })
+    writeFileSync(configFile(), JSON.stringify(rawCfg, null, 2))
+
+    const logs: string[] = []
+    const targetLinkAuto = stubLink(async (path, init) => {
+      if (path.startsWith('/api/node/handover/check')) {
+        return Response.json({
+          ok: true,
+          id: 'server-1',
+          commit: COMMIT,
+          platform: 'linux',
+          arch: 'x64',
+          hostname: 'atlas',
+          selfNames: ['atlas'],
+          hasNodes: false,
+          freeMb: 5000,
+          backup: okBackup(),
+        })
+      }
+      if (path === '/api/node/handover/relay') {
+        const b = JSON.parse(String(init?.body ?? '{}')) as { op?: string }
+        if (b.op === 'check' || b.op === 'apply' || b.op === 'enrol-add') {
+          return Response.json({ ok: true, user: 'agent-board-relay-m', hostKeys: ['ssh-ed25519 AAAAC3Key'] })
+        }
+        if (b.op === 'undo') {
+          return Response.json(
+            { ok: false, need: 'sudoPassword', error: 'sudo password required for undo' },
+            { status: 409 },
+          )
+        }
+      }
+      if (
+        path === '/api/node/handover/prepare' ||
+        path === '/api/node/handover/apply' ||
+        path === '/api/node/handover/rollback'
+      ) {
+        return Response.json({ ok: true, id: 'ho-x' })
+      }
+      if (path === '/api/node/handover/bundle') return Response.json({ ok: true })
+      if (path === '/api/node/handover/verify') {
+        return Response.json({ ok: true, checks: [{ name: 'nodes', ok: false, detail: 'verify failed' }] })
+      }
+      return Response.json({ ok: false }, { status: 404 })
+    })
+
+    const hoAuto = createMasterHandover({
+      cfg: rawCfg,
+      links: () => ({
+        on: () => true,
+        link: () => targetLinkAuto as never,
+        view: () => ({ devices: [], problems: [] }),
+      }),
+      commit: async () => COMMIT,
+      setFreeze: () => {},
+      beforeDbReplace: () => {},
+      afterDbReplace: () => {},
+      reloadConfig: async () => {},
+      probeDirect: async () => ({ ok: false }),
+      generateKey: async () => ({ ok: true, publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDialPubKey test' }),
+      hostName: () => 'laptop',
+      log: t => logs.push(t),
+      verifyTimeoutMs: 50,
+      verifyPollMs: 10,
+    })
+
+    const autoRes = await hoAuto.run({ to: 'server-1' })
+    expect(autoRes.ok).toBe(false)
+    expect(autoRes.rolledBack).toBe(false)
+    expect(autoRes.error).toContain('target relay undo failed: sudo password required for undo')
+    expect(autoRes.need).toBe('sudoPassword')
+    expect(hoAuto.view().phase).toBe('failed')
+    expect(logs.some(l => l.includes('target relay undo failed: sudo password required for undo'))).toBe(true)
+
+    // Pre-commit manual rollback on old-master checks relay undo response as well
+    logs.length = 0
+    takeLocalBackup('ho-precommit', Date.now())
+    writeHandoverState({
+      v: 1,
+      id: 'ho-precommit',
+      role: 'old-master',
+      phase: 'prepared',
+      from: 'laptop',
+      to: 'server-1',
+      peerId: 'server-1',
+      otherNodes: [],
+      enrolledSocket: 'laptop',
+      relayApplied: true,
+      at: Date.now(),
+    })
+    const manualRes = await hoAuto.rollback()
+    expect(manualRes.ok).toBe(false)
+    expect(manualRes.error).toContain('target relay undo failed: sudo password required for undo')
+    expect(manualRes.need).toBe('sudoPassword')
+    expect(hoAuto.view().phase).toBe('failed')
+    expect(hoAuto.view().rolledBack).toBe(false)
+    expect(logs.some(l => l.includes('target relay undo failed: sudo password required for undo'))).toBe(true)
+  })
+
+  test('createLocalRelayOps with real createRelaySetup + stubbed spawnLocal produces nodes.relay and rejects empty SSH host keys (#741 review)', async () => {
+    withIsolatedEnv()
+    const rawCfg = makeCfg({
+      node: { id: 'server-1', port: 12430, workRoot: '~', listen: 'loopback', tls: false, relay: null },
+    })
+    mkdirSync(dirname(configFile()), { recursive: true })
+    writeFileSync(configFile(), JSON.stringify(rawCfg, null, 2))
+
+    const spawnCalls: string[] = []
+    const stubSpawnLocal = (command: string) => {
+      const listeners: ((line: string, from: 'out' | 'err') => void)[] = []
+      const b64 = /echo ([A-Za-z0-9+/=]+) \| base64/.exec(command)?.[1] ?? ''
+      const script = Buffer.from(b64, 'base64').toString('utf8')
+      const done = (async () => {
+        await Promise.resolve()
+        const emit = (lines: string[]) => {
+          for (const line of lines) for (const fn of listeners) fn(line, 'out')
+        }
+        if (script.includes('# agent-board: probe')) {
+          spawnCalls.push('probe')
+          emit(['@@uid 0', '@@sudo ok', '@@flavor Sudo version 1.9.16p2'])
+          return { code: 0, error: null }
+        }
+        if (script.includes('@@sshd-t')) {
+          spawnCalls.push('look')
+          emit([
+            '@@os debian 13',
+            '@@pretty Debian 13',
+            '@@ssh OpenSSH_9.6p1',
+            '@@hostname atlas',
+            '@@sudo root',
+            '@@has sshd',
+            '@@has useradd',
+            '@@has usermod',
+            '@@has userdel',
+            '@@has install',
+            '@@has flock',
+            '@@node-user none',
+            '@@master-user none',
+            '@@sockets-dir none',
+            '@@keys-dir none',
+            '@@auth-keys-dir yes',
+            '@@keys-cmd none',
+            '@@enrol none',
+            '@@master-keys none',
+            '@@fence none',
+            '@@block whole',
+            '@@include yes',
+            '@@sshd-t ok',
+            '@@candidate ok',
+            '@@enrolled 0',
+            '@@end',
+          ])
+          return { code: 0, error: null }
+        }
+        spawnCalls.push('apply')
+        emit(['@@result applied'])
+        return { code: 0, error: null }
+      })()
+      return {
+        onLine: (fn: (line: string, from: 'out' | 'err') => void) => void listeners.push(fn),
+        done,
+        kill: () => {},
+      }
+    }
+
+    // Missing SSH host keys fails cleanly
+    const opsNoKeys = createLocalRelayOps({
+      cfg: rawCfg,
+      createSetup: deps => createRelaySetup(deps as never),
+      platform: () => 'linux',
+      spawnLocal: stubSpawnLocal,
+      sshHostKeys: () => [],
+      hostName: () => 'atlas',
+      log: () => {},
+    })
+    const noKeysRes = await opsNoKeys.apply({ host: 'atlas.example.com', sshPort: 2222 })
+    expect(noKeysRes.ok).toBe(false)
+    expect(noKeysRes.ok ? '' : noKeysRes.error).toContain('no local SSH host public keys')
+
+    // With host keys present, look + apply + finish run through real createRelaySetup and produce valid nodes.relay
+    const ops = createLocalRelayOps({
+      cfg: rawCfg,
+      createSetup: deps => createRelaySetup(deps as never),
+      platform: () => 'linux',
+      spawnLocal: stubSpawnLocal,
+      sshHostKeys: () => ['ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIRealSetupHostKey'],
+      hostName: () => 'atlas',
+      log: () => {},
+    })
+    const nh = createNodeHandover({
+      cfg: rawCfg,
+      nodeStore: createNodeStore({ dir: nodeDir() }),
+      commit: async () => COMMIT,
+      nodeLinks: () => null,
+      tunnelStatus: () => ({ state: 'off', since: Date.now(), attempt: 0, url: null }),
+      teamState: () => 'off',
+      beforeDbReplace: () => {},
+      afterDbReplace: () => {},
+      reloadConfig: async () => {},
+      relayOps: ops,
+      log: () => {},
+    })
+
+    const masterCfg = makeCfg({
+      nodes: {
+        id: 'laptop',
+        order: ['server-1', 'local'],
+        devices: {
+          local: { title: 'Laptop' },
+          'server-1': {
+            title: 'Atlas',
+            link: { kind: 'ssh', host: 'atlas.example.com', sshPort: 2222, user: 'agent-board', port: 12430 },
+          },
+        },
+      },
+    })
+    writeFileSync(configFile(), JSON.stringify(masterCfg, null, 2))
+    let appliedPayload: Record<string, unknown> = {}
+    const targetLink = stubLink(async (path, init) => {
+      if (path.startsWith('/api/node/handover/check')) {
+        return Response.json({
+          ok: true,
+          id: 'server-1',
+          commit: COMMIT,
+          platform: 'linux',
+          arch: 'x64',
+          hostname: 'atlas',
+          selfNames: ['atlas'],
+          hasNodes: false,
+          freeMb: 5000,
+          backup: okBackup(),
+        })
+      }
+      if (path === '/api/node/handover/relay') {
+        const b = JSON.parse(String(init?.body ?? '{}')) as { op?: string }
+        if (b.op === 'enrol-add') return Response.json({ ok: true, user: 'agent-board-relay-m' })
+        const r = await nh.relay(b)
+        return Response.json(r.body, { status: r.status })
+      }
+      if (path === '/api/node/handover/prepare' || path === '/api/node/handover/commit') {
+        return Response.json({ ok: true, id: 'ho-real' })
+      }
+      if (path === '/api/node/handover/bundle') return Response.json({ ok: true })
+      if (path === '/api/node/handover/apply') {
+        appliedPayload = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+        return Response.json({ ok: true, id: 'ho-real' })
+      }
+      if (path === '/api/node/handover/verify') {
+        return Response.json({ ok: true, checks: [{ name: 'nodes', ok: true, detail: 'ok' }] })
+      }
+      return Response.json({ ok: false }, { status: 404 })
+    })
+
+    const ho = createMasterHandover({
+      cfg: masterCfg,
+      links: () => ({ on: () => true, link: () => targetLink as never, view: () => ({ devices: [], problems: [] }) }),
+      commit: async () => COMMIT,
+      setFreeze: () => {},
+      beforeDbReplace: () => {},
+      afterDbReplace: () => {},
+      reloadConfig: async () => {},
+      probeDirect: async () => ({ ok: false }),
+      generateKey: async () => ({ ok: true, publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDialPubKey test' }),
+      hostName: () => 'laptop',
+      log: () => {},
+    })
+
+    const res = await ho.run({ to: 'server-1' })
+    expect(res.ok).toBe(true)
+    expect(spawnCalls).toContain('probe')
+    expect(spawnCalls).toContain('look')
+    expect(spawnCalls).toContain('apply')
+    const flipped = appliedPayload.flippedNodes as Record<string, unknown>
+    expect(nodesConfig(flipped)?.relay).toEqual({
+      host: 'atlas.example.com',
+      sshPort: 2222,
+      user: 'agent-board-relay-m',
+    })
   })
 })

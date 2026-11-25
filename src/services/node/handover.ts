@@ -161,9 +161,12 @@ export function createLocalRelayOps(o: {
   log: (t: string) => void
   platform?: () => string
   knownHosts?: () => string
+  spawnLocal?: (command: string, stdin: string | null, ms: number) => unknown
+  sshHostKeys?: () => string[]
 }): LocalRelayOps {
   const hostFn = o.hostName ?? hostname
   const khFn = o.knownHosts ?? knownHostsReady
+  const hostKeysFn = o.sshHostKeys ?? readLocalSshHostKeys
 
   function makeSetup(onChange: () => void): LocalRelaySetupLike {
     return o.createSetup({
@@ -174,6 +177,7 @@ export function createLocalRelayOps(o: {
       hostKeyPinned,
       hostKeyFingerprint,
       spawn: spawnRemote,
+      ...(o.spawnLocal ? { spawnLocal: o.spawnLocal } : {}),
       ...(o.platform ? { platform: o.platform } : {}),
       relayKey: async (kind: 'master' | 'enrol', make: boolean) => {
         const key = relayKeyPath(kind)
@@ -284,7 +288,10 @@ export function createLocalRelayOps(o: {
           }
           return { ok: false, error: fv.error ?? 'relay setup failed on target' }
         }
-        const hostKeys = readLocalSshHostKeys()
+        const hostKeys = hostKeysFn()
+        if (hostKeys.length === 0) {
+          return { ok: false, error: 'no local SSH host public keys found on target' }
+        }
         pinKnownHostKeys(
           khFn(),
           [
@@ -300,7 +307,10 @@ export function createLocalRelayOps(o: {
     },
 
     async enrolAdd({ sshPort, socket, publicKey }) {
-      const hostKeys = readLocalSshHostKeys()
+      const hostKeys = hostKeysFn()
+      if (hostKeys.length === 0) {
+        return { ok: false, error: 'no local SSH host public keys found on target' }
+      }
       pinKnownHostKeys(khFn(), [{ host: '127.0.0.1', sshPort }], hostKeys)
       const r = await relayEnrolFor({ host: '127.0.0.1', sshPort, user: RELAY_MASTER_USER }).add(socket, publicKey)
       if (!r.ok) return { ok: false, error: r.error }

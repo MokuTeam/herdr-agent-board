@@ -387,6 +387,22 @@ describe('web/MasterHandover (#697)', () => {
       if (!sudoInput) throw new Error('missing sudo password input')
       sudoInput.value = 'target-sudo-pw'
 
+      // Dry run keeps sudo input visible and preserves its value (#741 review)
+      const checkBtn = Array.from(rootEl.querySelectorAll('.devices-handover button')).find(
+        b => b.textContent === 'Dry run',
+      ) as HTMLButtonElement | undefined
+      expect(checkBtn).toBeTruthy()
+      const callsBeforeCheck = calls.length
+      await act(async () => {
+        checkBtn?.click()
+      })
+      const checkPosts = sent(calls.slice(callsBeforeCheck)).filter(([, method]) => method === 'POST')
+      expect(checkPosts).toEqual([
+        ['/api/nodes/handover', 'POST', '1', { op: 'check', to: 'server-1', sudoPassword: 'target-sudo-pw' }],
+      ])
+      expect(rootEl.querySelector('input[name="handover-sudo-password"]')).toBe(sudoInput)
+      expect(sudoInput.value).toBe('target-sudo-pw')
+
       const callsBefore = calls.length
       const moveBtn = Array.from(rootEl.querySelectorAll('.devices-handover button')).find(
         b => b.textContent === 'Move master',

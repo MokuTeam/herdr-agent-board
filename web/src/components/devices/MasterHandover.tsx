@@ -63,7 +63,7 @@ export function MasterHandover({ open: panelOpen = true, devices, initial }: Mas
       const r = await api.post('/api/nodes/handover', payload, isReply)
       if (isHandoverView(r.view)) setView(r.view)
       else refresh()
-      if (sudoRef.current) sudoRef.current.value = ''
+      if ((body.op === 'run' || body.op === 'rollback') && sudoRef.current) sudoRef.current.value = ''
     } catch (err) {
       if (err instanceof ApiError) {
         if (isHandoverView(err.reply.view)) setView(err.reply.view)
@@ -139,7 +139,7 @@ export function MasterHandover({ open: panelOpen = true, devices, initial }: Mas
               </label>
             </div>
           </details>
-          {(v?.need === 'sudoPassword' || plan?.relaySetup?.needsSudoPassword) && (
+          {(v?.need === 'sudoPassword' || Boolean(plan?.relaySetup)) && (
             <div className="access-entry">
               <label className="access-field">
                 <span>{t('node.handover.sudoPassword')}</span>

@@ -697,8 +697,9 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
     pairedOthers: { id: string; masterId: string }[]
     enrolledSocket: string | null
     relayCfg: { host: string; sshPort: number; user: string } | null
-  }): Promise<void> {
+  }): Promise<{ relayUndoError?: string }> {
     step = 'rollback'
+    let relayUndoError: string | undefined
     if (ctx.targetPrepared && ctx.targetLink) {
       await fetchJson(ctx.targetLink, '/api/node/handover/rollback', {
         method: 'POST',
@@ -707,7 +708,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
       }).catch(() => {})
     }
     if (ctx.relayApplied && ctx.targetLink && ctx.relayEndpoint) {
-      await fetchJson(
+      const ur = await fetchJson<{ ok: boolean }>(
         ctx.targetLink,
         '/api/node/handover/relay',
         {
@@ -721,7 +722,12 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
           }),
         },
         180_000,
-      ).catch(() => {})
+      )
+      if (!ur.ok) {
+        relayUndoError = `target relay undo failed: ${ur.error}`
+        o.log(`handover ${ctx.id}: ${relayUndoError}`)
+        if (ur.need === 'sudoPassword') lastNeed = 'sudoPassword'
+      }
     }
     for (const p of ctx.pairedOthers) {
       const peer = linkFor(p.id)
@@ -747,6 +753,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
       await o.reloadConfig().catch(() => {})
       o.setFreeze(false)
     }
+    return { ...(relayUndoError && { relayUndoError }) }
   }
 
   return {
@@ -1212,7 +1219,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
           const error = msg(err)
           lastError = error
           o.log(`handover ${id}: failed (${error}), rolling back`)
-          await autoRollback({
+          const rb = await autoRollback({
             id,
             targetLink,
             targetPrepared,
@@ -1224,6 +1231,24 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
             enrolledSocket,
             relayCfg: relayEndpoint ? null : nCfg.relay,
           })
+          if (rb.relayUndoError) {
+            const combined = `${error}; ${rb.relayUndoError}`
+            lastError = combined
+            rolledBack = false
+            phase = 'failed'
+            step = null
+            return {
+              ok: false,
+              id,
+              from: plan.from,
+              to: plan.to,
+              rolledBack: false,
+              error: combined,
+              ...(lastNeed && { need: lastNeed }),
+              plan,
+              verify: lastVerify,
+            }
+          }
           rolledBack = true
           phase = 'rolled-back'
           step = null
@@ -1330,7 +1355,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
                 'handover is already committed; rolling back will discard all changes written on this master since commit (pass --discard-since-commit to confirm)',
             }
           }
-          if (state?.relayApplied) {
+          if (state?.role === 'new-master' && state.relayApplied) {
             const ur = await undoRelay({
               ...localRelayEndpoint(),
               ...(opts.sudoPassword !== undefined && { sudoPassword: opts.sudoPassword }),
@@ -1446,6 +1471,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
         }
 
         // Otherwise: pre-commit or incomplete state on old master.
+        let relayUndoError: string | undefined
         if (state?.peerId) {
           const peerLink = linkFor(state.peerId)
           if (peerLink?.state().state === 'online') {
@@ -1457,7 +1483,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
             if (state.relayApplied) {
               const targetEp = relayTargetEndpoint(nodesConfig(o.cfg.nodes, hostFn())?.devices[state.peerId]?.link)
               const ep = targetEp ?? localRelayEndpoint()
-              await fetchJson(
+              const ur = await fetchJson<{ ok: boolean }>(
                 peerLink,
                 '/api/node/handover/relay',
                 {
@@ -1471,7 +1497,12 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
                   }),
                 },
                 180_000,
-              ).catch(() => {})
+              )
+              if (!ur.ok) {
+                relayUndoError = `target relay undo failed: ${ur.error}`
+                o.log(`handover ${id}: ${relayUndoError}`)
+                if (ur.need === 'sudoPassword') lastNeed = 'sudoPassword'
+              }
             }
           }
         }
@@ -1480,7 +1511,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
         let res: { restored: number; removed: number }
         try {
           res = await restoreLocalBackup(id, { scope: preScope })
-          if (state && state.id === id) {
+          if (state && state.id === id && !relayUndoError) {
             writeHandoverState({ ...state, phase: 'rolled-back', at: now() })
           }
         } finally {
@@ -1488,6 +1519,18 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
         }
         await o.reloadConfig()
         o.setFreeze(false)
+        if (relayUndoError) {
+          phase = 'failed'
+          rolledBack = false
+          lastError = relayUndoError
+          return {
+            ok: false,
+            id,
+            ...(lastNeed && { need: lastNeed }),
+            error: relayUndoError,
+            ...res,
+          }
+        }
         phase = 'rolled-back'
         rolledBack = true
         return { ok: true, id, ...res }
