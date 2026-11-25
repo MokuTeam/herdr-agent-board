@@ -2,7 +2,7 @@
 // 1. Half-open SSE reconnect supersedes stale client & fails waiting RPCs/streams; oversize break cancels reader.
 // 2. Byte-bounded back-pressure on streamChunk holds ack until the MokuPilot reader drains.
 // 3. openForNode security: caller cwd ignored, bare-UUID local fallback blocked, grant isolation between nodes.
-// 4. startForItem link mode only bypasses nodeLink error for registered node viewers.
+// 4. startForItem link mode returns mokupilot:// link for any viewer (including NAT) while keeping node probe; auto/local unchanged (#754).
 // 5. Longer timeouts for start/files RPCs and cleanup close(kill:true) when start finishes after 504.
 import { describe, expect, onTestFinished, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -524,15 +524,22 @@ describe('NodePilotCalls security isolation & viewer check (#729)', () => {
     expect(calls.authorizeForNode('server-1', localGrantId)).toBeNull()
   })
 
-  test('startForItem refuses non-node viewers in link mode with nodeLink, while allowing registered nodes', async () => {
+  test('startForItem returns mokupilot:// link for any viewer in link and auto-remote modes while preserving node probe and local/auto-local launch (#754)', async () => {
     const dir = scratchDir()
+    let probeCwd = dir
+    let linkState: 'online' | 'offline' = 'online'
+    let checkStatus = 200
+    let checkBody: Record<string, unknown> = { ok: true, cwd: probeCwd, profile: 'default' }
+    let launchCount = 0
+
     const fakeLink: Link = {
       id: 'server-1',
-      state: () => ({ state: 'online', since: 0, heardAt: 0 }),
+      state: () => ({ state: linkState, since: 0, heardAt: 0 }),
       async fetch(path: string) {
         if (path === '/api/node/pilot-call/check') {
-          return new Response(JSON.stringify({ ok: true, cwd: dir, profile: 'default' }), {
-            status: 200,
+          const body = checkStatus === 200 ? { ok: true, cwd: probeCwd, profile: 'default' } : checkBody
+          return new Response(JSON.stringify(body), {
+            status: checkStatus,
             headers: { 'content-type': 'application/json' },
           })
         }
@@ -540,45 +547,115 @@ describe('NodePilotCalls security isolation & viewer check (#729)', () => {
       },
     } as unknown as Link
 
-    const calls = createNodePilotCalls({
-      cfg: {
-        mokupilot: { mode: 'link' },
-        nodes: {
-          id: 'laptop',
-          devices: {
-            'server-1': { link: { kind: 'tailnet', address: '100.64.0.12', port: 12430 } },
+    const fakeLaunch = (async () => {
+      launchCount++
+      return {
+        ok: true as const,
+        state: 'launched' as const,
+        file: '/bin/mokupilot',
+        resolved: 'local' as const,
+        why: 'mode-local' as const,
+      }
+    }) as unknown as NonNullable<Parameters<typeof createNodePilotCalls>[0]['launch']>
+
+    const mkCalls = (mokupilot: Config['mokupilot']) => {
+      const calls = createNodePilotCalls({
+        cfg: {
+          mokupilot,
+          nodes: {
+            id: 'laptop',
+            devices: {
+              'server-1': { link: { kind: 'tailnet', address: '100.64.0.12', port: 12430 } },
+            },
           },
-        },
-      } as unknown as Config,
-      links: { link: id => (id === 'server-1' ? fakeLink : null), onChange: () => () => {} },
-      port: () => 12422,
-      log: () => {},
-    })
-    onTestFinished(() => calls.close())
+        } as unknown as Config,
+        links: { link: id => (id === 'server-1' ? fakeLink : null), onChange: () => () => {} },
+        port: () => 12422,
+        log: () => {},
+        own: () => ['100.64.0.1'],
+        launch: fakeLaunch,
+      })
+      onTestFinished(() => calls.close())
+      return calls
+    }
 
     const nodeItem = makeItem({ key: `@server-1:${SID_MASTER}`, device: 'server-1', session: SID_MASTER, cwd: dir })
 
-    // Plain browser or phone (unregistered address): gets mokupilot.err.nodeLink error.
+    // 1. mode: 'link' returns mokupilot:// link for every viewer (registered node, NAT, tunnel, or direct).
+    const linkCalls = mkCalls({ mode: 'link' })
     for (const viewer of [
       undefined,
       { peer: '127.0.0.1', forwardedFor: null },
       { peer: '127.0.0.1', forwardedFor: '100.64.0.99' },
+      { peer: '127.0.0.1', forwardedFor: '192.168.1.50' },
+      { peer: '203.0.113.42', forwardedFor: null },
       { peer: '100.64.0.99', forwardedFor: '100.64.0.12' },
+      { peer: '127.0.0.1', forwardedFor: '100.64.0.12' },
     ]) {
-      const r = await calls.startForItem(nodeItem, viewer)
-      expect(r.ok).toBe(false)
-      if (!r.ok) expect(r.error).toContain('master computer')
+      const r = await linkCalls.startForItem(nodeItem, viewer)
+      expect(r).toEqual({
+        ok: true,
+        state: 'link',
+        url: `mokupilot://call?claude-session=${SID_MASTER}&cwd=${encodeURIComponent(dir)}`,
+        resolved: 'link',
+        why: 'mode-link',
+      })
     }
+    expect(launchCount).toBe(0)
 
-    // Registered node viewer: gets mokupilot:// link.
-    const okNode = await calls.startForItem(nodeItem, { peer: '127.0.0.1', forwardedFor: '100.64.0.12' })
-    expect(okNode).toEqual({
+    // Probe cwd (including Windows path, spaces, Cyrillic, and '%') is used and percent-encoded.
+    probeCwd = 'C:\\Users\\anna\\atlas проект 100%'
+    const winRes = await linkCalls.startForItem(nodeItem, { peer: '127.0.0.1', forwardedFor: '192.168.1.50' })
+    expect(winRes).toEqual({
+      ok: true,
+      state: 'link',
+      url: `mokupilot://call?claude-session=${SID_MASTER}&cwd=${encodeURIComponent(probeCwd)}`,
+      resolved: 'link',
+      why: 'mode-link',
+    })
+    probeCwd = dir
+
+    // Target node probe failures still surface in link mode (offline, outdated 404, failed check).
+    linkState = 'offline'
+    const offRes = await linkCalls.startForItem(nodeItem, { peer: '127.0.0.1', forwardedFor: '192.168.1.50' })
+    expect(offRes.ok).toBe(false)
+    if (!offRes.ok) expect(offRes.error.toLowerCase()).toContain('offline')
+    linkState = 'online'
+
+    checkStatus = 404
+    const oldRes = await linkCalls.startForItem(nodeItem, { peer: '127.0.0.1', forwardedFor: '192.168.1.50' })
+    expect(oldRes.ok).toBe(false)
+    if (!oldRes.ok) expect(oldRes.error.toLowerCase()).toContain('update')
+
+    checkStatus = 409
+    checkBody = { ok: false, error: 'session folder missing' }
+    const chkRes = await linkCalls.startForItem(nodeItem, { peer: '127.0.0.1', forwardedFor: '192.168.1.50' })
+    expect(chkRes.ok).toBe(false)
+    if (!chkRes.ok) expect(chkRes.error).toContain('session folder missing')
+    checkStatus = 200
+
+    // 2. mode: 'auto': remote/NAT viewer gets link without launch; local viewer still launches locally.
+    const autoCalls = mkCalls({ mode: 'auto' })
+    const autoRemote = await autoCalls.startForItem(nodeItem, { peer: '127.0.0.1', forwardedFor: '203.0.113.42' })
+    expect(autoRemote).toEqual({
       ok: true,
       state: 'link',
       url: `mokupilot://call?claude-session=${SID_MASTER}&cwd=${encodeURIComponent(dir)}`,
       resolved: 'link',
-      why: 'mode-link',
+      why: 'forwarded-other',
+      viewer: '203.0.113.42',
     })
+    expect(launchCount).toBe(0)
+
+    const autoLocal = await autoCalls.startForItem(nodeItem, { peer: '127.0.0.1', forwardedFor: '100.64.0.1' })
+    expect(autoLocal.ok).toBe(true)
+    expect(launchCount).toBe(1)
+
+    // 3. mode: 'local': remote/NAT viewer still launches locally.
+    const localCalls = mkCalls({ mode: 'local' })
+    const localRemote = await localCalls.startForItem(nodeItem, { peer: '127.0.0.1', forwardedFor: '192.168.1.50' })
+    expect(localRemote.ok).toBe(true)
+    expect(launchCount).toBe(2)
   })
 })
 

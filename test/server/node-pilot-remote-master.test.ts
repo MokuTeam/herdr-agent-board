@@ -426,9 +426,10 @@ describe('MokuPilot with a master on another device (#700)', () => {
     }, 5000)
 
     // 1. Web UI on master in link mode:
-    //    - An unregistered remote viewer (phone at 100.64.0.99) is STILL refused with nodeLink
-    //      on node cards and with the wrong-account guard on secondary-profile master cards.
-    //    - A viewer sharing a self-reported private LAN IP (192.168.1.50) is ALSO refused (#730).
+    //    - Any remote/NAT viewer (100.64.0.99 or private LAN 192.168.1.50 via tunnel) gets a
+    //      mokupilot:// link for a node card (#754).
+    //    - Unregistered remote/LAN viewers are still refused with the wrong-account guard on
+    //      secondary-profile master cards (#730, master items unchanged).
     //    - A registered opted-in node viewer (server-1 reporting 100.64.0.50 in its node status) gets
     //      mokupilot:// links for server-1, master (secondary work profile), and server-2.
     server1.proxy.intercept = async (method, path, forward) => {
@@ -455,12 +456,27 @@ describe('MokuPilot with a master on another device (#700)', () => {
     expect(((await refusedLan.json()) as { error: string }).error).toContain('wrong account')
 
     const phoneHeaders = { 'x-board': '1', 'content-type': 'application/json', 'x-forwarded-for': '100.64.0.99' }
-    const refusedNode = await fetch(
-      `${pair.master.url}/api/session/${encodeURIComponent(`@server-1:${NODE_SID}`)}/mokupilot`,
-      { method: 'POST', headers: phoneHeaders, body: '{}' },
-    )
-    expect(refusedNode.status).toBe(409)
-    expect(((await refusedNode.json()) as { error: string }).error).toContain('master computer')
+    for (const viewerHeaders of [phoneHeaders, lanHeaders]) {
+      const nodeLinkRes = await fetch(
+        `${pair.master.url}/api/session/${encodeURIComponent(`@server-1:${NODE_SID}`)}/mokupilot`,
+        { method: 'POST', headers: viewerHeaders, body: '{}' },
+      )
+      expect(nodeLinkRes.status).toBe(200)
+      const nodeLinkBody = (await nodeLinkRes.json()) as {
+        ok: boolean
+        state: string
+        url: string
+        resolved: string
+      }
+      expect(nodeLinkBody.ok).toBe(true)
+      expect(nodeLinkBody.state).toBe('link')
+      expect(nodeLinkBody.resolved).toBe('link')
+      const parsed = new URL(nodeLinkBody.url)
+      expect(parsed.protocol).toBe('mokupilot:')
+      expect(parsed.host).toBe('call')
+      expect(parsed.searchParams.get('claude-session')).toBe(NODE_SID)
+      expect(parsed.searchParams.get('cwd')).toBe(nodeCwd)
+    }
 
     const refusedMasterProfile = await fetch(
       `${pair.master.url}/api/session/${encodeURIComponent(MASTER_SID)}/mokupilot`,

@@ -1928,7 +1928,6 @@ export async function startServer({
       remoteItems: () => aggregate.part()?.items ?? [],
       masterId: () => nodesConfig(cfg.nodes, hostname())?.id ?? '',
       profiles: () => deps.profiles(),
-      nodeAddresses: registeredNodeAddresses,
     })
     nodePilotCalls = pilotCalls
     refreshLocalPilotCallRoutes()

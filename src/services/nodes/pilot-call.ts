@@ -14,9 +14,9 @@ import { isRecord } from '../../adapters/json-store.ts'
 import { knobMs } from '../../adapters/pacing.ts'
 import { t } from '../../core/lang.ts'
 import { callable, callLink } from '../../core/mokupilot.ts'
-import { isRegisteredNodeViewer, mokupilotMode, resolveMode, type Viewer } from '../../core/mokupilot-mode.ts'
+import { mokupilotMode, resolveMode, type Viewer } from '../../core/mokupilot-mode.ts'
 import { dropMovedCards } from '../../core/node-items.ts'
-import { configuredNodeAddresses, LOCAL, nodesConfig, parseNodeKey } from '../../core/nodes.ts'
+import { LOCAL, nodesConfig, parseNodeKey } from '../../core/nodes.ts'
 import { isPilotCallId, type PilotSessionSummary, parseOpenRequest, UUID } from '../../core/pilot-call.ts'
 import { type ProfileSet, profileLabel } from '../../core/profiles.ts'
 import type { Config, Item } from '../../core/types.ts'
@@ -107,8 +107,6 @@ export interface NodePilotCallsDeps {
   masterId?: () => string
   /** Master's Claude profiles (#700). */
   profiles?: () => ProfileSet
-  /** Registered node addresses allowed to request node-card mokupilot:// links (#700). */
-  nodeAddresses?: () => readonly string[]
   home?: string
   platform?: string
   env?: Record<string, string | undefined>
@@ -172,7 +170,6 @@ export function createNodePilotCalls(deps: NodePilotCallsDeps): NodePilotCalls {
   const grantedParents = new Map<string, Map<string, number>>()
   const stdinChains = new Map<string, Promise<void>>()
   const own = deps.own ?? ownAddresses
-  const nodeAddresses = deps.nodeAddresses ?? (() => configuredNodeAddresses(nodesConfig(deps.cfg.nodes)))
   const launch = deps.launch ?? startCall
   const grantTtlMs = deps.grantTtlMs ?? knobMs('BOARD_PILOT_GRANT_TTL_MS', DEFAULT_GRANT_TTL_MS)
   const checkTimeoutMs = deps.checkTimeoutMs ?? knobMs('BOARD_PILOT_CHECK_MS', CHECK_TIMEOUT_MS)
@@ -569,9 +566,6 @@ export function createNodePilotCalls(deps: NodePilotCallsDeps): NodePilotCalls {
       if (!probe.ok) return { ok: false, error: probe.error, ...where }
 
       if (decided.resolved === 'link') {
-        if (!isRegisteredNodeViewer(viewer, nodeAddresses())) {
-          return { ok: false, error: t('mokupilot.err.nodeLink'), ...where }
-        }
         const url = callLink(item, probe.cwd)
         if (!url) return { ok: false, error: t('mokupilot.err.notClaude'), ...where }
         return { ok: true, state: 'link', url, ...where }
