@@ -98,7 +98,8 @@
 /* A message: a bubble, the others' on the left, this board's on the right in the accent. One
    sender's messages in a row keep their corners small where they meet. */
 .team-msg { position: relative; display: flex; flex-direction: column; align-items: flex-start; margin-top: 2px; }
-.team-msg:hover, .team-msg:focus-within, .team-msg.picker-open { z-index: 4; }
+.team-msg:hover, .team-msg:focus-within { z-index: 4; }
+.team-msg.picker-open, .team-msg.open { z-index: 6; }
 .team-msg.first { margin-top: 10px; }
 .team-msg.out { align-items: flex-end; }
 .team-msg-name { margin: 0 0 3px 12px; color: var(--tone); font-size: 12px; font-weight: 600; }
@@ -136,7 +137,7 @@
 .team-msg-reply { opacity: 0; transition: opacity 120ms ease, transform 100ms ease-out, background 120ms ease; }
 .team-msg:hover .team-msg-reply, .team-msg:focus-within .team-msg-reply, .team-msg-bar .team-msg-reply { opacity: 1; }
 @media (hover: none) { .team-msg-bar, .team-msg-reply { display: none; } }
-.team-msg-when { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; color: var(--label-2); font-size: 11.5px; }
+.team-msg-when { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; color: var(--label-2); font-size: 11.5px; }
 
 /* Reactions (#687): chips under a message, quick row, and searchable emoji picker. */
 .team-reactions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
@@ -156,7 +157,13 @@
 .team-react-pick:active { transform: scale(0.92); }
 .team-react-pick.me { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-soft, color-mix(in srgb, var(--accent) 12%, transparent)); }
 .team-react-more { font-size: 14px; font-weight: 600; color: var(--label-2); }
-.team-emoji-picker { display: flex; flex-direction: column; gap: 6px; width: min(272px, calc(100vw - 32px)); margin-top: 6px; padding: 8px; border: 1px solid var(--border); border-radius: var(--r-md, 8px); background: var(--panel-float); box-shadow: var(--shadow-lift); z-index: 3; }
+.team-emoji-picker { position: absolute; top: calc(100% + 4px); left: 0; z-index: 10; display: flex; flex-direction: column; gap: 6px; width: min(272px, calc(100vw - 32px)); padding: 8px; border: 1px solid var(--border); border-radius: var(--r-md, 8px); background: var(--panel-float); box-shadow: var(--shadow-lift); }
+.team-msg.out .team-emoji-picker { left: auto; right: 0; }
+.team-msg-row > .team-emoji-picker { top: 16px; left: 8px; }
+.team-msg.out .team-msg-row > .team-emoji-picker { left: auto; right: 8px; }
+.team-msg-row > .team-emoji-picker[data-place="up"] { top: auto; bottom: calc(100% + 22px); }
+.team-msg > .team-emoji-picker[data-place="up"] { top: auto; bottom: 30px; }
+.team-msg-when > .team-emoji-picker[data-place="up"] { top: auto; bottom: calc(100% + 4px); }
 .team-emoji-search { width: 100%; box-sizing: border-box; padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--r-sm, 6px); background: var(--surface); color: inherit; font: inherit; font-size: 12.5px; }
 .team-emoji-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; max-height: 180px; overflow-y: auto; overscroll-behavior: contain; }
 .team-emoji-btn { display: grid; place-items: center; height: 32px; padding: 0; border: 1px solid transparent; border-radius: var(--r-sm, 6px); background: none; font-size: 17px; line-height: 1; cursor: pointer; }

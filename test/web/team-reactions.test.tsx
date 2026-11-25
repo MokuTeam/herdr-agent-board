@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { JSDOM } from 'jsdom'
 import { act, type ReactNode } from 'react'
 import type { ThreadLine } from '../../web/src/models/team.ts'
@@ -59,6 +61,11 @@ afterAll(async () => {
   }
 })
 
+function pressClick(el: Element | null) {
+  el?.dispatchEvent(new dom.window.MouseEvent('pointerdown', { bubbles: true }))
+  el?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+}
+
 function mount() {
   const host = dom.window.document.createElement('div')
   dom.window.document.body.appendChild(host)
@@ -112,15 +119,15 @@ describe('TeamMessage reactions UI (#687)', () => {
       expect(chips[1]?.getAttribute('aria-pressed')).toBe('false')
       expect(chips[1]?.getAttribute('title')).toBe('cleo')
 
-      // '+' chip sits at the end of .team-reactions and opens the picker
+      // '+' chip sits at the end of .team-reactions; first pressClick opens anchored picker, second closes cleanly
       const addChip = m.host.querySelector('.team-reactions > button.team-react-add:last-child')
       expect(addChip).toBeTruthy()
       act(() => {
-        addChip?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+        pressClick(addChip)
       })
-      expect(m.host.querySelector('.team-emoji-picker')).toBeTruthy()
+      expect(m.host.querySelector('.team-msg > .team-emoji-picker')).toBeTruthy()
       act(() => {
-        addChip?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+        pressClick(addChip)
       })
       expect(m.host.querySelector('.team-emoji-picker')).toBeNull()
 
@@ -176,13 +183,23 @@ describe('TeamMessage reactions UI (#687)', () => {
       })
       expect(replied).toEqual(['m2'])
 
-      const reactBtn = bar?.querySelector('button.team-msg-react')
+      const reactBtn = bar?.querySelector('button.team-msg-react') ?? null
       expect(reactBtn).toBeTruthy()
+      // First pressClick (pointerdown + click) opens popover inside .team-msg-row; second closes cleanly without reopening
       act(() => {
-        reactBtn?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+        pressClick(reactBtn)
       })
+      expect(m.host.querySelector('.team-msg-row > .team-emoji-picker')).toBeTruthy()
+      act(() => {
+        pressClick(reactBtn)
+      })
+      expect(m.host.querySelector('.team-emoji-picker')).toBeNull()
 
-      expect(m.host.querySelector('.team-emoji-picker')).toBeTruthy()
+      // Re-open, search, and pick rocket
+      act(() => {
+        pressClick(reactBtn)
+      })
+      expect(m.host.querySelector('.team-msg-row > .team-emoji-picker')).toBeTruthy()
       expect(m.host.querySelectorAll('.team-react-pick')).toHaveLength(6)
 
       const search = m.host.querySelector('input.team-emoji-search') as HTMLInputElement | null
@@ -207,15 +224,32 @@ describe('TeamMessage reactions UI (#687)', () => {
       ])
       expect(m.host.querySelector('.team-emoji-picker')).toBeNull()
 
-      // Re-open and press Escape -> closes picker
+      // Re-open and click outside (.team-bubble, then document.body) -> closes picker
       act(() => {
-        reactBtn?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+        pressClick(reactBtn)
       })
       expect(m.host.querySelector('.team-emoji-picker')).toBeTruthy()
       act(() => {
-        m.host
-          .querySelector('.team-emoji-picker')
-          ?.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+        m.host.querySelector('.team-bubble')?.dispatchEvent(new dom.window.MouseEvent('pointerdown', { bubbles: true }))
+      })
+      expect(m.host.querySelector('.team-emoji-picker')).toBeNull()
+
+      act(() => {
+        pressClick(reactBtn)
+      })
+      expect(m.host.querySelector('.team-emoji-picker')).toBeTruthy()
+      act(() => {
+        dom.window.document.body.dispatchEvent(new dom.window.MouseEvent('pointerdown', { bubbles: true }))
+      })
+      expect(m.host.querySelector('.team-emoji-picker')).toBeNull()
+
+      // Re-open and press Escape on document -> closes picker
+      act(() => {
+        pressClick(reactBtn)
+      })
+      expect(m.host.querySelector('.team-emoji-picker')).toBeTruthy()
+      act(() => {
+        dom.window.document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
       })
       expect(m.host.querySelector('.team-emoji-picker')).toBeNull()
     } finally {
@@ -280,5 +314,10 @@ describe('TeamMessage reactions UI (#687)', () => {
     expect(findAll(tree, n => hasClass(n, 'team-reactions'))).toHaveLength(0)
     expect(findAll(tree, n => hasClass(n, 'team-msg-react'))).toHaveLength(0)
     expect(findAll(tree, n => hasClass(n, 'team-msg-bar'))).toHaveLength(0)
+  })
+
+  test('team-emoji-picker is a floating popover in team.css', () => {
+    const css = readFileSync(resolve(import.meta.dir, '../../web/styles/team.css'), 'utf8')
+    expect(css).toMatch(/\.team-emoji-picker\s*\{[^}]*position:\s*absolute\b/)
   })
 })

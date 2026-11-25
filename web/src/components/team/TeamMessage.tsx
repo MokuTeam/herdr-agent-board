@@ -65,14 +65,19 @@ export function TeamMessage({
 }: TeamMessageProps) {
   const t = useT()
   const [open, setOpen] = useState(false)
-  const [picker, setPicker] = useState(false)
+  const [picker, setPicker] = useState<'bar' | 'chips' | null>(null)
   const [longPicker, setLongPicker] = useState(false)
+  const reactBtnRef = useRef<HTMLButtonElement>(null)
+  const addChipRef = useRef<HTMLButtonElement>(null)
+  const moreBtnRef = useRef<HTMLButtonElement>(null)
   const press = useLongPress(() => setOpen(true))
   const agent = mark === undefined ? agentMark(line, t) : null
   const when = fullWhen(line.ts, t)
   const reactions = line.reactions ?? []
   const active = new Set(reactions.filter(r => r.me).map(r => r.emoji))
   const toggleReaction = (emoji: string) => onReact?.(line.id, emoji, active.has(emoji))
+  const isPickerTrigger = (target: Node) =>
+    Boolean(reactBtnRef.current?.contains(target) || addChipRef.current?.contains(target))
   const closeLong = () => {
     setOpen(false)
     setLongPicker(false)
@@ -122,7 +127,7 @@ export function TeamMessage({
           </span>
         </div>
         {onReact ? (
-          <div className={classNames('team-msg-bar', picker && 'open')}>
+          <div className={classNames('team-msg-bar', picker === 'bar' && 'open')}>
             {BAR_REACTIONS.map(emoji => (
               <button
                 key={emoji}
@@ -137,12 +142,13 @@ export function TeamMessage({
               </button>
             ))}
             <button
+              ref={reactBtnRef}
               type="button"
               className="team-bar-btn team-msg-react"
               aria-label={t('team.react')}
               title={t('team.react')}
-              aria-expanded={picker}
-              onClick={() => setPicker(p => !p)}
+              aria-expanded={picker === 'bar'}
+              onClick={() => setPicker(p => (p === 'bar' ? null : 'bar'))}
             >
               <ReactGlyph />
             </button>
@@ -174,23 +180,39 @@ export function TeamMessage({
             </button>
           )
         )}
+        {picker === 'bar' && onReact && (
+          <EmojiPicker
+            active={active}
+            anchorRef={reactBtnRef}
+            ignore={isPickerTrigger}
+            onPick={emoji => {
+              setPicker(null)
+              toggleReaction(emoji)
+            }}
+            onClose={() => setPicker(null)}
+          />
+        )}
       </div>
       {reactions.length > 0 && (
         <ReactionChips
           reactions={reactions}
           disabled={!onReact}
+          addRef={addChipRef}
+          addOpen={picker === 'chips'}
           onToggle={(emoji, remove) => onReact?.(line.id, emoji, remove)}
-          {...(onReact && { onAdd: () => setPicker(p => !p) })}
+          {...(onReact && { onAdd: () => setPicker(p => (p === 'chips' ? null : 'chips')) })}
         />
       )}
-      {picker && onReact && (
+      {picker === 'chips' && onReact && (
         <EmojiPicker
           active={active}
+          anchorRef={addChipRef}
+          ignore={isPickerTrigger}
           onPick={emoji => {
-            setPicker(false)
+            setPicker(null)
             toggleReaction(emoji)
           }}
-          onClose={() => setPicker(false)}
+          onClose={() => setPicker(null)}
         />
       )}
       {open && (
@@ -198,6 +220,8 @@ export function TeamMessage({
           {onReact && (
             <QuickReactions
               active={active}
+              moreRef={moreBtnRef}
+              moreOpen={longPicker}
               onPick={emoji => {
                 closeLong()
                 toggleReaction(emoji)
@@ -208,6 +232,8 @@ export function TeamMessage({
           {longPicker && onReact && (
             <EmojiPicker
               active={active}
+              anchorRef={moreBtnRef}
+              ignore={target => Boolean(moreBtnRef.current?.contains(target))}
               onPick={emoji => {
                 closeLong()
                 toggleReaction(emoji)
