@@ -5,8 +5,9 @@
 // wake turned on and started; what it did said, with the launcher note and the key bindings. The
 // old plugin's config and state folders are left where they are. Folders with spaces, Cyrillic
 // and %.
-import { expect, setDefaultTimeout, test } from 'bun:test'
+import { afterAll, expect, setDefaultTimeout, test } from 'bun:test'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { configFile } from '../../src/adapters/config-file.ts'
 import { ROOT } from '../../src/adapters/paths.ts'
@@ -29,6 +30,18 @@ import { endWithSandbox, wakeOnConfig, wakeSandbox, writeBoardConfig } from '../
 setDefaultTimeout(30_000)
 // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
 useLanguage('en')
+
+/** The home and folders the tests run with, as this file loads: every test gives them back. */
+const outside = () => ({
+  HOME: process.env.HOME,
+  USERPROFILE: process.env.USERPROFILE,
+  APPDATA: process.env.APPDATA,
+  LOCALAPPDATA: process.env.LOCALAPPDATA,
+  CLAUDE_CONFIG_DIR: process.env.CLAUDE_CONFIG_DIR,
+  homedir: homedir(),
+})
+const found = outside()
+const OUTSIDE = { ...found, homedir: (process.platform === 'win32' ? found.USERPROFILE : found.HOME) || found.homedir }
 
 const SIDS = [
   '0f8fad5b-d9cb-469f-a165-70867728950e',
@@ -143,14 +156,16 @@ interface World {
  * board's config.json with wake on.
  */
 function world(o: { old?: boolean } = {}): World {
-  const dir = isolatedHome()
-  process.env.APPDATA = join(dir, 'Роуминг 100%')
-  process.env.LOCALAPPDATA = join(dir, 'Local x 50%')
+  const dir = isolatedHome({
+    home: 'Иван Петров 100%',
+    appData: 'Роуминг 100%',
+    localAppData: 'Local x 50%',
+  })
   const home = join(dir, 'Иван Петров 100%')
-  process.env.HOME = home
-  process.env.USERPROFILE = home
-  const oldConfigDir = join(process.env.APPDATA, 'herdr', 'plugins', 'config', 'herdr-wake')
-  const oldStateDir = join(process.env.LOCALAPPDATA, 'herdr', 'plugins', 'herdr-wake')
+  const appData = join(dir, 'Роуминг 100%')
+  const localAppData = join(dir, 'Local x 50%')
+  const oldConfigDir = join(appData, 'herdr', 'plugins', 'config', 'herdr-wake')
+  const oldStateDir = join(localAppData, 'herdr', 'plugins', 'herdr-wake')
   const withOld = [join(home, '.claude'), join(home, '.claude-Работа 100%')]
   const other = join(home, '.claude-other')
   writeJson(configFile(), { language: 'en', wake: { enabled: true, port: 23456 } })
@@ -166,7 +181,7 @@ function world(o: { old?: boolean } = {}): World {
   writeFileSync(join(oldStateDir, 'router.log'), 'router up\n')
   for (const p of withOld) writeJson(join(p, 'settings.json'), settingsWithOld(oldConfigDir))
   writeJson(join(home, '.claude.json'), CLAUDE_JSON)
-  writeJson(join(process.env.APPDATA, 'herdr', 'config.toml'), HERDR_TOML)
+  writeJson(join(appData, 'herdr', 'config.toml'), HERDR_TOML)
   return { home, oldConfigDir, oldStateDir, withOld, other }
 }
 
@@ -502,23 +517,24 @@ test('nothing of the old plugin here: the first start takes nothing over and ask
   expect(boardConfig()).toEqual({ language: 'en', wake: { enabled: true, port: 23456 } })
 })
 
-test('a tg-router workspace with an agent in it is left open', async () => {
-  for (const extra of [
+test.each([
+  [
+    'an agent',
     { pane_id: 'wT:p3', tab_id: 'tT', workspace_id: 'wT', agent: 'claude', agent_status: 'working', cwd: PROJECT },
-    // The board's own pane (board.json's) is never closed with it either.
-    { pane_id: 'wT:p9', tab_id: 'tT', workspace_id: 'wT', cwd: ROOT },
-  ]) {
-    const w = world()
-    if (extra.pane_id === 'wT:p9') {
-      const boardJson = join(process.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board', 'board.json')
-      writeJson(boardJson, { pane: 'wT:p9', pid: process.pid })
-    }
-    const { herdr, calls } = fakeHerdr({ snap: tgRouter([extra]) })
-    const out = await switchOver({ uninstall: true, herdr, home: w.home, env: process.env, log: () => {} })
-    expect(out.ok).toBe(true)
-    expect(calls.some(c => c[0] === 'workspace' && c[1] === 'close')).toBe(false)
-    if (out.ok) expect(out.did).toContain('tg-router: left open, something else is in it')
+  ],
+  // The board's own pane (board.json's) is never closed with it either.
+  ['the board’s own pane', { pane_id: 'wT:p9', tab_id: 'tT', workspace_id: 'wT', cwd: ROOT }],
+])('a tg-router workspace with %s in it is left open', async (_, extra) => {
+  const w = world()
+  if (extra.pane_id === 'wT:p9') {
+    const boardJson = join(process.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board', 'board.json')
+    writeJson(boardJson, { pane: 'wT:p9', pid: process.pid })
   }
+  const { herdr, calls } = fakeHerdr({ snap: tgRouter([extra]) })
+  const out = await switchOver({ uninstall: true, herdr, home: w.home, env: process.env, log: () => {} })
+  expect(out.ok).toBe(true)
+  expect(calls.some(c => c[0] === 'workspace' && c[1] === 'close')).toBe(false)
+  if (out.ok) expect(out.did).toContain('tg-router: left open, something else is in it')
 })
 
 test('the old config and state folders are left where they are', async () => {
@@ -678,4 +694,10 @@ test('the old router still answers on the port after the uninstall: waited for, 
   expect(goes.ok).toBe(true)
   expect([started, looks]).toEqual([1, 3])
   expect(existsSync(wakeTakeoverFile())).toBe(true)
+})
+
+// Every test gives back the home and folders it found so later files in the same process do not
+// see a temp folder a test has deleted.
+afterAll(() => {
+  expect(outside()).toEqual(OUTSIDE)
 })
