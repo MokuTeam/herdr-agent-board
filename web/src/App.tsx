@@ -61,6 +61,7 @@ import { useToolbarMenu } from './hooks/useToolbarMore.ts'
 import { useT } from './i18n/I18nProvider.tsx'
 import { linkDecisionsSheet } from './models/decisions.ts'
 import { pageLayers } from './models/lifecycle.ts'
+import { backupAlert } from './models/master-owned.ts'
 import { adminHere, remotePage } from './models/remote-page.ts'
 import { offersTeam, teamBadge } from './models/team.ts'
 import { proposedCount } from './models/todos.ts'
@@ -417,7 +418,8 @@ export function App() {
   }, [panels.place])
 
   const wakeDown = adminHere() && isWakeView(data?.wake) && noteShown(data.wake, now)
-  const systemAlert = setup.shown || !!data?.backup?.problem || wakeDown
+  // On a node the master backs up (#777): its own backup's problem is no alert here (#797).
+  const systemAlert = setup.shown || backupAlert(data) || wakeDown
   const sched = scheduleBadge(data?.schedules ?? [], now)
   const railAlert =
     systemAlert ||

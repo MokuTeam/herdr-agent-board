@@ -459,8 +459,8 @@ describe('the update files never remove or move a .git', () => {
   })
 })
 
-describe('the installer after a checkout was updated by git', () => {
-  const markFile = (): string => join(dir, 'state', 'node', 'update', 'installer.json')
+describe('the installer after a checkout was updated by git (#797)', () => {
+  const stampFile = (): string => join(dir, 'state', 'node', 'update', 'installed.json')
   const steps = () => {
     const calls: string[] = []
     return {
@@ -478,37 +478,29 @@ describe('the installer after a checkout was updated by git', () => {
     }
   }
 
-  test('a refused update leaves no file; the one that moves the checkout leaves it, and the board that comes back runs the installer', async () => {
+  test('the board on the moved checkout runs the installer once, by the commit git says it runs', async () => {
     const { calls, deps } = steps()
     cloneAtA()
-    writeFileSync(join(root, 'src', 'adapters', 'paths.ts'), 'export const V = 99\n')
-    const refused = make(deps)
-    expect((await send(refused.update, repo.b)).body.error).toBe('git-dirty')
-    expect(existsSync(markFile())).toBe(false)
-    g(root, 'checkout', '-q', '--', 'src/adapters/paths.ts')
-    const { update, restarts } = make(deps)
+    const { update, restarts } = make({})
     expect((await send(update, repo.b)).status).toBe(200)
     expect(restarts).toEqual([root])
-    expect(JSON.parse(text(markFile()))).toMatchObject({ from: repo.a, to: repo.b })
-    // the board that handed it over leaves the file to the one that comes back
-    await update.started()
-    expect(calls).toEqual([])
     const back = make(deps)
     await back.update.started()
     expect(calls).toEqual(['backup', 'installer'])
-    expect(existsSync(markFile())).toBe(false)
-    expect(back.logs.join('\n')).toContain(`the installer ran after the update to ${repo.b.slice(0, 12)}`)
+    expect(JSON.parse(text(stampFile()))).toMatchObject({ commit: repo.b })
+    await make(deps).update.started()
+    expect(calls).toEqual(['backup', 'installer'])
   })
 
-  test('on Windows, with no record and no guard, the file alone lets the installer run', async () => {
+  test('on Windows, with no record and no guard, the stamp alone lets the installer run', async () => {
     const { calls, deps } = steps()
     cloneAtA()
     const win = { platform: 'win32', guard: never('guard'), go: never('go'), ...deps }
-    expect((await send(make(win).update, repo.b)).status).toBe(200)
+    expect(
+      (await send(make({ platform: 'win32', guard: never('guard'), go: never('go') }).update, repo.b)).status,
+    ).toBe(200)
     expect(existsSync(join(dir, 'state', 'node', 'update', 'pending.json'))).toBe(false)
-    expect(existsSync(markFile())).toBe(true)
     await make(win).update.started()
     expect(calls).toEqual(['backup', 'installer'])
-    expect(existsSync(markFile())).toBe(false)
   })
 })

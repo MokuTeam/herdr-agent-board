@@ -261,7 +261,7 @@ describe('Settings on a node: set on the master', () => {
     writeFileSync(masterFlagsFile(), JSON.stringify({ master: 'laptop', on: ['watches'], at: 1 }))
     const before = readFileSync(configFile(), 'utf8')
     for (const r of [editFeatures({ watches: true }), editTodos({ mode: 'agents' }), editThreads({ mode: 'agents' })])
-      expect(r).toMatchObject({ ok: false, error: 'Настраивается на мастере laptop' })
+      expect(r).toMatchObject({ ok: false, error: 'Настраивается на голове laptop' })
     expect(readFileSync(configFile(), 'utf8')).toBe(before)
   })
 

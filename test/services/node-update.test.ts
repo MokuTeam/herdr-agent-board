@@ -855,11 +855,11 @@ describe('the Windows update files', () => {
   })
 })
 
-describe('the installer an update leaves for the board that comes back', () => {
-  const markFile = (): string => join(dir, 'state', 'node', 'update', 'installer.json')
+describe('the installer, once for each commit the board starts on (#797)', () => {
+  const stampFile = (): string => join(dir, 'state', 'node', 'update', 'installed.json')
   const ok = { ok: true, detail: '' }
 
-  /** The two steps that follow an update, recorded in the order they run. */
+  /** The two steps, recorded in the order they run. */
   function steps() {
     const calls: string[] = []
     const deps: Partial<NodeUpdateDeps> = {
@@ -882,107 +882,47 @@ describe('the installer an update leaves for the board that comes back', () => {
     return update.update({ commit, sha256: sha(archive) })
   }
 
-  test('after an archive update on Linux the board that comes back runs backupSettings, then the installer, once', async () => {
+  test('the first board on an update by an older board (which wrote nothing) runs it once, and says so in installed.json', async () => {
     const { calls, deps } = steps()
-    const first = make(deps)
-    expect((await updateTo(first.update)).status).toBe(200)
-    const marked = JSON.parse(text(markFile()))
-    expect(marked).toMatchObject({ from: repo.a, to: repo.b })
-    expect(typeof marked.at).toBe('number')
-    // nothing runs before the restart, and the board that handed the update over leaves the file to the next one
-    await first.update.started()
-    expect(calls).toEqual([])
-    expect(existsSync(markFile())).toBe(true)
+    // The update itself, as the old code does it: no installer wired, no file.
+    expect((await updateTo(make({ ...stub }).update)).status).toBe(200)
+    expect(existsSync(stampFile())).toBe(false)
     const back = make({ ...deps, commit: async () => repo.b })
     await back.update.started()
     expect(calls).toEqual(['backup', 'installer'])
-    expect(existsSync(markFile())).toBe(false)
-    expect(back.logs.join('\n')).toContain(`the installer ran after the update to ${repo.b.slice(0, 12)}`)
-    await back.update.started()
+    expect(JSON.parse(text(stampFile()))).toMatchObject({ commit: repo.b })
+    expect(back.logs.join('\n')).toContain(`the installer ran for ${repo.b.slice(0, 12)}`)
+    // Again on the same commit (a restart): nothing.
+    await make({ ...deps, commit: async () => repo.b }).update.started()
+    expect(calls).toEqual(['backup', 'installer'])
+    // A later commit: once more.
+    await make({ ...deps, commit: async () => repo.a }).update.started()
+    expect(calls).toEqual(['backup', 'installer', 'backup', 'installer'])
+    expect(JSON.parse(text(stampFile()))).toMatchObject({ commit: repo.a })
+  })
+
+  test('the board that hands an update over runs nothing before its restart; the one that comes back does', async () => {
+    const { calls, deps } = steps()
+    const first = make(deps)
+    expect((await updateTo(first.update)).status).toBe(200)
+    await first.update.started()
+    expect(calls).toEqual([])
+    await make({ ...deps, commit: async () => repo.b }).update.started()
     expect(calls).toEqual(['backup', 'installer'])
   })
 
-  test('a board that came back on another commit (the update rolled back) runs no installer, and the file goes', async () => {
+  test('no installer wired: nothing read or written; no commit to name: nothing runs', async () => {
+    const { update, logs } = make({ ...stub, commit: async () => repo.b })
+    await update.started()
+    expect(logs).toEqual([])
+    expect(existsSync(stampFile())).toBe(false)
     const { calls, deps } = steps()
-    expect((await updateTo(make(deps).update)).status).toBe(200)
-    const back = make({ ...deps, commit: async () => repo.a })
-    await back.update.started()
+    await make({ ...deps, commit: async () => '' }).update.started()
     expect(calls).toEqual([])
-    expect(existsSync(markFile())).toBe(false)
-    expect(back.logs.join('\n')).toContain('the installer after the update did not run')
+    expect(existsSync(stampFile())).toBe(false)
   })
 
-  test('a node that never updated runs no installer and touches nothing', async () => {
-    for (const platform of ['linux', 'darwin']) {
-      const { calls, deps } = steps()
-      const { update, logs } = make({ ...deps, platform })
-      await update.started()
-      expect(calls).toEqual([])
-      expect(logs).toEqual([])
-      expect(existsSync(join(dir, 'state'))).toBe(false)
-    }
-  })
-
-  test('a refused update leaves no file; the one that goes through leaves it', async () => {
-    const { calls, deps } = steps()
-    const archive = repo.archive(repo.b)
-    const refused: [string, Partial<NodeUpdateDeps>, string][] = [
-      ['sha256', {}, 'f'.repeat(64)],
-      [
-        'install',
-        {
-          install: async () => ({ ok: false, detail: 'no network' }),
-        },
-        sha(archive),
-      ],
-      [
-        'swap',
-        {
-          swap: () => {
-            throw new Error('EBUSY')
-          },
-        },
-        sha(archive),
-      ],
-    ]
-    for (const [error, over, sum] of refused) {
-      const { update, restarts } = make({ ...deps, ...over })
-      await update.blob(stream(archive), archive.length)
-      expect((await update.update({ commit: repo.b, sha256: sum })).body.error).toBe(error)
-      expect(restarts).toEqual([])
-      expect(existsSync(markFile())).toBe(false)
-    }
-    // no archive at all, and the commit it runs already
-    const { update } = make(deps)
-    expect((await update.update({ commit: repo.b, sha256: sha(archive) })).body.error).toBe('blob')
-    expect((await update.update({ commit: repo.a, sha256: sha(archive) })).body.current).toBe(true)
-    expect(existsSync(markFile())).toBe(false)
-    // Windows: a guard that does not start, and a go that cannot be said
-    for (const over of [
-      {
-        guard: () => {
-          throw new Error('no guard')
-        },
-      },
-      {
-        guard: (file: string) => writeAlive(file),
-        go: () => {
-          throw new Error('EPERM')
-        },
-      },
-    ]) {
-      const { update } = make({ ...deps, platform: 'win32', ...over })
-      await update.blob(stream(archive), archive.length)
-      expect((await update.update({ commit: repo.b, sha256: sha(archive) })).body.error).toBe('swap')
-      expect(existsSync(markFile())).toBe(false)
-    }
-    expect(calls).toEqual([])
-    const good = make(deps)
-    expect((await updateTo(good.update)).status).toBe(200)
-    expect(JSON.parse(text(markFile()))).toMatchObject({ from: repo.a, to: repo.b })
-  })
-
-  test('an installer that fails or throws, a settings.json that cannot be copied, a file that cannot be read: said, never thrown, the file goes', async () => {
+  test('an installer that fails or throws, a settings.json that cannot be copied: said, never thrown, tried again at the next start', async () => {
     const cases: [Partial<NodeUpdateDeps>, string, string[]][] = [
       [{ installer: async () => ({ ok: false, detail: 'boom\nmore' }) }, 'failed: boom', ['backup']],
       [
@@ -1006,63 +946,40 @@ describe('the installer an update leaves for the board that comes back', () => {
     ]
     for (const [over, said, ran] of cases) {
       const { calls, deps } = steps()
-      expect((await updateTo(make(deps).update)).status).toBe(200)
       const back = make({ ...deps, ...over, commit: async () => repo.b })
       await back.update.started()
       expect(calls).toEqual(ran)
       expect(back.logs.join('\n')).toContain(said)
-      expect(existsSync(markFile())).toBe(false)
-      rmSync(besidePlugin(root).old, { recursive: true, force: true })
-      rmSync(root, { recursive: true, force: true })
-      unpackedA()
+      expect(existsSync(stampFile())).toBe(false)
     }
+    // A file that does not parse names no commit: the installer runs.
     const { calls, deps } = steps()
-    writeFileSync(markFile(), '{ not json')
-    const back = make({ ...deps, commit: async () => repo.b })
-    await back.update.started()
-    expect(calls).toEqual([])
-    expect(back.logs.join('\n')).toContain('could not be read')
-    expect(existsSync(markFile())).toBe(false)
+    mkdirSync(join(dir, 'state', 'node', 'update'), { recursive: true })
+    writeFileSync(stampFile(), '{ not json')
+    await make({ ...deps, commit: async () => repo.b }).update.started()
+    expect(calls).toEqual(['backup', 'installer'])
   })
 
-  test('on Windows the installer runs only after the record is claimed as applied; the file waits until the guard has settled', async () => {
+  test('on Windows the installer runs only once the record is settled: claimed as applied, or gone', async () => {
     const { calls, deps } = steps()
-    const at: string[] = []
     const guard = (file: string): void => writeAlive(file)
-    const first = make({
-      ...deps,
-      platform: 'win32',
-      guard,
-      // the file is there before the guard may act
-      go: file => void at.push(`${existsSync(markFile())}|${readPending(file)?.phase}`),
-    })
-    expect((await updateTo(first.update)).status).toBe(200)
-    expect(at).toEqual(['true|ready'])
-    expect(JSON.parse(text(markFile()))).toMatchObject({ from: repo.a, to: repo.b })
+    expect((await updateTo(make({ ...deps, platform: 'win32', guard, go: () => {} }).update)).status).toBe(200)
     const { fresh, old } = besidePlugin(root)
     const record = { commit: repo.b, from: repo.a, root, old, fresh, at: 1 }
     const back = (over: Partial<NodeUpdateDeps> = {}, commit = repo.b) =>
       make({ ...deps, platform: 'win32', guard, commit: async () => commit, ...over })
-    // the guard has not put the copy in place, or is putting the copy before back: nothing runs, nothing goes
     for (const phase of ['ready', 'go', 'restoring'] as const) {
       writePending(pendingFile(), { ...record, phase })
       await back().update.started()
       expect(calls).toEqual([])
-      expect(existsSync(markFile())).toBe(true)
       expect(readPending(pendingFile())?.phase).toBe(phase)
     }
-    // in place, but another commit runs: the record and the file stay for the guard
     writePending(pendingFile(), { ...record, phase: 'applied' })
     await back({}, repo.a).update.started()
     expect(calls).toEqual([])
-    expect(existsSync(markFile())).toBe(true)
-    expect(readPending(pendingFile())?.phase).toBe('applied')
-    // a record that does not parse is still a record
     writeFileSync(pendingFile(), 'not json')
     await back().update.started()
     expect(calls).toEqual([])
-    expect(existsSync(markFile())).toBe(true)
-    // in place and running: the record is claimed first, then the installer
     writePending(pendingFile(), { ...record, phase: 'applied' })
     const seen: boolean[] = []
     const settled = back({
@@ -1075,25 +992,9 @@ describe('the installer an update leaves for the board that comes back', () => {
     await settled.update.started()
     expect(seen).toEqual([false])
     expect(calls).toEqual(['backup', 'installer'])
-    expect(existsSync(markFile())).toBe(false)
-    expect(existsSync(pendingFile())).toBe(false)
     expect(settled.logs.join('\n')).toContain(`back on ${repo.b.slice(0, 12)}`)
-  })
-
-  test('on Windows with no record at all (taken already, or an update by git) the file alone decides', async () => {
-    const { calls, deps } = steps()
-    const mark = (to: string): void => {
-      mkdirSync(join(dir, 'state', 'node', 'update'), { recursive: true })
-      writeFileSync(markFile(), `${JSON.stringify({ from: repo.a, to, at: 1 })}\n`)
-    }
-    mark(repo.b)
-    await make({ ...deps, platform: 'win32', guard: () => {}, commit: async () => repo.b }).update.started()
+    // No record at all: the stamp alone decides.
+    await back().update.started()
     expect(calls).toEqual(['backup', 'installer'])
-    expect(existsSync(markFile())).toBe(false)
-    // the update rolled back: no installer
-    mark(repo.b)
-    await make({ ...deps, platform: 'win32', guard: () => {}, commit: async () => repo.a }).update.started()
-    expect(calls).toEqual(['backup', 'installer'])
-    expect(existsSync(markFile())).toBe(false)
   })
 })

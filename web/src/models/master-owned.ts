@@ -20,6 +20,15 @@ export interface MasterOwnedNow {
   presence: PresenceMode | 'none'
 }
 
+/** Whether the page is a node's own (#797): its master sent flags, or it has a paired master. */
+export const onNodePage = (data: { masterFlags?: unknown; nodeMaster?: unknown } | null | undefined): boolean =>
+  !!data?.masterFlags || !!data?.nodeMaster
+
+/** Whether the board's backup has a problem to flag here: on a node the master backs up (#777), so never. */
+export const backupAlert = (
+  data: { masterFlags?: unknown; nodeMaster?: unknown; backup?: { problem?: unknown } } | null | undefined,
+): boolean => !onNodePage(data) && !!data?.backup?.problem
+
 export function masterOwnedNow(f: MasterFlagsPayload): MasterOwnedNow {
   const on = (key: string): boolean => f.on.includes(key)
   const todos: TodoMode = !on('todos')

@@ -1882,8 +1882,8 @@ export async function startServer({
       guard: (file, old) => startGuard(join(old, 'src', 'entrypoints', 'node-update-guard.ts'), file),
       // After the answer, so it reaches the master before the files change and the board restarts.
       go: file => goLater(file, RESTART_AFTER_MS, log),
-      // The board that comes back on an update's commit runs the installer once, as the board's own
-      // update does, so the skills in the Claude profiles are the new code's.
+      // The board runs the installer once for each commit it starts on (#797), as the board's own
+      // update does, so the skills in the Claude profiles are the running code's.
       installer: () => runInstaller(root),
       backupSettings: () => backupSettings(),
       restart: old => {
@@ -2730,7 +2730,7 @@ export async function startServer({
 
   // A node's update is settled by the board that came back on its commit: here, when the whole
   // start is done (a later throw in this function never gets here), and once it stayed up a while.
-  // On Windows (#699) that takes the guard's record; everywhere the installer an update left runs.
+  // On Windows (#699) that takes the guard's record; everywhere the installer runs once per commit.
   // Only a node has one: a board that is no node schedules nothing.
   if (nodeUpdate) {
     const settled = nodeUpdate

@@ -28,7 +28,7 @@ import { backupNoteText } from '../../models/backup.ts'
 import { CARD_TEXT_KEY, CARD_TEXTS, type CardText, cardTextNow, setCardText } from '../../models/card-text.ts'
 import { reachable } from '../../models/devices.ts'
 import { LOOK_KEY, LOOKS, lookNow, setLook } from '../../models/look.ts'
-import { masterOwnedNow } from '../../models/master-owned.ts'
+import { backupAlert, masterOwnedNow, onNodePage } from '../../models/master-owned.ts'
 import { DOCKS, type Dock } from '../../models/panel-layout.ts'
 import { offersProfiles } from '../../models/profiles.ts'
 import { adminHere, keptAuth, ownerAdminPage, remotePage } from '../../models/remote-page.ts'
@@ -193,7 +193,7 @@ export function SettingsPanel({
   // the relay (#780); Tasks stay read-only here.
   const masterOwned = data?.masterFlags ?? null
   // On a node (#797): each row says whose it is, this computer's own or the master's.
-  const onNode = !!masterOwned || !!data?.nodeMaster
+  const onNode = onNodePage(data)
   const headName = masterOwned?.master || data?.nodeMaster?.name || ''
   const headLabel = headName ? t('node.scope.head', { name: headName }) : t('node.scope.headNone')
   const hereMark = onNode ? <small className="set-owned">{t('node.scope.here')}</small> : null
@@ -232,7 +232,7 @@ export function SettingsPanel({
 
   const backupProblem = data?.backup?.problem
   const wakeDown = canAdmin && isWakeView(data?.wake) && noteShown(data.wake, now)
-  const systemWarn = !!setup?.shown || (!onNode && !!backupProblem) || wakeDown
+  const systemWarn = !!setup?.shown || backupAlert(data) || wakeDown
 
   const pickTheme = (next: string) => {
     setTheme(next, { root: rootEl, keep: v => storage.set(THEME_KEY, v), transition: crossFade() })

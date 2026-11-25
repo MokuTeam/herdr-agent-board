@@ -38,14 +38,14 @@
 // older one) answers `platform`.
 //
 // The installer (entrypoints/install.ts) copies the board's skills into the Claude profiles and
-// registers its hooks, so code that came without it leaves those as the old board had them. An
-// update that restarts the board writes `<dir>/installer.json` (`{ from, to, at }`) first, on every
-// platform and by every path. The board that comes back (`started`, once it stayed up a while)
-// runs the installer when it runs `to`, with a dated copy of each settings.json before it, and
-// removes the file; on another commit (a rolled back update) it removes the file and runs nothing.
-// On Windows that board waits for the guard's record to be settled first (taken as applied, or
-// gone): while the guard may still roll back, the file stays. A failing installer is logged, never
-// thrown. A board that wires no installer writes and reads no such file.
+// registers its hooks, so code that came without it leaves those as the old board had them. The
+// board that starts (`started`, once it stayed up a while) runs the installer once for each commit
+// it runs: `<dir>/installed.json` (`{ commit, at }`) names the last commit it went through for, and
+// a board on any other commit (an update by any path, the old board's included, which wrote
+// nothing, or a pull by hand) runs it, with a dated copy of each settings.json before it, and
+// writes the file. On Windows that board waits for the guard's record to be settled first (taken as
+// applied, or gone). A failing installer is logged, never thrown, and tried again at the next
+// start. A board that wires no installer reads and writes no such file.
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pause } from '../../adapters/pacing.ts'
@@ -125,7 +125,7 @@ export interface NodeUpdateDeps {
   git?: (args: string[], timeoutMs?: number) => Promise<GitResult>
   /** A checkout's `bun install` with its lockfile as it is (adapters/self-update.ts bunInstall). */
   installCheckout?: () => Promise<StepResult>
-  /** The installer of the code now in the plugin's folder (adapters/self-update.ts runInstaller), run once by the board that comes back on an update's commit; without it an update leaves no file for it. */
+  /** The installer of the code now in the plugin's folder (adapters/self-update.ts runInstaller), run once for each commit the board starts on; without it nothing of it is read or written. */
   installer?: () => Promise<StepResult>
   /** A dated copy of each settings.json, before the installer writes them (adapters/self-update.ts backupSettings); the files copied. */
   backupSettings?: () => string[]
@@ -141,7 +141,7 @@ export interface NodeUpdate {
   busy(): boolean
   /**
    * The board has started: on Windows, one that came back on the commit an update put in place says
-   * so (the guard stands down). Then, on every platform, the installer an update left to run.
+   * so (the guard stands down). Then, on every platform, the installer once for the running commit.
    */
   started(): Promise<void>
 }
@@ -179,8 +179,8 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
   const pendingFile = join(d.dir, 'pending.json')
   /** A checkout's lock files taken from the commit while bun install runs: `{ from, to, files }`, put back by the next update when the board died in between. */
   const locksFile = join(d.dir, 'git-locks.json')
-  /** An update that restarts the board leaves `{ from, to, at }` here: the board that comes back on `to` runs the installer. */
-  const markFile = join(d.dir, 'installer.json')
+  /** The commit the installer last went through for (`{ commit, at }`): a board on another one runs it once. */
+  const installedFile = join(d.dir, 'installed.json')
   let busy = false
   /** An archive is coming in: an update, or a second archive, waits for it. */
   let uploading = false
@@ -193,19 +193,6 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
     if (platform === 'win32' && !d.guard) return refuse(409, 'platform')
     if (!d.canRestart) return refuse(409, 'restart')
     return null
-  }
-
-  /** An update about to restart the board leaves word for the installer; a file that cannot be written is said, not thrown. */
-  function markInstaller(from: string, to: string): void {
-    if (!d.installer) return
-    try {
-      mkdirSync(d.dir, { recursive: true })
-      writeFileSync(markFile, `${JSON.stringify({ from, to, at: Date.now() })}\n`)
-    } catch (err) {
-      d.log(
-        `node: ${markFile} could not be written, so the installer will not run after the update: ${err instanceof Error ? err.message : String(err)}`,
-      )
-    }
   }
 
   /** Windows: whether the guard's record is settled, so the installer may go: none at all, or one taken here as applied on the running commit. */
@@ -229,52 +216,49 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
     return true
   }
 
-  /**
-   * The installer an update left word for, run by the board that came back on its commit; the file
-   * goes either way. Nothing is read but whether the file is there when no update left one.
-   */
-  async function runMarked(installer: () => Promise<StepResult>): Promise<void> {
-    // The board that handed an update over is about to restart: the file is for the next one.
-    if (busy || !existsSync(markFile)) return
+  /** The commit installed.json names, or '' (none, or a file that does not parse). */
+  function installedCommit(): string {
     try {
-      let to = ''
-      try {
-        const j: unknown = JSON.parse(readFileSync(markFile, 'utf8'))
-        const at = j && typeof j === 'object' ? (j as Record<string, unknown>).to : undefined
-        if (typeof at === 'string') to = at
-      } catch (err) {
-        d.log(`node: ${markFile} could not be read: ${err instanceof Error ? err.message : String(err)}`)
-      }
+      const j: unknown = JSON.parse(readFileSync(installedFile, 'utf8'))
+      const c = j && typeof j === 'object' ? (j as Record<string, unknown>).commit : undefined
+      return typeof c === 'string' ? c : ''
+    } catch {
+      return ''
+    }
+  }
+
+  /**
+   * The installer once for the commit this board runs, when installed.json names another one (or
+   * none): the first board on an update's code runs it, whichever board did the update.
+   */
+  async function installOnce(installer: () => Promise<StepResult>): Promise<void> {
+    // The board that handed an update over is about to restart: the next one runs it.
+    if (busy) return
+    try {
       const now = await d.commit()
-      if (!to || now !== to) {
-        d.log(
-          `node: the board runs ${short(now) || 'no commit'}, not ${short(to) || 'the update'}: the installer after the update did not run`,
-        )
-        return
-      }
+      // No commit to name (a board restarted half way): nothing to compare with.
+      if (!COMMIT.test(now) || installedCommit() === now) return
       let copies: string[] = []
       try {
         copies = d.backupSettings?.() ?? []
       } catch (err) {
         d.log(
-          `node: the installer after the update to ${short(to)} did not run: settings.json not copied: ${err instanceof Error ? err.message : String(err)}`,
+          `node: the installer for ${short(now)} did not run: settings.json not copied: ${err instanceof Error ? err.message : String(err)}`,
         )
         return
       }
       const r = await installer()
       if (!r.ok) {
-        d.log(`node: the installer after the update to ${short(to)} failed: ${firstLines(r.detail, 2) || 'no output'}`)
+        d.log(`node: the installer for ${short(now)} failed: ${firstLines(r.detail, 2) || 'no output'}`)
         return
       }
+      mkdirSync(d.dir, { recursive: true })
+      writeFileSync(installedFile, `${JSON.stringify({ commit: now, at: Date.now() })}\n`)
       d.log(
-        `node: the installer ran after the update to ${short(to)}; settings.json copied to ${copies.join(', ') || 'nothing (none there)'}`,
+        `node: the installer ran for ${short(now)}; settings.json copied to ${copies.join(', ') || 'nothing (none there)'}`,
       )
     } catch (err) {
-      d.log(`node: the installer after the update did not run: ${err instanceof Error ? err.message : String(err)}`)
-    } finally {
-      try {
-        rmSync(markFile, { force: true })
-      } catch {}
+      d.log(`node: the installer did not run: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
@@ -439,7 +423,6 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
     d.log(
       `node: updated by git to ${short(commit)}${branch ? ` (${branch} fast-forwarded)` : ' (detached)'}; the board restarts on it`,
     )
-    markInstaller(from, commit)
     d.restart(d.root)
     return { status: 200, body: { ok: true, commit, restarting: true } }
   }
@@ -449,7 +432,7 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
     async started() {
       // Only Windows has such a record; nothing of it is read elsewhere.
       if (platform === 'win32' && !(await settled())) return
-      if (d.installer) await runMarked(d.installer)
+      if (d.installer) await installOnce(d.installer)
     },
     async blob(body, told) {
       const no = cannot()
@@ -561,12 +544,9 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
         if (platform === 'win32' && d.guard) {
           const no = await handOver(d.guard, { commit, from, fresh, old })
           if (no) return no
-          // before the go: the guard may put the copy in place and restart the board at once
-          markInstaller(from, commit)
           try {
             go(pendingFile)
           } catch (err) {
-            rmSync(markFile, { force: true })
             removePending(pendingFile)
             removeAlive(pendingFile)
             dropFresh(fresh)
@@ -588,7 +568,6 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
         d.log(
           `node: updated to ${short(commit)}; the board restarts on it, the copy before stays in ${old} until the next update`,
         )
-        markInstaller(from, commit)
         d.restart(old)
         return { status: 200, body: { ok: true, commit, restarting: true } }
       } finally {

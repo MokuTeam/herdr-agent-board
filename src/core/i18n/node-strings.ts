@@ -1035,8 +1035,8 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.banner.offline': 'мастер недоступен, показаны только сессии этой машины',
     'node.banner.open': 'Открыть общую доску',
     // A node's master-owned features (#775)
-    'node.masterOwned': 'Настраивается на мастере {name}',
-    'node.masterOwnedNone': 'Настраивается на мастере',
+    'node.masterOwned': 'Настраивается на голове {name}',
+    'node.masterOwnedNone': 'Настраивается на голове',
     'node.masterOwned.since': 'как мастер сказал {when}',
     // Whose a node's setting is (#797): this computer's own, or the master's
     'node.scope.here': 'На этом компьютере',
