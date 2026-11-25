@@ -5,6 +5,12 @@ import { describe, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { normalizeConfig } from '../../src/core/categories.ts'
 import {
+  DEVICE_COLORS,
+  deviceColorHex,
+  normalizeDeviceColor,
+  resolveDeviceColors,
+} from '../../src/core/device-color.ts'
+import {
   configuredNodeAddresses,
   DEVICE_ID,
   type DeviceConfig,
@@ -674,5 +680,54 @@ describe('a revoked device (#510)', () => {
     assert.equal(markRevoked(nodes, 'local'), false)
     assert.equal(markRevoked({}, 'a'), false)
     assert.deepEqual(nodes, { devices: { a: { link, revoked: true }, local: {} } })
+  })
+})
+
+describe('device colors (#758)', () => {
+  const link = { kind: 'direct', url: 'http://127.0.0.1:12430' }
+
+  test('normalizeDeviceColor and device config parse valid palette ids and hex colors, and flag invalid ones', () => {
+    assert.equal(normalizeDeviceColor(' TEAL '), 'teal')
+    assert.equal(normalizeDeviceColor('#12ABef'), '#12abef')
+    assert.equal(normalizeDeviceColor('not-a-color'), null)
+    assert.equal(deviceColorHex('rose'), '#D64F86')
+    assert.equal(deviceColorHex('#12abef'), '#12abef')
+
+    const c = conf({
+      devices: {
+        a: { link, color: 'Rose' },
+        b: { link, color: '#112233' },
+        c: { link },
+        local: { color: 'indigo' },
+      },
+    })
+    assert.equal(c.problems.length, 0)
+    assert.equal(c.devices.a?.color, 'rose')
+    assert.equal(c.devices.b?.color, '#112233')
+    assert.equal('color' in (c.devices.c ?? {}), false)
+    assert.equal(c.devices.local?.color, 'indigo')
+
+    const bad = conf({ devices: { a: { link, color: 'neon' } } })
+    assert.deepEqual(bad.problems, [{ device: 'a', key: 'color', why: 'type' }])
+  })
+
+  test('resolveDeviceColors assigns distinct deterministic colors, invariant to row order and master handover', () => {
+    const devs = [{ id: 'local', selfId: 'laptop' }, { id: 'server-1' }, { id: 'server-2', color: 'teal' }]
+    const forward = resolveDeviceColors(devs)
+    const reordered = resolveDeviceColors([...devs].reverse())
+    assert.equal(forward.get('server-2')?.id, 'teal')
+    assert.equal(forward.get('local')?.hex, reordered.get('local')?.hex)
+    assert.equal(forward.get('server-1')?.hex, reordered.get('server-1')?.hex)
+    // Distinct colors across all 3 devices:
+    assert.equal(new Set([...forward.values()].map(v => v.id)).size, 3)
+    // After master handover (server-1 becomes local with selfId server-1, laptop becomes remote id laptop):
+    const flipped = resolveDeviceColors([
+      { id: 'local', selfId: 'server-1' },
+      { id: 'laptop' },
+      { id: 'server-2', color: 'teal' },
+    ])
+    assert.equal(flipped.get('local')?.id, forward.get('server-1')?.id)
+    assert.equal(flipped.get('laptop')?.id, forward.get('local')?.id)
+    assert.ok(DEVICE_COLORS.length >= 6)
   })
 })

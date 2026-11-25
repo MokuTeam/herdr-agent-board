@@ -107,6 +107,8 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     // the devices on a master's page (#502)
     // the chip's tooltip, and the sheet's
     'node.on': 'Runs on {name}',
+    // the card corner's tooltip (#758)
+    'node.agentOn': 'Agent on {name}',
     // an offline device: its cards are its last ones, this old
     'node.asOf': 'as of {age} ago',
     'node.asOfNow': 'as of just now',
@@ -180,6 +182,9 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.dev.order': 'Move {name}',
     'node.dev.here': 'This computer',
     'node.dev.name': 'Name',
+    'node.dev.color': 'Color',
+    'node.dev.colorPick': 'Change color',
+    'node.dev.colorOf': 'Color of {name}',
     'node.dev.rename': 'Rename',
     'node.dev.renameOf': 'Rename {name}',
     'node.dev.renameLabel': 'Device name',
@@ -574,6 +579,7 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'Код доски на узле заменяется; запущенная доска работает со старым кодом, пока herdr не перезапустится, а это завершит сессии узла.',
     // the devices on a master's page (#502)
     'node.on': 'Работает на {name}',
+    'node.agentOn': 'Агент на {name}',
     'node.asOf': 'данные {age} назад',
     'node.asOfNow': 'данные только что',
     'node.asOfNever': 'данных пока нет',
@@ -643,6 +649,9 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.dev.order': 'Переместить {name}',
     'node.dev.here': 'Этот компьютер',
     'node.dev.name': 'Название',
+    'node.dev.color': 'Цвет',
+    'node.dev.colorPick': 'Сменить цвет',
+    'node.dev.colorOf': 'Цвет {name}',
     'node.dev.rename': 'Переименовать',
     'node.dev.renameOf': 'Переименовать {name}',
     'node.dev.renameLabel': 'Название устройства',

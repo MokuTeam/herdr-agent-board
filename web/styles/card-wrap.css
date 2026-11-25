@@ -21,12 +21,8 @@
 :root[data-card-text="wrap"] .card-top > .alarm,
 :root[data-card-text="wrap"] .card-top > .age { margin-inline-start: auto; }
 :root[data-card-text="wrap"] .card-top > .alarm ~ .age { margin-inline-start: 0; }
-:root[data-card-text="wrap"] .card-top > .card-device,
 :root[data-card-text="wrap"] .card-top > .device-as-of { margin-inline-start: auto; }
-:root[data-card-text="wrap"] .card-top > .alarm ~ .card-device,
-:root[data-card-text="wrap"] .card-top > .alarm ~ .device-as-of,
-:root[data-card-text="wrap"] .card-top > .card-device ~ .age,
-:root[data-card-text="wrap"] .card-top > .card-device ~ .device-as-of { margin-inline-start: 0; }
+:root[data-card-text="wrap"] .card-top > .alarm ~ .device-as-of { margin-inline-start: 0; }
 /* A name cut in the middle when cut short (#324) wraps as one text. */
 :root[data-card-text="wrap"] .card .name.split { display: block; }
 :root[data-card-text="wrap"] .card .name-head,

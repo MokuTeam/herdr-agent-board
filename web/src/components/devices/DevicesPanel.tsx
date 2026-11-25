@@ -18,6 +18,7 @@ import { useRowReorder } from '../../hooks/useRowReorder.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import type { ComputerSetupView } from '../../models/computer-setup.ts'
 import {
+  DEVICE_COLORS,
   type DeviceRow,
   deviceRows,
   deviceTitleEdited,
@@ -68,6 +69,8 @@ export function DevicesPanel({ open, onClose, back, initial, setup, computerSetu
   const [settings, setSettings] = useState<PanelSettings | null>(initial ?? null)
   // An order just dropped, shown until the payload brings it.
   const [order, setOrder] = useState<string[] | null>(null)
+  // The device whose colour swatches are open; at most one at a time.
+  const [palette, setPalette] = useState<string | null>(null)
   const list = useRef<HTMLDivElement>(null)
   const latest = useLatest({ canEdit, t, toast })
 
@@ -81,6 +84,7 @@ export function DevicesPanel({ open, onClose, back, initial, setup, computerSetu
   const master = !!data?.devices
   useEffect(() => {
     if (open && master) refresh()
+    if (!open) setPalette(null)
   }, [open, master, refresh])
 
   const send: Send = useCallback(
@@ -181,6 +185,8 @@ export function DevicesPanel({ open, onClose, back, initial, setup, computerSetu
               open={open}
               defaults={settings?.defaults[row.id]}
               next={settings?.next === row.id}
+              paletteOpen={palette === row.id}
+              onTogglePalette={() => setPalette(was => (was === row.id ? null : row.id))}
               disabled={!canEdit}
               send={send}
               onMove={by => move(row.id, by)}
@@ -225,6 +231,8 @@ interface RowProps {
   defaults: Record<Threshold, number> | undefined
   /** The next start would go here: a quiet mark. */
   next: boolean
+  paletteOpen: boolean
+  onTogglePalette(): void
   disabled: boolean
   send: Send
   onMove(by: number): void
@@ -232,11 +240,23 @@ interface RowProps {
   onUpdate(): void
 }
 
-/** One device: handle, title and link, the bars, the version, Pause and Drain, the thresholds. */
-function DeviceRowView({ row, open, defaults, next, disabled, send, onMove, onUpdate }: RowProps) {
+/** One device: handle, colour legend/picker, title and link, the bars, the version, Pause and Drain, the thresholds. */
+function DeviceRowView({
+  row,
+  open,
+  defaults,
+  next,
+  paletteOpen,
+  onTogglePalette,
+  disabled,
+  send,
+  onMove,
+  onUpdate,
+}: RowProps) {
   const t = useT()
   const [editing, setEditing] = useState<string | null>(null)
   const [pending, setPending] = useState<{ title: string; was: string } | null>(null)
+  const [pendingColor, setPendingColor] = useState<{ colorId: string; color: string; was: string } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const titleBtnRef = useRef<HTMLButtonElement>(null)
   const doneRef = useRef(false)
@@ -255,6 +275,10 @@ function DeviceRowView({ row, open, defaults, next, disabled, send, onMove, onUp
   }, [pending, row.rawTitle])
 
   useEffect(() => {
+    if (pendingColor && row.colorId !== pendingColor.was) setPendingColor(null)
+  }, [pendingColor, row.colorId])
+
+  useEffect(() => {
     const now = editing !== null
     if (now && !wasEditing.current) {
       inputRef.current?.focus?.()
@@ -269,6 +293,20 @@ function DeviceRowView({ row, open, defaults, next, disabled, send, onMove, onUp
   const activePending = pending && pending.was === row.rawTitle ? pending : null
   const currentRaw = activePending ? activePending.title : row.rawTitle
   const shownTitle = activePending ? activePending.title || row.defaultTitle : row.title
+  const activeColor = pendingColor && pendingColor.was === row.colorId ? pendingColor : null
+  const shownColorId = activeColor ? activeColor.colorId : row.colorId
+  const shownColorHex = activeColor ? activeColor.color : row.color
+
+  const pickColor = (id: string) => {
+    onTogglePalette()
+    if (disabled || id === shownColorId) return
+    const hex = DEVICE_COLORS.find(s => s.id === id)?.hex ?? row.color
+    const entry = { colorId: id, color: hex, was: row.colorId }
+    setPendingColor(entry)
+    void send({ op: 'set', id: row.id, color: id }).then(r => {
+      if (!r) setPendingColor(p => (p === entry ? null : p))
+    })
+  }
 
   const startEdit = () => {
     if (disabled) return
@@ -339,6 +377,16 @@ function DeviceRowView({ row, open, defaults, next, disabled, send, onMove, onUp
         >
           <GripGlyph />
         </button>
+        <button
+          type="button"
+          className="devices-color"
+          style={{ '--device': shownColorHex }}
+          title={t('node.dev.colorPick')}
+          aria-label={t('node.dev.colorOf', { name: shownTitle })}
+          aria-expanded={paletteOpen}
+          disabled={disabled}
+          onClick={onTogglePalette}
+        />
         <div className="devices-name">
           {editing !== null ? (
             <input
@@ -376,6 +424,24 @@ function DeviceRowView({ row, open, defaults, next, disabled, send, onMove, onUp
           {next && <span className="devices-next">{t('node.dev.next')}</span>}
         </div>
       </div>
+      {paletteOpen && (
+        <div className="devices-palette">
+          {DEVICE_COLORS.map(sw => (
+            <button
+              type="button"
+              key={sw.id}
+              className="devices-sw"
+              data-color={sw.id}
+              style={{ '--sw': sw.hex }}
+              title={sw.id}
+              aria-label={sw.id}
+              aria-pressed={shownColorId === sw.id}
+              disabled={disabled}
+              onClick={() => pickColor(sw.id)}
+            />
+          ))}
+        </div>
+      )}
       {row.sessions || row.memory ? (
         <div className="devices-bars">
           {row.sessions && (

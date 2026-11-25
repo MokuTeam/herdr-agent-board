@@ -222,7 +222,7 @@ export function createNodeLinks(o: NodeLinksOptions): NodeLinks {
           ? JSON.stringify([device.link, cfg?.relay ?? null])
           : JSON.stringify(device?.link)
       if (device && wantedKey === held.key) {
-        const renamed = held.device.title !== device.title
+        const renamed = held.device.title !== device.title || held.device.color !== device.color
         held.device = device
         if (renamed) changed(id)
         continue
@@ -271,20 +271,24 @@ export function createNodeLinks(o: NodeLinksOptions): NodeLinks {
           : {}
       const devices = cfg.order.flatMap((id): DeviceView[] => {
         const held = links.get(id)
-        if (held)
+        if (held) {
+          const color = cfg.devices[id]?.color ?? held.device.color
           return [
             {
               ...held.link.view(),
               title: cfg.devices[id]?.title ?? held.device.title,
+              ...(color && { color }),
               ...revoked(id, cfg.devices[id]),
             },
           ]
+        }
         const device = cfg.devices[id]
         if (!device) return []
         return [
           {
             id,
             title: device.title,
+            ...(device.color && { color: device.color }),
             ...(id === LOCAL && { selfId: cfg.id }),
             kind: null,
             link: null,

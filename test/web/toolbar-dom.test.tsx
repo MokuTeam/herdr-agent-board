@@ -10,7 +10,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from 'bun:test'
 import { JSDOM } from 'jsdom'
 import { act } from 'react'
-import type { BoardPayload } from '../../src/core/payload.ts'
+import type { BoardDevice, BoardPayload } from '../../src/core/payload.ts'
 import type { SegmentPicks } from '../../web/src/hooks/useSegmentPicks.ts'
 
 let createRoot: typeof import('react-dom/client').createRoot
@@ -248,13 +248,20 @@ function sampleData(): BoardPayload {
 }
 
 async function mountToolbar(
-  opts: { filter?: string[]; query?: string; onOpenDrawer?: () => void; railAlert?: boolean } = {},
+  opts: {
+    filter?: string[]
+    query?: string
+    device?: string
+    devices?: BoardDevice[]
+    onOpenDrawer?: () => void
+    railAlert?: boolean
+  } = {},
 ) {
   const host = need('#root')
   const root = createRoot(host)
   const val = support.board({
-    data: sampleData(),
-    ui: { filter: opts.filter ?? [], query: opts.query ?? '' },
+    data: { ...sampleData(), ...(opts.devices && { devices: opts.devices }) },
+    ui: { filter: opts.filter ?? [], query: opts.query ?? '', ...(opts.device && { device: opts.device }) },
   })
   await act(async () => {
     root.render(
@@ -389,4 +396,30 @@ test('phone drawer button (#rail-toggle) fires onOpenDrawer and shows alert dot 
     toggle.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
   })
   expect(opens).toBe(1)
+})
+
+test('toolbar filter peek normalises "local" device title to the device id (#758)', async () => {
+  const dev = (id: string, title: string, extra: Partial<BoardDevice> = {}): BoardDevice => ({
+    id,
+    title,
+    kind: id === 'local' ? null : 'ssh',
+    link: null,
+    status: null,
+    sameCommit: true,
+    payloadAt: 1000,
+    paused: false,
+    drain: false,
+    maxSessions: null,
+    minFreeMemMb: null,
+    maxLoad: null,
+    ...extra,
+  })
+  await mountToolbar({
+    device: 'local',
+    devices: [dev('local', 'Local', { selfId: 'server-2' }), dev('laptop', 'LOCAL')],
+  })
+  await scrollTo(120)
+  const peek = need('#toolbar-peek')
+  expect(peek.getAttribute('title')).toContain('server-2')
+  expect(peek.getAttribute('title')).not.toMatch(/Local/i)
 })

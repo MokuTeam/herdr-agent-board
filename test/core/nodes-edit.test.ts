@@ -286,4 +286,27 @@ describe('title (#601)', () => {
     expect(applied({ op: 'set', id: 'server-1', title: 'bad\u001bname' }, base).r).toEqual({ error: 'title' })
     expect(applied({ op: 'set', id: 'server-9', title: 'Ghost' }, base).r).toEqual({ error: 'id' })
   })
+
+  test('sets, clears, and validates device color (#758)', () => {
+    const base = section()
+    expect(nodesEditOf({ op: 'set', id: 'server-1', color: 'rose' })).toEqual({
+      op: 'set',
+      id: 'server-1',
+      values: { color: 'rose' },
+    })
+    expect(applied({ op: 'set', id: 'server-1', color: 'Rose' }, base).r).toEqual({ changed: true })
+    expect(devices(base)['server-1']?.color).toBe('rose')
+    expect(nodesConfig(base, 'laptop')?.devices['server-1']?.color).toBe('rose')
+
+    expect(applied({ op: 'set', id: 'local', color: '#336699' }, base).r).toEqual({ changed: true })
+    expect(devices(base).local?.color).toBe('#336699')
+
+    expect(applied({ op: 'set', id: 'server-1', color: 'invalid' }, base).r).toEqual({ error: 'color' })
+    expect(devices(base)['server-1']?.color).toBe('rose')
+
+    expect(applied({ op: 'set', id: 'server-1', color: '' }, base).r).toEqual({ changed: true })
+    expect('color' in (devices(base)['server-1'] ?? {})).toBe(false)
+    expect(applied({ op: 'set', id: 'local', color: null }, base).r).toEqual({ changed: true })
+    expect(devices(base).local).toBeUndefined()
+  })
 })

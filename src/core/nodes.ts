@@ -7,6 +7,7 @@
 //   "nodes": { "id": "laptop", "order": ["server-1", "local"], "devices": { "server-1": { ... } } }
 //   "node": { "id": "server-1", "port": 12430, "workRoot": "~/work" }
 import { type BoardAgyLimits, boardAgyLimitsOf } from './agy-limits.ts'
+import { normalizeDeviceColor } from './device-color.ts'
 import { type GitFacts, gitFactsOf } from './git-access.ts'
 import { isRoutableNodeAddress, plainAddress } from './mokupilot-mode.ts'
 import { DEVICE_ID, isDevice, LOCAL, parseNodeKey, validMasterUrl } from './node-key.ts'
@@ -27,6 +28,8 @@ export type LinkConfig =
 export interface DeviceConfig {
   id: string
   title: string
+  /** Optional colour id or #rrggbb hex for the card corner and Settings, Devices legend (#758). */
+  color?: string
   /** null: this computer (`local`). */
   link: LinkConfig | null
   /** null until the board writes them from the device's first status. */
@@ -121,6 +124,7 @@ const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
 const TOP_KEYS = ['id', 'order', 'whenFull', 'lanes', 'relay', 'devices']
 const DEVICE_KEYS = [
   'title',
+  'color',
   'link',
   'maxSessions',
   'minFreeMemMb',
@@ -325,6 +329,12 @@ function deviceOf(
   const rawTitle = o.title === undefined ? defaultTitle : typeof o.title === 'string' ? o.title.trim() : ''
   const title = rawTitle.toLowerCase() === LOCAL ? defaultTitle : rawTitle
   if (!isText(title, 200)) flag('title', 'type')
+  let color: string | undefined
+  if (given(o.color)) {
+    const normColor = normalizeDeviceColor(o.color)
+    if (normColor) color = normColor
+    else flag('color', 'type')
+  }
   const profiles = bare<string>()
   if (o.profiles !== undefined) {
     if (!isObject(o.profiles)) flag('profiles', 'type')
@@ -347,6 +357,7 @@ function deviceOf(
   const device: DeviceConfig = {
     id,
     title,
+    ...(color && { color }),
     link,
     maxSessions: num('maxSessions', n => Number.isInteger(n) && n >= 1),
     minFreeMemMb: num('minFreeMemMb', n => Number.isInteger(n) && n >= 0),
@@ -737,6 +748,8 @@ export interface LinkStatus {
 export interface DeviceView {
   id: string
   title: string
+  /** Optional configured colour id or #rrggbb hex (#758). */
+  color?: string
   /** The master's own device id (`nodes.id`), present on the `local` row so the UI knows its default name even when renamed. */
   selfId?: string
   /** null: this computer. */
@@ -780,6 +793,7 @@ export interface DeviceUpdate {
 /** The thresholds, switches and title the Devices panel sets per device (`nodes.devices.<id>`). */
 const DEVICE_SETTINGS = [
   'title',
+  'color',
   'paused',
   'drain',
   'giveSecrets',
@@ -858,7 +872,7 @@ export function nodesEditOf(body: Record<string, unknown>): NodesEdit | { error:
     if (!Object.hasOwn(body, key)) continue
     const v = body[key]
     const fits =
-      key === 'title'
+      key === 'title' || key === 'color'
         ? v === null || typeof v === 'string'
         : key === 'paused' || key === 'drain' || key === 'giveSecrets' || key === 'pilotBridge'
           ? typeof v === 'boolean'
@@ -921,6 +935,10 @@ export function applyNodesEdit(
         )
           delete entry.title
         else entry.title = trimmed
+      } else if (key === 'color') {
+        const trimmed = v === null ? '' : (v as string).trim()
+        if (trimmed === '') delete entry.color
+        else entry.color = trimmed.toLowerCase()
       } else if (key === 'giveSecrets' && v === true) delete entry[key]
       else if (key === 'pilotBridge' && v === true) delete entry[key]
       else entry[key] = v

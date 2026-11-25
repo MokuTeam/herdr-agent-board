@@ -42,7 +42,7 @@ import {
   questionLine,
 } from '../models/card.ts'
 import { nameParts } from '../models/card-head.ts'
-import { nodeLook, nodeOffline } from '../models/devices.ts'
+import { type NodeLook, nodeLook, nodeOffline } from '../models/devices.ts'
 import { pendingQuestions } from '../models/question-model.ts'
 import { restartOf, restartView } from '../models/restart.ts'
 import { COLUMN_COLORS } from '../models/toolbar.ts'
@@ -50,7 +50,7 @@ import { useBoardContext } from '../state/BoardProvider.tsx'
 import { AlarmBadge } from './AlarmBadge.tsx'
 import { classNames } from './class-names.ts'
 import { DecisionButtons } from './decisions/DecisionButtons.tsx'
-import { CardDevice } from './devices/DeviceChip.tsx'
+import { CardDeviceCorner } from './devices/DeviceChip.tsx'
 import { HelpersChip, Relations } from './helpers/CardHelpers.tsx'
 import {
   CheckGlyph,
@@ -162,12 +162,14 @@ export function Card(props: CardProps) {
 
 function CardContent({ item, launch, folding }: { item: Item; launch: LaunchSlots | undefined; folding: boolean }) {
   const t = useT()
-  const { data } = useBoardContext()
+  const { data, now } = useBoardContext()
   const oneLine = compact(item, data?.schedules)
   const checklist = !oneLine && !folding ? cardChecklist(item, t) : null
+  const node = nodeLook(item, data?.devices, now, t)
   return (
     <>
-      <CardTop item={item} />
+      {node && <CardDeviceCorner node={node} />}
+      <CardTop item={item} node={node} />
       {item.agent === 'codex' && item.model && item.effort && (
         <div className="card-meter">
           {item.model} · {item.effort}
@@ -196,11 +198,10 @@ function ChecklistEdge({ checklist }: { checklist: CardChecklist }) {
   )
 }
 
-function CardTop({ item }: { item: Item }) {
+function CardTop({ item, node }: { item: Item; node: NodeLook | null }) {
   const t = useT()
-  const { ui, data, now } = useBoardContext()
+  const { ui, now } = useBoardContext()
   const age = cardAge(item, now, t)
-  const node = nodeLook(item, data?.devices, now, t)
   const renamed = item.name !== item.autoName && !!item.autoName
   const was = renamed ? t('rename.was', { name: item.autoName }) : undefined
   return (
@@ -233,7 +234,6 @@ function CardTop({ item }: { item: Item }) {
         </span>
       )}
       <AlarmBadge item={item} />
-      {node && <CardDevice node={node} />}
       {node?.offline ? (
         <span className="device-as-of" title={node.why || age.title || undefined}>
           {node.asOf}

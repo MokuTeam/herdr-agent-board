@@ -556,7 +556,7 @@ export function parseReverseLinkSpec(o: {
 const pickDeviceLimits = (raw: Record<string, unknown> | undefined): Record<string, unknown> => {
   const out: Record<string, unknown> = {}
   if (!raw) return out
-  for (const key of ['title', 'maxSessions', 'minFreeMemMb', 'maxLoad', 'tags', 'drain'] as const) {
+  for (const key of ['title', 'color', 'maxSessions', 'minFreeMemMb', 'maxLoad', 'tags', 'drain'] as const) {
     if (raw[key] !== undefined) out[key] = structuredClone(raw[key])
   }
   if (raw.pilotBridge === false) out.pilotBridge = false

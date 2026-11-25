@@ -94,6 +94,7 @@ function boardDevice(
   }
   return {
     ...view,
+    ...(device?.color && { color: device.color }),
     link,
     status,
     payloadAt: at ?? view.payloadAt,

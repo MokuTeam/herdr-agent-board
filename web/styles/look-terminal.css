@@ -274,11 +274,8 @@
 :root[data-look="terminal"] .card-top[data-give~="profile"] > .profile-tag { min-width: 0; padding: 0; }
 :root[data-look="terminal"] .card-top[data-give~="profile"] > .profile-tag::before { content: "[" attr(data-mark); content: "[" attr(data-mark) / ""; }
 
-/* Inline machine label in the card head (#758): quiet @name, no SVG noise. */
-:root[data-look="terminal"] .card-device { gap: 0; color: var(--label-2); font-size: 12px; font-weight: 400; letter-spacing: 0; }
-:root[data-look="terminal"] .card-device svg { display: none; }
-:root[data-look="terminal"] .card-device::before { content: "@"; content: "@" / ""; color: var(--label-3); }
-:root[data-look="terminal"] .card-device.offline { color: var(--label); }
+/* Card corner keyboard tooltip in Terminal style (#758): outlined box, no shadow. */
+:root[data-look="terminal"] .card-device-corner:focus-visible::after { border-radius: var(--radius); background: var(--bg); box-shadow: 0 0 0 1px var(--accent); }
 
 /* The body: one line each. What it does in the text color, what it said dim, the rest in color. */
 :root[data-look="terminal"] .what,

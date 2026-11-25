@@ -13,6 +13,7 @@ import { DevicesPanel } from '../../web/src/components/devices/DevicesPanel.tsx'
 import { offersDevices } from '../../web/src/hooks/useSettingsMenu.ts'
 import { I18nProvider } from '../../web/src/i18n/I18nProvider.tsx'
 import {
+  DEVICE_COLORS,
   deviceOptions,
   deviceRows,
   deviceTitle,
@@ -771,6 +772,8 @@ describe('rename a device (#601)', () => {
 
     expect(refusedText(400, 'title', t)).toBe('Not saved: Name does not check out')
     expect(refusedText(400, 'title', ru)).toBe('Не сохранено: Название не подходит')
+    expect(refusedText(400, 'color', t)).toBe('Not saved: Color does not check out')
+    expect(refusedText(400, 'color', ru)).toBe('Не сохранено: Цвет не подходит')
   })
 
   describe('interactive inline rename in DevicesPanel', () => {
@@ -1039,6 +1042,45 @@ describe('rename a device (#601)', () => {
       expect(btn()?.textContent).toBe('Atlas Box')
       await renderWith([device('server-1', { title: 'Server 1' }), device('local')])
       expect(btn()?.textContent).toBe('Server 1')
+
+      await act(async () => root.unmount())
+      host.remove()
+    })
+
+    test('each device row shows its colour legend swatch, opens the palette, and saves a picked colour (#758)', async () => {
+      const calls = answers([200, { settings: SETTINGS }], [200, { ok: true, settings: SETTINGS }])
+      const host = dom.window.document.createElement('div')
+      dom.window.document.body.appendChild(host)
+      const root = createRoot(host)
+      await act(async () => {
+        root.render(
+          <I18nProvider lang="en">
+            <BoardContext.Provider value={board({ data: full(), now: NOW })}>
+              <PanelProvider viewport={() => VP}>
+                <DevicesPanel open onClose={() => {}} initial={SETTINGS} />
+              </PanelProvider>
+            </BoardContext.Provider>
+          </I18nProvider>,
+        )
+      })
+      const colorBtns = host.querySelectorAll('.devices-color')
+      expect(colorBtns).toHaveLength(4)
+      expect(host.querySelector('.devices-palette')).toBeNull()
+
+      await act(async () => {
+        colorBtns[0]?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+      const palette = host.querySelector('.devices-palette')
+      expect(palette).not.toBeNull()
+      expect(host.querySelectorAll('.devices-sw')).toHaveLength(DEVICE_COLORS.length)
+
+      await act(async () => {
+        host
+          .querySelector('.devices-sw[data-color="rose"]')
+          ?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+      expect(host.querySelector('.devices-palette')).toBeNull()
+      expect(posted(calls)).toEqual([{ op: 'set', id: 'server-1', color: 'rose' }])
 
       await act(async () => root.unmount())
       host.remove()

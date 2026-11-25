@@ -140,6 +140,22 @@ describe('POST /api/nodes, the panel’s ops (#510)', () => {
     expect('local' in (savedNodes().devices as Record<string, unknown>)).toBe(false)
   })
 
+  test('set color updates device color, clears it, and refuses invalid colors (#758)', async () => {
+    isolatedHome()
+    seed({ language: 'en', port: 9, nodes: NODES })
+    const { post } = routes()
+    expect((await call(post, { op: 'set', id: 'server-1', color: 'rose' })).status).toBe(200)
+    expect((savedNodes().devices as Record<string, Record<string, unknown>>)['server-1']?.color).toBe('rose')
+    expect((await call(post, { op: 'set', id: 'local', color: 'teal' })).status).toBe(200)
+    expect((savedNodes().devices as Record<string, Record<string, unknown>>).local).toEqual({ color: 'teal' })
+    expect(await call(post, { op: 'set', id: 'server-1', color: 'neon' })).toEqual({
+      status: 400,
+      body: { error: 'color' },
+    })
+    expect((await call(post, { op: 'set', id: 'local', color: '' })).status).toBe(200)
+    expect('local' in (savedNodes().devices as Record<string, unknown>)).toBe(false)
+  })
+
   test('a bad value is refused with its field, and nothing is written', async () => {
     isolatedHome()
     seed({ language: 'en', nodes: NODES })
