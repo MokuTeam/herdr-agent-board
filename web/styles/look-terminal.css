@@ -728,3 +728,7 @@
 :root[data-look="terminal"] .card-todo-fill { background: var(--accent); opacity: 0.75; }
 :root[data-look="terminal"] #sheet .sheet-card .checklist-bar { border-radius: 0; background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
 :root[data-look="terminal"] #sheet .sheet-card .checklist-bar-fill { background: var(--accent); }
+
+/* Node local board banner (#744): outlined, monospace, no fills. */
+:root[data-look="terminal"] .node-master-banner { border-radius: var(--radius); background: none; border-color: var(--t-edge); font-family: var(--mono); }
+:root[data-look="terminal"] .node-master-banner.offline { background: none; border-color: var(--orange); }

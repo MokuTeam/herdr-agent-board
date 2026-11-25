@@ -4906,6 +4906,15 @@ If the old master is unreachable or stopped, `board master rollback --local-only
 `--discard-since-commit` after commit) restores only this machine from its local pre-handover
 backup. `board master status` shows the current handover state.
 
+On a node, opening its local web board opens the master's board instead (#744): the master
+advertises its public tunnel URL over the existing node link, and when the master is online with
+a URL the local board replaces the location with the master's board (`location.replace`). When the
+master is offline or has no public URL, the page stays on the node's local board with a quiet
+banner naming the node and master (and a link when a URL is known). Opening the local board with
+`?local=1` keeps that browser tab on the node's local board and shows the banner with a link to
+the shared board. Boards without `node` (standalone and master boards) and the herdr TUI board
+are unchanged.
+
 ## Development
 
 [Bun](https://bun.com/docs/installation) 1.4.3 or newer and git on PATH, in a clone with the

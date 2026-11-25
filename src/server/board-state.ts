@@ -36,6 +36,7 @@ import type {
   BoardProfile,
   CalendarPayload,
   JournalPayload,
+  NodeMasterPayload,
   ThreadsPayload,
   TimePayload,
 } from '../core/payload.ts'
@@ -146,6 +147,8 @@ interface Options {
   turnResume?: Pick<TurnResumeService, 'observe' | 'observeFailure'>
   /** Whether a node item is allowed to set `call.parent` to another device's card (#730). */
   allowCallParent?: (device: string, parentKey: string) => boolean
+  /** Master info for a node's local web board (#744); null on non-node or unpaired boards. */
+  nodeMaster?: () => NodeMasterPayload | null
 }
 
 // The colors the category editor offers (aliases left out).
@@ -265,6 +268,11 @@ function remoteOf(remote: Options['remote']): { remote?: RemoteView } {
   return view ? { remote: view } : {}
 }
 
+function nodeMasterOf(nodeMaster: Options['nodeMaster']): { nodeMaster?: NodeMasterPayload } {
+  const view = nodeMaster?.() ?? null
+  return view ? { nodeMaster: view } : {}
+}
+
 export function createBoardState({
   deps,
   launches,
@@ -296,6 +304,7 @@ export function createBoardState({
   agyLimits: readAgyLimits,
   turnResume,
   allowCallParent,
+  nodeMaster,
 }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
@@ -500,6 +509,8 @@ export function createBoardState({
       ...(devices && { devices }),
       // machine: only on a node board, so the master can match Telegram X-Herdr-Pane hints (#701).
       ...(nodeConfig(cfg.node) !== null && { machine: process.env.COMPUTERNAME || hostname() }),
+      // nodeMaster: only on a pure node with at least one paired master (#744).
+      ...nodeMasterOf(nodeMaster),
     }
   }
 

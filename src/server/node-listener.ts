@@ -23,9 +23,9 @@ import { isRecord } from '../adapters/json-store.ts'
 import type { NodeJoinStore } from '../adapters/node-join-store.ts'
 import { type MasterRecord, masterName, type NodeStore } from '../adapters/node-store.ts'
 import { RateLimiter } from '../core/access.ts'
-import { doorRoute, loopbackHost, NODE_API } from '../core/node-door.ts'
+import { doorRoute, loopbackHost, MASTER_BOARD_URL_HEADER, NODE_API } from '../core/node-door.ts'
 import { JOIN_CODE, sameJoinCode } from '../core/node-join.ts'
-import { type NodeConfig, nodeConfig } from '../core/nodes.ts'
+import { type NodeConfig, nodeConfig, validMasterUrl } from '../core/nodes.ts'
 import { bearerOf } from '../core/remote.ts'
 import type { Config } from '../core/types.ts'
 import { ownAddresses } from '../services/tunnel.ts'
@@ -53,6 +53,8 @@ export interface NodeListenerOptions {
   doorCert?: (nodeId: string) => DoorCert
   /** Called whenever the door starts listening, moves, or closes. */
   onChange?: () => void
+  /** Called when a master's online state or advertised board URL changes (#744). */
+  onMasterChange?: () => void
   /** Local network addresses accepted in `Host` when `node.listen === 'tailnet'` (tests). */
   ownAddresses?: () => string[]
   /** Machine hostname accepted in `Host` when `node.listen === 'tailnet'` (tests). */
@@ -68,6 +70,8 @@ export interface NodeListener {
   listening(): number | null
   /** Last bind or listen error while not listening, or null. */
   error(): string | null
+  /** Ids of masters with an open /api/events stream on this door (#744). */
+  connectedMasters(): ReadonlySet<string>
   close(): Promise<void>
 }
 
@@ -100,6 +104,20 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
   const configKey = (): string => JSON.stringify(o.cfg.node ?? null)
   let lastConfig = configKey()
   const wrong = new RateLimiter(WRONG_TOKENS)
+  const connected = new Map<string, number>()
+  const markConnected = (id: string): void => {
+    const count = connected.get(id) ?? 0
+    connected.set(id, count + 1)
+    if (count === 0) o.onMasterChange?.()
+  }
+  const markDisconnected = (id: string): void => {
+    const count = connected.get(id) ?? 0
+    if (count <= 1) {
+      if (connected.delete(id)) o.onMasterChange?.()
+    } else {
+      connected.set(id, count - 1)
+    }
+  }
   let claiming = false
   let lastClaim: {
     nonce: string
@@ -258,10 +276,53 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
       if (path === null) return json(400, { error: 'path' })
       const route = doorRoute(req.method, raw, path)
       if (!route) return json(404, { error: 'not found' })
+      const rawBoardUrl = req.headers.get(MASTER_BOARD_URL_HEADER)
+      if (rawBoardUrl !== null) {
+        const trimmed = rawBoardUrl.trim()
+        const clear = trimmed === '' || trimmed === 'none'
+        const next = clear ? null : validMasterUrl(trimmed)
+        if (clear || next !== null) {
+          const current = master.boardUrl ?? null
+          if (next !== current) {
+            try {
+              if (o.store.setBoardUrl(master.id, next)) o.onMasterChange?.()
+            } catch {}
+          }
+        }
+      }
       if (route.door) callers.set(req, master)
       const res = await dispatch(route.door ? o.doorRoutes : o.routes, req, url, path, o.guards, () => peerOf(srv, req))
       const id = master.id
-      return endsWhenGone(res, gone => o.store.watch(id, gone), { 'x-accel-buffering': 'no' })
+      const isEventStream =
+        req.method === 'GET' &&
+        raw === '/api/events' &&
+        res.body !== null &&
+        (res.headers.get('content-type') ?? '').startsWith('text/event-stream')
+      if (!isEventStream) {
+        return endsWhenGone(res, gone => o.store.watch(id, gone), { 'x-accel-buffering': 'no' })
+      }
+      markConnected(id)
+      let ended = false
+      const disconnect = (): void => {
+        if (ended) return
+        ended = true
+        markDisconnected(id)
+      }
+      req.signal.addEventListener('abort', disconnect, { once: true })
+      return endsWhenGone(
+        res,
+        gone => {
+          const unwatch = o.store.watch(id, () => {
+            disconnect()
+            gone()
+          })
+          return () => {
+            unwatch()
+            disconnect()
+          }
+        },
+        { 'x-accel-buffering': 'no' },
+      )
     } catch (err) {
       // The path only: a query can carry the page's file token.
       o.log(`node door ${req.method} ${url ? url.pathname : ''}: ${messageOf(err)}`)
@@ -278,6 +339,10 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
     boundListen = null
     boundCertFp = null
     lastClaim = null
+    if (connected.size > 0) {
+      connected.clear()
+      o.onMasterChange?.()
+    }
     if (s) {
       await s.stop(true)
       o.onChange?.()
@@ -365,6 +430,7 @@ export function createNodeListener(o: NodeListenerOptions): NodeListener {
     },
     listening: () => bound,
     error: () => error,
+    connectedMasters: () => new Set(connected.keys()),
     async close() {
       closed = true
       clearTimeout(retry)

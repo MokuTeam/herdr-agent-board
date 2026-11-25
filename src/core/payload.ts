@@ -6,7 +6,7 @@ import type { DecisionsPayload } from './decisions.ts'
 import type { FoldMode } from './fold-mode.ts'
 import type { JournalList } from './journal.ts'
 import type { LimitWindow } from './limits.ts'
-import type { DeviceView, LinkStatus } from './nodes.ts'
+import type { DeviceView, LinkStatus, NodeMasterPayload } from './nodes.ts'
 import type { PresenceView } from './presence.ts'
 import type { RemoteView } from './remote.ts'
 import type { ScheduleEntry } from './schedule-rules.ts'
@@ -210,7 +210,14 @@ export interface BoardPayload {
    * match Telegram `X-Herdr-Pane` hints against this device (#701).
    */
   machine?: string
+  /**
+   * Master info for a node's local web board (#744): populated only on a pure node with at least
+   * one paired master (`node` set, `nodes` unset).
+   */
+  nodeMaster?: NodeMasterPayload
 }
+
+export type { NodeMasterPayload }
 
 /**
  * A device as the master's payload shows it (#500): its link and its last status as `GET

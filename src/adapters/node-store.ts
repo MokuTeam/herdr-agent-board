@@ -18,7 +18,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { UPLINK_SEEN_MAX, type UplinkResult, uplinkResultOf } from '../core/node-uplink.ts'
-import { DEVICE_ID } from '../core/nodes.ts'
+import { DEVICE_ID, validMasterUrl } from '../core/nodes.ts'
 import { hasUnprintable } from '../core/team.ts'
 import { isValidCertPem } from './door-cert.ts'
 import { isRecord, readJson, replaceFile, updateJson } from './json-store.ts'
@@ -37,6 +37,8 @@ export interface MasterRecord {
   /** When its token was last used, written at most once a minute; null before. */
   seenAt: number | null
   via: MasterVia
+  /** The master's public board URL (#744), pushed over the link; absent when none. */
+  boardUrl?: string
 }
 
 /** A master's name: trimmed, not empty, at most this long, nothing unprintable. */
@@ -62,7 +64,8 @@ const isMaster = (m: unknown): m is MasterRecord =>
   /^[0-9a-f]{64}$/.test(m.tokenHash) &&
   typeof m.pairedAt === 'number' &&
   (m.seenAt === null || typeof m.seenAt === 'number') &&
-  VIAS.has(m.via)
+  VIAS.has(m.via) &&
+  (m.boardUrl === undefined || typeof m.boardUrl === 'string')
 const isMasters = (v: unknown): v is MasterRecord[] => Array.isArray(v) && v.every(isMaster)
 
 /** A name as given, or null when it will not do. */
@@ -90,6 +93,11 @@ export interface NodeStore {
   verify(token: string): MasterRecord | null
   /** Forgets a master: its token stops working at once, its open streams end. False: no such master. */
   forget(id: string): boolean
+  /**
+   * Updates the master's public board URL (#744); null clears it. Returns true when the stored
+   * record changed, false when unchanged, unknown master, or invalid URL.
+   */
+  setBoardUrl(id: string, url: string | null): boolean
   /** Calls `gone` once the master is forgotten, by this process or another; returns the unwatch. */
   watch(id: string, gone: () => void): () => void
 }
@@ -208,6 +216,28 @@ export function createNodeStore({ dir = nodeDir(), now = Date.now, pollMs = 1000
       })
       if (found) ended(read())
       return found
+    },
+    setBoardUrl(id, url) {
+      const next = url === null ? undefined : validMasterUrl(url)
+      if (url !== null && next === null) return false
+      const normalized: string | undefined = next ?? undefined
+      let changed = false
+      save(masters => {
+        const idx = masters.findIndex(m => m.id === id)
+        if (idx < 0) return undefined
+        const cur = masters[idx]
+        if (!cur || (cur.boardUrl ?? undefined) === normalized) return undefined
+        changed = true
+        return masters.map(m => {
+          if (m.id !== id) return m
+          if (normalized === undefined) {
+            const { boardUrl: _, ...rest } = m
+            return rest
+          }
+          return { ...m, boardUrl: normalized }
+        })
+      })
+      return changed
     },
     watch(id, gone) {
       const set = watchers.get(id) ?? new Set()

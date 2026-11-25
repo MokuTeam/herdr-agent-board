@@ -23,7 +23,7 @@
 import { isCertError } from '../../adapters/door-cert.ts'
 import type { PidRecord, SshChild } from '../../adapters/ssh.ts'
 import { takeEvents } from '../../core/event-stream.ts'
-import { NODE_API } from '../../core/node-door.ts'
+import { MASTER_BOARD_URL_HEADER, NODE_API } from '../../core/node-door.ts'
 import {
   type DeviceConfig,
   type DeviceView,
@@ -85,6 +85,8 @@ export interface LinkDeps {
   directTls?: () => BunFetchRequestInit['tls'] | undefined
   /** This board's own commit (adapters/git.ts headCommit), to say whether the node runs the same; '' unknown. */
   commit?: () => string
+  /** This master's public board URL to advertise to the node (#744); null when none. */
+  boardUrl?: () => string | null
 }
 
 /** The link's waits: production's, or a test's (adapters/pacing.ts knobs and pace). */
@@ -464,6 +466,9 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
     return ask(`${o.base}${path}`, { ...init, headers: headers(init, token, o), ...(o.tls && { tls: o.tls }) })
   }
 
+  const boardUrlHeader = (): Record<string, string> =>
+    deps.boardUrl ? { [MASTER_BOARD_URL_HEADER]: deps.boardUrl() ?? 'none' } : {}
+
   /** Drops an active stream and marks the link refused for a door certificate mismatch. */
   function refuseCert(): void {
     if (stream && !stream.drop) {
@@ -478,7 +483,12 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
     const token = deps.token()
     if (!o || !token || status.state === 'refused') return null
     try {
-      const res = await call(o, '/api/node/status', { signal: AbortSignal.timeout(ASK_MS) }, token)
+      const res = await call(
+        o,
+        '/api/node/status',
+        { ...(deps.boardUrl && { headers: boardUrlHeader() }), signal: AbortSignal.timeout(ASK_MS) },
+        token,
+      )
       const got = res.ok ? nodeStatusOf(await res.json()) : null
       if (!res.ok) await res.body?.cancel()
       if (got) nodeStatus = got
@@ -612,7 +622,12 @@ export function createLink({ device, cfg, deps }: { device: DeviceConfig; cfg: L
     stream = held
     let res: Response
     try {
-      res = await call(o, '/api/events', { signal: held.ac.signal }, token)
+      res = await call(
+        o,
+        '/api/events',
+        { ...(deps.boardUrl && { headers: boardUrlHeader() }), signal: held.ac.signal },
+        token,
+      )
     } catch (err) {
       stream = null
       if (held.drop) return afterDrop(held.drop)

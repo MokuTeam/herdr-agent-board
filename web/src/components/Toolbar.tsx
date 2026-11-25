@@ -29,6 +29,7 @@ import { ColumnsHead } from './ColumnsHead.tsx'
 import { CalendarButton } from './calendar/CalendarButton.tsx'
 import { classNames } from './class-names.ts'
 import { DeviceSwitch } from './devices/DeviceSwitch.tsx'
+import { NodeMasterBanner } from './devices/NodeMasterBanner.tsx'
 import { CloseIcon, FilterIcon, JournalIcon, MenuIcon, PlusIcon, SearchIcon } from './icons.tsx'
 import { Lanes } from './Lanes.tsx'
 import { NextAttention } from './NextAttention.tsx'
@@ -290,6 +291,7 @@ export function Toolbar({
       <p id="connection-state" role="status" hidden={canMutate}>
         {t(canEdit ? 'mobile.readOnly' : 'live.off')}
       </p>
+      <NodeMasterBanner />
       {data?.workdesk && (
         <p className="workdesk-status" role="status">
           {t('workdesk.status', {

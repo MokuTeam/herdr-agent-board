@@ -9,6 +9,9 @@
 /** The version of the node link (6.5): the master places work only on a node whose own equals its. */
 export const NODE_API = 1
 
+/** Header the master sends on authenticated door requests to advertise its public board URL (#744). */
+export const MASTER_BOARD_URL_HEADER = 'x-master-board-url'
+
 export interface DoorRoute {
   method: 'GET' | 'POST' | 'PUT'
   /**

@@ -465,6 +465,10 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.handover.step.verify': 'Verifying new master',
     'node.handover.step.commit': 'Committing role switch',
     'node.handover.step.rollback': 'Rolling back',
+    // Node local board opens master's board (#744)
+    'node.banner.text': 'This is node {id}. The shared board is on master {name}',
+    'node.banner.offline': "master is unreachable, showing only this machine's sessions",
+    'node.banner.open': 'Open shared board',
   },
   ru: {
     'node.step.check': 'Проверить сервер',
@@ -933,5 +937,9 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.handover.step.verify': 'Проверка нового мастера',
     'node.handover.step.commit': 'Переключение ролей',
     'node.handover.step.rollback': 'Откат изменений',
+    // Node local board opens master's board (#744)
+    'node.banner.text': 'Это нода {id}. Общая доска на мастере {name}',
+    'node.banner.offline': 'мастер недоступен, показаны только сессии этой машины',
+    'node.banner.open': 'Открыть общую доску',
   },
 }

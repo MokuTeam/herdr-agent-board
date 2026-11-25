@@ -9,11 +9,11 @@
 import { type BoardAgyLimits, boardAgyLimitsOf } from './agy-limits.ts'
 import { type GitFacts, gitFactsOf } from './git-access.ts'
 import { isRoutableNodeAddress, plainAddress } from './mokupilot-mode.ts'
-import { DEVICE_ID, isDevice, LOCAL, parseNodeKey } from './node-key.ts'
+import { DEVICE_ID, isDevice, LOCAL, parseNodeKey, validMasterUrl } from './node-key.ts'
 import { hasUnprintable } from './team.ts'
 
 // The device id and the prefixed keys live in a leaf module the page can import (core/node-key.ts).
-export { DEVICE_ID, LOCAL, parseNodeKey }
+export { DEVICE_ID, LOCAL, parseNodeKey, validMasterUrl }
 
 /** The node's door, on 127.0.0.1, when `node.port` and a link's `port` do not say. */
 export const NODE_PORT = 12430
@@ -941,6 +941,57 @@ export function applyNodesEdit(
     Object.assign(nodes, next)
   }
   return { changed }
+}
+
+/** What a node's payload tells its local web board about its master (#744). */
+export interface NodeMasterPayload {
+  nodeId: string
+  name: string
+  url: string | null
+  online: boolean
+}
+
+/** Summary fields of a master record needed to pick the active master view (#744). */
+export interface MasterSummary {
+  id: string
+  name: string
+  pairedAt: number
+  seenAt: number | null
+  boardUrl?: string
+}
+
+/**
+ * Picks the master a node's local web board opens (#744), or null when no master is paired.
+ * Prefers an online master (and one with a valid URL), then most recently seen, then most
+ * recently paired.
+ */
+export function pickNodeMaster(
+  nodeId: string,
+  masters: readonly MasterSummary[],
+  onlineIds: ReadonlySet<string>,
+): NodeMasterPayload | null {
+  if (masters.length === 0) return null
+  const rank = (m: MasterSummary): [number, number, number, number] => {
+    const online = onlineIds.has(m.id) ? 1 : 0
+    const hasUrl = online && validMasterUrl(m.boardUrl) ? 1 : 0
+    return [online, hasUrl, m.seenAt ?? -1, m.pairedAt]
+  }
+  const best = [...masters].sort((a, b) => {
+    const ra = rank(a)
+    const rb = rank(b)
+    for (let i = 0; i < ra.length; i++) {
+      const diff = (rb[i] ?? 0) - (ra[i] ?? 0)
+      if (diff !== 0) return diff
+    }
+    return 0
+  })[0]
+  if (!best) return null
+  return {
+    nodeId,
+    name: best.name,
+    url: best.boardUrl ? validMasterUrl(best.boardUrl) : null,
+    online: onlineIds.has(best.id),
+  }
 }
 
 /**

@@ -23,3 +23,22 @@ export function parseNodeKey(key: string): { device: string; key: string } | nul
   const rest = key.slice(at + 1)
   return isDevice(device) && rest ? { device, key: rest } : null
 }
+
+const UNPRINTABLE = /[\p{Cc}\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/u
+
+/**
+ * Validates and normalizes a master's advertised public board URL (#744): https only, no
+ * credentials, bounded length, and no control or bidi characters. Returns null when invalid.
+ */
+export function validMasterUrl(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const s = raw.trim()
+  if (!s || s.length > 512 || UNPRINTABLE.test(s)) return null
+  try {
+    const u = new URL(s)
+    if (u.protocol !== 'https:' || u.username || u.password || !u.hostname) return null
+    return u.href
+  } catch {
+    return null
+  }
+}

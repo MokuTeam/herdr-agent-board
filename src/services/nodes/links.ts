@@ -46,6 +46,8 @@ export interface NodeLinks {
   onChange(fn: (id: string) => void): () => void
   /** The device's link tries again at once (a token was stored). False: no such link. */
   retry(id: string): boolean
+  /** Pushes the master's current public board URL to online nodes via an immediate status poll (#744). */
+  syncBoardUrl(): void
   /**
    * The links follow config.json and the store again now: a revoked device whose token is gone
    * (services/nodes/revoke.ts) loses its link.
@@ -68,6 +70,8 @@ export interface NodeLinksOptions {
   hostName?: string
   /** This board's commit (server/app.ts runningCommit); git's HEAD in the plugin's folder when not given. */
   commit?: () => Promise<string>
+  /** This master's public board URL to advertise to connected nodes (#744); null when none. */
+  boardUrl?: () => string | null
 }
 
 /** The sleep watch: a tick this often; a gap longer than SLEPT_MS means the computer slept. */
@@ -109,9 +113,16 @@ function realLink(
   log: (t: string) => void,
   commit: () => string,
   relay: NodesConfig['relay'],
+  boardUrl?: () => string | null,
 ): Link {
   const link = device.link
-  const deps: LinkDeps = { token: () => store.token(device.id), clock: realClock, log, commit }
+  const deps: LinkDeps = {
+    token: () => store.token(device.id),
+    clock: realClock,
+    log,
+    commit,
+    ...(boardUrl && { boardUrl }),
+  }
   if (link?.kind === 'ssh') deps.ssh = sshPipeDeps(device.id, link, store)
   else if (link?.kind === 'relay' && relay) deps.relay = relayPipeDeps(device.id, link, relay, store)
   else if (link?.kind === 'direct' && link.url.startsWith('https://')) {
@@ -150,7 +161,7 @@ export function createNodeLinks(o: NodeLinksOptions): NodeLinks {
   const make =
     o.makeLink ??
     ((device: DeviceConfig, times: LinkTimes, relay: NodesConfig['relay']) =>
-      realLink(device, times, store, o.log, ownCommit, relay))
+      realLink(device, times, store, o.log, ownCommit, relay, o.boardUrl))
   const links = new Map<string, { link: Link; key: string; device: DeviceConfig; off: (() => void)[] }>()
   const changeFns = new Set<(id: string) => void>()
   const changed = (id: string): void => {
@@ -295,6 +306,11 @@ export function createNodeLinks(o: NodeLinksOptions): NodeLinks {
       if (!held) return false
       held.link.reconnect('a token stored', true)
       return true
+    },
+    syncBoardUrl() {
+      for (const { link } of links.values()) {
+        if (link.state().state === 'online') void link.status()
+      }
     },
     follow: () => sync(),
     killNow() {

@@ -43,6 +43,13 @@ export const isBoardProfile: Guard<BoardProfile> = (value): value is BoardProfil
   isProfileLimits(value.limits) &&
   (value.command === undefined || typeof value.command === 'string')
 
+const isNodeMaster = (value: unknown): boolean =>
+  isReply(value) &&
+  typeof value.nodeId === 'string' &&
+  typeof value.name === 'string' &&
+  (value.url === null || typeof value.url === 'string') &&
+  typeof value.online === 'boolean'
+
 /** The board payload's shape, as far as the page relies on it (src/core/payload.ts). */
 export const isBoardPayload: Guard<BoardPayload> = (value): value is BoardPayload =>
   isReply(value) &&
@@ -71,4 +78,6 @@ export const isBoardPayload: Guard<BoardPayload> = (value): value is BoardPayloa
   // The team's unread messages (#355), likewise.
   (value.teamUnread === undefined || typeof value.teamUnread === 'number') &&
   // What the owner's phone asked and waits for the passkey here (#377), only while some does.
-  (value.teamWaiting === undefined || typeof value.teamWaiting === 'number')
+  (value.teamWaiting === undefined || typeof value.teamWaiting === 'number') &&
+  // Master info on a node's local board (#744).
+  (value.nodeMaster === undefined || isNodeMaster(value.nodeMaster))

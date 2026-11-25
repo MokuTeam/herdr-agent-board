@@ -59,6 +59,17 @@ export function publicOrigin(c: TunnelConfig): string {
   return c.publicPort === null || c.publicPort === 443 ? `https://${c.domain}` : `https://${c.domain}:${c.publicPort}`
 }
 
+/**
+ * The master's public board URL advertised to its nodes (#744), or null when the tunnel is off
+ * or its domain or public port does not check out.
+ */
+export function masterBoardUrl(tunnel: unknown): string | null {
+  const conf = tunnelConfig(tunnel)
+  if (!conf.on || !conf.domain) return null
+  if (fieldProblem('domain', conf.domain) !== null || fieldProblem('publicPort', conf.publicPort) !== null) return null
+  return `${publicOrigin(conf)}/`
+}
+
 /** The Host the tunnel listener accepts: '<domain>' (and '<domain>:443'), or exactly '<domain>:<publicPort>'. */
 export function publicHosts(c: TunnelConfig): string[] {
   return c.publicPort === null || c.publicPort === 443 ? [c.domain, `${c.domain}:443`] : [`${c.domain}:${c.publicPort}`]

@@ -37,6 +37,7 @@ import {
   createDeviceStore,
   createNodeStore,
   dropRelayCredentials,
+  type NodeStore,
   nodeDir,
   nodesDir,
   readLanesSeen,
@@ -99,6 +100,7 @@ import {
   nodeConfig,
   nodesConfig,
   parseNodeKey,
+  pickNodeMaster,
 } from '../core/nodes.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
 import type { BackupPayload, CalendarPayload, TimePayload } from '../core/payload.ts'
@@ -110,7 +112,15 @@ import type { SetupFacts } from '../core/setup.ts'
 import { teamConfig } from '../core/team.ts'
 import { toastBody } from '../core/team-unread.ts'
 import { MAX_NAME } from '../core/team-wire.ts'
-import { boardPorts, forwardSpec, publicHosts, sshArgs, tunnelConfig, tunnelProblems } from '../core/tunnel.ts'
+import {
+  boardPorts,
+  forwardSpec,
+  masterBoardUrl,
+  publicHosts,
+  sshArgs,
+  tunnelConfig,
+  tunnelProblems,
+} from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
 import { watchesConfig } from '../core/watches.ts'
 import { threadsConfig, verifyKeptOff } from '../core/work-threads.ts'
@@ -577,6 +587,14 @@ export async function startServer({
     },
     log,
   })
+  let nodeLinks: NodeLinks | null = null
+  let lastMasterBoardUrl = masterBoardUrl(cfg.tunnel)
+  const syncMasterBoardUrl = (): void => {
+    const next = masterBoardUrl(cfg.tunnel)
+    if (next === lastMasterBoardUrl) return
+    lastMasterBoardUrl = next
+    nodeLinks?.syncBoardUrl()
+  }
   const probes = createProbes()
   const tunnel = createTunnelListener({
     cfg,
@@ -591,6 +609,7 @@ export async function startServer({
     frozen: () => handoverFrozen,
     onChange: () => {
       accessChanged()
+      syncMasterBoardUrl()
       void supervisor.sync()
     },
     adminRoutes: remoteAdminRoutes,
@@ -968,6 +987,9 @@ export async function startServer({
         log,
       }),
     })
+  // Declared before createBoardState so board.publish() never hits TDZ before doorFollows() runs.
+  let door: NodeListener | null = null
+  let doorStore: NodeStore | null = null
   const board = createBoardState({
     deps,
     launches,
@@ -996,6 +1018,15 @@ export async function startServer({
     journal,
     turnResume,
     allowCallParent: (device, parentKey) => nodePilotCalls?.allowsCallParent(device, parentKey) ?? false,
+    nodeMaster: () => {
+      const n = nodeConfig(cfg.node)
+      if (!n || nodesConfig(cfg.nodes) !== null || !door || !doorStore) return null
+      try {
+        return pickNodeMaster(n.id, doorStore.list(), door.connectedMasters())
+      } catch {
+        return null
+      }
+    },
     // Threads (#379): while config.json turns them on, the revision and the count that waits on
     // the owner (two queries a refresh); off, nothing is read.
     threads: () => {
@@ -1386,7 +1417,6 @@ export async function startServer({
   // The master door on a node (#498, server/node-listener.ts), its masters and its status: made the
   // first time config.json has `node`, and from then on following it. Without `node` nothing of it
   // exists: no listener, no timer, no file read.
-  let door: NodeListener | null = null
   let relayDial: RelayDial | null = null
   // A node's calls to its master (#508, services/node/uplink.ts): the outbox and its stream on the
   // door, and `POST /api/node/call` for this computer's own `board thread`, on this listener alone.
@@ -1532,6 +1562,7 @@ export async function startServer({
       workspaces: () => workspaceList(8000),
     })
     const nodeStore = createNodeStore()
+    doorStore = nodeStore
     const nodeJoin = createNodeJoinStore()
     const nodeHandover = createNodeHandover({
       cfg,
@@ -1617,16 +1648,20 @@ export async function startServer({
         handover: nodeHandover,
       }),
       log,
-      onChange: () => void relayDial?.sync(),
+      onChange: () => {
+        void relayDial?.sync()
+        board.publish()
+      },
+      onMasterChange: () => board.publish(),
     })
     void door.sync()
     relayDialFollows()
+    board.publish()
   }
 
   // The master's links to its nodes (#499, services/nodes/links.ts) and `/api/nodes` on this board
   // alone: made the first time config.json has `nodes`, and from then on following it. Without
   // `nodes` nothing of it exists: no ssh, no timer, no file, no route.
-  let nodeLinks: NodeLinks | null = null
   const registeredNodeAddresses = (): string[] => {
     const conf = nodesConfig(cfg.nodes, hostname())
     if (!conf || !nodeLinks?.on()) return []
@@ -1821,7 +1856,7 @@ export async function startServer({
     if (nodesConfig(cfg.nodes)?.relay && existsSync(pendingEnrolsFile())) {
       void computerSetupInstance().sweepExpired()
     }
-    nodeLinks = createNodeLinks({ cfg, log, commit: runningCommit })
+    nodeLinks = createNodeLinks({ cfg, log, commit: runningCommit, boardUrl: () => masterBoardUrl(cfg.tunnel) })
     nodeLinks.onChange(id => scheduler?.wakeDevice(id))
     // Where a new session runs (#504), and the Devices row of this computer (#500): this computer's
     // own status by the code a node answers with.
@@ -2235,6 +2270,7 @@ export async function startServer({
     const settings = tunnelSettings()
     if (settings !== lastSettings) {
       lastSettings = settings
+      syncMasterBoardUrl()
       void supervisor.sync()
     }
     // Turned on in config.json (by hand, or from the panel): started at once.

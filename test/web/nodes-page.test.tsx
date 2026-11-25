@@ -504,6 +504,8 @@ describe('nodes.css (#502)', () => {
     '.sheet-device',
     // Settings, Devices (#510).
     '.devices-',
+    // Node local board banner (#744).
+    '.node-master-banner',
   ]
   const body = (selector: string) => {
     const at = css.indexOf(`\n${selector} {`)
