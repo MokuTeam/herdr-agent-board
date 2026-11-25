@@ -285,7 +285,7 @@ function DeviceRowView({ row, open, defaults, next, disabled, send, onMove, onUp
   const commit = (value: string) => {
     doneRef.current = true
     setEditing(null)
-    const nextTitle = deviceTitleEdited(row.id, currentRaw, value)
+    const nextTitle = deviceTitleEdited(row.id, currentRaw, value, row.defaultTitle)
     if (nextTitle === null) return
     const entry = { title: nextTitle, was: row.rawTitle }
     setPending(entry)
@@ -371,6 +371,7 @@ function DeviceRowView({ row, open, defaults, next, disabled, send, onMove, onUp
               </span>
             </button>
           )}
+          {row.here && <span className="devices-role">{t('node.dev.master')}</span>}
           {row.link && <span className="devices-link">{row.link}</span>}
           {next && <span className="devices-next">{t('node.dev.next')}</span>}
         </div>

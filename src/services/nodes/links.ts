@@ -285,6 +285,7 @@ export function createNodeLinks(o: NodeLinksOptions): NodeLinks {
           {
             id,
             title: device.title,
+            ...(id === LOCAL && { selfId: cfg.id }),
             kind: null,
             link: null,
             status: null,

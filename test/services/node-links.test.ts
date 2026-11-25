@@ -153,7 +153,12 @@ test('the links follow config.json: a device added, its link changed, removed; n
   expect(links.view().devices.map(d => [d.id, d.title])).toEqual([
     ['server-2', 'server-2'],
     ['server-1', 'One'],
-    ['local', 'local'],
+    ['local', 'laptop'],
+  ])
+  expect(links.view().devices.map(d => [d.id, d.selfId])).toEqual([
+    ['server-2', undefined],
+    ['server-1', undefined],
+    ['local', 'laptop'],
   ])
 
   // server-1's link changes: its link starts over. server-2 removed: its link ends.
@@ -325,7 +330,7 @@ test('renaming a device updates view() immediately, keeps its link open, and not
   // Even before configChanged() finishes syncNow(), view() reads the live title.
   expect(links.view().devices.map(d => [d.id, d.title])).toEqual([
     ['server-1', 'Atlas Box'],
-    ['local', 'local'],
+    ['local', 'laptop'],
   ])
   links.configChanged()
   await settle()

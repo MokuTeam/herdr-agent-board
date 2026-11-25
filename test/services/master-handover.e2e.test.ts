@@ -225,17 +225,19 @@ describe('services/nodes/handover e2e (#697)', () => {
 
     // New master (server-1) now serves /api/nodes and sees laptop online!
     const deadline = Date.now() + 5000
-    let laptopView: { id: string; link?: { state: string } } | undefined
+    let laptopView: { id: string; title?: string; link?: { state: string } } | undefined
     while (Date.now() < deadline) {
       const r = await fetch(`${node.url}/api/nodes`)
       if (r.ok) {
-        const j = (await r.json()) as { devices: { id: string; link?: { state: string } }[] }
+        const j = (await r.json()) as { devices: { id: string; title?: string; link?: { state: string } }[] }
         laptopView = j.devices.find(d => d.id === 'laptop')
         if (laptopView?.link?.state === 'online') break
       }
       await Bun.sleep(50)
     }
     expect(laptopView?.link?.state).toBe('online')
+    expect(laptopView?.title).toBe((await import('node:os')).hostname())
+    expect(laptopView?.title).not.toBe('local')
 
     // Old master (laptop) is no longer a master (/api/nodes -> 404), retired schedule/watch files,
     // and stripped master-only keys from config.json (Item 2).

@@ -361,7 +361,9 @@ describe('Verified done section in SettingsPanel (#680)', () => {
     const customModelInput = sec.querySelector('input[aria-label="Model (Custom...)"]') as HTMLInputElement
     expect(customModelInput.value).toBe('claude-opus-5-5')
 
-    // Per-device profile selects rendered for local and server-1:
+    // Per-device profile selects rendered for local and server-1, with master named by title/selfId (never "local"):
+    const devLabels = [...sec.querySelectorAll('.set-verify-dev')].map(el => el.textContent)
+    expect(devLabels.slice(0, 2)).toEqual(['laptop', 'Build box'])
     expect((sec.querySelector('select[aria-label*="local"]') as HTMLSelectElement).value).toBe('work')
     expect((sec.querySelector('select[aria-label*="server-1"]') as HTMLSelectElement).value).toBe('default')
 

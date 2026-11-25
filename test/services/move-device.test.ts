@@ -233,4 +233,27 @@ test('refusals use the device title when renamed (#601)', async () => {
     'local',
   )
   expect(already[0]).toMatchObject({ result: 'refused', why: 'it is on Work Laptop already' })
+
+  const unnamedNodes = {
+    ...NODES,
+    id: 'server-2',
+    devices: {
+      ...NODES.devices,
+      local: { id: 'local', title: 'local', link: null, profiles: {} },
+    },
+  } as unknown as NodesConfig
+  const alreadyUnnamed = await moveToDevice(
+    {
+      nodes: () => unnamedNodes,
+      link: () => null,
+      out: {} as MoveOut,
+      in: {} as MoveIn,
+      items: () => [{ key: S, session: S, name: 'Atlas', agent: 'claude' } as Item],
+      rekeyThreads: () => {},
+      log: () => {},
+    },
+    [S],
+    'local',
+  )
+  expect(alreadyUnnamed[0]).toMatchObject({ result: 'refused', why: 'it is on server-2 already' })
 })

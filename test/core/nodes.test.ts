@@ -111,7 +111,7 @@ describe('nodesConfig', () => {
     assert.deepEqual(Object.keys(c.devices), [LOCAL])
     assert.deepEqual(plain(c.devices.local), {
       id: 'local',
-      title: 'local',
+      title: 'laptop',
       link: null,
       maxSessions: null,
       minFreeMemMb: null,
@@ -128,6 +128,21 @@ describe('nodesConfig', () => {
     assert.deepEqual(c.lanes, [])
     assert.equal(c.relay, null)
     assert.deepEqual(c.problems, [])
+  })
+
+  test('local device title defaults to nodes.id (or hostName) and never resolves to "local" (#752)', () => {
+    const named = conf({ id: 'server-2', devices: {} })
+    assert.equal(named.devices.local?.title, 'server-2')
+
+    const fromHost = nodesConfig({ devices: {} }, 'Atlas-Box')
+    assert.equal(fromHost?.id, 'atlas-box')
+    assert.equal(fromHost?.devices.local?.title, 'atlas-box')
+
+    const custom = conf({ id: 'server-2', devices: { local: { title: 'Офис 50%' } } })
+    assert.equal(custom.devices.local?.title, 'Офис 50%')
+
+    const legacyLocalTitle = conf({ id: 'server-2', devices: { local: { title: 'local' } } })
+    assert.equal(legacyLocalTitle.devices.local?.title, 'server-2')
   })
 
   test('link defaults: ssh port 22, the door 12430', () => {

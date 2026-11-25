@@ -216,6 +216,49 @@ describe('core/master-handover (#697)', () => {
       link: { kind: 'relay', socket: 'laptop' },
     })
 
+    // #752: when old local had no title or had "local", handover uses oldMasterTitle (hostname) and never writes "local"
+    const unnamedFlip = flipNodesConfig(
+      {
+        id: 'laptop',
+        order: ['local', 'server-1'],
+        devices: {
+          local: { title: 'local', maxSessions: 4 },
+          'server-1': { title: 'local', link: { kind: 'direct', url: 'http://127.0.0.1:12430' } },
+        },
+      },
+      {
+        oldMasterId: 'laptop',
+        targetId: 'server-1',
+        oldMasterTitle: 'Anna-MacBook',
+        reverseLink: { kind: 'relay', socket: 'laptop' },
+      },
+    )
+    expect((unnamedFlip.devices as Record<string, Record<string, unknown>>).local).toEqual({})
+    expect((unnamedFlip.devices as Record<string, Record<string, unknown>>).laptop).toEqual({
+      title: 'Anna-MacBook',
+      maxSessions: 4,
+      link: { kind: 'relay', socket: 'laptop' },
+    })
+
+    const literalLocalFallback = flipNodesConfig(
+      {
+        id: 'laptop',
+        order: ['local', 'server-1'],
+        devices: {
+          'server-1': { title: 'Atlas', link: { kind: 'direct', url: 'http://127.0.0.1:12430' } },
+        },
+      },
+      {
+        oldMasterId: 'laptop',
+        targetId: 'server-1',
+        oldMasterTitle: 'local',
+        reverseLink: { kind: 'relay', socket: 'laptop' },
+      },
+    )
+    expect((literalLocalFallback.devices as Record<string, Record<string, unknown>>).laptop).toEqual({
+      link: { kind: 'relay', socket: 'laptop' },
+    })
+
     const oldCfg = {
       port: 12422,
       profiles: [{ id: 'default', dir: '/Users/anna/.claude' }],

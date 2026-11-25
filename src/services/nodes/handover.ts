@@ -1093,10 +1093,20 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
             }),
           ]
 
-          const flippedNodes = flipNodesConfig(rawCfg.nodes as Record<string, unknown>, {
+          const rawNodes = rawCfg.nodes as Record<string, unknown>
+          const rawDevices = isRecord(rawNodes.devices) ? rawNodes.devices : null
+          const rawLocal = rawDevices && isRecord(rawDevices[LOCAL]) ? rawDevices[LOCAL] : null
+          const rawLocalTitle = typeof rawLocal?.title === 'string' ? rawLocal.title.trim() : ''
+          const hostTitle = hostFn().trim()
+          const oldMasterTitle =
+            (rawLocalTitle && rawLocalTitle !== LOCAL ? rawLocalTitle : '') ||
+            (hostTitle && hostTitle !== LOCAL ? hostTitle : '') ||
+            plan.from
+
+          const flippedNodes = flipNodesConfig(rawNodes, {
             oldMasterId: plan.from,
             targetId: plan.to,
-            oldMasterTitle: isRecord(nCfg.devices[LOCAL]) ? (nCfg.devices[LOCAL].title as string) : hostFn(),
+            oldMasterTitle,
             reverseLink: plan.reverseLink,
             ...(relayEndpoint && {
               relay: {

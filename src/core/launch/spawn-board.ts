@@ -129,7 +129,15 @@ export function outcomeOf(
         d !== null &&
         typeof (d as { id?: unknown }).id === 'string' &&
         typeof (d as { title?: unknown }).title === 'string'
-          ? [{ id: (d as { id: string }).id, title: (d as { title: string }).title }]
+          ? [
+              {
+                id: (d as { id: string }).id,
+                title: (d as { title: string }).title,
+                ...(typeof (d as { selfId?: unknown }).selfId === 'string' && {
+                  selfId: (d as { selfId: string }).selfId,
+                }),
+              },
+            ]
           : [],
       )
     : undefined

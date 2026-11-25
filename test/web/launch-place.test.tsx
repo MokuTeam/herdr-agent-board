@@ -4,6 +4,7 @@ import { expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { STRINGS } from '../../src/core/i18n/strings.ts'
 import { translator } from '../../src/core/i18n/translator.ts'
+import { deviceName } from '../../src/core/launch/place-text.ts'
 import type { LaunchView } from '../../src/core/types.ts'
 import { LaunchNote } from '../../web/src/components/launch/LaunchCard.tsx'
 import {
@@ -288,4 +289,7 @@ test('renamed device titles appear on launch cards, blockers, refusals and turne
     <LaunchNote launch={refused} look={{ ...look, devices: devices as never }} />,
   )
   expect(refusedHtml).toContain('No device can take it: Atlas Box is paused')
+
+  // #752: when local has selfId and no custom title, deviceName uses selfId instead of "this computer".
+  expect(deviceName('local', en, [{ id: 'local', title: 'local', selfId: 'server-2' }])).toBe('server-2')
 })

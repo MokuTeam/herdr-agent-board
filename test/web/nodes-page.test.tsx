@@ -117,19 +117,51 @@ describe('the device chip (#502)', () => {
     expect(html(card)).toContain('title="Runs on Hetzner box"')
   })
 
-  test('a card of this computer has no chip and no identity row, also on a master’s board', () => {
+  test('a card of the master carries the master’s machine chip when the board has nodes, and keeps focus (#752)', () => {
     const data = payload({ items: [local, remote], devices: DEVICES })
-    const card = html(drawCard(local, data))
-    expect(card).not.toContain('card-ident')
-    expect(card).not.toContain('device-chip')
-    expect(card).not.toContain('node-offline')
+    const card = drawCard(local, data)
+    const out = html(card)
+    const [row] = byClassAll(card, 'card-ident')
+    expect(row).toBeDefined()
+    expect(html(row ? [row] : [])).toContain('>laptop<')
+    expect(out).toContain('title="Runs on laptop"')
+    expect(out).not.toContain('node-offline')
+    expect(out).toContain('data-act="focus"')
+    // Even if devices.local has no custom title and selfId is set, never shows "local" or "This computer".
+    const unnamed = drawCard(
+      local,
+      payload({
+        items: [local, remote],
+        devices: [device('local', 'local', { selfId: 'server-2' }), device('server-1', 'server-1')],
+      }),
+    )
+    expect(html(unnamed)).toContain('>server-2<')
+    expect(html(unnamed)).not.toContain('>local<')
+    expect(html(unnamed)).not.toContain('This computer')
+    // Non-ASCII and % in master title render intact.
+    const special = drawCard(
+      local,
+      payload({
+        lang: 'ru',
+        items: [local, remote],
+        devices: [device('local', 'Сервер 50%'), device('server-1', 'server-1')],
+      }),
+      'ru',
+    )
+    expect(html(special)).toContain('>Сервер 50%<')
+    expect(html(special)).toContain('title="Работает на Сервер 50%"')
   })
 
-  test('without devices in the payload (a board without nodes) a card draws none of it', () => {
-    const card = html(drawCard(local, payload({ items: [local] })))
-    expect(card).not.toContain('card-ident')
-    expect(card).not.toContain('device')
-    expect(card).toContain('data-act="focus"')
+  test('without remote nodes (standalone or single-device nodes), a card draws no device badge (#502, #752)', () => {
+    for (const data of [
+      payload({ items: [local] }),
+      payload({ items: [local], devices: [device('local', 'laptop')] }),
+    ]) {
+      const card = html(drawCard(local, data))
+      expect(card).not.toContain('card-ident')
+      expect(card).not.toContain('device-chip')
+      expect(card).toContain('data-act="focus"')
+    }
   })
 
   test('a compact card (asleep in Idle) keeps its one name row and gets the chip in a row of its own', () => {
@@ -179,8 +211,16 @@ describe('an offline device (#502)', () => {
     })
     // A device the payload does not list is not heard either, named by its id.
     expect(nodeLook(remote, [], NOW, t)?.why).toBe('server-1 is not reachable')
-    // This computer's card: nothing.
-    expect(nodeLook(local, DEVICES, NOW, t)).toBeNull()
+    // Master's card: its machine name when the board has nodes; null on standalone or single-device boards.
+    expect(nodeLook(local, DEVICES, NOW, t)).toEqual({
+      id: 'local',
+      title: 'laptop',
+      offline: false,
+      asOf: '',
+      why: '',
+    })
+    expect(nodeLook(local, [device('local', 'laptop')], NOW, t)).toBeNull()
+    expect(nodeLook(local, undefined, NOW, t)).toBeNull()
   })
 
   test('a node-offline answer of the server is worded with the device’s title', () => {
@@ -267,8 +307,8 @@ describe('a node card’s actions (#502)', () => {
   })
 })
 
-describe('the session sheet’s head (#502)', () => {
-  test('names the device first on its line, with the age while offline; none for this computer’s', () => {
+describe('the session sheet’s head (#502, #752)', () => {
+  test('names the device first on its line (master too when nodes exist), with the age while offline; none without nodes', () => {
     const data = payload({
       items: [remote, local],
       devices: [device('local', 'laptop'), offline({ title: 'Hetzner box' })],
@@ -278,7 +318,12 @@ describe('the session sheet’s head (#502)', () => {
     expect(head).toContain('>Hetzner box<')
     expect(head).toContain('>as of 8 min ago<')
     const mine = html(renderInBoard(<SheetHead item={local} missing={false} />, board({ data })))
-    expect(mine).not.toContain('sheet-device')
+    expect(mine).toContain('class="sheet-device"')
+    expect(mine).toContain('>laptop<')
+    const standalone = html(
+      renderInBoard(<SheetHead item={local} missing={false} />, board({ data: payload({ items: [local] }) })),
+    )
+    expect(standalone).not.toContain('sheet-device')
   })
 })
 
@@ -315,12 +360,37 @@ describe('a start placed on a device (#502, design 8.3)', () => {
     ...(devices && { devices, now: NOW }),
   })
 
-  test('its launch card shows the device’s chip; one of this computer none', () => {
+  test('its launch card shows the machine chip when placed (master too when nodes exist); none without nodes or while choosing', () => {
     const on = html(renderInBoard(<LaunchCard launch={launch({ device: 'server-1' })} look={look(DEVICES)} />, board()))
     expect(on).toContain('class="card-ident"')
     expect(on).toContain('>server-1<')
+    const cloningRemote = html(
+      renderInBoard(
+        <LaunchCard launch={launch({ step: 'cloning', place: { device: 'server-1' } })} look={look(DEVICES)} />,
+        board(),
+      ),
+    )
+    expect(cloningRemote).toContain('class="card-ident"')
+    expect(cloningRemote).toContain('>server-1<')
+    expect(cloningRemote).not.toContain('>laptop<')
     const here = html(renderInBoard(<LaunchCard launch={launch()} look={look(DEVICES)} />, board()))
-    expect(here).not.toContain('card-ident')
+    expect(here).toContain('class="card-ident"')
+    expect(here).toContain('>laptop<')
+    const placedLocal = html(
+      renderInBoard(<LaunchCard launch={launch({ place: { device: 'local' } })} look={look(DEVICES)} />, board()),
+    )
+    expect(placedLocal).toContain('class="card-ident"')
+    expect(placedLocal).toContain('>laptop<')
+    const choosing = html(
+      renderInBoard(<LaunchCard launch={launch({ step: 'placing', place: {} })} look={look(DEVICES)} />, board()),
+    )
+    expect(choosing).not.toContain('card-ident')
+    const standalone = html(renderInBoard(<LaunchCard launch={launch()} look={look()} />, board()))
+    expect(standalone).not.toContain('card-ident')
+    const standalonePlacedLocal = html(
+      renderInBoard(<LaunchCard launch={launch({ place: { device: 'local' } })} look={look()} />, board()),
+    )
+    expect(standalonePlacedLocal).not.toContain('card-ident')
   })
 
   test('the placer’s words, from the payload’s fields; nothing for values not sent yet', () => {

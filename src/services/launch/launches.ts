@@ -3,6 +3,7 @@
 // starting card at once and a clear reason when it fails. This keeps them: starting one, linking
 // it to the session it started, the card's buttons (dismiss, go to it, trust, close its tab) and
 // what the new-session window offers, the agents a start may pick among it (core/launch/agents.ts).
+import { hostname } from 'node:os'
 import { readCard, removeCard, writeCard } from '../../adapters/cards.ts'
 import { cachedCodexModels } from '../../adapters/codex-home.ts'
 import { herdr, paneTab, paneTabTerminal, workspaceList } from '../../adapters/herdr.ts'
@@ -540,7 +541,7 @@ export function createLaunches({
     let error = l.error
     if (l.state === 'failed' && !error) {
       if (l.place?.refuse) {
-        const cfg = nodesConfig(deps.cfg.nodes)
+        const cfg = nodesConfig(deps.cfg.nodes, hostname())
         const titles = cfg
           ? Object.fromEntries(Object.entries(cfg.devices).map(([dev, d]) => [dev, d.title]))
           : undefined

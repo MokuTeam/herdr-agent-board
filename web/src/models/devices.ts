@@ -15,13 +15,23 @@ import type { ProfileOption } from './profiles.ts'
 
 type Devices = readonly BoardDevice[] | undefined
 
+/** Whether the board has at least one remote device configured alongside the master. */
+export const hasNodes = (devices: Devices): boolean => !!devices && devices.some(d => d.id !== 'local')
+
+const defaultDeviceTitle = (d: Pick<BoardDevice, 'id' | 'selfId' | 'status'>, t: Translator): string =>
+  d.id === 'local' ? d.selfId || d.status?.id || t('node.dev.master') : d.id
+
 /**
- * What the owner reads for a device: this computer is "This computer" while config.json gives it
- * no title of its own (its title is then its id, `local`); any other device its title.
+ * What the owner reads for a device: the master's own row (`local`) shows its custom title, else its
+ * configured device id (`selfId` / `status.id`), else "master"; any other device its title or id.
  */
-export function deviceTitle(d: Pick<BoardDevice, 'id' | 'title' | 'kind'>, t: Translator): string {
-  // By id: a revoked device with no link has no kind either.
-  return d.id === 'local' && (!d.title || d.title === d.id) ? t('node.dev.here') : d.title
+export function deviceTitle(
+  d: Pick<BoardDevice, 'id' | 'title' | 'kind'> & Partial<Pick<BoardDevice, 'selfId' | 'status'>>,
+  t: Translator,
+): string {
+  if (d.id !== 'local') return d.title || d.id
+  if (d.title && d.title !== 'local') return d.title
+  return d.selfId || d.status?.id || t('node.dev.master')
 }
 
 /** A device by its id; null when the payload does not list it. */
@@ -52,12 +62,17 @@ function asOf(d: BoardDevice | null, now: number, t: Translator): string {
 }
 
 /**
- * The device of a card (or a launch) of another device; null for this computer's own, which has
- * no `device`. One the payload does not list is not heard either.
+ * The device of a card (or a launch): every machine is named when the board has at least one
+ * remote node; null on standalone boards or single-device boards without remote nodes.
  */
 export function nodeLook(item: Pick<Item, 'device'>, devices: Devices, now: number, t: Translator): NodeLook | null {
   const id = item.device
-  if (!id) return null
+  if (!id) {
+    if (!hasNodes(devices)) return null
+    const master = deviceOf(devices, 'local')
+    if (!master) return null
+    return { id: 'local', title: deviceTitle(master, t), offline: false, asOf: '', why: '' }
+  }
   const d = deviceOf(devices, id)
   const title = d ? deviceTitle(d, t) : id
   if (d && reachable(d)) return { id, title, offline: false, asOf: '', why: '' }
@@ -390,8 +405,8 @@ export function deviceRows(
           }
         : null
     const title = deviceTitle(d, t)
-    const rawTitle = d.title && d.title !== d.id ? d.title : ''
-    const defaultTitle = d.id === 'local' ? t('node.dev.here') : d.id
+    const defaultTitle = defaultDeviceTitle(d, t)
+    const rawTitle = d.title && d.title !== d.id && d.title !== defaultTitle ? d.title : ''
     return {
       id: d.id,
       title,
@@ -510,8 +525,8 @@ export function thresholdTyped(
  * A device's title as left: the trimmed string to send ('' resets to the default), or null when
  * nothing changed. Typing the device's own id resets to the default too.
  */
-export function deviceTitleEdited(id: string, rawTitle: string, value: string): string | null {
+export function deviceTitleEdited(id: string, rawTitle: string, value: string, defaultTitle = id): string | null {
   const trimmed = value.trim()
-  const next = trimmed === id ? '' : trimmed
+  const next = trimmed === id || trimmed === defaultTitle ? '' : trimmed
   return next === rawTitle ? null : next
 }

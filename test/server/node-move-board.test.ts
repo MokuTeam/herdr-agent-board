@@ -320,7 +320,7 @@ test('a branch not pushed is refused with the reason: nothing put to sleep, copi
       'a move to another device is made from the master: this board has no devices',
     ])
     const here = await post(pair.master.url, { targets: [S], device: 'local' })
-    expect((here.body.results as Record<string, unknown>[])[0]?.why).toBe('it is on this computer already')
+    expect((here.body.results as Record<string, unknown>[])[0]?.why).toBe('it is on laptop already')
   } finally {
     close()
   }

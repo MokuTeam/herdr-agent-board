@@ -2586,12 +2586,13 @@ async function nodesCmd(): Promise<void> {
     lines.push(`master ${nodes.id} · ${NO_BOARD}`)
     for (const dev of nodes.order) {
       const title = nodes.devices[dev]?.title
-      const head = `${dev}${title && title !== dev ? ` "${title}"` : ''}`
+      const defaultTitle = dev === 'local' ? nodes.id : dev
+      const head = `${dev}${title && title !== dev && title !== defaultTitle ? ` "${title}"` : ''}`
       lines.push(`${head} · ${dev === 'local' ? 'this computer' : nodes.devices[dev]?.link?.kind}`)
     }
   } else {
     lines.push(`master ${nodes.id}`)
-    for (const d of devices) lines.push(deviceLine(d))
+    for (const d of devices) lines.push(deviceLine(d, nodes.id))
   }
   for (const p of nodes.problems) lines.push(`problem: ${p.device ? `${p.device} ` : ''}${p.key}: ${p.why}`)
   console.log(lines.join('\n'))
@@ -2858,8 +2859,10 @@ function identityLine(done: unknown): string {
 }
 
 /** One device of GET /api/nodes as `board nodes` prints it. */
-function deviceLine(d: Record<string, unknown>): string {
-  const head = `${String(d.id)}${typeof d.title === 'string' && d.title && d.title !== d.id ? ` "${d.title}"` : ''}`
+function deviceLine(d: Record<string, unknown>, masterId?: string): string {
+  const defaultTitle =
+    d.id === 'local' ? (typeof d.selfId === 'string' && d.selfId ? d.selfId : (masterId ?? 'local')) : String(d.id)
+  const head = `${String(d.id)}${typeof d.title === 'string' && d.title && d.title !== d.id && d.title !== defaultTitle ? ` "${d.title}"` : ''}`
   const link = isRecord(d.link) ? d.link : null
   // A revoked device (#510): its link is gone once the node was told, or its credentials dropped.
   const revoked = isRecord(d.revoked) ? d.revoked : null

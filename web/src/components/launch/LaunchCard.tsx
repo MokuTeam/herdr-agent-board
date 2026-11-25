@@ -35,8 +35,12 @@ export interface LaunchLook {
 /** The card of a launch that is not a session on the board yet ("back": one back from the archive). */
 export function LaunchCard({ launch: l, look }: { launch: LaunchView; look: LaunchLook }) {
   const { t } = look
-  // Placed on another device (#502): its identity row, as a session's card has it.
-  const node = nodeLook(l, look.devices, look.now ?? Date.now(), t)
+  // Placed on a machine when the board has nodes (#502, #752): wait until a device is chosen.
+  const placed = !l.place || !!l.place.device || !!l.device
+  const chipDevice = l.device ?? (l.place?.device === 'local' ? undefined : l.place?.device)
+  const node = placed
+    ? nodeLook(chipDevice ? { device: chipDevice } : {}, look.devices, look.now ?? Date.now(), t)
+    : null
   return (
     <>
       <div className="card-top">

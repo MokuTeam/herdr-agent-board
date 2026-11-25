@@ -321,7 +321,9 @@ function deviceOf(
     if (typeof v !== 'boolean') flag(key, 'type')
     return v === true
   }
-  const title = o.title === undefined ? id : typeof o.title === 'string' ? o.title.trim() : ''
+  const defaultTitle = id === LOCAL ? selfId : id
+  const rawTitle = o.title === undefined ? defaultTitle : typeof o.title === 'string' ? o.title.trim() : ''
+  const title = id === LOCAL && rawTitle === LOCAL ? defaultTitle : rawTitle
   if (!isText(title, 200)) flag('title', 'type')
   const profiles = bare<string>()
   if (o.profiles !== undefined) {
@@ -735,6 +737,8 @@ export interface LinkStatus {
 export interface DeviceView {
   id: string
   title: string
+  /** The master's own device id (`nodes.id`), present on the `local` row so the UI knows its default name even when renamed. */
+  selfId?: string
   /** null: this computer. */
   kind: LinkConfig['kind'] | null
   /** null: this computer, which has no link. */
@@ -887,6 +891,8 @@ export function applyNodesEdit(
   hostName = '',
 ): { changed: boolean } | { error: string } {
   const next = structuredClone(nodes)
+  const was = nodesConfig(nodes, hostName)
+  const selfId = was?.id ?? deviceIdFromHost(hostName)
   if (edit.op === 'order') next.order = [...edit.ids]
   else if (edit.op === 'whenFull') next.whenFull = edit.whenFull
   else if (edit.op === 'lanes')
@@ -907,7 +913,7 @@ export function applyNodesEdit(
     for (const [key, v] of Object.entries(edit.values))
       if (key === 'title') {
         const trimmed = v === null ? '' : (v as string).trim()
-        if (trimmed === '' || trimmed === edit.id) delete entry.title
+        if (trimmed === '' || trimmed === edit.id || (edit.id === LOCAL && trimmed === selfId)) delete entry.title
         else entry.title = trimmed
       } else if (key === 'giveSecrets' && v === true) delete entry[key]
       else if (key === 'pilotBridge' && v === true) delete entry[key]
@@ -917,7 +923,6 @@ export function applyNodesEdit(
       if (!hadDevices && Object.keys(devices).length === 0) delete next.devices
     }
   }
-  const was = nodesConfig(nodes, hostName)
   // The panel lists the usable devices (nodesConfig's order) and sends each of them once: anything
   // else is a list gone stale. A device left out for a problem of its own keeps a place after them.
   if (edit.op === 'order') {

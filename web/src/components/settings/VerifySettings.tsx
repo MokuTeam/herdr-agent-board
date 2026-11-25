@@ -13,6 +13,7 @@ import {
 } from '../../../../src/core/work-threads.ts'
 import { api, errorText, isReply, replyOf } from '../../api/client.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
+import { deviceTitle } from '../../models/devices.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import { ChevIcon, CrossIcon } from '../icons.tsx'
@@ -429,7 +430,10 @@ export function VerifySettings({ verifyOn, canEdit, onToggle }: VerifySettingsPr
                   <div className="set-verify-list">
                     <div className="set-verify-list-row">
                       <span className="set-verify-dev">
-                        {activeDevices.find(d => d.id === LOCAL)?.title ?? t('set.verify.device.local')}
+                        {(() => {
+                          const localDev = activeDevices.find(d => d.id === LOCAL)
+                          return localDev ? deviceTitle(localDev, t) : t('set.verify.device.local')
+                        })()}
                       </span>
                       <select
                         className="set-select"

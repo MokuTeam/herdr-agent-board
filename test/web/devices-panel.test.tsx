@@ -161,7 +161,9 @@ describe('Settings, Devices (#510)', () => {
       // The quiet mark on the device the next start would go to, on that one only.
       expect(rows.map(r => findAll([r], el => hasClass(el, 'devices-next')).length)).toEqual([1, 0, 0, 0])
       expect(one).toContain('Next start')
-      expect(here).toContain('This computer')
+      expect(here).toContain('laptop')
+      expect(here).toContain('master')
+      expect(here).not.toContain('This computer')
       expect(here).toContain('3 of 20 sessions')
       // Pause and Give it the secrets on every device but this computer; Drain on all four.
       const switches = (row: (typeof rows)[number]) =>
@@ -199,7 +201,7 @@ describe('Settings, Devices (#510)', () => {
         'Move Server 1',
         'Move server-2',
         'Move server-3',
-        'Move This computer',
+        'Move laptop',
       ])
       // The lanes, in their colours, a new one marked; All; When everything is full.
       const lanes = findAll([sheet], el => hasClass(el, 'devices-lane'))
@@ -233,6 +235,8 @@ describe('Settings, Devices (#510)', () => {
     )
     const all = text([byId(nodes, 'devices-sheet')])
     expect(all).toContain('Устройства')
+    expect(all).toContain('мастер')
+    expect(all).not.toContain('Этот компьютер')
     expect(all).toContain('На связи')
     expect(all).toContain('Лейны, которые могут уйти с этого компьютера')
     expect(all).toContain('новый')
@@ -490,14 +494,15 @@ describe('what the owner reads (#510, polish)', () => {
     ])
   })
 
-  test('this computer is "This computer" in the switch and the panel, never its id; a title of its own stays', () => {
-    const devices = [device('local'), device('server-1', { title: 'Server 1' })]
-    expect(deviceOptions(devices, [], t)?.map(o => o.title)).toEqual(['All devices', 'This computer', 'Server 1'])
-    expect(deviceOptions(devices, [], ru)?.map(o => o.title)).toEqual(['Все устройства', 'Этот компьютер', 'Server 1'])
+  test('master device is named by its title/selfId/status in switch and panel, never "local" or "This computer"; a title of its own stays (#752)', () => {
+    const devices = [device('local', { selfId: 'server-2' }), device('server-1', { title: 'Server 1' })]
+    expect(deviceOptions(devices, [], t)?.map(o => o.title)).toEqual(['All devices', 'server-2', 'Server 1'])
+    expect(deviceOptions(devices, [], ru)?.map(o => o.title)).toEqual(['Все устройства', 'server-2', 'Server 1'])
     const nodes = draw(payload({ devices, categories: CATEGORIES }))
     const here = rowsOf(nodes).find(r => r.attrs.get('data-id') === 'local')
     const name = findAll([here as Node], el => hasClass(el, 'devices-name'))[0]
-    expect(text([name as Node])).toBe('This computer')
+    expect(text([name as Node])).toBe('server-2master')
+    expect(text([name as Node])).not.toContain('This computer')
     expect(findAll([here as Node], el => hasClass(el, 'devices-link'))).toEqual([])
     const ruNodes = renderInBoard(
       <PanelProvider viewport={() => ({ w: 1600, h: 900 })}>
@@ -507,9 +512,12 @@ describe('what the owner reads (#510, polish)', () => {
       'ru',
     )
     const ruHere = rowsOf(ruNodes).find(r => r.attrs.get('data-id') === 'local')
-    expect(text(findAll([ruHere as Node], el => hasClass(el, 'devices-name')))).toBe('Этот компьютер')
-    // An owner who named it keeps the name.
+    expect(text(findAll([ruHere as Node], el => hasClass(el, 'devices-name')))).toBe('server-2мастер')
+    // An owner who named it keeps the name; without title/selfId/status falls back to master/мастер.
     expect(deviceTitle({ id: 'local', title: 'Workstation', kind: null }, t)).toBe('Workstation')
+    expect(deviceTitle({ id: 'local', title: 'local', kind: null, selfId: 'server-2' }, t)).toBe('server-2')
+    expect(deviceTitle({ id: 'local', title: 'local', kind: null }, t)).toBe('master')
+    expect(deviceTitle({ id: 'local', title: 'local', kind: null }, ru)).toBe('мастер')
     expect(deviceTitle({ id: 'server-1', title: 'server-1', kind: 'ssh' }, t)).toBe('server-1')
     // A revoked device with no link has no kind either: still its own title.
     expect(deviceTitle({ id: 'server-1', title: 'server-1', kind: null }, t)).toBe('server-1')
@@ -735,13 +743,19 @@ describe('rename a device (#601)', () => {
     expect(deviceTitleEdited('server-1', 'Atlas Box', '   ')).toBe('')
     expect(deviceTitleEdited('server-1', 'Atlas Box', 'server-1')).toBe('')
     expect(deviceTitleEdited('server-1', '', 'server-1')).toBeNull()
-    expect(deviceTitleEdited('local', '', 'Work Laptop')).toBe('Work Laptop')
-    expect(deviceTitleEdited('local', 'Work Laptop', '')).toBe('')
-    expect(deviceTitleEdited('local', '', '')).toBeNull()
+    expect(deviceTitleEdited('local', '', 'Work Laptop', 'server-2')).toBe('Work Laptop')
+    expect(deviceTitleEdited('local', 'Work Laptop', '', 'server-2')).toBe('')
+    expect(deviceTitleEdited('local', 'Work Laptop', 'server-2', 'server-2')).toBe('')
+    expect(deviceTitleEdited('local', '', 'server-2', 'server-2')).toBeNull()
+    expect(deviceTitleEdited('local', '', '', 'server-2')).toBeNull()
 
-    const rows = deviceRows([device('server-1', { title: 'Server 1' }), device('local')], NOW, t)
+    const rows = deviceRows(
+      [device('server-1', { title: 'Server 1' }), device('local', { selfId: 'server-2' })],
+      NOW,
+      t,
+    )
     expect(rows[0]).toMatchObject({ title: 'Server 1', rawTitle: 'Server 1', defaultTitle: 'server-1' })
-    expect(rows[1]).toMatchObject({ title: 'This computer', rawTitle: '', defaultTitle: 'This computer' })
+    expect(rows[1]).toMatchObject({ title: 'server-2', rawTitle: '', defaultTitle: 'server-2' })
 
     expect(refusedText(400, 'title', t)).toBe('Not saved: Name does not check out')
     expect(refusedText(400, 'title', ru)).toBe('Не сохранено: Название не подходит')
@@ -873,7 +887,7 @@ describe('rename a device (#601)', () => {
       expect(row('server-1').querySelector('button.devices-title')?.textContent).toBe('Atlas Box')
       expect(dom.window.document.activeElement).toBe(row('server-1').querySelector('button.devices-title'))
 
-      // 2. Click local title -> input opens empty with placeholder "This computer" -> blur saves.
+      // 2. Click local title -> input opens empty with placeholder "laptop" -> blur saves.
       await act(async () => {
         row('local')
           .querySelector('button.devices-title')
@@ -881,7 +895,7 @@ describe('rename a device (#601)', () => {
       })
       input = row('local').querySelector('input.devices-title-input') as HTMLInputElement
       expect(input.value).toBe('')
-      expect(input.placeholder).toBe('This computer')
+      expect(input.placeholder).toBe('laptop')
       await act(async () => {
         setVal(input, 'Work Laptop')
       })

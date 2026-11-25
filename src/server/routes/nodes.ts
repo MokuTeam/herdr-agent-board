@@ -7,6 +7,7 @@
 // the local board only, and only while config.json's `nodes` is on: app.ts picks these routes for
 // /api/nodes itself, so the board's route table, which every remote listener and a node's door
 // serve, is the same as without `nodes`.
+import { hostname } from 'node:os'
 import type { EditResult } from '../../adapters/config-file.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import {
@@ -356,12 +357,12 @@ export function nodesRoutes(
           let refused: string | null = null
           let after: NodesConfig | null = null
           const r = panel.edit(nodes => {
-            const done = applyNodesEdit(nodes, edit)
+            const done = applyNodesEdit(nodes, edit, hostname())
             if ('error' in done) {
               refused = done.error
               return false
             }
-            after = nodesConfig(nodes)
+            after = nodesConfig(nodes, hostname())
             return done.changed
           })
           if (refused) return json(400, { error: refused })

@@ -275,7 +275,7 @@ function forCard(board: BoardMenuDeps, key: string, it: Item, el: Element, at: P
   const nameEl = el.matches?.('.card') ? el.querySelector('.name') : el
   const profiles = movable(board)
   // A card of another device (#502); none for this computer's.
-  const node = nodeLook(it, state.data.devices, Date.now(), t)
+  const node = it.device ? nodeLook(it, state.data.devices, Date.now(), t) : null
   // A master's devices, for the card's Device (#616): a revoked one is none to move to.
   const devices = (state.data.devices ?? [])
     .filter(d => !d.revoked)

@@ -791,7 +791,7 @@ test('a refused start with this computer draining explains why the task could no
   assert.equal(first.code, 1)
   assert.equal(
     first.stderr.trim(),
-    'spawn-agent: Cannot leave this computer (the branch is not at its remote branch), and this computer is draining. Push the branch.',
+    'spawn-agent: Cannot leave laptop (the branch is not at its remote branch), and laptop is draining. Push the branch.',
   )
   const cards = await launchesOf(pair.master.url)
   const failedCard = cards.find(l => l.state === 'failed')
@@ -824,7 +824,7 @@ test('a refused start with this computer draining explains why the task could no
   assert.equal(second.code, 1)
   assert.equal(
     second.stderr.trim(),
-    `spawn-agent: Cannot leave this computer (the first message names ${localFile}, which is on this computer), and this computer is draining. Drop the path from the first message.`,
+    `spawn-agent: Cannot leave laptop (the first message names ${localFile}, which is on this computer), and laptop is draining. Drop the path from the first message.`,
   )
 
   // Drop the local path from the brief: the start goes to server-1 at once.

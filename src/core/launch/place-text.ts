@@ -6,11 +6,15 @@ import type { PortableWhy } from '../portable.ts'
 import type { Translator } from '../types.ts'
 
 /** Device titles keyed by device id, or the payload's device rows. */
-export type DeviceTitles = Readonly<Record<string, string>> | readonly { id: string; title: string }[]
+export type DeviceTitles = Readonly<Record<string, string>> | readonly { id: string; title: string; selfId?: string }[]
 
 function titleOf(id: string, titles?: DeviceTitles): string {
   if (!titles) return ''
-  if (Array.isArray(titles)) return titles.find(d => d.id === id)?.title ?? ''
+  if (Array.isArray(titles)) {
+    const d = titles.find(x => x.id === id)
+    if (!d) return ''
+    return id === 'local' && (!d.title || d.title === 'local') ? (d.selfId ?? '') : d.title
+  }
   return Object.hasOwn(titles, id) ? ((titles as Readonly<Record<string, string>>)[id] ?? '') : ''
 }
 

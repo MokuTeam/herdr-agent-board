@@ -3,8 +3,10 @@
 // without devices, or with this computer alone: no new item, the menu as before.
 import { describe, expect, test } from 'bun:test'
 import { translator } from '../../src/core/i18n/translator.ts'
+import type { BoardDevice } from '../../src/core/payload.ts'
 import type { Reply } from '../../web/src/api/client.ts'
 import { moveCardToDevice } from '../../web/src/models/device-move.ts'
+import { deviceTitle } from '../../web/src/models/devices.ts'
 import { cardMenu, type MenuEntry, type MenuItem } from '../../web/src/models/menu-model.ts'
 
 const t = translator('en')
@@ -44,6 +46,31 @@ describe("the card's Device", () => {
   test('no devices, this computer alone, or not a Claude session: the menu as before', () => {
     expect(cardMenu(it, { ...ctx, devices: DEVICES.slice(0, 1) })).toEqual(cardMenu(it, ctx))
     expect(find(cardMenu({ ...it, agent: 'pi' }, { ...ctx, devices: DEVICES }), 'device')).toBeUndefined()
+  })
+
+  test('master row built with deviceTitle uses its name instead of "local" or "This computer", and master cards keep focus and reveal (#752)', () => {
+    const ru = translator('ru')
+    const rawDevices: Pick<BoardDevice, 'id' | 'title' | 'kind' | 'selfId'>[] = [
+      { id: 'local', title: 'local', kind: null, selfId: 'server-2' },
+      { id: 'server-1', title: 'Atlas Box', kind: 'ssh' },
+    ]
+    const menuDevices = rawDevices.map(d => ({ id: d.id, title: deviceTitle(d, ru), why: '' }))
+    const masterMenu = cardMenu(it, { ...ctx, t: ru, devices: menuDevices, deviceAt: 'local' })
+    expect(find(masterMenu, 'device')?.submenu).toEqual([
+      { id: 'device:local', label: 'server-2', checked: true },
+      { id: 'device:server-1', label: 'Atlas Box', checked: false },
+    ])
+    expect(find(masterMenu, 'focus')).toBeDefined()
+    expect(find(masterMenu, 'reveal')).toBeDefined()
+    const remoteMenu = cardMenu(it, {
+      ...ctx,
+      t: ru,
+      device: { title: 'Atlas Box', why: '' },
+      devices: menuDevices,
+      deviceAt: 'server-1',
+    })
+    expect(find(remoteMenu, 'focus')).toBeUndefined()
+    expect(find(remoteMenu, 'reveal')).toBeUndefined()
   })
 })
 

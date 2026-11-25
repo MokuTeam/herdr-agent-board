@@ -645,8 +645,7 @@ function CardActions({ item }: { item: Item }) {
   const away = inMokupilot(item)
   // A card of another device (#502): its herdr pane is not on this computer, so no Go to herdr;
   // while the master does not hear the device, what goes there answers that it is not reachable.
-  const node = nodeLook(item, data?.devices, now, t)
-  const why = node?.why || undefined
+  const why = item.device ? nodeLook(item, data?.devices, now, t)?.why || undefined : undefined
   return (
     <div className="card-actions">
       {/* Its turn interrupted with its program's own key, where the board knows it (#330). */}
@@ -672,7 +671,7 @@ function CardActions({ item }: { item: Item }) {
           <WriteGlyph />
         </button>
       )}
-      {!away && !node && (
+      {!away && !item.device && (
         <button type="button" data-act="focus" title={t('card.focus')} disabled={!canMutate}>
           <FocusGlyph />
         </button>
