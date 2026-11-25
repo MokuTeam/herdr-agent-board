@@ -769,10 +769,6 @@ describe('createNodeTelegram', () => {
       body: { matched: true, result: { ok: true } },
     })
   })
-
-  test('restores original home/env after tests', () => {
-    expect(outside()).toEqual(OUTSIDE)
-  })
 })
 
 describe('#732 duplicate holds and deferred checks', () => {
@@ -1082,7 +1078,59 @@ describe('#732 duplicate holds and deferred checks', () => {
     expect(tabOpened).toBe(0)
   })
 
-  test('local sleeper + offline node live pane holds for offline node without waking local sleeper; offline node sleeper lets local wake; other setups unchanged', async () => {
+  test('createNodeTelegram does not fall back to local herdr delivery when wake /route times out', async () => {
+    const pane: FakePane = {
+      pane_id: 'w1:p1',
+      tab_id: 't1',
+      workspace_id: 'w1',
+      cwd: PROJECT,
+      agent: 'claude',
+      agent_status: 'idle',
+      agent_session: { value: SID },
+    }
+    const w = world({ panes: [pane] })
+    const logs: string[] = []
+    const svcSlow = createNodeTelegram({
+      cfg: { language: 'en', wake: { enabled: true, port: 44123 } } as unknown as Config,
+      profiles: () => w.set,
+      herdr: w.io,
+      readSessions: () => ({}),
+      machine: 'SRV1',
+      wakeTimeoutMs: 40,
+      fetch: (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(init.signal?.reason))
+        }),
+      log: text => logs.push(text),
+    })
+
+    expect(await svcSlow.route({ items: [routeItem({ key: PROJECT, text: 'slow wake' })] })).toEqual({
+      status: 200,
+      body: { matched: true, result: { skip: true, note: ambiguousDeliveryNote('SRV1') } },
+    })
+    expect(w.io.calls).toEqual([])
+    expect(logs.some(l => l.includes('timed out'))).toBe(true)
+
+    const svcTimeoutErr = createNodeTelegram({
+      cfg: { language: 'en', node: { id: 'server-1' }, wake: { enabled: true, port: 44123 } } as unknown as Config,
+      profiles: () => w.set,
+      herdr: w.io,
+      readSessions: () => ({}),
+      machine: 'SRV1',
+      fetch: async () => {
+        throw new DOMException('The operation timed out.', 'TimeoutError')
+      },
+      log: () => {},
+    })
+
+    expect(await svcTimeoutErr.route({ items: [routeItem({ key: PROJECT, text: 'slow wake 2' })] })).toEqual({
+      status: 200,
+      body: { matched: true, result: { skip: true, note: ambiguousDeliveryNote('server-1') } },
+    })
+    expect(w.io.calls).toEqual([])
+  })
+
+  test('local sleeper + offline node live pane holds for offline node without waking local sleeper; offline node sleeper lets local wake', async () => {
     const cfg = {
       nodes: {
         id: 'laptop',
@@ -1184,8 +1232,9 @@ describe('#732 duplicate holds and deferred checks', () => {
       status: 200,
       body: { matched: true, result: { retry: 60, note: offlineRetryNote('Atlas 1') } },
     })
+  })
 
-    // D. Other setups unchanged: standalone (hasRemote=false) wakes local sleeper with 0 remote calls; local live delivers locally with 0 remote calls.
+  test('standalone setup (hasRemote=false) wakes local sleeper with 0 remote calls', async () => {
     const standPane = shellPane('w1:p1')
     const wStand = world({
       panes: [standPane],
@@ -1223,7 +1272,9 @@ describe('#732 duplicate holds and deferred checks', () => {
       note: '⏰ Разбудил сессию «Standalone».',
     })
     expect(standaloneRemoteCalls).toBe(0)
+  })
 
+  test('master with local live session delivers locally with 0 remote calls', async () => {
     const wLive = world({
       panes: [
         {
@@ -1254,5 +1305,9 @@ describe('#732 duplicate holds and deferred checks', () => {
     onTestFinished(() => tgLive.stop())
     expect(await tgLive.route([routeItem({ key: PROJECT })])).toEqual({ ok: true })
     expect(liveRemoteCalls).toBe(0)
+  })
+
+  test('restores original home/env after tests', () => {
+    expect(outside()).toEqual(OUTSIDE)
   })
 })

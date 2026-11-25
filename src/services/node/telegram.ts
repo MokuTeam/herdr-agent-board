@@ -7,10 +7,16 @@ import { hostname } from 'node:os'
 import { isRecord } from '../../adapters/json-store.ts'
 import { peekWakeSessions } from '../../adapters/wake-files.ts'
 import { cliWakeHerdr, type WakeHerdr } from '../../adapters/wake-herdr.ts'
+import { nodeConfig } from '../../core/nodes.ts'
 import type { ProfileSet } from '../../core/profiles.ts'
 import type { Config } from '../../core/types.ts'
 import { wakeConfig } from '../../core/wake/config.ts'
-import { isRouteResult, nodeWakeTimeoutMs, parseRouteItemsBody } from '../../core/wake/node-route.ts'
+import {
+  ambiguousDeliveryNote,
+  isRouteResult,
+  nodeWakeTimeoutMs,
+  parseRouteItemsBody,
+} from '../../core/wake/node-route.ts'
 import { resolve } from '../../core/wake/route.ts'
 import type { WakeSessions } from '../../core/wake/sessions.ts'
 import { type Follow, followFiles } from '../wake/follow.ts'
@@ -34,6 +40,7 @@ export interface NodeTelegramDeps {
   platform?: string
   fetch?: (url: string, init?: RequestInit) => Promise<Response>
   askWake?: boolean
+  wakeTimeoutMs?: number
   log(text: string): void
   refresh?(): void
   sleep?(ms: number): Promise<void>
@@ -41,6 +48,12 @@ export interface NodeTelegramDeps {
 }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
+
+const isTimeoutError = (err: unknown): boolean => {
+  if (typeof err !== 'object' || err === null) return false
+  const name = (err as { name?: unknown }).name
+  return name === 'TimeoutError' || name === 'AbortError'
+}
 
 export function createNodeTelegram(deps: NodeTelegramDeps): NodeTelegram {
   const herdr = deps.herdr ?? cliWakeHerdr
@@ -66,12 +79,13 @@ export function createNodeTelegram(deps: NodeTelegramDeps): NodeTelegram {
 
       const wake = wakeConfig(deps.cfg.wake)
       if (wake.enabled && deps.askWake !== false) {
+        const signal = AbortSignal.timeout(deps.wakeTimeoutMs ?? nodeWakeTimeoutMs(wake.wakeTimeoutSec))
         try {
           const res = await fetchFn(`http://127.0.0.1:${wake.port}/route`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ items, ...(liveOnly && { liveOnly: true }) }),
-            signal: AbortSignal.timeout(nodeWakeTimeoutMs(wake.wakeTimeoutSec)),
+            signal,
           })
           if (res.status === 503) return { status: 200, body: { matched: true, result: { retry: 15 } } }
           if (res.ok) {
@@ -82,7 +96,13 @@ export function createNodeTelegram(deps: NodeTelegramDeps): NodeTelegram {
               return { status: 200, body: { matched: true, result: ans.result } }
             }
           }
-        } catch {}
+        } catch (err) {
+          if (signal.aborted || isTimeoutError(err)) {
+            deps.log(`node telegram wake /route timed out (${messageOf(err)}); not falling back to avoid duplicate`)
+            const label = nodeConfig(deps.cfg.node)?.id ?? machine
+            return { status: 200, body: { matched: true, result: { skip: true, note: ambiguousDeliveryNote(label) } } }
+          }
+        }
       }
 
       // Fallback when wake is off or unreachable: route directly via local herdr and wake-sessions.json.
