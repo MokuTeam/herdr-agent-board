@@ -86,18 +86,23 @@ import {
 } from '../adapters/ssh.ts'
 import { rekeySession } from '../adapters/work-thread-store.ts'
 import { connectWorkdeskEvents } from '../adapters/workdesk-events.ts'
+import { nodeSlicesView } from '../core/board-slices.ts'
 import { NODE_PROGRAMS } from '../core/bundle.ts'
 import { answerText, decisionsConfig } from '../core/decisions.ts'
 import { journalConfig } from '../core/journal.ts'
 import { t } from '../core/lang.ts'
 import {
   BOARD_SLICES_PATH,
+  BULK_FIELD,
   DECISIONS_PATH,
+  masterBulkBody,
   NODE_CLI_PATH,
   ownerCliOf,
   type RelayWho,
+  relayDevicesPath,
   relayedDecisions,
   relayOwnerSetting,
+  relayOwnerTeam,
 } from '../core/master-relay.ts'
 import { messageGate } from '../core/message-gate.ts'
 import { isRoutableNodeAddress } from '../core/mokupilot-mode.ts'
@@ -121,6 +126,7 @@ import type { BackupPayload, CalendarPayload, TimePayload } from '../core/payloa
 import type { Observation } from '../core/presence.ts'
 import { shownProfiles } from '../core/profiles.ts'
 import { pwaPage } from '../core/pwa.ts'
+import { ownerTeam } from '../core/remote.ts'
 import { heldByDevice } from '../core/schedule-rules.ts'
 import type { SetupFacts } from '../core/setup.ts'
 import { teamConfig } from '../core/team.ts'
@@ -1132,7 +1138,18 @@ export async function startServer({
       }
     },
     // A node's master-run parts of the payload (#780): only once its master gave them.
-    masterSlices: () => (nodeConfig(cfg.node) ? (nodeSlices?.current() ?? null) : null),
+    // Since #786 also Team's numbers and the master's devices, rebased so this computer is `local`.
+    masterSlices: () => {
+      const n = nodeConfig(cfg.node)
+      const got = n ? (nodeSlices?.current() ?? null) : null
+      if (!n || !got) return null
+      return nodeSlicesView(got, {
+        self: n.id,
+        ownTeam: teamConfig(cfg.team) !== null,
+        ownDevices: nodesConfig(cfg.nodes) !== null,
+        online: masterRelay?.online() ?? false,
+      })
+    },
     // Threads (#379): while config.json turns them on, the revision and the count that waits on
     // the owner (two queries a refresh); off, nothing is read.
     threads: () => {
@@ -1480,8 +1497,14 @@ export async function startServer({
       }
       if (req.method !== 'GET' && path.startsWith('/api/') && path !== '/api/presence' && ownOrigin(req))
         presence.touch()
-      // Adding a server or a computer on a node would make a second master by accident (#777).
-      if (SETUP_PATHS.has(path) && isNodeOnly(cfg)) return json(409, { ok: false, error: t('node.add.onNode') })
+      // Adding a server or a computer on a node would make a second master by accident (#777): it
+      // goes to the master over the relay instead (#786), as Devices does.
+      if (SETUP_PATHS.has(path) && isNodeOnly(cfg)) {
+        const up = masterRelayFirst
+          ? await dispatch([masterRelayFirst], req, url, path, guards, () => peerOf(srv, req))
+          : null
+        return up ?? json(409, { ok: false, error: t('node.add.onNode') })
+      }
       const selected =
         path === '/api/board-events' || path === '/api/board-events/ack'
           ? localEventRoutes
@@ -1550,23 +1573,65 @@ export async function startServer({
         ...(req.method === 'POST' && { body: JSON.stringify(next.body) }),
       })
     }
+    // A node's bulk request (#786): a key of this board's own loses its prefix, a move to this
+    // board's own id is a move to `local`; every other machine's key goes on to the node proxy.
+    if (from && req.method === 'POST' && BULK_FIELD[raw]) {
+      const selfId = nodesConfig(cfg.nodes, hostname())?.id ?? ''
+      const body = masterBulkBody(raw, await req.json().catch(() => null), selfId)
+      req = new Request(url, { method: req.method, headers: req.headers, body: JSON.stringify(body) })
+    }
+    const owner = from?.who.kind === 'owner'
+    // Devices and its setup forms (#786): a master's own, the owner's on each paired device (never a
+    // node session's), each change in the admin log. Answered by the same routes as on this
+    // computer (answer() picks them there); a board without `nodes` has none of them.
+    if (from && relayDevicesPath(raw)) {
+      if (!owner) return json(403, { ok: false, error: 'owner' })
+      const picked =
+        raw === '/api/nodes'
+          ? localNodeRoutes
+          : isNodeOnly(cfg)
+            ? null
+            : raw === '/api/nodes/setup'
+              ? localSetupRoutes
+              : raw === '/api/nodes/relay/setup'
+                ? localRelaySetupRoutes
+                : localComputerSetupRoutes
+      if (!picked) return json(404, { ok: false, error: 'not found' })
+      return replayAdmin(req, url, path, picked, from.device, req.method !== 'GET')
+    }
     // The settings of the features the master runs for every machine (#780), which a remote
     // listener keeps on this computer (localOnly), are the owner's on each of its paired devices
     // too; never a node session's. What acts on this computer's screen stays refused. Each write of
     // them goes into the admin log, as an owner-admin login's does through the tunnel.
     const setting = relayOwnerSetting(req.method, raw, from?.who)
-    const refused = remoteRefusal(raw, path, false, false, true, setting)
+    // Team (#786): the owner's on each paired device as at the computer, but the passkey's own
+    // window; a change of what agents or peers may do goes into the admin log.
+    const team = owner && relayOwnerTeam(req.method, raw)
+    const refused = remoteRefusal(raw, path, false, false, true, setting || team)
     if (refused) return refused
     const table = masterRelayFirst ? routes.filter(r => r !== masterRelayFirst) : routes
-    const logAdmin = setting && req.method !== 'GET'
-    if (logAdmin && !board.checkAdminAudit()) return json(503, { ok: false, error: 'audit' })
-    const op = logAdmin ? await adminOpOf(req) : undefined
+    const device = from?.device ?? 'unknown'
+    if (team) return replayAdmin(req, url, path, table, device, req.method !== 'GET' && !ownerTeam(raw))
+    return replayAdmin(req, url, path, table, device, setting && req.method !== 'GET')
+  }
+
+  /** A relayed request run against `table` as a remote caller's; with `log`, in the admin log as the owner's on `device`. */
+  async function replayAdmin(
+    req: Request,
+    url: URL,
+    path: string,
+    table: Route[],
+    device: string,
+    log: boolean,
+  ): Promise<Response> {
+    if (log && !board.checkAdminAudit()) return json(503, { ok: false, error: 'audit' })
+    const op = log ? await adminOpOf(req) : undefined
     let res: Response | undefined
     try {
       res = await dispatch(table, req, url, path, { ...guards, remote: true })
       return res
     } finally {
-      if (logAdmin)
+      if (log)
         board.recordAdmin({
           kind: 'admin',
           at: Date.now(),
@@ -1575,8 +1640,8 @@ export async function startServer({
           ...(op && { op }),
           status: res?.status ?? 500,
           via: 'relay',
-          who: `owner on ${from?.device ?? 'unknown'}`,
-          from: from?.device ?? 'unknown',
+          who: `owner on ${device}`,
+          from: device,
         })
     }
   }
@@ -1753,7 +1818,18 @@ export async function startServer({
       profiles: () => deps.profiles(),
       log,
     })
-    const upRelay = createMasterRelay({ cfg, items: board.items, log })
+    const upRelay = createMasterRelay({
+      cfg,
+      items: board.items,
+      log,
+      // What this node answers itself (#786): a Team of its own config.json, and a start the master placed here.
+      stays: (entry, raw) =>
+        entry.group === 'team'
+          ? teamConfig(cfg.team) !== null
+          : entry.group === 'launch' && /^\/api\/launch\/[\w-]+\//.test(raw)
+            ? launches.list().some(l => l.id === raw.split('/')[3])
+            : false,
+    })
     const upFlags = createNodeMasterFlags({ cfg, log, changed: () => void runRefresh() })
     nodeFlags = upFlags
     upFlags.apply()

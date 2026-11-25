@@ -1,6 +1,6 @@
 // A node's copy of its master's time, calendar, journal and presence for its own page (#780, epic
-// #763 T4a; the parts: core/board-slices.ts). While the master holds its relay stream here and has one
-// of those features on, the node asks GET /api/board-slices over the relay every little while
+// #763 T4a; since #786 Team's numbers and the devices too; the parts: core/board-slices.ts). While the
+// master holds its relay stream here and has sent its flags, the node asks GET /api/board-slices over the relay every little while
 // (paced), and once at once when the master's flags change; a change refreshes the payload. The
 // last parts stay while the master is away: the page keeps its panels, whose calls answer 503 and
 // whose banner (#744) says the master is offline; a master whose owner turned this computer off
@@ -9,7 +9,7 @@
 import { pace } from '../../adapters/pacing.ts'
 import { type BoardSlices, boardSlicesOf } from '../../core/board-slices.ts'
 import type { MasterFlags } from '../../core/master-flags.ts'
-import { BOARD_SLICE_KEYS, BOARD_SLICES_PATH, RELAY_ERRORS } from '../../core/master-relay.ts'
+import { BOARD_SLICES_PATH, RELAY_ERRORS } from '../../core/master-relay.ts'
 import type { MasterRelay } from './master-relay.ts'
 
 export interface NodeMasterSlices {
@@ -40,10 +40,9 @@ export function createNodeMasterSlices(deps: NodeMasterSlicesDeps): NodeMasterSl
   let again = false
   let closed = false
 
-  const wanted = (): boolean => {
-    const on = deps.flags()?.on ?? []
-    return BOARD_SLICE_KEYS.some(k => on.includes(k))
-  }
+  // Since #786 the master's devices come with them, which every master of a node has: asked once
+  // its flags came, whatever features it has on.
+  const wanted = (): boolean => deps.flags() !== null
 
   function take(next: BoardSlices | null): void {
     const text = JSON.stringify(next)
@@ -59,7 +58,7 @@ export function createNodeMasterSlices(deps: NodeMasterSlicesDeps): NodeMasterSl
       again = true
       return
     }
-    // Every one of them off at the master: none on show here.
+    // No flags from the master yet: none on show here.
     if (!wanted()) return take(null)
     asking = true
     try {

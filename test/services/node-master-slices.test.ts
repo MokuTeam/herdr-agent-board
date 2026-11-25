@@ -1,6 +1,6 @@
 // A node's copy of its master's payload parts (#780, services/node/master-slices.ts): asked over the
-// relay only while the master's stream is up and one of the four features is on there; a change
-// refreshes the payload; the master away keeps the last parts; none on at the master shows none.
+// relay only while the master's stream is up and its flags came (#786: the devices come with them,
+// whatever is on there); a change refreshes the payload; the master away keeps the last parts.
 import { expect, test } from 'bun:test'
 import type { MasterFlags } from '../../src/core/master-flags.ts'
 import { createNodeMasterSlices } from '../../src/services/node/master-slices.ts'
@@ -60,7 +60,7 @@ test('asked when poked while the stream is up; the parts and one refresh', async
   h.slices.close()
 })
 
-test('nothing asked while the master holds no stream, nor while none of the four is on there', async () => {
+test('nothing asked while the master holds no stream, nor before its flags came', async () => {
   const off = harness({ online: false })
   off.slices.poke()
   await settle()
@@ -68,12 +68,24 @@ test('nothing asked while the master holds no stream, nor while none of the four
   expect(off.slices.current()).toBeNull()
   off.slices.close()
 
-  const none = harness({ on: ['threads', 'watches'] })
+  const none = harness()
+  none.setFlags(null)
   none.slices.poke()
   await settle()
   expect(none.asked).toEqual([])
   expect(none.slices.current()).toBeNull()
   none.slices.close()
+})
+
+test('#786: asked with none of the four on at the master, for its devices and Team numbers', async () => {
+  const h = harness({ on: ['threads', 'team'] })
+  const devices = [{ id: 'local', selfId: 'atlas' }, { id: 'ben' }]
+  h.setAnswer(() => new Response(JSON.stringify({ ok: true, slices: { teamRev: 3, teamUnread: 1, devices } })))
+  h.slices.poke()
+  await settle()
+  expect(h.asked).toEqual(['/api/board-slices'])
+  expect(h.slices.current()).toEqual({ teamRev: 3, teamUnread: 1, devices } as never)
+  h.slices.close()
 })
 
 test('a poke while a question is out asks again once it is answered', async () => {
@@ -103,7 +115,7 @@ test("the master's owner turned this computer off: none of its parts on show", a
   h.slices.close()
 })
 
-test('the master away or an older master: the last parts stay; all four off at the master: none', async () => {
+test('the master away or an older master: the last parts stay; no flags from the master: none', async () => {
   const h = harness()
   h.slices.poke()
   await settle()
@@ -115,7 +127,7 @@ test('the master away or an older master: the last parts stay; all four off at t
   h.slices.poke()
   await settle()
   expect(h.slices.current()?.time?.seq).toBe(1)
-  h.setFlags(flagsOn(['threads']))
+  h.setFlags(null)
   h.slices.poke()
   await settle()
   expect(h.slices.current()).toBeNull()

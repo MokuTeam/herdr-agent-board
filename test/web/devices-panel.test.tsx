@@ -1114,3 +1114,20 @@ describe('rename a device (#601)', () => {
     })
   })
 })
+
+describe("a node's own page (#786): its master's devices, relayed", () => {
+  test('Add a server and Add a computer are offered (they go to the master); Move master role is not', () => {
+    const relayed = draw(
+      payload({ devices: DEVICES, categories: CATEGORIES, machine: 'server-1', relayedDevices: true }),
+    )
+    const words = text(relayed)
+    expect(words).toContain(t('node.add.title'))
+    expect(words).not.toContain(t('node.handover.title'))
+    expect(words).not.toContain(t('node.add.onNode'))
+    expect(rowsOf(relayed)).toHaveLength(DEVICES.length)
+  })
+
+  test("a master's own page is as before: Move master role is there", () => {
+    expect(text(draw(full()))).toContain(t('node.handover.title'))
+  })
+})

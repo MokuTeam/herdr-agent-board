@@ -1206,7 +1206,7 @@ async function main(): Promise<void> {
     return
   }
 
-  if (cmd === 'update') return selfUpdateNow()
+  if (cmd === 'update') return isNodeOnly(cfg) ? updateFromMaster() : selfUpdateNow()
 
   if (cmd === 'housekeeping') {
     const usageErr = 'usage: board housekeeping --dry-run [--json] | board housekeeping status [--json]'
@@ -1750,7 +1750,10 @@ async function restart(s: Session): Promise<void> {
  * it is. Without a web board answering there is no fork: it is the board that starts it.
  */
 async function fork(): Promise<void> {
-  const s = await resolveSession()
+  // On a node (#786), another machine's session by its key: its board forks it, through the master.
+  const node = nodeConfig(cfg.node)
+  const { foreignTargets } = await import('./node-remote-cli.ts')
+  const s = node && target && foreignTargets([target], node.id) ? { key: target, name: target } : await resolveSession()
   if (cfg.web === false) throw new Error('board fork goes through the web board, and config.json turns it off')
   const res = await fetch(`http://127.0.0.1:${cfg.port ?? 12422}/api/session/${encodeURIComponent(s.key)}/fork`, {
     method: 'POST',
@@ -1910,6 +1913,9 @@ async function archive(): Promise<void> {
     throw new Error(
       'usage: board archive --session <id|name|pane>: the session to take off the board (one you started, or one the user asked you to)',
     )
+  // On a node (#786), another machine's session by its key: archived there, through the master.
+  const node = nodeConfig(cfg.node)
+  if (node && (await import('./node-remote-cli.ts')).foreignTargets([target], node.id)) return archiveUp(target)
   // Its helpers too: one with helpers at work stays, as on the web board.
   const items = await collect(deps, { helpers: true })
   const want = target.toLowerCase()
@@ -1957,6 +1963,35 @@ async function archive(): Promise<void> {
   )
 }
 
+/** `board archive` of another machine's session from a node (#786): through the master, which hands it on. */
+async function archiveUp(key: string): Promise<void> {
+  const { boardCall, relayLine } = await import('./node-remote-cli.ts')
+  const r = await boardCall(cfg.port, '/api/archive', { method: 'POST', body: { op: 'archive', keys: [key] } })
+  if (!r) throw new Error(NO_BOARD)
+  const plain = relayLine(r)
+  if (plain) throw new Error(`${key} stays on the board: ${plain}`)
+  const failed = Array.isArray(r.body.failed) ? r.body.failed.filter(isRecord) : []
+  if (r.body.ok !== true || failed.length)
+    throw new Error(`${key} stays on the board: ${String(failed[0]?.error ?? r.body.error ?? r.status)}`)
+  console.log(`ok · archived ${key}: the user can bring it back from the board's archive (Archive on the toolbar)`)
+}
+
+/** `board sleep` naming another machine's sessions from a node (#786): through the master, which hands each to its machine. */
+async function sleepUp(targets: string[]): Promise<void> {
+  const { boardCall, relayLine } = await import('./node-remote-cli.ts')
+  const r = await boardCall(cfg.port, '/api/sleep', {
+    method: 'POST',
+    body: { targets, ...(whenFree && { whenFree: true }) },
+  })
+  if (!r) throw new Error(NO_BOARD)
+  const plain = relayLine(r)
+  if (plain) throw new Error(`${plain}; nothing was put to sleep`)
+  const results = (Array.isArray(r.body.results) ? r.body.results.filter(isRecord) : []) as unknown as SleepOutcome[]
+  if (!results.length) throw new Error(`the board said ${r.status}${r.body.error ? `: ${String(r.body.error)}` : ''}`)
+  const asleep = results.filter(o => o.result === 'asleep').length
+  console.log([`ok · ${asleep} put to sleep of ${results.length}`, ...results.map(sleepLine)].join('\n'))
+}
+
 // What holds a session up, for `board sleep`'s lines.
 const KEPT: Record<string, string> = {
   busy: 'working',
@@ -2000,6 +2035,9 @@ async function sleep(): Promise<void> {
     throw new Error(
       'usage: board sleep <id|name|pane>... [--when-free] [--self]: the sessions to put to sleep (a name with spaces in quotes; --self: this one, once its turn is over)',
     )
+  // On a node (#786), another machine's sessions by their keys: put to sleep there, through the master.
+  const node = nodeConfig(cfg.node)
+  if (node && !self && (await import('./node-remote-cli.ts')).foreignTargets(targets, node.id)) return sleepUp(targets)
   const up = await wakeAnswers(deps)
   if (!up.ok) throw new Error(`putting sessions to sleep needs ${wakeMissing(up)}; nothing was put to sleep`)
   const from = await ownSession()
@@ -2580,6 +2618,8 @@ async function nodesCmd(): Promise<void> {
     'usage: board nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]]'
   const { nodesConfig } = await import('../core/nodes.ts')
   const nodes = nodesConfig(cfg.nodes, (await import('node:os')).hostname())
+  // On a node (#786): the master's devices, read through the relay; update and sync asked of it.
+  if (!nodes && isNodeOnly(cfg)) return nodesOnNode(op, id)
   if (!nodes) return console.log('this board is not a master: config.json has no `nodes`')
   const webPort = Number(cfg.port) || 12422
   const device = (): string => {
@@ -2707,6 +2747,43 @@ const UPDATE_WHY: Record<string, string> = {
  * `board nodes update <id>` (#590, docs/design/nodes 6.5): the running board ships its commit to
  * the device now, a session there in a turn or not, and says how it went.
  */
+/**
+ * `board nodes` on a node (#786): the master's devices, read through the relay, and Update and
+ * Sync asked of the master; adding, revoking and tokens stay on the master.
+ */
+async function nodesOnNode(op: string, id: string): Promise<void> {
+  const webPort = Number(cfg.port) || 12422
+  const usage = 'usage on a node: board nodes [update <id> | sync <id> [<profile>]]; the rest runs on the master'
+  if (op === 'update') {
+    if (!id || words.length > 2) throw new Error(usage)
+    return nodesUpdate(webPort, id)
+  }
+  if (op === 'sync') {
+    if (!id || words.length > 3) throw new Error(usage)
+    return nodesSync(webPort, id, words[2])
+  }
+  if (op !== 'status' || words.length > 0) throw new Error(usage)
+  const { boardCall, relayLine } = await import('./node-remote-cli.ts')
+  const r = await boardCall(webPort, '/api/nodes', { ms: 5000 })
+  if (!r) throw new Error(NO_BOARD)
+  const plain = relayLine(r)
+  if (plain) throw new Error(plain)
+  const devices = Array.isArray(r.body.devices) ? r.body.devices.filter(isRecord) : null
+  if (!devices) throw new Error(`the board said ${r.status}${r.body.error ? `: ${String(r.body.error)}` : ''}`)
+  const masterId = String(devices.find(d => d.id === 'local')?.selfId ?? 'local')
+  const self = nodeConfig(cfg.node)?.id
+  console.log(
+    [
+      `master ${masterId}`,
+      ...devices.map(d =>
+        d.id === 'local'
+          ? `${masterId} · the master`
+          : `${deviceLine(d, masterId)}${d.id === self ? ' · this computer' : ''}`,
+      ),
+    ].join('\n'),
+  )
+}
+
 async function nodesUpdate(webPort: number, id: string): Promise<void> {
   let res: Response
   try {
@@ -3641,6 +3718,16 @@ async function callReport(): Promise<void> {
  * /api/self-update), whether or not the schedule is on. After an update that restarts the board it
  * waits for the new board to finish it (the record that names the new commit), 3.5 minutes at most.
  */
+/**
+ * `board update` on a node (#786): a node runs its master's commit, so the master ships it here
+ * (Settings, Devices' Update; POST /api/nodes { op: 'update' } through the relay).
+ */
+async function updateFromMaster(): Promise<void> {
+  const node = nodeConfig(cfg.node)
+  if (!node) return selfUpdateNow()
+  return nodesUpdate(Number(cfg.port) || 12422, node.id)
+}
+
 async function selfUpdateNow(): Promise<void> {
   if (cfg.web === false) throw new Error('board update goes through the web board, and config.json turns it off')
   const url = `http://127.0.0.1:${cfg.port ?? 12422}/api/self-update`

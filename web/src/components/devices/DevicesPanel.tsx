@@ -9,7 +9,9 @@
 // every device is full. The devices' live state comes with the payload (`devices`); the section's
 // own keys and the board's figures from GET /api/nodes, asked at each opening and answered again
 // by every change. Every change goes to config.json at once (POST /api/nodes) and comes back over
-// the live stream.
+// the live stream. On a node's own page the payload carries its master's devices (#786,
+// `relayedDevices`): the same panel, its changes and Add a server / Add a computer going to the
+// master over the relay; Move master role stays on the master.
 import { type FocusEvent, type KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { ApiError, api, errorText } from '../../api/client.ts'
 import { useHeld } from '../../hooks/useHeld.ts'
@@ -213,7 +215,10 @@ export function DevicesPanel({ open, onClose, back, initial, setup, computerSetu
             {...(computerSetup && { initial: computerSetup })}
           />
         )}
-        {master && <MasterHandover open={open} devices={shown} {...(handover && { initial: handover })} />}
+        {/* Moving the master role is done on the master (#786: a node's page shows its devices, relayed). */}
+        {master && !data?.relayedDevices && (
+          <MasterHandover open={open} devices={shown} {...(handover && { initial: handover })} />
+        )}
         {master && <LanesSection settings={settings} disabled={!canEdit} send={send} />}
         {master && (
           <section className="devices-section">

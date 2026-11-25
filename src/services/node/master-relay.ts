@@ -7,20 +7,27 @@
 // headers and body, a stream (SSE) chunk by chunk with the caller's pace. Without a master on the
 // stream: 503 node-master-offline, never this board's own answer (a 409 "off" for a feature the
 // master has).
+//
+// A body-gated path (#786: a move to a device, a bulk request naming another machine's session)
+// goes up only when its body says so, with this computer's own sessions named by their prefixed
+// keys; the rest stays with this board's own routes, as before.
 import { createHash, randomBytes } from 'node:crypto'
 import { knobMs } from '../../adapters/pacing.ts'
 import {
   IDEMPOTENCY_HEADER,
   isIdemKey,
   isRelayId,
+  nodeBulkBody,
   plainPath,
   RELAY_BODY_MAX,
   RELAY_ERRORS,
   RELAY_INLINE_BYTES,
   RELAY_PATH_MAX,
   RELAY_REQUEST_HEADERS,
+  type RelayEntry,
   type RelayRequest,
   type RelayWho,
+  relayBodyWants,
   relayChunkOf,
   relayError,
   relayHeadOf,
@@ -69,6 +76,11 @@ export interface MasterRelayDeps {
   headMs?: number
   /** The most bytes a streamed answer keeps for a slow caller before the master waits. */
   streamQueueBytes?: number
+  /**
+   * A path of the table this board answers itself after all (#786): a group its own config.json
+   * runs (its own Team), or a start of its own (a launch the master placed here). Absent: none.
+   */
+  stays?(entry: RelayEntry, rawPath: string): boolean
 }
 
 interface Waiting {
@@ -286,6 +298,28 @@ export function createMasterRelay(deps: MasterRelayDeps): MasterRelay {
       if (!enabled()) return undefined
       const match = relayMatch(req.method, caller.rawPath, skip)
       if (!match) return undefined
+      if (match.kind === 'table' && deps.stays?.(match.entry, caller.rawPath)) return undefined
+      // A body-gated entry (#786): its body decides, read from a copy so a body that stays here
+      // reaches this board's own route whole.
+      let gated: Uint8Array<ArrayBuffer> | null = null
+      if (match.kind === 'table' && match.entry.when) {
+        const self = nodeConfig(deps.cfg.node)?.id ?? ''
+        const copy = await bodyUpTo(req.clone(), RELAY_BODY_MAX)
+        let body: unknown = null
+        try {
+          body = copy ? JSON.parse(new TextDecoder().decode(copy)) : null
+        } catch {}
+        if (!copy || !self || !relayBodyWants(match.entry.when, caller.rawPath, body, self)) return undefined
+        const own = (target: string): string | null => {
+          const want = target.toLowerCase()
+          const items = deps.items()
+          let found = items.filter(i => [i.key, i.session, i.pane].some(v => !!v && String(v).toLowerCase() === want))
+          if (!found.length) found = items.filter(i => !!i.name && i.name.toLowerCase() === want)
+          return found.length === 1 ? (found[0]?.key ?? null) : null
+        }
+        const sent = nodeBulkBody(caller.rawPath, body as Record<string, unknown>, self, own)
+        gated = new Uint8Array(Buffer.from(JSON.stringify(sent)))
+      }
       // The node's own remote listeners: the master cannot tell who is behind them.
       if (caller.remote) return refused(403, RELAY_ERRORS.remote)
       const write = req.method !== 'GET'
@@ -304,7 +338,8 @@ export function createMasterRelay(deps: MasterRelayDeps): MasterRelay {
       if (write && given !== null && !isIdemKey(given)) return refused(400, RELAY_ERRORS.badIdem)
       if (!clients.size) return refused(503, RELAY_ERRORS.offline)
       let bytes: Uint8Array<ArrayBuffer> | null = new Uint8Array(0)
-      if (write) {
+      if (gated) bytes = gated
+      else if (write) {
         bytes = await bodyUpTo(req, RELAY_BODY_MAX)
         if (!bytes) return refused(413, RELAY_ERRORS.tooBig)
       }

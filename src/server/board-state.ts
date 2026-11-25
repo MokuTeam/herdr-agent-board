@@ -161,7 +161,7 @@ interface Options {
    * A node's master-run parts of the payload (time, calendar, journal, presence) as its master last
    * gave them (#780); null elsewhere. They stand for the node's own, which its config.json no longer has.
    */
-  masterSlices?: () => BoardSlices | null
+  masterSlices?: () => Partial<BoardPayload> | null
 }
 
 // The colors the category editor offers (aliases left out).

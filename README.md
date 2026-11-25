@@ -4956,6 +4956,20 @@ What goes up is a declared list, one feature group at a time:
   requests from it pass (never a node session's), and each write is in the master's admin log
   (`GET /api/links/log`, `via: "relay"`, the device as `from`). The master's bundle brings new
   lanes back to every node.
+- Team (#786): `/api/team` and every path under it, as the owner at the master's computer, but the
+  passkey's own window (`/api/team/confirm/<id>`) and changes to the passkey list, which sign on the
+  master's screen. A send that waits for the passkey answers 428 with `where: "computer"`: the
+  owner confirms it on the master. A node that runs a Team of its own keeps answering it itself.
+- Devices (#786): `/api/nodes` and the Add a server, Add a computer and relay forms
+  (`/api/nodes/setup`, `/api/nodes/computer/setup`, `/api/nodes/relay/setup`), for the owner only
+  (a node session gets 403), each change in the admin log. On a node these forms go up instead of
+  being refused; Move master role stays on the master.
+- Starts (#786): `GET /api/launch/options`, `POST /api/launch` and a start's dismiss, trust and close
+  (a start the master placed on this node stays its own). The master's placer picks the machine.
+- Moves and bulk requests (#786): `POST /api/move` with a device other than `local`, and
+  `POST /api/sleep` or `POST /api/archive` that name another machine's session. The node names its
+  own sessions in them by `@<its id>:<key>` (and `local` by its id), so the master's node proxy
+  hands them back; anything else stays with the node's own route.
 
 A request that names another machine's session (`/api/session/@<device>:<key>/...`) goes up too,
 and the master hands it to its own node proxy. Everything else stays on the node as before;
@@ -4965,8 +4979,8 @@ checks the list again itself and never takes another path from a node.
 Two more paths are the master's answers for a node only, never routes of its own:
 
 - `GET /api/board-slices`: the master's `time`, `calendar`, `journal` and `presence` parts of its
-  payload. The node asks for them every 15 seconds while the master's stream is up and one of
-  them is on there, and when the master's flags come; it puts them in its own payload, so its page
+  payload, and since #786 Team's `teamRev` and `teamUnread` and its `devices`. The node asks for
+  them every 15 seconds while the master's stream is up and its flags came, and when they change; it puts them in its own payload, so its page
   shows those panels with the master's data, and their calls go up the relay. While the master is
   away the node keeps the last ones, its calls answer 503 and the page's banner says the shared
   board is offline.
@@ -4975,6 +4989,13 @@ Two more paths are the master's answers for a node only, never routes of its own
   the master as the owner's, as they would in a terminal there; `board time` takes the lane the
   terminal's folder maps to on the node. `board time import` and `board cal push` carry a file and
   stay with a session's call.
+
+Since #786 a terminal on a node also has `board nodes` (the master's devices; `update <id>` and
+`sync <id>` asked of the master), `board update` (the master ships its commit to this node), and
+`board sleep`, `board archive --session` and `board fork --session` with another machine's
+`@<device>:<key>`, which go through the node's own board and its relay. The node's own page shows
+the master's devices with this computer as the row with no link (`relayedDevices`), and the Team
+panel while the master runs Team.
 
 The machines are one mesh: the master takes what any of its nodes relays as the owner's, and
 everything talks to everything. Who the request is only narrows that:

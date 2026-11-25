@@ -4,7 +4,8 @@
 // only because the node sent it.
 //
 // The table names the master-owned paths, one group at a time (T1: threads; T4a, #780: time,
-// calendar, journal, presence, their settings and the categories). A node also passes up
+// calendar, journal, presence, their settings and the categories; T4b, #786: Team, Devices and its
+// setup forms, starts, moves to a device, and bulk requests that name another machine's session). A node also passes up
 // a request that names another machine's session (`/api/session/@<device>:<key>/...`), which the
 // master hands to its own node proxy.
 //
@@ -51,6 +52,11 @@ export interface RelayEntry {
    * the payload's master-run parts and a sessionless terminal's command (#780).
    */
   relayOnly?: true
+  /**
+   * Relayed only when the body says so (#786, relayBodyWants): `device`, a move to another device;
+   * `foreign`, a bulk request that names another machine's session. Any other body stays here.
+   */
+  when?: 'device' | 'foreign'
 }
 
 /**
@@ -84,6 +90,17 @@ export const RELAY_TABLE: readonly RelayEntry[] = [
   { group: 'settings', method: 'GET', path: /^\/api\/threads-settings$/ },
   { group: 'settings', method: 'POST', path: /^\/api\/threads-settings$/ },
   { group: 'settings', method: 'POST', path: /^\/api\/categories$/ },
+  // T4b (#786): Team, Devices, starts and moves.
+  { group: 'team', method: 'GET', path: /^\/api\/team(?:\/[^/]+)*$/ },
+  { group: 'team', method: 'POST', path: /^\/api\/team(?:\/[^/]+)*$/ },
+  { group: 'devices', method: 'GET', path: /^\/api\/nodes(?:\/(?:setup|relay\/setup|computer\/setup))?$/ },
+  { group: 'devices', method: 'POST', path: /^\/api\/nodes(?:\/(?:setup|relay\/setup|computer\/setup))?$/ },
+  { group: 'launch', method: 'GET', path: /^\/api\/launch\/options$/ },
+  { group: 'launch', method: 'POST', path: /^\/api\/launch$/ },
+  { group: 'launch', method: 'POST', path: /^\/api\/launch\/[\w-]+\/(?:dismiss|trust|close)$/ },
+  { group: 'moves', method: 'POST', path: /^\/api\/move$/, when: 'device' },
+  { group: 'moves', method: 'POST', path: /^\/api\/sleep$/, when: 'foreign' },
+  { group: 'moves', method: 'POST', path: /^\/api\/archive$/, when: 'foreign' },
   { group: 'payload', method: 'GET', path: /^\/api\/board-slices$/, relayOnly: true },
   { group: 'cli', method: 'POST', path: /^\/api\/node-cli$/, relayOnly: true },
 ]
@@ -463,3 +480,95 @@ export function masterPath(path: string, selfId: string): string {
   if (!keyed || !selfId || keyed.device !== selfId) return path
   return `/api/${keyed.area}/${encodeURIComponent(keyed.key)}${keyed.rest}${path.slice(raw.length)}`
 }
+
+// ---------------------------------------------------------------- T4b (#786)
+
+/** The bulk routes' field of session keys, as the board's own routes read them. */
+export const BULK_FIELD: Readonly<Record<string, 'targets' | 'keys'>> = {
+  '/api/move': 'targets',
+  '/api/sleep': 'targets',
+  '/api/archive': 'keys',
+}
+
+/**
+ * Whether a body-gated entry (RelayEntry.when) goes up for this body (#786): a move to a device
+ * other than this computer (`local`), or a bulk request naming a session of another machine than
+ * `self`. Anything else, a body that is no JSON object too, stays with this board's own route.
+ */
+export function relayBodyWants(when: 'device' | 'foreign', path: string, body: unknown, self: string): boolean {
+  if (!isObject(body)) return false
+  if (when === 'device') return typeof body.device === 'string' && body.device !== '' && body.device !== 'local'
+  const field = BULK_FIELD[path]
+  const list = field && Array.isArray(body[field]) ? (body[field] as unknown[]) : []
+  return list.some(t => {
+    const at = typeof t === 'string' ? parseNodeKey(t) : null
+    return !!at && at.device !== self
+  })
+}
+
+/**
+ * A bulk body as a node sends it up (#786): each of its own sessions (`own`, by key, session id,
+ * pane or name, one match only) named by its prefixed key, which the master's node proxy hands back
+ * to this node; a move's device `local` (this computer) by this node's id. What it does not know
+ * goes as it came, for the master to read.
+ */
+export function nodeBulkBody(
+  path: string,
+  body: Record<string, unknown>,
+  self: string,
+  own: (target: string) => string | null,
+): Record<string, unknown> {
+  const field = BULK_FIELD[path]
+  if (!field || !Array.isArray(body[field])) return body
+  const list = (body[field] as unknown[]).map(t => {
+    if (typeof t !== 'string' || !t || parseNodeKey(t)) return t
+    const key = own(t)
+    if (!key) return t
+    try {
+      return nodeKey(self, key)
+    } catch {
+      return t
+    }
+  })
+  return {
+    ...body,
+    [field]: list,
+    ...(path === '/api/move' && body.device === 'local' && { device: self }),
+  }
+}
+
+/**
+ * A bulk body as the master runs it (#786): a key with the master's own prefix loses it (the
+ * master knows its own sessions by their bare keys), and a move to the master's own id is a move
+ * to `local`. Every other key keeps its prefix for the node proxy.
+ */
+export function masterBulkBody(path: string, body: unknown, selfId: string): unknown {
+  const field = BULK_FIELD[path]
+  if (!field || !isObject(body) || !selfId) return body
+  const list = Array.isArray(body[field])
+    ? (body[field] as unknown[]).map(t => {
+        const at = typeof t === 'string' ? parseNodeKey(t) : null
+        return at && at.device === selfId ? at.key : t
+      })
+    : body[field]
+  return {
+    ...body,
+    [field]: list,
+    ...(path === '/api/move' && body.device === selfId && { device: 'local' }),
+  }
+}
+
+/**
+ * Team for a relayed owner (#786): every /api/team path as at the computer (the machines are one
+ * mesh), but the passkey's own window and its list's changes, which sign on the master's screen.
+ * A send that waits for the passkey answers 428 with `where: 'computer'` there (the request is
+ * from away), and the owner confirms it on the master.
+ */
+export const relayOwnerTeam = (method: string, rawPath: string): boolean =>
+  /^\/api\/team(?:\/[^/]+)*$/.test(rawPath) &&
+  !/^\/api\/team\/confirm\/[^/]+$/.test(rawPath) &&
+  !(method !== 'GET' && rawPath === '/api/team/passkeys')
+
+/** Devices and its setup forms (#786): a master's alone, which it answers a relayed owner (never a session). */
+export const relayDevicesPath = (rawPath: string): boolean =>
+  /^\/api\/nodes(?:\/(?:setup|relay\/setup|computer\/setup))?$/.test(rawPath)
