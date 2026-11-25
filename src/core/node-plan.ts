@@ -830,6 +830,9 @@ function applySteps(f: NodeFacts, w: NodeWanted, waitS: number): NodeStep[] {
         // one copy, out of every other user's reach, checked and unpacked: the file cannot change between
         `cp ${arch} "$W/plugin.tar" || exit 1`,
         `[ "$(sha256sum < "$W/plugin.tar" | cut -c1-64)" = ${sha} ] || { echo "the archive at "${arch}" is not the one the board sent"; exit 1; }`,
+        // A folder that holds a .git is someone's clone (#793, #795): never moved or removed. Refused
+        // before anything is touched, with the folder named; the owner moves it away by hand.
+        `for d in agent-board agent-board.old agent-board.new; do if ${holdsGit('"$H/$d"')}; then echo "$H/$d holds a git checkout (.git): it is kept and the plugin is not replaced; move it away by hand"; exit 1; fi; done`,
         // unpacked and installed beside the plugin's folder, then moved in; the one before stays as agent-board.old
         `asNode sh -c 'rm -rf "$HOME/agent-board.new" "$HOME/agent-board.old" && mkdir "$HOME/agent-board.new" && tar -xf - -C "$HOME/agent-board.new"' < "$W/plugin.tar"`,
         `asNode sh -c 'cd "$HOME/agent-board.new" && bun install --production'`,
@@ -841,8 +844,8 @@ function applySteps(f: NodeFacts, w: NodeWanted, waitS: number): NodeStep[] {
       ],
       check: pluginHolds,
       undo: [
-        'asNode rm -rf "$H/agent-board.new"',
-        `if [ -f "$W/moved-plugin" ]; then asNode sh -c 'rm -rf "$HOME/agent-board"; if [ -d "$HOME/agent-board.old" ]; then mv "$HOME/agent-board.old" "$HOME/agent-board"; fi'; fi`,
+        `if ! ${holdsGit('"$H/agent-board.new"')}; then asNode rm -rf "$H/agent-board.new"; fi`,
+        `if [ -f "$W/moved-plugin" ] && ! ${holdsGit('"$H/agent-board"')}; then asNode sh -c 'rm -rf "$HOME/agent-board"; if [ -d "$HOME/agent-board.old" ]; then mv "$HOME/agent-board.old" "$HOME/agent-board"; fi'; fi`,
       ],
       timeoutS: 600,
     }),
@@ -957,6 +960,9 @@ function applySteps(f: NodeFacts, w: NodeWanted, waitS: number): NodeStep[] {
  * The plan for this server, or why there is none. Every step is in it, each with its skip check, so
  * a second Apply on a node set up as wanted skips them all and changes nothing.
  */
+/** A shell test that `dir` (a quoted shell word) holds a `.git`: a folder, a file or a link (#793). */
+const holdsGit = (dir: string): string => `{ [ -e ${dir}/.git ] || [ -L ${dir}/.git ]; }`
+
 export function nodePlan(
   f: NodeFacts,
   w: NodeWanted,

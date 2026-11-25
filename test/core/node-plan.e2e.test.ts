@@ -4,9 +4,9 @@
 // node-undo, so the slow parts of the three run side by side.
 import { describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { createNodeStore } from '../../src/adapters/node-store.ts'
 import { ceilingFor, nodeLookScript, nodePlan, nodeRunScript, nodeUndoPlan } from '../../src/core/node-plan.ts'
 import { herdrUnit, linkFence, linkKeysLine, profileBlock, sliceDropIn } from '../../src/core/node-texts.ts'
@@ -275,4 +275,41 @@ describe.skipIf(!sh)('Apply on the fake root', () => {
     ])
       expect([changing, more.includes(changing)]).toEqual([changing, false])
   }, 240_000)
+})
+
+describe.skipIf(!sh)('the plugin step and a git checkout (#793, #795)', () => {
+  const HOME = '/home/agent-board'
+  test('a plugin folder, a .old or a .new that holds a .git: the step fails in words and every one of them is kept', () => {
+    const s = nodeServer()
+    expect(s.apply().result).toBe('applied')
+    const put = (rel: string, data: string): void => {
+      mkdirSync(dirname(s.root.path(`${HOME}/${rel}`)), { recursive: true })
+      writeFileSync(s.root.path(`${HOME}/${rel}`), data)
+    }
+    for (const [d, rel] of [
+      ['agent-board', 'agent-board/.git/HEAD'],
+      ['agent-board.old', 'agent-board.old/.git/HEAD'],
+      ['agent-board.new', 'agent-board.new/.git'],
+    ] as const) {
+      // the plugin no longer holds the archive the board sends: its step runs again
+      rmSync(s.root.path(`${HOME}/agent-board/.archive-sha256`), { force: true })
+      put(rel, 'ref')
+      put(`${d}/mine.txt`, 'mine')
+      const run = s.apply({ only: ['plugin'] })
+      expect(stepsOf(run)).toContain('plugin fail')
+      expect(run.result).not.toBe('applied')
+      expect(run.said.join('\n')).toContain(`${d} holds a git checkout (.git): it is kept`)
+      expect(readFileSync(s.root.path(`${HOME}/${rel}`), 'utf8')).toBe('ref')
+      expect(readFileSync(s.root.path(`${HOME}/${d}/mine.txt`), 'utf8')).toBe('mine')
+      // the plugin's own files are where they were
+      expect(readFileSync(s.root.path(`${HOME}/agent-board/package.json`), 'utf8')).toBe('{"name":"agent-board"}\n')
+      rmSync(s.root.path(`${HOME}/${d}`), { recursive: true, force: true })
+      if (d === 'agent-board') put('agent-board/package.json', '{"name":"agent-board"}\n')
+    }
+    // with none of them left, the step runs as before and puts the plugin in place
+    rmSync(s.root.path(`${HOME}/agent-board/.archive-sha256`), { force: true })
+    const again = s.apply({ only: ['plugin'] })
+    expect(stepsOf(again)).toContain('plugin ok')
+    expect(existsSync(s.root.path(`${HOME}/agent-board/.archive-sha256`))).toBe(true)
+  }, 120_000)
 })
