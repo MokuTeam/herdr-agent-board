@@ -435,9 +435,12 @@ async function nodeCaller(): Promise<{ key: string; lane: string | null } | null
 async function tryNodeRead(cmd: 'cats' | 'list', fallbackNote: string): Promise<boolean> {
   if (!nodeConfig(cfg.node)) return false
   const caller = await nodeCaller()
-  if (!caller?.key) return false
-  const { callBoard } = await import('./node-call.ts')
-  const answer = await callBoard(cfg.port)({ cmd, argv: [], session: caller.key, lane: null, files: [] })
+  // Outside a session the categories are the owner's, up the relay (#780); the list stays a session's.
+  if (!caller?.key && cmd !== 'cats') return false
+  const { callBoard, callBoardAsOwner } = await import('./node-call.ts')
+  const answer = caller?.key
+    ? await callBoard(cfg.port)({ cmd, argv: [], session: caller.key, lane: null, files: [] })
+    : await callBoardAsOwner(cfg.port)({ cmd, argv: [] })
   if (answer?.state === 'answered') {
     if (answer.code === UPLINK_REFUSED && answer.err.some(l => /is not taken from a node/i.test(l))) {
       console.error(
@@ -467,19 +470,12 @@ async function decisionsOnNode(args: readonly string[]): Promise<void> {
     process.exitCode = exit
   }
   const caller = await nodeCaller()
-  if (!caller?.key)
-    return fail(
-      'no_session',
-      "run it from a session: on a node, board decisions goes to the board's computer as a session's",
-    )
-  const { callBoard } = await import('./node-call.ts')
-  const answer = await callBoard(cfg.port)({
-    cmd: 'decisions',
-    argv: [...(wantDone ? ['--done'] : []), '--json'],
-    session: caller.key,
-    lane: null,
-    files: [],
-  })
+  const argv = [...(wantDone ? ['--done'] : []), '--json']
+  const { callBoard, callBoardAsOwner } = await import('./node-call.ts')
+  // Outside a session (#780): the owner's, up the relay.
+  const answer = caller?.key
+    ? await callBoard(cfg.port)({ cmd: 'decisions', argv, session: caller.key, lane: null, files: [] })
+    : await callBoardAsOwner(cfg.port)({ cmd: 'decisions', argv })
   const now = Date.now()
   const localOn = decisionsConfig(cfg.decisions) !== null
   const [cliMod, svcMod] = await Promise.all([import('./decisions-cli.ts'), import('../services/decisions.ts')])

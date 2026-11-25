@@ -46,7 +46,7 @@ import { nodeConfig } from '../core/nodes.ts'
 import { addDays, dateIn, isDate, localZone, parseWhen } from '../core/time.ts'
 import type { Config } from '../core/types.ts'
 import { calendarOf, pushEvents, readEvents, sourceViews, syncSource, withCalendarDb } from '../services/calendar.ts'
-import { forwardNodeCall, type NodeCall, type NodeCallAnswer } from './node-call.ts'
+import { forwardNodeCall, type NodeCall, type NodeCallAnswer, type OwnerCallBody } from './node-call.ts'
 
 export const CAL_USAGE = `board cal list [--day <d> | --from <t> --to <t> | --days <n>] [--source <id>]... [--cancelled] [--json]
 board cal sources [--json]
@@ -131,6 +131,8 @@ export interface CalCmdContext {
   actor: CalActor
   lane?: string | null
   call?: (body: NodeCall) => Promise<NodeCallAnswer>
+  /** On a node outside a session (#780): the owner's call up the relay; the tests' stand-in. */
+  callOwner?: (body: OwnerCallBody) => Promise<NodeCallAnswer>
   out?: (line: string) => void
   err?: (line: string) => void
   /** Standard input's text, for push without --file. */
@@ -291,6 +293,13 @@ export async function calCmd(rest: readonly string[], ctx: CalCmdContext): Promi
   if (nodeConfig(ctx.cfg.node)) {
     let files: string[] = []
     if (cmd === 'push') {
+      // Outside a session the owner's call carries no file (#780): a session's does.
+      if (typeof ctx.actor === 'string') {
+        const message = "run it from a session: on a node, board cal push's file goes with a session's call"
+        if (json) out(JSON.stringify({ ok: false, error: 'no_session', message }))
+        else errOut(message)
+        return 1
+      }
       const pos = calPushFileArg(more)
       if (pos < 0) {
         const message = 'board cal push from a node needs --file <events.json> (stdin is not forwarded)'
@@ -309,6 +318,7 @@ export async function calCmd(rest: readonly string[], ctx: CalCmdContext): Promi
       port: ctx.cfg.port,
       json,
       call: ctx.call,
+      callOwner: ctx.callOwner,
       out,
       err: errOut,
     })

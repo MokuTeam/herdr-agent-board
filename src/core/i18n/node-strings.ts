@@ -483,6 +483,8 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.masterOwned': 'Set on the master {name}',
     'node.masterOwnedNone': 'Set on the master board',
     'node.masterOwned.since': 'as the master last said {when}',
+    // A relayed call while the shared board is away (#780)
+    'node.err.masterOffline': 'The shared board is not reachable from this computer now: try again once it is back',
   },
   ru: {
     'node.step.check': 'Проверить сервер',
@@ -968,5 +970,7 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.masterOwned': 'Настраивается на мастере {name}',
     'node.masterOwnedNone': 'Настраивается на мастере',
     'node.masterOwned.since': 'как мастер сказал {when}',
+    // A relayed call while the shared board is away (#780)
+    'node.err.masterOffline': 'Общая доска сейчас недоступна с этого компьютера: повторите, когда она вернётся',
   },
 }

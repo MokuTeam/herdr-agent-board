@@ -564,7 +564,7 @@ describe('the master holds what a node sends to the table itself', () => {
 describe("what is not the relay's is as before", () => {
   test('local paths fall through to the next route on a node', async () => {
     const r = await rig()
-    for (const path of ['/api/threads-settings', '/api/board', '/api/session/pane-p1']) {
+    for (const path of ['/api/decisions', '/api/board', '/api/session/pane-p1']) {
       const res = await r.ask(path)
       expect(await res.json()).toEqual({ local: true, path })
     }

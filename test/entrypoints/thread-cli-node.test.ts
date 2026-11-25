@@ -195,6 +195,7 @@ test('board cal on a node forwards over the uplink, checks session, carries push
     } = {},
   ) => {
     const calls: NodeCall[] = []
+    const owners: { cmd: string; argv: string[]; lane?: string }[] = []
     const out: string[] = []
     const err: string[] = []
     const code = await calCmd(args, {
@@ -207,8 +208,12 @@ test('board cal on a node forwards over the uplink, checks session, carries push
         calls.push(body)
         return o.answer === undefined ? { state: 'answered', code: 0, out: ['ok'], err: [] } : o.answer
       },
+      callOwner: async body => {
+        owners.push(body)
+        return o.answer === undefined ? { state: 'answered', code: 0, out: ['owner ok'], err: [] } : o.answer
+      },
     })
-    return { code, out, err, calls }
+    return { code, out, err, calls, owners }
   }
 
   // Forwarding a read (no call id) and a write (remembered UUID call id) even when calendar is off on the node.
@@ -258,12 +263,16 @@ test('board cal on a node forwards over the uplink, checks session, carries push
   const unreach = await runCal(['list'], { answer: { state: 'unreachable' } })
   expect(unreach).toMatchObject({ code: 1, err: ["the board's computer is not reachable"] })
 
+  // Outside a session (#780): the owner's, up the relay, never the uplink.
   const asUser = await runCal(['list'], { actor: 'user' })
   expect(asUser.calls).toEqual([])
-  expect(asUser).toMatchObject({
-    code: 1,
-    err: ["run it from a session: on a node, board cal goes to the board's computer as a session's"],
-  })
+  expect(asUser.owners).toEqual([{ cmd: 'cal', argv: ['list'], lane: 'atlas' }])
+  expect(asUser).toMatchObject({ code: 0, out: ['owner ok'], err: [] })
+  // A push carries a file: outside a session it is refused here, before anything goes up.
+  const ownerPush = await runCal(['push', '--file', 'events.json'], { actor: 'user' })
+  expect(ownerPush.owners).toEqual([])
+  expect(ownerPush.calls).toEqual([])
+  expect(ownerPush.code).toBe(1)
 
   // Help stays local even on a node.
   const help = await runCal(['--help'])
@@ -328,6 +337,7 @@ test('board time on a node forwards all subcommands over the uplink, checks sess
     } = {},
   ) => {
     const calls: NodeCall[] = []
+    const owners: { cmd: string; argv: string[]; lane?: string }[] = []
     const out: string[] = []
     const err: string[] = []
     const code = await timeCmd(args, {
@@ -340,8 +350,12 @@ test('board time on a node forwards all subcommands over the uplink, checks sess
         calls.push(body)
         return o.answer === undefined ? { state: 'answered', code: 0, out: ['ok'], err: [] } : o.answer
       },
+      callOwner: async body => {
+        owners.push(body)
+        return o.answer === undefined ? { state: 'answered', code: 0, out: ['owner ok'], err: [] } : o.answer
+      },
     })
-    return { code, out, err, calls }
+    return { code, out, err, calls, owners }
   }
 
   // Forwarding a write (remembered UUID id) and a read (no id) with session and lane, even when time is off on the node.
@@ -396,12 +410,16 @@ test('board time on a node forwards all subcommands over the uplink, checks sess
   })
   const noBoard = await runTime(['list'], { answer: null })
   expect(noBoard).toMatchObject({ code: 1, err: ['the board does not run on this computer: nothing was sent'] })
+  // Outside a session (#780): the owner's, up the relay, never the uplink; an import's file stays with a session.
   const asUser = await runTime(['list'], { actor: 'user' })
   expect(asUser.calls).toEqual([])
-  expect(asUser).toMatchObject({
-    code: 1,
-    err: ["run it from a session: on a node, board time goes to the board's computer as a session's"],
-  })
+  expect(asUser.owners).toEqual([{ cmd: 'time', argv: ['list'], lane: 'atlas' }])
+  expect(asUser).toMatchObject({ code: 0, out: ['owner ok'], err: [] })
+  const ownerAway = await runTime(['list', '--json'], { actor: 'user', answer: { state: 'unreachable' } })
+  expect(JSON.parse(ownerAway.out[0] ?? '{}')).toMatchObject({ ok: false, error: 'unreachable' })
+  const ownerImport = await runTime(['import', 'entries.csv'], { actor: 'user' })
+  expect(ownerImport.owners).toEqual([])
+  expect(ownerImport.code).toBe(1)
 
   // Help stays local even on a node.
   const help = await runTime(['add', '--help'])

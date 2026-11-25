@@ -1,7 +1,8 @@
 // Shared client helper for CLI commands forwarded from a node to its master over the uplink (#508, #698).
 import { randomUUID } from 'node:crypto'
 import { SPAWN_FOLLOW_MAX_SEC } from '../core/launch/spawn-node.ts'
-import { isRememberedCall, UPLINK_REFUSED } from '../core/node-uplink.ts'
+import { NODE_CLI_PATH, OWNER_CLI_COMMANDS, RELAY_ERRORS } from '../core/master-relay.ts'
+import { isRememberedCall, UPLINK_REFUSED, uplinkResultOf } from '../core/node-uplink.ts'
 
 /** A command on a node as it goes to the node's board (services/node/uplink.ts call). */
 export interface NodeCall {
@@ -88,6 +89,51 @@ export const callBoard =
     }
   }
 
+/**
+ * `POST /api/node-cli` on this computer's board (#780): a terminal's command with no session, which
+ * the board relays to its master as the owner's (core/master-relay.ts). Null when no board answers.
+ */
+/** What a sessionless terminal sends up (#780, core/master-relay.ts ownerCliOf). */
+export interface OwnerCallBody {
+  cmd: string
+  argv: string[]
+  /** The lane the terminal's folder maps to here, for board time's default client. */
+  lane?: string
+}
+
+export const callBoardAsOwner =
+  (port: unknown) =>
+  async (body: OwnerCallBody): Promise<NodeCallAnswer> => {
+    try {
+      const res = await fetch(`http://127.0.0.1:${typeof port === 'number' ? port : 12422}${NODE_CLI_PATH}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-board': '1' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(CALL_WAIT_MS),
+      })
+      const value: unknown = await res.json().catch(() => null)
+      const reply = typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
+      if (res.status === 503 && reply.error === RELAY_ERRORS.offline) return { state: 'unreachable' }
+      const result = res.ok ? uplinkResultOf(value) : null
+      if (result) return { state: 'answered', ...result }
+      // The relay keys every call as a write: an answer that never came may or may not have run.
+      if (reply.error === RELAY_ERRORS.unknown || reply.error === RELAY_ERRORS.timeout)
+        return {
+          state: 'answered',
+          code: 1,
+          out: [],
+          err: ["the board's computer did not answer in time: for a change, check before running it again"],
+        }
+      const why =
+        typeof reply.message === 'string' ? reply.message : `the board on this computer answered HTTP ${res.status}`
+      return { state: 'answered', code: 1, out: [], err: [why] }
+    } catch (err) {
+      if (err instanceof Error && err.name === 'TimeoutError')
+        return { state: 'answered', code: 1, out: [], err: ['the board on this computer did not answer in time'] }
+      return null
+    }
+  }
+
 export interface ForwardNodeCallOptions {
   cmd: NodeCall['cmd']
   argv: string[]
@@ -99,13 +145,16 @@ export interface ForwardNodeCallOptions {
   port: unknown
   json?: boolean | undefined
   call?: ((body: NodeCall) => Promise<NodeCallAnswer>) | undefined
+  /** Outside a session (#780): the owner's call; callBoardAsOwner by default. */
+  callOwner?: ((body: OwnerCallBody) => Promise<NodeCallAnswer>) | undefined
   out?: ((line: string) => void) | undefined
   err?: ((line: string) => void) | undefined
 }
 
 /**
  * Forward a CLI command from a node session to its master via the node's local uplink route,
- * printing the master's output/errors and returning its exit code.
+ * printing the master's output/errors and returning its exit code. Outside a session, a command the
+ * master takes from the owner (OWNER_CLI_COMMANDS) goes up the relay as the owner's (#780).
  */
 export async function forwardNodeCall(opts: ForwardNodeCallOptions): Promise<number> {
   const out = opts.out ?? ((line: string) => console.log(line))
@@ -116,23 +165,31 @@ export async function forwardNodeCall(opts: ForwardNodeCallOptions): Promise<num
     else err(message)
     return exit
   }
-  if (!opts.session)
+  if (!opts.session && !OWNER_CLI_COMMANDS.has(opts.cmd))
     return fail(
       'no_session',
       `run it from a session: on a node, board ${opts.cmd} goes to the board's computer as a session's`,
     )
-  const id = opts.id ?? (isRememberedCall(opts.cmd, opts.argv) ? randomUUID() : undefined)
-  const body: NodeCall = {
-    ...(id && { id }),
-    cmd: opts.cmd,
-    argv: opts.argv,
-    session: opts.session,
-    lane: opts.lane ?? null,
-    files: opts.files ?? [],
-    ...(opts.claimed !== undefined && { claimed: opts.claimed }),
+  let answer: NodeCallAnswer
+  if (!opts.session)
+    answer = await (opts.callOwner ?? callBoardAsOwner(opts.port))({
+      cmd: opts.cmd,
+      argv: opts.argv,
+      ...(opts.lane && { lane: opts.lane }),
+    })
+  else {
+    const id = opts.id ?? (isRememberedCall(opts.cmd, opts.argv) ? randomUUID() : undefined)
+    const body: NodeCall = {
+      ...(id && { id }),
+      cmd: opts.cmd,
+      argv: opts.argv,
+      session: opts.session,
+      lane: opts.lane ?? null,
+      files: opts.files ?? [],
+      ...(opts.claimed !== undefined && { claimed: opts.claimed }),
+    }
+    answer = await (opts.call ?? callBoard(opts.port))(body)
   }
-  const send = opts.call ?? callBoard(opts.port)
-  const answer = await send(body)
   if (!answer) return fail('board', 'the board does not run on this computer: nothing was sent')
   if (answer.state === 'answered') {
     if (answer.code === UPLINK_REFUSED && answer.err.some(l => /is not taken from a node/i.test(l)))

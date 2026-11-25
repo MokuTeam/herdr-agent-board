@@ -54,6 +54,8 @@ export interface MasterRelay {
   sync(): void
   /** The master's stream goes and what waits fails, as when the master goes; the next stream is taken. */
   drop(): void
+  /** The master holds its stream here now: what is relayed reaches it. */
+  online(): boolean
   close(): void
 }
 
@@ -442,6 +444,8 @@ export function createMasterRelay(deps: MasterRelayDeps): MasterRelay {
     },
 
     drop: disconnect,
+
+    online: () => enabled() && clients.size > 0,
 
     close() {
       closed = true

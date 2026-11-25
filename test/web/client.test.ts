@@ -191,6 +191,15 @@ test('a refusal or ok:false is an ApiError worded as the board words it; so is a
   expect(errorText(new TypeError('Failed to fetch'), t)).toBe('No connection to the board: Failed to fetch')
 })
 
+test("a node's relayed call while the shared board is away reads as one plain line, never its code (#780)", async () => {
+  answer(503, '{"ok":false,"error":"node-master-offline","message":"The master board is not reachable"}')
+  const away = await api.post('/api/presence', { state: 'away' }).catch((err: unknown) => err)
+  expect(errorText(away, t)).toBe('The shared board is not reachable from this computer now: try again once it is back')
+  expect(errorText(away, translator('ru'))).toBe(
+    'Общая доска сейчас недоступна с этого компьютера: повторите, когда она вернётся',
+  )
+})
+
 test('GET checks the answer with the guard; the board snapshot is uncached and comes as it is, for the connection to check', async () => {
   const calls = answer(200, JSON.stringify(payload()))
   expect((await api.board()).version).toBe('v1')

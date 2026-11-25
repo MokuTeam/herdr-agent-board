@@ -4944,12 +4944,37 @@ relay), and the master runs them against its own routes and answers: status, hea
 event stream chunk by chunk. MokuPilot's Threads tab and any other client of the node's
 `127.0.0.1` API see the master's threads as if they asked the master.
 
-What goes up is a declared list, one feature group at a time; today the threads group:
-`GET /api/threads`, `GET /api/threads/<key>`, `GET /api/threads/events` (the stream), and the posts
-to `/api/threads` and `/api/threads/<key>`. A request that names another machine's session
-(`/api/session/@<device>:<key>/...`) goes up too, and the master hands it to its own node proxy.
-Everything else stays on the node as before (`/api/threads-settings` included). The master checks
-the list again itself and never takes another path from a node.
+What goes up is a declared list, one feature group at a time:
+
+- threads: `GET /api/threads`, `GET /api/threads/<key>`, `GET /api/threads/events` (the stream),
+  and the posts to `/api/threads` and `/api/threads/<key>` (#764);
+- time, calendar, journal and presence (#780): `/api/time`, `/api/time-settings`, `/api/calendar`,
+  `/api/calendar-settings`, `POST /api/calendar-reminders`, `/api/journal`, `/api/presence`;
+- the settings of these features and the lanes (#780): `POST /api/feature-settings`,
+  `/api/threads-settings`, `POST /api/categories`. On the master the settings are for its own
+  computer only (no tunnel, no phone), but a paired device is the owner's own, so the owner's
+  requests from it pass (never a node session's), and each write is in the master's admin log
+  (`GET /api/links/log`, `via: "relay"`, the device as `from`). The master's bundle brings new
+  lanes back to every node.
+
+A request that names another machine's session (`/api/session/@<device>:<key>/...`) goes up too,
+and the master hands it to its own node proxy. Everything else stays on the node as before;
+decisions stay there until a node's sessions ask their questions on the master (#781). The master
+checks the list again itself and never takes another path from a node.
+
+Two more paths are the master's answers for a node only, never routes of its own:
+
+- `GET /api/board-slices`: the master's `time`, `calendar`, `journal` and `presence` parts of its
+  payload. The node asks for them every 15 seconds while the master's stream is up and one of
+  them is on there, and when the master's flags come; it puts them in its own payload, so its page
+  shows those panels with the master's data, and their calls go up the relay. While the master is
+  away the node keeps the last ones, its calls answer 503 and the page's banner says the shared
+  board is offline.
+- `POST /api/node-cli`: `board time`, `board cal`, `board journal`, `board presence`, `board away`,
+  `board decisions` and `board cats` in a terminal of the node outside any session. They run on
+  the master as the owner's, as they would in a terminal there; `board time` takes the lane the
+  terminal's folder maps to on the node. `board time import` and `board cal push` carry a file and
+  stay with a session's call.
 
 The machines are one mesh: the master takes what any of its nodes relays as the owner's, and
 everything talks to everything. Who the request is only narrows that:

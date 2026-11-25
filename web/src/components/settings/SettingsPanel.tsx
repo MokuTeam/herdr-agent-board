@@ -220,7 +220,8 @@ export function SettingsPanel({
   const isRemote = remotePage()
   const canAdmin = adminHere()
   const languages = data?.languages ?? LANGUAGES
-  // A node's master-owned features (#775): shown as they are, set on the master, not here.
+  // A node's master-owned features (#775): shown as the master has them, and written there through
+  // the relay (#780); Tasks stay read-only here.
   const masterOwned = data?.masterFlags ?? null
   const ownedNote = masterOwned ? (
     <small className="set-owned" title={new Date(masterOwned.at).toLocaleString()}>
@@ -496,7 +497,7 @@ export function SettingsPanel({
                     <select
                       className="set-select"
                       aria-label={t('set.presence')}
-                      disabled={!canEdit || !!masterOwned}
+                      disabled={!canEdit}
                       value={presenceMode}
                       onChange={e => {
                         const v = e.currentTarget.value as PresenceMode | 'none'
@@ -519,7 +520,7 @@ export function SettingsPanel({
                     <select
                       className="set-select"
                       aria-label={t('set.presence.idleLabel')}
-                      disabled={!canEdit || !!masterOwned}
+                      disabled={!canEdit}
                       value={idleMinutes}
                       onChange={e => pickPresence({ on: true, idleMinutes: Number(e.currentTarget.value) })}
                     >
@@ -592,7 +593,7 @@ export function SettingsPanel({
                       </div>
                       <Segmented
                         label={t('set.threads')}
-                        disabled={!canEdit || !!masterOwned}
+                        disabled={!canEdit}
                         value={threadsInfo.mode}
                         options={THREAD_MODES.map(id => ({ value: id, label: t(`set.threads.${id}`) }))}
                         onChange={mode => pickThreads({ mode })}
@@ -606,7 +607,7 @@ export function SettingsPanel({
                               <label className="set-chk">
                                 <input
                                   type="checkbox"
-                                  disabled={!canEdit || !!masterOwned}
+                                  disabled={!canEdit}
                                   checked={threadsInfo.share}
                                   onChange={e => pickThreads({ share: e.currentTarget.checked })}
                                 />
@@ -617,7 +618,7 @@ export function SettingsPanel({
                               <label className="set-chk" title={t('set.cases.note')}>
                                 <input
                                   type="checkbox"
-                                  disabled={!canEdit || !!masterOwned}
+                                  disabled={!canEdit}
                                   checked={features.threadsCases}
                                   onChange={e => pickThreads({ cases: e.currentTarget.checked })}
                                 />
@@ -629,7 +630,7 @@ export function SettingsPanel({
                         {features?.threadsVerify !== undefined && (
                           <VerifySettings
                             verifyOn={features.threadsVerify}
-                            canEdit={canEdit && !masterOwned}
+                            canEdit={canEdit}
                             onToggle={next => pickThreads({ verify: next })}
                           />
                         )}
@@ -653,7 +654,7 @@ export function SettingsPanel({
                           <label className="set-chk">
                             <input
                               type="checkbox"
-                              disabled={!canEdit || !!masterOwned}
+                              disabled={!canEdit}
                               checked={features.decisionsDefaults}
                               onChange={e => pickFeature({ decisionsDefaults: e.currentTarget.checked })}
                             />
@@ -662,7 +663,7 @@ export function SettingsPanel({
                         )}
                         <Switch
                           checked={!!features.decisions}
-                          disabled={!canEdit || !!masterOwned}
+                          disabled={!canEdit}
                           label={t('set.decisions')}
                           onToggle={() => pickFeature({ decisions: !features.decisions })}
                         />
@@ -679,7 +680,7 @@ export function SettingsPanel({
                       </div>
                       <Switch
                         checked={!!features.watches}
-                        disabled={!canEdit || !!masterOwned}
+                        disabled={!canEdit}
                         label={t('set.watches')}
                         onToggle={() => pickFeature({ watches: !features.watches })}
                       />
@@ -695,7 +696,7 @@ export function SettingsPanel({
                       </div>
                       <Switch
                         checked={!!features.journal}
-                        disabled={!canEdit || !!masterOwned}
+                        disabled={!canEdit}
                         label={t('set.journal')}
                         onToggle={() => pickFeature({ journal: !features.journal })}
                       />

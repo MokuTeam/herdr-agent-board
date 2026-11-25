@@ -4,8 +4,8 @@
 //
 // - Only allowlisted shared-state and cross-session commands (#508, #619, #628, #644, #698;
 //   core/node-uplink.ts UPLINK_COMMANDS); anything else is answered with 126 and a line, whatever
-//   the node sends. Only a session's: a call with no session would be the owner's, and nothing an
-//   owner does comes up a link (#224). Owner-only subcommands (such as `thread open`, `thread share`,
+//   the node sends. Only a session's here: a terminal with no session is the owner's, whose few
+//   commands come up the master relay instead (#780, ownerCall: core/master-relay.ts NODE_CLI_PATH). Owner-only subcommands (such as `thread open`, `thread share`,
 //   `thread import`, `team join`, `team watch`, `team listen`, `team loop <peer> <n>`) are refused.
 // - Run in this process by each command's own entry (entrypoints/thread-cli.ts threadCmd,
 //   entrypoints/time-cli.ts timeCmd, core/agent-send.ts), as the node's session: its prefixed key
@@ -74,6 +74,11 @@ import type { NodeLinks } from './links.ts'
 import type { SpawnFromDeps } from './spawn-from.ts'
 
 export interface UplinkRunner {
+  /**
+   * A sessionless terminal's command on node `device` (#780), relayed as the owner's
+   * (core/master-relay.ts NODE_CLI_PATH): run here as the owner, as on this computer.
+   */
+  ownerCall(device: string, call: { cmd: string; argv: string[]; lane?: string }): Promise<UplinkResult>
   close(): Promise<void>
 }
 
@@ -745,7 +750,12 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
   /** `board decisions [--done] [--json]` in a session of the node (#698). */
   async function decisionsFrom(id: string, call: UplinkCall): Promise<UplinkResult> {
     if (!sessionOf(id, call.session)) return refused('not a session of the node')
-    const json = call.argv.includes('--json')
+    return decisionsRun(call.argv)
+  }
+
+  /** `board decisions [--done] [--json]` here, for a node's session or its owner. */
+  async function decisionsRun(argv: readonly string[]): Promise<UplinkResult> {
+    const json = argv.includes('--json')
     if (!decisionsConfig(o.cfg.decisions)) {
       const msg = 'decisions are off on this board (config.json "decisions")'
       return json ? { code: 1, out: [JSON.stringify({ ok: false, error: 'off', message: msg })], err: [] } : failed(msg)
@@ -753,7 +763,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     const out: string[] = []
     try {
       const { decisionsCommand } = await import('../../entrypoints/decisions-cli.ts')
-      ;(o.runDecisions ?? decisionsCommand)(call.argv, Date.now(), l => out.push(...l.split('\n')))
+      ;(o.runDecisions ?? decisionsCommand)(argv, Date.now(), l => out.push(...l.split('\n')))
       return { code: 0, out, err: [] }
     } catch (e) {
       const msg = messageOf(e)
@@ -770,12 +780,17 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
   /** `board journal …` in a session of the node (#698). */
   async function journalFrom(id: string, call: UplinkCall): Promise<UplinkResult> {
     if (!sessionOf(id, call.session)) return refused('not a session of the node')
+    return journalRun(call.argv)
+  }
+
+  /** `board journal …` here, for a node's session or its owner. */
+  async function journalRun(argv: readonly string[]): Promise<UplinkResult> {
     const { node: _node, ...masterCfg } = o.cfg
     const out: string[] = []
     const err: string[] = []
     try {
       const { journalCmd } = await import('../../entrypoints/journal-cli.ts')
-      const code = (o.runJournal ?? journalCmd)(call.argv, {
+      const code = (o.runJournal ?? journalCmd)(argv, {
         cfg: masterCfg as Config,
         out: l => out.push(...l.split('\n')),
         err: l => err.push(...l.split('\n')),
@@ -789,9 +804,14 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
   /** `board presence [here|away|call]` and `board away [on|off]` in a session of the node (#698). */
   async function presenceFrom(id: string, call: UplinkCall): Promise<UplinkResult> {
     if (!sessionOf(id, call.session)) return refused('not a session of the node')
-    const word = (call.argv[0] ?? '').toLowerCase()
+    return presenceRun(call.cmd, call.argv, 'agent')
+  }
+
+  /** `board presence …` and `board away …` here: a node's session switches as an agent, its owner's terminal as the CLI. */
+  function presenceRun(cmd: string, argv: readonly string[], from: PresenceSource): UplinkResult {
+    const word = (argv[0] ?? '').toLowerCase()
     const state: PresenceState | null =
-      call.cmd === 'away'
+      cmd === 'away'
         ? word === '' || word === 'on'
           ? 'away'
           : word === 'off'
@@ -802,8 +822,8 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
           : isPresenceState(word)
             ? word
             : null
-    if (call.argv.length > 1 || (word && !state))
-      return failed(call.cmd === 'away' ? 'usage: board away [on|off]' : 'usage: board presence [here|away|call]')
+    if (argv.length > 1 || (word && !state))
+      return failed(cmd === 'away' ? 'usage: board away [on|off]' : 'usage: board presence [here|away|call]')
     if (!presenceConfig(o.cfg.presence)) {
       if (!state)
         return {
@@ -814,13 +834,17 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
       return failed(t('err.presenceOff'))
     }
     if (!state) return { code: 0, out: [presenceLine(currentPresence())], err: [] }
-    const { presence: p, changed } = (o.setPresence ?? ((st, fr) => setPresence(st, 'user', fr)))(state, 'agent')
+    const { presence: p, changed } = (o.setPresence ?? ((st, fr) => setPresence(st, 'user', fr)))(state, from)
     return { code: 0, out: [`ok · ${changed ? '' : 'already '}${p.state}`], err: [] }
   }
 
   /** `board cats` in a session of the node (#698): master categories without leaking master filesystem paths. */
   function catsFrom(id: string, call: UplinkCall): UplinkResult {
     if (!sessionOf(id, call.session)) return refused('not a session of the node')
+    return catsRun()
+  }
+
+  function catsRun(): UplinkResult {
     const known = o.cfg.categories.map(c => `${c.id} (${categoryInfo(o.cfg, c.id).title})`).join(', ')
     return { code: 0, out: [`${known}. A new id makes a new lane.`], err: [] }
   }
@@ -985,9 +1009,62 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     }
   }
 
+  /**
+   * A sessionless terminal's command on node `id` (#780): the owner's, as `board …` outside a session
+   * on this computer runs it. A file the command names stays on the node: those run in a session.
+   */
+  async function ownerCall(id: string, call: { cmd: string; argv: string[]; lane?: string }): Promise<UplinkResult> {
+    if (!o.links.link(id)) return refused('not a device of this board')
+    const { node: _node, ...masterCfg } = o.cfg
+    const argv = [...call.argv]
+    const sub = argv[0] ?? 'list'
+    const out: string[] = []
+    const err: string[] = []
+    try {
+      switch (call.cmd) {
+        case 'time': {
+          if (sub === 'import') return refused('board time import from a node runs in a session: its file goes with it')
+          const { timeCmd } = await import('../../entrypoints/time-cli.ts')
+          const code = await (o.runTime ?? timeCmd)(argv, {
+            cfg: masterCfg as Config,
+            actor: 'user',
+            // The lane the terminal's folder maps to on the node, as `board time` there takes it (#780).
+            lane: call.lane ?? null,
+            out: l => out.push(...l.split('\n')),
+          })
+          return fit({ code, out, err })
+        }
+        case 'cal': {
+          if (sub === 'push') return refused('board cal push from a node runs in a session: its file goes with it')
+          const { calCmd } = await import('../../entrypoints/cal-cli.ts')
+          const code = await (o.runCal ?? calCmd)(argv, {
+            cfg: masterCfg as Config,
+            actor: 'user',
+            out: l => out.push(...l.split('\n')),
+            err: l => err.push(...l.split('\n')),
+          })
+          return fit({ code, out, err })
+        }
+        case 'journal':
+          return fit(await journalRun(argv))
+        case 'decisions':
+          return fit(await decisionsRun(argv))
+        case 'presence':
+        case 'away':
+          return presenceRun(call.cmd, argv, 'cli')
+        case 'cats':
+          return catsRun()
+      }
+      return refused(`board ${said(call.cmd)} is not taken from a node's terminal: run it in a session`)
+    } catch (e) {
+      return fit({ code: 1, out, err: [...err, ...messageOf(e).split('\n')] })
+    }
+  }
+
   const off = o.links.onChange(changed)
 
   return {
+    ownerCall,
     async close() {
       closed = true
       off()

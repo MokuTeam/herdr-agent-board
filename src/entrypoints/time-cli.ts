@@ -85,6 +85,7 @@ import {
 import { type DateFormat, dayTotals, parseMap, rowsFromCsv, rowsFromJson, type TogglRow } from '../core/time-import.ts'
 import type { Config } from '../core/types.ts'
 import { withNewProject, writeRefusal } from '../services/time.ts'
+import type { OwnerCallBody } from './node-call.ts'
 import type { NodeCall, NodeCallAnswer } from './thread-cli.ts'
 
 const FLAGS_WITH_VALUE = new Set([
@@ -169,6 +170,8 @@ export interface TimeCmdContext {
   err?: (line: string) => void
   /** On a node (#644): hands the call to this node's board, `POST /api/node/call`; the tests' stand-in. */
   call?: (body: NodeCall) => Promise<NodeCallAnswer>
+  /** On a node outside a session (#780): the owner's call up the relay; the tests' stand-in. */
+  callOwner?: (body: OwnerCallBody) => Promise<NodeCallAnswer>
   now?: number
 }
 
@@ -335,12 +338,24 @@ async function forward(
     else err(message)
     return 1
   }
-  if (typeof ctx.actor === 'string')
-    return fail(
-      'no_session',
-      "run it from a session: on a node, board time goes to the board's computer as a session's",
-    )
   const [sub = 'list', ...args] = rest
+  // Outside a session (#780): the owner's, up the relay; its master runs it as on its own computer.
+  if (typeof ctx.actor === 'string') {
+    if (sub === 'import')
+      return fail('no_session', "run it from a session: on a node, board time import's file goes with a session's call")
+    const { forwardNodeCall } = await import('./node-call.ts')
+    return forwardNodeCall({
+      cmd: 'time',
+      argv: [...rest],
+      session: null,
+      lane: ctx.lane,
+      port: ctx.cfg.port,
+      json,
+      ...(ctx.callOwner && { callOwner: ctx.callOwner }),
+      out,
+      err,
+    })
+  }
   let files: string[] = []
   if (sub === 'import') {
     const pos = timeImportFileArg(args)

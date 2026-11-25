@@ -3,7 +3,8 @@
 // services/nodes/master-relay.ts, and both read the declared table here, so the master never takes a path
 // only because the node sent it.
 //
-// The table names the master-owned paths, one group at a time (T1: threads). A node also passes up
+// The table names the master-owned paths, one group at a time (T1: threads; T4a, #780: time,
+// calendar, journal, presence, their settings and the categories). A node also passes up
 // a request that names another machine's session (`/api/session/@<device>:<key>/...`), which the
 // master hands to its own node proxy.
 //
@@ -27,7 +28,9 @@
 //   `board` calls do (#508). It reads (threads, any machine's session) but never writes: an HTTP
 //   write is recorded as the owner's, and a session writes with `board thread` and `board send`.
 // - the owner: the node's own page or a sessionless terminal, held to what the owner may do from
-//   away (server/streams.ts remoteRefusal): no admin panels, nothing on the master's screen.
+//   away (server/streams.ts remoteRefusal): nothing on the master's screen, and of the panels kept
+//   for the master's own computer (localOnly) only the settings of the features it runs for the
+//   whole mesh (RELAY_OWNER_SETTINGS, #780), each write of them in the master's admin log.
 // - never a Team peer, nor a caller through the node's own remote listeners (403 master-relay-remote).
 import { keyedPath } from './node-proxy.ts'
 import { hasUnprintable } from './team.ts'
@@ -42,11 +45,17 @@ export interface RelayEntry {
   path: RegExp
   /** A long answer the caller reads as it comes (SSE). */
   stream?: true
+  /**
+   * The master answers it for a node only (server/app.ts replayRelayed), never in its route table:
+   * the payload's master-run parts and a sessionless terminal's command (#780).
+   */
+  relayOnly?: true
 }
 
 /**
  * The master-owned paths a node relays. A write (POST) carries an idempotency key; a session may
- * use the GETs only.
+ * use the GETs only. T4a (#780): time, calendar, journal, presence, these features' settings and
+ * the categories. Decisions stay on the node until its sessions' questions live on the master (#781).
  */
 export const RELAY_TABLE: readonly RelayEntry[] = [
   { group: 'threads', method: 'GET', path: /^\/api\/threads$/ },
@@ -54,7 +63,88 @@ export const RELAY_TABLE: readonly RelayEntry[] = [
   { group: 'threads', method: 'GET', path: /^\/api\/threads\/[^/]+$/ },
   { group: 'threads', method: 'POST', path: /^\/api\/threads$/ },
   { group: 'threads', method: 'POST', path: /^\/api\/threads\/[^/]+$/ },
+  { group: 'time', method: 'GET', path: /^\/api\/time$/ },
+  { group: 'time', method: 'POST', path: /^\/api\/time$/ },
+  { group: 'time', method: 'GET', path: /^\/api\/time-settings$/ },
+  { group: 'time', method: 'POST', path: /^\/api\/time-settings$/ },
+  { group: 'calendar', method: 'GET', path: /^\/api\/calendar$/ },
+  { group: 'calendar', method: 'POST', path: /^\/api\/calendar$/ },
+  { group: 'calendar', method: 'GET', path: /^\/api\/calendar-settings$/ },
+  { group: 'calendar', method: 'POST', path: /^\/api\/calendar-settings$/ },
+  { group: 'calendar', method: 'POST', path: /^\/api\/calendar-reminders$/ },
+  { group: 'journal', method: 'GET', path: /^\/api\/journal$/ },
+  { group: 'journal', method: 'POST', path: /^\/api\/journal$/ },
+  { group: 'presence', method: 'GET', path: /^\/api\/presence$/ },
+  { group: 'presence', method: 'POST', path: /^\/api\/presence$/ },
+  { group: 'settings', method: 'POST', path: /^\/api\/feature-settings$/ },
+  { group: 'settings', method: 'GET', path: /^\/api\/threads-settings$/ },
+  { group: 'settings', method: 'POST', path: /^\/api\/threads-settings$/ },
+  { group: 'settings', method: 'POST', path: /^\/api\/categories$/ },
+  { group: 'payload', method: 'GET', path: /^\/api\/board-slices$/, relayOnly: true },
+  { group: 'cli', method: 'POST', path: /^\/api\/node-cli$/, relayOnly: true },
 ]
+
+/** The relay-only paths (RelayEntry.relayOnly), as the master answers them. */
+export const BOARD_SLICES_PATH = '/api/board-slices'
+export const NODE_CLI_PATH = '/api/node-cli'
+
+/** The payload's master-run parts a node's page shows as the master has them (#780). */
+export const BOARD_SLICE_KEYS = ['time', 'calendar', 'journal', 'presence'] as const
+export type BoardSliceKey = (typeof BOARD_SLICE_KEYS)[number]
+
+/** The commands a sessionless terminal on a node runs on the master as the owner (#780). */
+export const OWNER_CLI_COMMANDS: ReadonlySet<string> = new Set([
+  'time',
+  'cal',
+  'journal',
+  'presence',
+  'away',
+  'decisions',
+  'cats',
+])
+
+/** A sessionless terminal's command as the node sends it up: the lane is the one its folder maps to there. */
+export interface OwnerCli {
+  cmd: string
+  argv: string[]
+  lane?: string
+}
+
+/** A sessionless terminal's command as the node sends it up, or null. */
+export function ownerCliOf(raw: unknown): OwnerCli | null {
+  if (!isObject(raw)) return null
+  const { cmd, argv, lane } = raw
+  if (typeof cmd !== 'string' || !OWNER_CLI_COMMANDS.has(cmd)) return null
+  if (!Array.isArray(argv) || argv.length > 64) return null
+  if (!argv.every(a => typeof a === 'string' && a.length <= 8192 && !a.includes('\0'))) return null
+  if (
+    lane !== undefined &&
+    lane !== null &&
+    (typeof lane !== 'string' || !lane || lane.length > 64 || hasUnprintable(lane))
+  )
+    return null
+  return { cmd, argv: argv as string[], ...(typeof lane === 'string' && { lane }) }
+}
+
+/** Whether a path is one of the table's (#780). */
+export const relayTablePath = (method: string, rawPath: string): boolean =>
+  RELAY_TABLE.some(e => e.method === method && e.path.test(rawPath))
+
+/**
+ * The settings a relayed owner's request reaches past the master's localOnly (#780): those of the
+ * features the master runs for every machine. Nothing else kept for the master's own computer, and
+ * never a session's request.
+ */
+export const RELAY_OWNER_SETTINGS: ReadonlySet<string> = new Set([
+  '/api/time-settings',
+  '/api/calendar-settings',
+  '/api/feature-settings',
+  '/api/threads-settings',
+])
+
+/** Whether a relayed request by `who` passes the master's localOnly refusal for `rawPath`. */
+export const relayOwnerSetting = (method: string, rawPath: string, who: RelayWho | undefined): boolean =>
+  who?.kind === 'owner' && RELAY_OWNER_SETTINGS.has(rawPath) && relayTablePath(method, rawPath)
 
 /** What a request is to the relay: a path of the table, or another machine's session. */
 export type RelayMatch = { kind: 'table'; entry: RelayEntry } | { kind: 'keyed'; device: string }

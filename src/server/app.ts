@@ -90,6 +90,7 @@ import { NODE_PROGRAMS } from '../core/bundle.ts'
 import { answerText, decisionsConfig } from '../core/decisions.ts'
 import { journalConfig } from '../core/journal.ts'
 import { t } from '../core/lang.ts'
+import { BOARD_SLICES_PATH, NODE_CLI_PATH, ownerCliOf, type RelayWho, relayOwnerSetting } from '../core/master-relay.ts'
 import { messageGate } from '../core/message-gate.ts'
 import { isRoutableNodeAddress } from '../core/mokupilot-mode.ts'
 import { dropMovedCards } from '../core/node-items.ts'
@@ -157,6 +158,7 @@ import { createLocalRelayOps, createNodeHandover } from '../services/node/handov
 import { createNodeLaunch } from '../services/node/launch.ts'
 import { createNodeMasterFlags, type NodeMasterFlags } from '../services/node/master-flags.ts'
 import { createMasterRelay, type MasterRelay } from '../services/node/master-relay.ts'
+import { createNodeMasterSlices, type NodeMasterSlices } from '../services/node/master-slices.ts'
 import { createNodePilotBridge, type NodePilotBridge } from '../services/node/pilot-bridge.ts'
 import { createNodePilotCall, type NodePilotCall } from '../services/node/pilot-call.ts'
 import { createRelayDial, type RelayDial } from '../services/node/relay-dial.ts'
@@ -267,7 +269,7 @@ import { keepTimeDb, timeRoutes, timeToday } from './routes/time.ts'
 import { todosRoutes } from './routes/todos.ts'
 import { wakeRoutes } from './routes/wake.ts'
 import { createBroadcaster } from './sse.ts'
-import { decoded, remoteRefusal } from './streams.ts'
+import { adminOpOf, decoded, remoteRefusal } from './streams.ts'
 import { createTunnelListener } from './tunnel.ts'
 import { openProbeListener } from './tunnel-probe.ts'
 import { pruneUploads, uploadRoutes } from './uploads.ts'
@@ -1062,6 +1064,8 @@ export async function startServer({
   }
   // A node's copy of its master's feature flags (#775, services/node/master-flags.ts); null without `node`.
   let nodeFlags: NodeMasterFlags | null = null
+  // A node's copy of its master's payload parts (#780, services/node/master-slices.ts); null without `node`.
+  let nodeSlices: NodeMasterSlices | null = null
   const board = createBoardState({
     deps,
     launches,
@@ -1119,6 +1123,8 @@ export async function startServer({
         ...(f.presence && { presenceMode: f.presence.mode }),
       }
     },
+    // A node's master-run parts of the payload (#780): only once its master gave them.
+    masterSlices: () => (nodeConfig(cfg.node) ? (nodeSlices?.current() ?? null) : null),
     // Threads (#379): while config.json turns them on, the revision and the count that waits on
     // the owner (two queries a refresh); off, nothing is read.
     threads: () => {
@@ -1491,17 +1497,51 @@ export async function startServer({
    * and the guards see a remote caller. This board's own relay route, when it is a node too, is
    * left out: what a node asks of it is answered here.
    */
-  async function replayRelayed(req: Request): Promise<Response> {
+  async function replayRelayed(req: Request, from?: { device: string; who: RelayWho }): Promise<Response> {
     const url = new URL(req.url)
     const raw = url.pathname
     const path = decoded(raw)
     if (path === null) return json(400, { error: 'path' })
     if (handoverFrozen && req.method !== 'GET' && req.method !== 'HEAD')
       return json(503, { error: 'handover-frozen', message: 'master handover in progress; writes are frozen' })
-    const refused = remoteRefusal(raw, path, false, false, true, false)
+    // For a node only (#780): the payload's master-run parts, and a sessionless terminal's command as the owner's.
+    if (req.method === 'GET' && raw === BOARD_SLICES_PATH) return json(200, { ok: true, slices: board.slices() })
+    if (req.method === 'POST' && raw === NODE_CLI_PATH) {
+      if (from?.who.kind !== 'owner') return json(403, { ok: false, error: 'owner' })
+      const call = ownerCliOf(await req.json().catch(() => null))
+      if (!call) return json(400, { ok: false, error: 'call' })
+      if (!uplinkRunner) return json(503, { ok: false, error: 'uplink' })
+      return json(200, await uplinkRunner.ownerCall(from.device, call))
+    }
+    // The settings of the features the master runs for every machine (#780), which a remote
+    // listener keeps on this computer (localOnly), are the owner's on each of its paired devices
+    // too; never a node session's. What acts on this computer's screen stays refused. Each write of
+    // them goes into the admin log, as an owner-admin login's does through the tunnel.
+    const setting = relayOwnerSetting(req.method, raw, from?.who)
+    const refused = remoteRefusal(raw, path, false, false, true, setting)
     if (refused) return refused
     const table = masterRelayFirst ? routes.filter(r => r !== masterRelayFirst) : routes
-    return dispatch(table, req, url, path, { ...guards, remote: true })
+    const logAdmin = setting && req.method !== 'GET'
+    if (logAdmin && !board.checkAdminAudit()) return json(503, { ok: false, error: 'audit' })
+    const op = logAdmin ? await adminOpOf(req) : undefined
+    let res: Response | undefined
+    try {
+      res = await dispatch(table, req, url, path, { ...guards, remote: true })
+      return res
+    } finally {
+      if (logAdmin)
+        board.recordAdmin({
+          kind: 'admin',
+          at: Date.now(),
+          method: req.method,
+          path: path.slice(0, 200),
+          ...(op && { op }),
+          status: res?.status ?? 500,
+          via: 'relay',
+          who: `owner on ${from?.device ?? 'unknown'}`,
+          from: from?.device ?? 'unknown',
+        })
+    }
   }
 
   // No idle timeout: answers that drive a session can take longer than Bun's default 10 s, and the
@@ -1680,6 +1720,14 @@ export async function startServer({
     const upFlags = createNodeMasterFlags({ cfg, log, changed: () => void runRefresh() })
     nodeFlags = upFlags
     upFlags.apply()
+    // The master's time, calendar, journal and presence for this node's page (#780).
+    const upSlices = createNodeMasterSlices({
+      relay: upRelay,
+      flags: upFlags.current,
+      changed: () => void runRefresh(),
+      log,
+    })
+    nodeSlices = upSlices
     masterRelay = upRelay
     masterRelayFirst = masterRelayRoute(upRelay)
     routes.unshift(masterRelayFirst)
@@ -1774,7 +1822,14 @@ export async function startServer({
         pilotCall,
         pilotBridge: nodePilotBridge,
         masterRelay: upRelay,
-        masterFlags: upFlags,
+        // Each post of the flags (the master's stream just opened, or every 5 minutes) asks for the slices too.
+        masterFlags: {
+          take(raw) {
+            const answer = upFlags.take(raw)
+            upSlices.poke()
+            return answer
+          },
+        },
         telegram: nodeTelegram,
         relayKey: async publicKey => {
           const r = activateNodeRelayKey(publicKey, nodeDir())
@@ -2100,7 +2155,7 @@ export async function startServer({
           return false
         }
       },
-      replay: req => replayRelayed(req),
+      replay: (req, from) => replayRelayed(req, from),
       // The master-owned features for the nodes (#775).
       flags: () => masterFlagsFor(cfg, nodesConfig(cfg.nodes, hostname())?.id ?? '', presence.view()),
     })
@@ -2595,6 +2650,7 @@ export async function startServer({
       nodePilotBridge?.close()
       await pilotBridgeRunner?.close()
       masterRelay?.close()
+      nodeSlices?.close()
       await masterRelayRunner?.close()
       if (nodePilotCall) {
         nodePilotCall.closeAll()

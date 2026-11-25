@@ -358,7 +358,8 @@ export interface AdminEdge {
   path: string
   op?: string
   status: number
-  via: 'tunnel' | 'tailnet' | 'serve'
+  /** `relay`: a node's owner request through the master relay (#780). */
+  via: 'tunnel' | 'tailnet' | 'serve' | 'relay'
   who: string
   from: string
 }

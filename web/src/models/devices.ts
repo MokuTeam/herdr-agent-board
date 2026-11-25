@@ -190,6 +190,8 @@ export function knowDevices(devices: readonly BoardDevice[]): void {
  * `{ error: 'node-offline', device }`): "server-1 is not reachable". Null for any other answer.
  */
 export function offlineAnswer(reply: { error?: unknown; device?: unknown }, t: Translator): string | null {
+  // A node's call its master answers (#780, core/master-relay.ts RELAY_ERRORS.offline) while the shared board is away.
+  if (reply.error === 'node-master-offline') return t('node.err.masterOffline')
   if (reply.error !== 'node-offline') return null
   const id = typeof reply.device === 'string' ? reply.device : ''
   return id ? t('node.offline', { name: titles.get(id) || id }) : t('node.offlineAny')

@@ -14,6 +14,7 @@ import { forgetProfilePanes } from '../adapters/profile-panes.ts'
 import { listEntries, listWatches, readLog, watchesDir } from '../adapters/schedule-store.ts'
 import { type BoardAgyLimits, pickAgyLimits } from '../core/agy-limits.ts'
 import { COLUMNS } from '../core/board.ts'
+import { type BoardSlices, slicesOf } from '../core/board-slices.ts'
 import { besideParents } from '../core/call-agent.ts'
 import { categoryInfo, colorHex, laneRank, PALETTE } from '../core/categories.ts'
 import { isCodexItem } from '../core/codex.ts'
@@ -67,6 +68,8 @@ import type { TurnResumeService } from '../services/turn-resume.ts'
 export interface BoardState {
   /** The latest payload, as JSON text. */
   payload(): string
+  /** The latest payload's master-run parts, for a node's page (#780, GET /api/board-slices over the relay). */
+  slices(): BoardSlices
   items(): Item[]
   observation(): BoardObservation | null
   find(key: string): Item | undefined
@@ -152,6 +155,11 @@ interface Options {
   nodeMaster?: () => NodeMasterPayload | null
   /** A node's master-owned features as its master sent them (#775); null elsewhere. */
   masterFlags?: () => MasterFlagsPayload | null
+  /**
+   * A node's master-run parts of the payload (time, calendar, journal, presence) as its master last
+   * gave them (#780); null elsewhere. They stand for the node's own, which its config.json no longer has.
+   */
+  masterSlices?: () => BoardSlices | null
 }
 
 // The colors the category editor offers (aliases left out).
@@ -309,6 +317,7 @@ export function createBoardState({
   allowCallParent,
   nodeMaster,
   masterFlags,
+  masterSlices,
 }: Options): BoardState {
   const { cfg, log } = deps
   let items: Item[] = []
@@ -520,16 +529,20 @@ export function createBoardState({
         const f = masterFlags?.() ?? null
         return f ? { masterFlags: f } : {}
       })(),
+      // The master's time, calendar, journal and presence: only on a node whose master gave them (#780).
+      ...(masterSlices?.() ?? {}),
     }
   }
 
   // GET always answers with the latest payload. Live clients get it again only when the board
   // changed (stale included): a refresh time that moves every few seconds alone is no news.
   let sent = ''
+  let lastSlices: BoardSlices = {}
   function publish(): void {
     // Turned off in config.json: no pane stays on show.
     if (!terminalOn(cfg)) terminals?.stopAll()
     const next = board()
+    lastSlices = slicesOf(next)
     const key = JSON.stringify(next)
     payload = JSON.stringify({ ...next, lastSuccessfulRefreshAt })
     if (key === sent) return
@@ -676,6 +689,7 @@ export function createBoardState({
     Date.now() - lastSuccessfulRefreshAt > Math.max(10000, (cfg.refreshSec ?? 2) * 3000)
   return {
     payload: () => payload,
+    slices: () => lastSlices,
     items: () => items,
     observation: () => (lastSuccessfulRefreshAt && !isStale() ? { items, observedAt: lastSuccessfulRefreshAt } : null),
     find: key => items.find(i => i.key === key),

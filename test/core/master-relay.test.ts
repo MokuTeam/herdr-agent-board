@@ -1,13 +1,21 @@
 // The master relay's declared table, wire and rules (#764, core/master-relay.ts): pure.
 import { describe, expect, test } from 'bun:test'
+import { boardSlicesOf, slicesOf } from '../../src/core/board-slices.ts'
 import {
+  BOARD_SLICES_PATH,
   masterPath,
+  NODE_CLI_PATH,
+  OWNER_CLI_COMMANDS,
+  ownerCliOf,
   plainPath,
   RELAY_INLINE_BYTES,
+  RELAY_OWNER_SETTINGS,
   relayChunkOf,
   relayHeadOf,
   relayMatch,
+  relayOwnerSetting,
   relayRequestOf,
+  relayTablePath,
 } from '../../src/core/master-relay.ts'
 import { applyNodesEdit, nodesConfig, nodesEditOf } from '../../src/core/nodes.ts'
 
@@ -31,13 +39,21 @@ describe("relayMatch: the threads group and other machines' sessions, nothing el
     expect(events?.kind === 'table' && events.entry.stream).toBe(true)
   })
 
-  test("what stays local is not the relay's: settings, other groups, local sessions, other methods", () => {
+  test("what stays local is not the relay's: decisions (#781), other settings, local sessions, other methods", () => {
     for (const [method, path] of [
-      ['GET', '/api/threads-settings'],
-      ['POST', '/api/threads-settings'],
+      ['GET', '/api/decisions'],
+      ['POST', '/api/decisions'],
+      ['POST', '/api/settings'],
+      ['POST', '/api/todos'],
+      ['POST', '/api/profiles'],
+      ['GET', '/api/feature-settings'],
+      ['GET', '/api/categories'],
       ['GET', '/api/threads/a/b'],
+      ['GET', '/api/time/x'],
+      ['GET', '/api/calendar-reminders'],
+      ['POST', '/api/board-slices'],
+      ['GET', '/api/node-cli'],
       ['GET', '/api/board'],
-      ['GET', '/api/time'],
       ['POST', '/api/reveal'],
       ['GET', '/api/session/pane-p1'],
       ['GET', '/api/term/@ben:k/agent/stream'],
@@ -53,6 +69,89 @@ describe("relayMatch: the threads group and other machines' sessions, nothing el
     expect(relayMatch('GET', '/api/session/%40ben%3As%201', none)).toEqual({ kind: 'keyed', device: 'ben' })
     const skip = (d: string): boolean => d === 'server-1'
     expect(relayMatch('POST', '/api/session/@server-1:pane-p1/message', skip)).toBeNull()
+  })
+})
+
+describe('T4a groups (#780): time, calendar, journal, presence, their settings and the categories', () => {
+  test('each route of the issue is the table, in its group', () => {
+    for (const [method, path, group] of [
+      ['GET', '/api/time', 'time'],
+      ['POST', '/api/time', 'time'],
+      ['GET', '/api/time-settings', 'time'],
+      ['POST', '/api/time-settings', 'time'],
+      ['GET', '/api/calendar', 'calendar'],
+      ['POST', '/api/calendar', 'calendar'],
+      ['GET', '/api/calendar-settings', 'calendar'],
+      ['POST', '/api/calendar-settings', 'calendar'],
+      ['POST', '/api/calendar-reminders', 'calendar'],
+      ['GET', '/api/journal', 'journal'],
+      ['POST', '/api/journal', 'journal'],
+      ['GET', '/api/presence', 'presence'],
+      ['POST', '/api/presence', 'presence'],
+      ['POST', '/api/feature-settings', 'settings'],
+      ['GET', '/api/threads-settings', 'settings'],
+      ['POST', '/api/threads-settings', 'settings'],
+      ['POST', '/api/categories', 'settings'],
+    ] as const) {
+      const m = relayMatch(method, path, none)
+      expect(m?.kind === 'table' && m.entry.group).toBe(group)
+      expect(m?.kind === 'table' && m.entry.relayOnly).toBeUndefined()
+      expect(relayTablePath(method, path)).toBe(true)
+    }
+  })
+
+  test('the two relay-only paths: the payload parts and a sessionless terminal', () => {
+    const slices = relayMatch('GET', BOARD_SLICES_PATH, none)
+    expect(slices?.kind === 'table' && slices.entry.relayOnly).toBe(true)
+    const cli = relayMatch('POST', NODE_CLI_PATH, none)
+    expect(cli?.kind === 'table' && cli.entry.relayOnly).toBe(true)
+    // A keyed session path is not the table's, so it never passes localOnly by it.
+    expect(relayTablePath('POST', '/api/session/@ben:p1/message')).toBe(false)
+    expect(relayTablePath('GET', '/api/threads-settings/x')).toBe(false)
+  })
+
+  test('only the owner passes localOnly, and only for the settings of the features the master runs', () => {
+    const owner = { kind: 'owner' } as const
+    const session = { kind: 'session', key: 'k' } as const
+    for (const path of RELAY_OWNER_SETTINGS) expect(relayOwnerSetting('POST', path, owner)).toBe(true)
+    expect(relayOwnerSetting('GET', '/api/time-settings', owner)).toBe(true)
+    expect(relayOwnerSetting('GET', '/api/time-settings', session)).toBe(false)
+    expect(relayOwnerSetting('POST', '/api/time-settings', undefined)).toBe(false)
+    // A table path that is no setting, and a setting that is no table path, pass nothing.
+    expect(relayOwnerSetting('POST', '/api/presence', owner)).toBe(false)
+    expect(relayOwnerSetting('GET', '/api/feature-settings', owner)).toBe(false)
+    expect(relayOwnerSetting('POST', '/api/backup', owner)).toBe(false)
+  })
+
+  test("ownerCliOf takes the owner's few commands, with string arguments only", () => {
+    expect(ownerCliOf({ cmd: 'presence', argv: ['away'] })).toEqual({ cmd: 'presence', argv: ['away'] })
+    expect(ownerCliOf({ cmd: 'time', argv: [], lane: 'atlas' })).toEqual({ cmd: 'time', argv: [], lane: 'atlas' })
+    expect(ownerCliOf({ cmd: 'time', argv: [], lane: null })).toEqual({ cmd: 'time', argv: [] })
+    for (const lane of ['', 'x'.repeat(65), 'a\nb', 3]) expect(ownerCliOf({ cmd: 'time', argv: [], lane })).toBeNull()
+    expect(ownerCliOf({ cmd: 'time', argv: ['list', '--json', 'ünï 100%'] })?.argv).toHaveLength(3)
+    for (const cmd of OWNER_CLI_COMMANDS) expect(ownerCliOf({ cmd, argv: [] })?.cmd).toBe(cmd)
+    for (const bad of [
+      null,
+      { cmd: 'thread', argv: [] },
+      { cmd: 'send', argv: ['x'] },
+      { cmd: 'presence' },
+      { cmd: 'presence', argv: [1] },
+      { cmd: 'presence', argv: ['a\u0000b'] },
+      { cmd: 'presence', argv: Array.from({ length: 65 }, () => 'x') },
+    ])
+      expect(ownerCliOf(bad)).toBeNull()
+  })
+
+  test('boardSlicesOf keeps the four parts only, from an answer of that kind', () => {
+    expect(
+      boardSlicesOf({
+        ok: true,
+        slices: { time: { seq: 1, date: '2026-11-25', today: {} }, items: [], presence: null },
+      }),
+    ).toEqual({ time: { seq: 1, date: '2026-11-25', today: {} } })
+    expect(boardSlicesOf({ ok: false, slices: {} })).toBeNull()
+    expect(boardSlicesOf({ ok: true })).toBeNull()
+    expect(slicesOf(null)).toEqual({})
   })
 })
 
