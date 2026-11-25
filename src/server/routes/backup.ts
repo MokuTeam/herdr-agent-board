@@ -28,9 +28,17 @@ export interface BackupApp {
   changed(): void
   /** True while this board is a node (#777): the panel says the master backs up, and nothing changes here. */
   onNode?: () => boolean
+  /** The machine that backs up instead, by its name, for the note; null when not known. */
+  masterName?: () => string | null
 }
 
 const text = (v: unknown): string | null => (typeof v === 'string' ? v : null)
+
+/** The one line a node's panel shows (#777): the machine that backs up, by its name when known. */
+function onNodeLine(app: BackupApp): string {
+  const master = app.masterName?.() ?? null
+  return master ? t('backup.onNode', { master }) : t('backup.onNodeUnnamed')
+}
 
 export function backupRoutes(app: BackupApp): Route[] {
   // config.json as it is now: the live config follows a change a moment later (its watcher), and
@@ -50,14 +58,14 @@ export function backupRoutes(app: BackupApp): Route[] {
     {
       method: 'GET',
       path: '/api/backup',
-      handle: async () => json(200, app.onNode?.() ? { ...view(), onNode: t('backup.onNode') } : view()),
+      handle: async () => json(200, app.onNode?.() ? { ...view(), onNode: onNodeLine(app) } : view()),
     },
     {
       method: 'POST',
       path: '/api/backup',
       guard: ['board-header', 'origin'],
       async handle(_req, ctx) {
-        if (app.onNode?.()) return json(409, { ok: false, error: t('backup.onNode') })
+        if (app.onNode?.()) return json(409, { ok: false, error: onNodeLine(app) })
         const raw = await ctx.rawBody()
         const b = isRecord(raw) ? raw : {}
         const sudo = text(b.sudoPassword) || null

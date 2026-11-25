@@ -58,9 +58,9 @@ function render(props: Partial<BackupBodyProps>) {
 
 test('on a node: the master backs up, nothing to set or send here (#777)', () => {
   const r = render({
-    view: { ...VIEW, onNode: 'This computer is a node: the board’s database is backed up on the master.' },
+    view: { ...VIEW, onNode: 'The board is backed up on atlas: Settings → Backup there.' },
   })
-  expect(r.all).toBe('This computer is a node: the board’s database is backed up on the master.')
+  expect(r.all).toBe('The board is backed up on atlas: Settings → Backup there.')
   expect(r.button('Back up now')).toBeUndefined()
   expect(r.inputs).toEqual([])
 })

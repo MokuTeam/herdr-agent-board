@@ -1020,6 +1020,16 @@ export async function startServer({
   // Declared before createBoardState so board.publish() never hits TDZ before doorFollows() runs.
   let door: NodeListener | null = null
   let doorStore: NodeStore | null = null
+  /** The name of the machine this node's board is served from, for a node's one-line notes (#777); null when none is paired. */
+  function masterNameHere(): string | null {
+    const n = nodeConfig(cfg.node)
+    if (!n || !doorStore) return null
+    try {
+      return pickNodeMaster(n.id, doorStore.list(), door?.connectedMasters() ?? new Set())?.name || null
+    } catch {
+      return null
+    }
+  }
   // A node's copy of its master's feature flags (#775, services/node/master-flags.ts); null without `node`.
   let nodeFlags: NodeMasterFlags | null = null
   const board = createBoardState({
@@ -1286,6 +1296,7 @@ export async function startServer({
       now: () => backups.now(true),
       changed: () => board.publish(),
       onNode: () => isNodeOnly(cfg),
+      masterName: masterNameHere,
     }),
     // Settings → Updates… (#617): the board's update of itself from git; this computer only.
     ...selfUpdateRoutes({

@@ -8,6 +8,7 @@ import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { FOLDER_NAME, writeKey } from '../../src/adapters/backup-store.ts'
 import { dbFile, openDb } from '../../src/adapters/db.ts'
+import { createNodeStore } from '../../src/adapters/node-store.ts'
 import { snapshotName } from '../../src/core/backup.ts'
 import { makeKey } from '../../src/core/backup-file.ts'
 import { backupNow } from '../../src/services/backup.ts'
@@ -49,10 +50,19 @@ test('on a node board backup and board db refuse, and the database stays as it w
   for (const args of [['backup', 'now'], ['backup'], ['db', 'restore', '--target', 'folder'], ['db', 'rekey']]) {
     const r = await cli(args)
     assert.notEqual(r.code, 0, `${args.join(' ')}: ${r.out}`)
-    assert.match(r.out, /this computer is a node: the board’s database and its backups are on the master/)
+    // no paired machine in this sandbox: the line says where without a name, and never "off"
+    assert.match(
+      r.out,
+      /the board’s database and its backups are on the machine the board is served from: run this there/,
+    )
   }
   assert.deepEqual(readFileSync(dbFile()), before)
   assert.equal(readdirSync(folder).length, 0, 'nothing was sent to the folder')
+  // paired with the machine it is served from: named
+  createNodeStore().add('atlas', 'hand')
+  const named = await cli(['backup', 'now'])
+  assert.notEqual(named.code, 0)
+  assert.match(named.out, /the board’s database and its backups are on atlas: run this there/)
 }, 30_000)
 
 test('board db restore names each newer snapshot it passed over, and why', async () => {

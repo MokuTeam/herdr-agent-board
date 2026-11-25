@@ -263,6 +263,17 @@ describe('Settings, Devices (#510)', () => {
     expect(all).not.toContain('Add a computer')
   })
 
+  test('a node board names the machine its board is served from (#777)', () => {
+    const data = payload({
+      categories: CATEGORIES,
+      machine: 'server-1',
+      nodeMaster: { nodeId: 'server-1', name: 'atlas', url: null, online: true },
+    })
+    const all = text([byId(draw(data, 1600, undefined), 'devices-sheet')])
+    expect(all).toContain('This computer is a node of the board on atlas. Servers and computers are added there')
+    expect(all).not.toContain('Add a server…')
+  })
+
   test('a master that is a node too still adds devices (#777)', () => {
     const all = text([byId(draw(payload({ ...full(), machine: 'laptop' }), 1600, undefined), 'devices-sheet')])
     expect(all).toContain('Add a server…')

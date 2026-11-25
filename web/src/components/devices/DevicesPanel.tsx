@@ -178,7 +178,15 @@ export function DevicesPanel({ open, onClose, back, initial, setup, computerSetu
       }
     >
       <div className="sheet-body cats-body devices-body">
-        {!master && <p className="sheet-meta devices-none">{t(nodeOnly ? 'node.add.onNode' : 'node.add.none')}</p>}
+        {!master && (
+          <p className="sheet-meta devices-none">
+            {!nodeOnly
+              ? t('node.add.none')
+              : data?.nodeMaster?.name
+                ? t('node.add.onNodeNamed', { master: data.nodeMaster.name })
+                : t('node.add.onNode')}
+          </p>
+        )}
         <div className="cats-list devices-list" ref={list}>
           {rows.map(row => (
             <DeviceRowView

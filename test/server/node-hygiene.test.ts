@@ -42,11 +42,13 @@ describe('a node board (#777)', () => {
       expect(((await sent.json()) as { error: string }).error).toContain(ON_NODE)
     }
     const view = (await (await fetch(`${node.url}/api/backup`)).json()) as { onNode?: string }
-    expect(view.onNode).toContain('backed up on the master')
+    expect(view.onNode).toBe('The board is backed up on master: Settings → Backup there.')
     for (const op of ['now', 'folder', 'passphrase', 'apply']) {
       const r = await post(node.url, '/api/backup', { op, folder: '' })
       expect(r.status).toBe(409)
-      expect(((await r.json()) as { error: string }).error).toContain('backed up on the master')
+      expect(((await r.json()) as { error: string }).error).toBe(
+        'The board is backed up on master: Settings → Backup there.',
+      )
     }
     const payload = (await (await fetch(`${node.url}/api/board`)).json()) as Record<string, unknown>
     expect(payload.backup).toBeUndefined()

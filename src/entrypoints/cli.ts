@@ -3215,7 +3215,7 @@ function option(name: string): string | undefined {
 /** `board backup …` (#233): the backup of the board's database (services/backup.ts). */
 async function backupCmd(): Promise<void> {
   // a node's database is the master's old one: its backups are the master's (#777)
-  if (isNodeOnly(cfg)) throw new Error(t('backup.cli.onNode'))
+  if (isNodeOnly(cfg)) throw new Error(await onNodeLine())
   const [op = 'status', arg] = words
   const backup = await import('../services/backup.ts')
   const { activeTargets, backupConfig, isTarget, problemSentence } = await import('../core/backup.ts')
@@ -3286,10 +3286,22 @@ async function backupCmd(): Promise<void> {
   throw new Error(t('backup.cli.usage'))
 }
 
+/** What `board backup` and `board db` say on a node (#777): the machine that holds the database, by name. */
+async function onNodeLine(): Promise<string> {
+  let master: string | null = null
+  try {
+    const { createNodeStore } = await import('../adapters/node-store.ts')
+    const { pickNodeMaster } = await import('../core/nodes.ts')
+    const n = nodeConfig(cfg.node)
+    if (n) master = pickNodeMaster(n.id, createNodeStore().list(), new Set())?.name || null
+  } catch {}
+  return master ? t('backup.cli.onNode', { master }) : t('backup.cli.onNodeUnnamed')
+}
+
 /** `board db restore …` (#233) and `board db rekey …` (#696). */
 async function dbCmd(): Promise<void> {
   // restore and rekey write the database a node no longer serves (#777)
-  if (isNodeOnly(cfg)) throw new Error(t('backup.cli.onNode'))
+  if (isNodeOnly(cfg)) throw new Error(await onNodeLine())
   const [op] = words
   if (op === 'rekey') return dbRekeyCmd()
   if (op !== 'restore') throw new Error(t('backup.cli.restoreUsage'))
