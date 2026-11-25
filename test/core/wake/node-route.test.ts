@@ -3,18 +3,23 @@
 import { describe, expect, test } from 'bun:test'
 import type { Item } from '../../../src/core/types.ts'
 import {
+  ambiguousDeliveryNote,
   hintMachine,
   hintPane,
   isNodeOnly,
+  isPreConnectError,
   isRouteResult,
+  masterNodeTimeoutMs,
   matchNodeItem,
   type NodeRouteCandidate,
+  nodeWakeTimeoutMs,
   offlineHeldNote,
   offlineRetryNote,
   orderNodeDevices,
   parseRouteItemsBody,
   remoteMachineHint,
   sameTgKey,
+  wakeMasterTimeoutMs,
 } from '../../../src/core/wake/node-route.ts'
 
 const item = (fields: Partial<Item> = {}): Item => ({
@@ -181,10 +186,36 @@ describe('parseRouteItemsBody and isRouteResult', () => {
     expect(isRouteResult(null)).toBe(false)
   })
 
-  test('offline notes contain no em or en dashes', () => {
-    for (const note of [offlineHeldNote('Atlas Server'), offlineRetryNote('Atlas Server')]) {
+  test('offline and ambiguous notes contain no em or en dashes', () => {
+    for (const note of [
+      offlineHeldNote('Atlas Server'),
+      offlineRetryNote('Atlas Server'),
+      ambiguousDeliveryNote('Atlas Server'),
+    ]) {
       expect(note).not.toContain('\u2014')
       expect(note).not.toContain('\u2013')
     }
+    expect(ambiguousDeliveryNote('Atlas Server')).toContain('Atlas Server')
+  })
+})
+
+describe('layered timeouts and pre-connect error checks (#732)', () => {
+  test('node->wake < master->node < wake->master for any wakeTimeoutSec', () => {
+    for (const sec of [5, 120, 300]) {
+      expect(nodeWakeTimeoutMs(sec)).toBeLessThan(masterNodeTimeoutMs(sec))
+      expect(masterNodeTimeoutMs(sec)).toBeLessThan(wakeMasterTimeoutMs(sec))
+    }
+  })
+
+  test('isPreConnectError matches only definite pre-connect failures', () => {
+    for (const code of ['ECONNREFUSED', 'ConnectionRefused', 'EHOSTUNREACH', 'ENETUNREACH', 'ENOTFOUND']) {
+      expect(isPreConnectError(Object.assign(new Error(code), { code }))).toBe(true)
+      expect(isPreConnectError(new Error('wrapped', { cause: { code } }))).toBe(true)
+    }
+    expect(isPreConnectError(new DOMException('The operation timed out.', 'TimeoutError'))).toBe(false)
+    expect(isPreConnectError(new DOMException('Aborted', 'AbortError'))).toBe(false)
+    expect(isPreConnectError(Object.assign(new Error('reset'), { code: 'ECONNRESET' }))).toBe(false)
+    expect(isPreConnectError(new Error('network glitch'))).toBe(false)
+    expect(isPreConnectError(null)).toBe(false)
   })
 })

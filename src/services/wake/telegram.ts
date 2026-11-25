@@ -242,6 +242,37 @@ export async function postMasterTelegram(
   return null
 }
 
+/** Delivers `items` to `target` (waking a sleeping target first when `target.session` is set). */
+export function deliverTarget(
+  target: RouteTarget,
+  items: RouteItem[],
+  opts: {
+    herdr: WakeHerdr
+    wakePane: (target: RouteTarget) => Promise<WakeOutcome>
+    timing: Timing
+    log: (text: string) => void
+  },
+): Promise<RouteResult> {
+  const first = items[0]
+  if (!first) return Promise.resolve({ ok: true })
+  const topic = first.topic ?? first.key
+  return withPane(target.pane, async (): Promise<RouteResult> => {
+    // A sleeper whose pane wake closed wakes in a new tab (#204): the message goes there.
+    let pane = target.pane
+    let wokeHere = Boolean(target.session)
+    if (target.session) {
+      const woke = await opts.wakePane(target)
+      if (!woke.ok) return notWoken(target.pane, woke, topic, opts.log)
+      pane = woke.pane ?? pane
+      if (woke.already) wokeHere = false
+    }
+    const r = await withPane(pane, () => deliverLive(opts.herdr, pane, formatPrompt(items), opts.timing))
+    if (!('ok' in r)) return r
+    opts.log(`delivered ${items.length} message(s) for ${first.key} to ${pane}${wokeHere ? ' after waking it' : ''}`)
+    return wokeHere ? { ok: true, note: wokeNote(target.title) } : r
+  })
+}
+
 export function createTelegram(o: TelegramDeps): Telegram {
   const fetchFn = o.fetch ?? ((url: string, init: RequestInit) => fetch(url, init))
   const timing: Timing = { log: text => o.log(text), ...(o.sleep && { sleep: o.sleep }) }
@@ -273,28 +304,13 @@ export function createTelegram(o: TelegramDeps): Telegram {
       else timer = setTimeout(done, ms)
     })
 
-  function deliverTarget(
-    target: RouteTarget,
-    items: RouteItem[],
-    first: RouteItem,
-    topic: string,
-  ): Promise<RouteResult> {
-    return withPane(target.pane, async (): Promise<RouteResult> => {
-      // A sleeper whose pane wake closed wakes in a new tab (#204): the message goes there.
-      let pane = target.pane
-      if (target.session) {
-        const woke = await o.engine.wakePane(target.pane)
-        if (!woke.ok) return notWoken(target.pane, woke, topic, o.log)
-        pane = woke.pane ?? pane
-      }
-      const r = await withPane(pane, () => deliverLive(o.herdr, pane, formatPrompt(items), timing))
-      if (!('ok' in r)) return r
-      o.log(
-        `delivered ${items.length} message(s) for ${first.key} to ${pane}${target.session ? ' after waking it' : ''}`,
-      )
-      return target.session ? { ok: true, note: wokeNote(target.title) } : r
+  const deliver = (target: RouteTarget, items: RouteItem[]): Promise<RouteResult> =>
+    deliverTarget(target, items, {
+      herdr: o.herdr,
+      wakePane: t => o.engine.wakePane(t.pane),
+      timing,
+      log: o.log,
     })
-  }
 
   function routeLocal(
     items: RouteItem[],
@@ -306,8 +322,7 @@ export function createTelegram(o: TelegramDeps): Telegram {
       const { snap, sessions } = await o.engine.seen()
       const target = resolve(first, routeSnapshot(snap), sessions, o.machine)
       if (!target || (opts?.liveOnly && target.session)) return { matched: false }
-      const topic = first.topic ?? first.key
-      return { matched: true, result: await deliverTarget(target, items, first, topic) }
+      return { matched: true, result: await deliver(target, items) }
     })
   }
 
@@ -321,7 +336,7 @@ export function createTelegram(o: TelegramDeps): Telegram {
         const { snap, sessions } = await o.engine.seen()
         const target = resolve(first, routeSnapshot(snap), sessions, o.machine)
         if (!target) return missing(topic)
-        return deliverTarget(target, items, first, topic)
+        return deliver(target, items)
       })
     }
     return o.engine.deliver(async () => {
@@ -332,13 +347,13 @@ export function createTelegram(o: TelegramDeps): Telegram {
       }
       const { snap, sessions } = await o.engine.seen()
       const target = resolve(first, routeSnapshot(snap), sessions, o.machine)
-      if (target && !target.session) return deliverTarget(target, items, first, topic)
+      if (target && !target.session) return deliver(target, items)
       if (target?.session) {
-        if ((first.live_panes ?? []).some(h => remoteMachineHint(h, o.machine) !== null)) {
+        if (!remoteFirst) {
           const liveRemote = await remoteFn(items, { liveOnly: true })
           if (liveRemote !== null) return liveRemote
         }
-        return deliverTarget(target, items, first, topic)
+        return deliver(target, items)
       }
       if (!remoteFirst) {
         const r = await remoteFn(items)

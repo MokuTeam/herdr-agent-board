@@ -6,11 +6,14 @@ import { isRecord } from '../../adapters/json-store.ts'
 import { addEntry, type NewEntry } from '../../adapters/schedule-store.ts'
 import { LOCAL, nodesConfig } from '../../core/nodes.ts'
 import { MAX_TELEGRAM_HOLD_CHARS, NODE_OFFLINE_WHY, type ScheduleEntry } from '../../core/schedule-rules.ts'
-import type { Config } from '../../core/types.ts'
+import type { Config, Item } from '../../core/types.ts'
 import { wakeConfig } from '../../core/wake/config.ts'
 import {
+  ambiguousDeliveryNote,
   hintMachine,
+  isPreConnectError,
   isRouteResult,
+  masterNodeTimeoutMs,
   matchNodeItem,
   type NodeRouteCandidate,
   offlineHeldNote,
@@ -36,6 +39,7 @@ export interface NodesTelegramDeps {
   deviceState(device: string): RemoteDeviceState
   holdEntry?(entry: NewEntry): ScheduleEntry
   onHeld?(): void
+  fetchTimeoutMs?: number
   log(text: string): void
   now?(): number
 }
@@ -78,7 +82,45 @@ export function createNodesTelegram(deps: NodesTelegramDeps): NodesTelegram {
 
       const ordered = orderNodeDevices(first, candidates)
       const fellOffline = new Set<string>()
-      const timeoutMs = (wakeConfig(deps.cfg.wake).wakeTimeoutSec + 60) * 1000
+      const ambiguous = new Set<string>()
+      const failed = new Set<string>()
+      const timeoutMs = deps.fetchTimeoutMs ?? masterNodeTimeoutMs(wakeConfig(deps.cfg.wake).wakeTimeoutSec)
+
+      function holdForOffline(d: NodeRouteCandidate, hit: Item): Answer {
+        const at = now()
+        const totalChars = items.reduce((sum, it) => sum + String(it.text ?? '').length, 0)
+        const formatted = formatPrompt(items, at)
+        if (totalChars > MAX_TELEGRAM_HOLD_CHARS || Buffer.byteLength(formatted, 'utf8') > MAX_HOLD_PROMPT_BYTES) {
+          deps.log(
+            `telegram: held batch exceeds offline limit (${totalChars} text chars, ${formatted.length} formatted chars) for ${hit.key}; asking tg-mcp to retry`,
+          )
+          return { status: 200, body: { matched: true, result: { retry: 60, note: offlineRetryNote(d.title) } } }
+        }
+        try {
+          holdEntry({
+            key: hit.key,
+            name: hit.name,
+            text: formatted,
+            kind: 'telegram',
+            telegramItems: items,
+            at,
+            next: at,
+            pendingSince: at,
+            why: NODE_OFFLINE_WHY,
+            by: 'telegram',
+          })
+        } catch (err) {
+          deps.log(`telegram: could not hold message for ${hit.key}: ${messageOf(err)}`)
+          return { status: 200, body: { matched: true, result: { retry: 60, note: offlineRetryNote(d.title) } } }
+        }
+        try {
+          deps.onHeld?.()
+        } catch (err) {
+          deps.log(`telegram: post-hold hook failed for ${hit.key}: ${messageOf(err)}`)
+        }
+        deps.log(`telegram: held ${items.length} message(s) for ${hit.key} while ${d.id} is offline`)
+        return { status: 200, body: { matched: true, result: { ok: true, note: offlineHeldNote(d.title) } } }
+      }
 
       async function askDevice(id: string, bodyLiveOnly: boolean): Promise<RouteResult | null> {
         const link = deps.links.link(id)
@@ -94,14 +136,28 @@ export function createNodesTelegram(deps: NodesTelegramDeps): NodesTelegram {
             signal: AbortSignal.timeout(timeoutMs),
           })
           if (!res.ok) {
-            if (res.status === 503) fellOffline.add(id)
+            if (res.status === 503) {
+              const data: unknown = await res.json().catch(() => null)
+              if (data === null || (isRecord(data) && data.error === 'node-offline')) fellOffline.add(id)
+              else failed.add(id)
+            } else {
+              await res.body?.cancel().catch(() => {})
+              failed.add(id)
+              deps.log(`telegram: node ${id} answered HTTP ${res.status}`)
+            }
             return null
           }
           const data: unknown = await res.json().catch(() => null)
           if (isRecord(data) && data.matched === true && isRouteResult(data.result)) return data.result
           return null
-        } catch {
-          fellOffline.add(id)
+        } catch (err) {
+          if (isPreConnectError(err)) {
+            fellOffline.add(id)
+          } else {
+            ambiguous.add(id)
+            failed.add(id)
+            deps.log(`telegram: delivery to ${id} uncertain (${messageOf(err)}); not holding to avoid duplicate`)
+          }
           return null
         }
       }
@@ -122,7 +178,7 @@ export function createNodesTelegram(deps: NodesTelegramDeps): NodesTelegram {
             if (r !== null) return { status: 200, body: { matched: true, result: r } }
           }
           for (const d of online) {
-            if (fellOffline.has(d.id)) continue
+            if (fellOffline.has(d.id) || failed.has(d.id)) continue
             const r = await askDevice(d.id, false)
             if (r !== null) return { status: 200, body: { matched: true, result: r } }
           }
@@ -134,46 +190,31 @@ export function createNodesTelegram(deps: NodesTelegramDeps): NodesTelegram {
         }
       }
 
-      if (!liveOnly) {
-        const offline = ordered.filter(d => !d.online || fellOffline.has(d.id))
-        for (const d of offline) {
-          const state = deps.deviceState(d.id)
-          if (state === 'revoked' || state === 'forgotten') continue
-          const hit = matchNodeItem(first, d.items, d.machine)
-          if (hit) {
-            const at = now()
-            const totalChars = items.reduce((sum, it) => sum + String(it.text ?? '').length, 0)
-            const formatted = formatPrompt(items, at)
-            if (totalChars > MAX_TELEGRAM_HOLD_CHARS || Buffer.byteLength(formatted, 'utf8') > MAX_HOLD_PROMPT_BYTES) {
-              deps.log(
-                `telegram: held batch exceeds offline limit (${totalChars} text chars, ${formatted.length} formatted chars) for ${hit.key}; asking tg-mcp to retry`,
-              )
-              return { status: 200, body: { matched: true, result: { retry: 60, note: offlineRetryNote(d.title) } } }
-            }
-            try {
-              holdEntry({
-                key: hit.key,
-                name: hit.name,
-                text: formatted,
-                kind: 'telegram',
-                telegramItems: items,
-                at,
-                next: at,
-                pendingSince: at,
-                why: NODE_OFFLINE_WHY,
-                by: 'telegram',
-              })
-              deps.onHeld?.()
-              deps.log(`telegram: held ${items.length} message(s) for ${hit.key} while ${d.id} is offline`)
-              return { status: 200, body: { matched: true, result: { ok: true, note: offlineHeldNote(d.title) } } }
-            } catch (err) {
-              deps.log(`telegram: could not hold message for ${hit.key}: ${messageOf(err)}`)
-              return { status: 200, body: { matched: true, result: { retry: 60, note: offlineRetryNote(d.title) } } }
-            }
-          }
-          if (pinned && d.machine && d.machine.toLowerCase() === pinned.toLowerCase()) {
-            return { status: 200, body: { matched: true, result: { retry: 60, note: offlineRetryNote(d.title) } } }
-          }
+      const liveHintMachines = new Set(
+        (first.live_panes ?? []).map(h => hintMachine(h)?.toLowerCase()).filter((m): m is string => !!m),
+      )
+
+      for (const d of ordered) {
+        if (!ambiguous.has(d.id)) continue
+        const mach = d.machine?.toLowerCase()
+        const hinted = Boolean(mach && ((pinned && mach === pinned.toLowerCase()) || liveHintMachines.has(mach)))
+        const pool = liveOnly ? d.items.filter(i => !i.sleeping) : d.items
+        if (hinted || matchNodeItem(first, pool, d.machine)) {
+          return { status: 200, body: { matched: true, result: { skip: true, note: ambiguousDeliveryNote(d.title) } } }
+        }
+      }
+
+      const offline = ordered.filter(d => !d.online || fellOffline.has(d.id))
+      for (const d of offline) {
+        const state = deps.deviceState(d.id)
+        if (state === 'revoked' || state === 'forgotten') continue
+        const pool = liveOnly ? d.items.filter(i => !i.sleeping) : d.items
+        const hit = matchNodeItem(first, pool, d.machine)
+        if (hit) return holdForOffline(d, hit)
+        if (liveOnly && matchNodeItem(first, d.items, d.machine)?.sleeping) continue
+        const mach = d.machine?.toLowerCase()
+        if (mach && ((pinned && mach === pinned.toLowerCase()) || liveHintMachines.has(mach))) {
+          return { status: 200, body: { matched: true, result: { retry: 60, note: offlineRetryNote(d.title) } } }
         }
       }
 

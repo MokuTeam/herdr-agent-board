@@ -8,8 +8,12 @@
 // Claude has left, the pane is closed, and its tab with it when only herdr-sidebar's panes are
 // beside it; it wakes in a new tab then (services/wake/tabs.ts), the line run as the shell starts.
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { homedir } from 'node:os'
+import type { HerdrSnapshot } from '../../adapters/herdr.ts'
 import type { WakeHerdr } from '../../adapters/wake-herdr.ts'
 import { inputDraft } from '../../core/dialogs/input-box.ts'
+import { sameDir } from '../../core/launch/names.ts'
+import { defaultProfileDir, type ProfileSet, profileForDir } from '../../core/profiles.ts'
 import {
   type FreedPlace,
   type FreeRules,
@@ -21,10 +25,13 @@ import {
 } from '../../core/wake/freed.ts'
 import { clearKeyFor, plainProfile, wakeLine } from '../../core/wake/rules.ts'
 import { isChannelsWarning, isExitTasksDialog, isTrustDialog } from '../../core/wake/screens.ts'
+import { isFreed, type WakeEntry } from '../../core/wake/sessions.ts'
+import type { Follow } from './follow.ts'
+import { openTab, type TabOps } from './tabs.ts'
 
 /** Woken, with the pane it woke in when that is another than the one asked for (a new tab, #204). */
 export type WakeOutcome =
-  | { ok: true; pane?: string }
+  | { ok: true; pane?: string; already?: true }
   | { ok: false; why: 'busy' | 'timeout' | 'trust' | 'blocked' | 'line'; error: string }
 
 /** The clock and the log, for tests; the real ones by default. */
@@ -155,6 +162,98 @@ export async function waitReady(
     lastConfirm = now()
   }
   return 'timeout'
+}
+
+export function wakeProfileFor(
+  set: ProfileSet,
+  dir: string | undefined,
+  platform: string = process.platform,
+): string | null {
+  if (!dir) return null
+  const id = profileForDir(set.list, dir)?.id
+  if (!id) return null
+  return plainProfile(id) || !sameDir(dir, defaultProfileDir(homedir(), platform)) ? id : null
+}
+
+export interface WakeClaudeEntryOpts {
+  herdr: WakeHerdr
+  profiles: ProfileSet
+  tabs: TabOps
+  follow: Follow
+  timeoutMs: number
+  platform?: string
+  timing?: Timing
+  reuseLive?: boolean
+  snapshot?: () => Promise<HerdrSnapshot>
+  onOpened?: (pane: string) => void
+  onAwake?: (pane: string, wasFreed: boolean) => Promise<void> | void
+}
+
+/**
+ * Shared Claude wake helper for a kept or #204 freed session entry: validates the wake line before
+ * opening any tab, optionally reuses a live pane when `reuseLive` is set, updates schedule/card
+ * follow state, and invokes `wakeInPane`.
+ */
+export async function wakeClaudeEntry(
+  pane: string,
+  entry: WakeEntry | undefined,
+  session: string,
+  opts: WakeClaudeEntryOpts,
+): Promise<WakeOutcome> {
+  const platform = opts.platform ?? process.platform
+  const dir = entry?.profileDir ?? defaultProfileDir(homedir(), platform)
+  const profile = wakeProfileFor(opts.profiles, dir, platform)
+
+  if (entry && isFreed(entry)) {
+    const found = lineFor(entry.session, profile)
+    if ('error' in found) return { ok: false, why: 'line', error: found.error }
+    const snap = await (opts.snapshot ? opts.snapshot() : opts.herdr.snapshot())
+    if (opts.reuseLive) {
+      const up = snap.panes.find(p => p.agent === 'claude' && p.agent_session?.value === entry.session)
+      if (up) return { ok: true, pane: up.pane_id, already: true }
+    }
+    const was = entry.freed
+    const name = entry.name || entry.title || ''
+    const openedPane = await openTab(
+      opts.tabs,
+      {
+        ...(was.workspace !== undefined && { workspace: was.workspace }),
+        ...(was.workspaceLabel !== undefined && { workspaceLabel: was.workspaceLabel }),
+        cwd: entry.cwd ?? '',
+        label: name || 'claude',
+        ...(was.tabLabel !== undefined && { tabLabel: was.tabLabel }),
+        ...(was.worktree && { worktree: was.worktree }),
+      },
+      snap,
+    )
+    opts.onOpened?.(openedPane)
+    try {
+      opts.follow.paneOpened(entry.session, openedPane)
+    } catch (err) {
+      opts.timing?.log?.(`could not update the schedule: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    const woke = await wakeInPane(
+      opts.herdr,
+      { pane: openedPane, session: entry.session, profile },
+      { ...opts.timing, timeoutMs: opts.timeoutMs, platform, fresh: true },
+    )
+    if (!woke.ok) {
+      await opts.herdr.rename(openedPane, `💤 ${name}`).catch(() => {})
+      return woke
+    }
+    const finalPane = woke.pane ?? openedPane
+    await opts.onAwake?.(finalPane, true)
+    return { ok: true, pane: finalPane }
+  }
+
+  const woke = await wakeInPane(
+    opts.herdr,
+    { pane, session: entry?.session ?? session, profile },
+    { ...opts.timing, timeoutMs: opts.timeoutMs, platform },
+  )
+  if (!woke.ok) return woke
+  await opts.onAwake?.(woke.pane ?? pane, false)
+  return woke
 }
 
 /**

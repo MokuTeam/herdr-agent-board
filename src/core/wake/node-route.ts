@@ -202,8 +202,37 @@ export function isRouteResult(v: unknown): v is RouteResult {
   return false
 }
 
+export const NODE_WAKE_TIMEOUT_SLACK_SEC = 45
+export const MASTER_NODE_TIMEOUT_SLACK_SEC = 60
+export const WAKE_MASTER_TIMEOUT_SLACK_SEC = 90
+
+export const nodeWakeTimeoutMs = (wakeTimeoutSec: number): number =>
+  (wakeTimeoutSec + NODE_WAKE_TIMEOUT_SLACK_SEC) * 1000
+export const masterNodeTimeoutMs = (wakeTimeoutSec: number): number =>
+  (wakeTimeoutSec + MASTER_NODE_TIMEOUT_SLACK_SEC) * 1000
+export const wakeMasterTimeoutMs = (wakeTimeoutSec: number): number =>
+  (wakeTimeoutSec + WAKE_MASTER_TIMEOUT_SLACK_SEC) * 1000
+
+const PRE_CONNECT_CODES = new Set(['ECONNREFUSED', 'ConnectionRefused', 'EHOSTUNREACH', 'ENETUNREACH', 'ENOTFOUND'])
+
+/** True only for definite pre-connect failures where the request could not have reached the node. */
+export function isPreConnectError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false
+  const rec = err as { code?: unknown; cause?: unknown }
+  const direct = typeof rec.code === 'string' ? rec.code : null
+  if (direct && PRE_CONNECT_CODES.has(direct)) return true
+  if (typeof rec.cause === 'object' && rec.cause !== null) {
+    const c = (rec.cause as { code?: unknown }).code
+    if (typeof c === 'string' && PRE_CONNECT_CODES.has(c)) return true
+  }
+  return false
+}
+
 export const offlineHeldNote = (title: string): string =>
   `💤 Устройство «${title}» не в сети. Сообщение сохранено и будет доставлено, когда оно подключится.`
 
 export const offlineRetryNote = (title: string): string =>
   `💤 Устройство «${title}» не в сети. Доставлю, когда оно подключится.`
+
+export const ambiguousDeliveryNote = (title: string): string =>
+  `⚠️ Устройство «${title}» не подтвердило доставку вовремя. Сообщение не дублировано: проверьте сессию.`

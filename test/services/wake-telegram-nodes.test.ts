@@ -11,6 +11,7 @@ import { mergeProfiles, profileSet } from '../../src/core/profiles.ts'
 import { cleanTelegramItems, MAX_TELEGRAM_HOLD_CHARS, promptOf } from '../../src/core/schedule-rules.ts'
 import type { Config, Item } from '../../src/core/types.ts'
 import { wakeConfig } from '../../src/core/wake/config.ts'
+import { ambiguousDeliveryNote, offlineHeldNote, offlineRetryNote } from '../../src/core/wake/node-route.ts'
 import type { RouteItem } from '../../src/core/wake/route.ts'
 import type { WakeSessions } from '../../src/core/wake/sessions.ts'
 import { createNodeTelegram } from '../../src/services/node/telegram.ts'
@@ -771,5 +772,487 @@ describe('createNodeTelegram', () => {
 
   test('restores original home/env after tests', () => {
     expect(outside()).toEqual(OUTSIDE)
+  })
+})
+
+describe('#732 duplicate holds and deferred checks', () => {
+  test('onHeld throw after holdEntry does not trigger retry or duplicate hold; holdEntry throw returns retry', async () => {
+    const cfg = {
+      nodes: {
+        id: 'laptop',
+        order: ['server-1'],
+        devices: { 'server-1': { title: 'Atlas 1', link: { kind: 'direct', url: 'http://127.0.0.1:1' } } },
+      },
+    } as unknown as Config
+
+    const held: unknown[] = []
+    const logs: string[] = []
+    const svc = createNodesTelegram({
+      cfg,
+      links: { link: () => null },
+      aggregate: {
+        devicePart: () => ({ items: [nodeItem({ sleeping: false })], launches: [], schedules: [], machine: 'SRV1' }),
+      },
+      deviceState: () => 'offline',
+      holdEntry: entry => {
+        held.push(entry)
+        return { id: 'hh1122', ...entry } as never
+      },
+      onHeld: () => {
+        throw new Error('SSE publish failed')
+      },
+      log: text => logs.push(text),
+      now: () => 1700000000000,
+    })
+
+    const res = await svc.route({ items: [routeItem({ text: 'hold once' })] })
+    expect(res).toEqual({
+      status: 200,
+      body: { matched: true, result: { ok: true, note: offlineHeldNote('Atlas 1') } },
+    })
+    expect(held).toHaveLength(1)
+    expect(logs.some(l => l.includes('post-hold hook failed'))).toBe(true)
+
+    const svcFailSave = createNodesTelegram({
+      cfg,
+      links: { link: () => null },
+      aggregate: {
+        devicePart: () => ({ items: [nodeItem({ sleeping: false })], launches: [], schedules: [], machine: 'SRV1' }),
+      },
+      deviceState: () => 'offline',
+      holdEntry: () => {
+        throw new Error('disk full')
+      },
+      log: text => logs.push(text),
+      now: () => 1700000000000,
+    })
+    expect(await svcFailSave.route({ items: [routeItem({ text: 'cannot save' })] })).toEqual({
+      status: 200,
+      body: { matched: true, result: { retry: 60, note: offlineRetryNote('Atlas 1') } },
+    })
+  })
+
+  test('ambiguous link.fetch timeout or ECONNRESET does not mark node offline or hold duplicate; ECONNREFUSED and 503 node-offline do', async () => {
+    const cfg = {
+      nodes: {
+        id: 'laptop',
+        order: ['server-1', 'server-2'],
+        devices: {
+          'server-1': { title: 'Atlas 1', link: { kind: 'direct', url: 'http://127.0.0.1:1' } },
+          'server-2': { title: 'Atlas 2', link: { kind: 'direct', url: 'http://127.0.0.1:2' } },
+        },
+      },
+    } as unknown as Config
+
+    // 1. Slow link.fetch exceeding fetchTimeoutMs on matching online node: skip with ambiguousDeliveryNote, no hold, no pass-2 retry.
+    const held: unknown[] = []
+    let fetchCalls = 0
+    const svcTimeout = createNodesTelegram({
+      cfg,
+      links: {
+        link: id =>
+          id === 'server-1'
+            ? ({
+                fetch: (_path: string, init?: RequestInit) => {
+                  fetchCalls++
+                  return new Promise((_resolve, reject) => {
+                    init?.signal?.addEventListener('abort', () => reject(init.signal?.reason))
+                  })
+                },
+              } as unknown as Link)
+            : ({
+                fetch: async () => Response.json({ matched: false }),
+              } as unknown as Link),
+      },
+      aggregate: {
+        devicePart: id =>
+          id === 'server-1'
+            ? { items: [nodeItem({ sleeping: false })], launches: [], schedules: [], machine: 'SRV1' }
+            : { items: [], launches: [], schedules: [], machine: 'SRV2' },
+      },
+      deviceState: () => 'online',
+      holdEntry: entry => {
+        held.push(entry)
+        return { id: 'tt1122', ...entry } as never
+      },
+      fetchTimeoutMs: 40,
+      log: () => {},
+      now: () => 1700000000000,
+    })
+
+    expect(await svcTimeout.route({ items: [routeItem()] })).toEqual({
+      status: 200,
+      body: { matched: true, result: { skip: true, note: ambiguousDeliveryNote('Atlas 1') } },
+    })
+    expect(held).toHaveLength(0)
+    expect(fetchCalls).toBe(1)
+
+    // 2. ECONNRESET on matching online node: also ambiguous, not held, not retried in pass 2.
+    fetchCalls = 0
+    const svcReset = createNodesTelegram({
+      cfg,
+      links: {
+        link: id =>
+          id === 'server-1'
+            ? ({
+                fetch: async () => {
+                  fetchCalls++
+                  throw Object.assign(new Error('socket reset'), { code: 'ECONNRESET' })
+                },
+              } as unknown as Link)
+            : ({
+                fetch: async () => Response.json({ matched: false }),
+              } as unknown as Link),
+      },
+      aggregate: {
+        devicePart: id =>
+          id === 'server-1'
+            ? { items: [nodeItem({ sleeping: false })], launches: [], schedules: [], machine: 'SRV1' }
+            : { items: [], launches: [], schedules: [], machine: 'SRV2' },
+      },
+      deviceState: () => 'online',
+      holdEntry: entry => {
+        held.push(entry)
+        return { id: 'rr1122', ...entry } as never
+      },
+      log: () => {},
+      now: () => 1700000000000,
+    })
+    expect(await svcReset.route({ items: [routeItem()] })).toEqual({
+      status: 200,
+      body: { matched: true, result: { skip: true, note: ambiguousDeliveryNote('Atlas 1') } },
+    })
+    expect(held).toHaveLength(0)
+    expect(fetchCalls).toBe(1)
+
+    // 3. Definite pre-connect error (ECONNREFUSED) and 503 node-offline mark node offline and hold cleanly.
+    const svcRefused = createNodesTelegram({
+      cfg: {
+        nodes: {
+          id: 'laptop',
+          order: ['server-1'],
+          devices: { 'server-1': { title: 'Atlas 1', link: { kind: 'direct', url: 'http://127.0.0.1:1' } } },
+        },
+      } as unknown as Config,
+      links: {
+        link: () =>
+          ({
+            fetch: async () => {
+              throw Object.assign(new Error('connect failed'), { code: 'ECONNREFUSED' })
+            },
+          }) as unknown as Link,
+      },
+      aggregate: {
+        devicePart: () => ({ items: [nodeItem({ sleeping: false })], launches: [], schedules: [], machine: 'SRV1' }),
+      },
+      deviceState: () => 'online',
+      holdEntry: entry => {
+        held.push(entry)
+        return { id: 'cc1122', ...entry } as never
+      },
+      log: () => {},
+      now: () => 1700000000000,
+    })
+    expect(await svcRefused.route({ items: [routeItem()] })).toEqual({
+      status: 200,
+      body: { matched: true, result: { ok: true, note: offlineHeldNote('Atlas 1') } },
+    })
+    expect(held).toHaveLength(1)
+
+    const svc503Offline = createNodesTelegram({
+      cfg: {
+        nodes: {
+          id: 'laptop',
+          order: ['server-1'],
+          devices: { 'server-1': { title: 'Atlas 1', link: { kind: 'direct', url: 'http://127.0.0.1:1' } } },
+        },
+      } as unknown as Config,
+      links: {
+        link: () =>
+          ({
+            fetch: async () =>
+              new Response(JSON.stringify({ error: 'node-offline' }), {
+                status: 503,
+                headers: { 'content-type': 'application/json' },
+              }),
+          }) as unknown as Link,
+      },
+      aggregate: {
+        devicePart: () => ({ items: [nodeItem({ sleeping: false })], launches: [], schedules: [], machine: 'SRV1' }),
+      },
+      deviceState: () => 'online',
+      holdEntry: entry => {
+        held.push(entry)
+        return { id: 'dd1122', ...entry } as never
+      },
+      log: () => {},
+      now: () => 1700000000000,
+    })
+    expect(await svc503Offline.route({ items: [routeItem()] })).toEqual({
+      status: 200,
+      body: { matched: true, result: { ok: true, note: offlineHeldNote('Atlas 1') } },
+    })
+    expect(held).toHaveLength(2)
+
+    // 4. Unrelated online node timing out does not block matching/holding for another node.
+    const svcUnrelatedTimeout = createNodesTelegram({
+      cfg,
+      links: {
+        link: id =>
+          id === 'server-1'
+            ? ({
+                fetch: async () => {
+                  throw new DOMException('timed out', 'TimeoutError')
+                },
+              } as unknown as Link)
+            : null,
+      },
+      aggregate: {
+        devicePart: id =>
+          id === 'server-1'
+            ? { items: [nodeItem({ tgKey: 'topic:Other' })], launches: [], schedules: [], machine: 'SRV1' }
+            : {
+                items: [nodeItem({ key: `@server-2:${SID2}`, sleeping: false })],
+                launches: [],
+                schedules: [],
+                machine: 'SRV2',
+              },
+      },
+      deviceState: id => (id === 'server-1' ? 'online' : 'offline'),
+      holdEntry: entry => {
+        held.push(entry)
+        return { id: 'ee1122', ...entry } as never
+      },
+      log: () => {},
+      now: () => 1700000000000,
+    })
+    expect(await svcUnrelatedTimeout.route({ items: [routeItem()] })).toEqual({
+      status: 200,
+      body: { matched: true, result: { ok: true, note: offlineHeldNote('Atlas 2') } },
+    })
+    expect(held).toHaveLength(3)
+  })
+
+  test('createNodeTelegram fallback validates non-plain profile before opening a tab for freed sleeper', async () => {
+    const w = world({ panes: [], shells: {} })
+    const badSet = profileSet(
+      mergeProfiles([{ id: 'работа', dir: w.work }], findProfileDirs(w.home), w.home, w.claude).list,
+      w.claude,
+    )
+
+    let tabOpened = 0
+    const sessions: WakeSessions = {
+      [SID]: {
+        session: SID,
+        name: 'Billing',
+        title: 'Billing freed',
+        cwd: PROJECT,
+        seen_at: Date.now() - 2000,
+        slept_at: Date.now() - 2000,
+        profileDir: w.work,
+        freed: { at: Date.now() - 2000, workspace: 'w1', pane: 'w1:p1', tabLabel: 'Billing', topic: 'topic:Billing' },
+      },
+    }
+    const tabs = {
+      newTab: async () => {
+        tabOpened++
+        return 'w1:p9'
+      },
+      newWorkspace: async () => {
+        tabOpened++
+        return 'w1:p9'
+      },
+      exists: () => true,
+      home: w.home,
+    }
+    const svc = createNodeTelegram({
+      cfg: { language: 'en', wake: { enabled: false } } as unknown as Config,
+      profiles: () => badSet,
+      herdr: w.io,
+      readSessions: () => sessions,
+      tabs,
+      machine: 'SRV1',
+      askWake: false,
+      log: () => {},
+      sleep: async () => {},
+    })
+
+    const res = await svc.route({ items: [routeItem({ key: 'topic:Billing', topic: 'Billing' })] })
+    expect(res).toMatchObject({ status: 200, body: { matched: true, result: { skip: true } } })
+    expect(tabOpened).toBe(0)
+  })
+
+  test('local sleeper + offline node live pane holds for offline node without waking local sleeper; offline node sleeper lets local wake; other setups unchanged', async () => {
+    const cfg = {
+      nodes: {
+        id: 'laptop',
+        order: ['server-1'],
+        devices: { 'server-1': { title: 'Atlas 1', link: { kind: 'direct', url: 'http://127.0.0.1:1' } } },
+      },
+    } as unknown as Config
+
+    // A. Shared local sleeper and offline node live pane (topic key and path key with spaces/Cyrillic/%): holds instead of waking local.
+    const localPane = shellPane('w1:p1')
+    const w = world({
+      panes: [localPane],
+      shells: { 'w1:p1': 'bash' },
+      sessions: f => ({
+        'w1:p1': {
+          session: SID,
+          name: 'Local',
+          title: 'Local chat',
+          cwd: PROJECT,
+          seen_at: Date.now() - 1000,
+          slept_at: Date.now() - 1000,
+          profileDir: f.claude,
+        },
+      }),
+    })
+    const engine = createWakeEngine(w.deps)
+    let nodeSleeping = false
+    const held: Record<string, unknown>[] = []
+    const nodesTg = createNodesTelegram({
+      cfg,
+      links: { link: () => null },
+      aggregate: {
+        devicePart: () => ({
+          items: [nodeItem({ sleeping: nodeSleeping, tgKey: 'topic:Main', cwd: PROJECT })],
+          launches: [],
+          schedules: [],
+          machine: 'SRV1',
+        }),
+      },
+      deviceState: () => 'offline',
+      holdEntry: entry => {
+        held.push(entry)
+        return { id: 'll1122', ...entry } as never
+      },
+      log: () => {},
+      now: () => 1700000000000,
+    })
+
+    const tg = createTelegram({
+      engine,
+      herdr: w.io,
+      target: () => null,
+      machine: 'LAPTOP',
+      pollTimeoutSec: () => 25,
+      log: text => w.log.push(text),
+      hasRemote: () => true,
+      remote: async (items, opts) => {
+        const ans = await nodesTg.route({ items, ...(opts?.liveOnly && { liveOnly: true }) })
+        const body = ans.body as { matched?: boolean; result?: RouteItem & Record<string, unknown> }
+        return body.matched ? ((body.result as never) ?? null) : null
+      },
+    })
+    onTestFinished(() => tg.stop())
+
+    // No live_panes hint at all, matched by path key: must hold for offline node's live session and NEVER wake local sleeper.
+    expect(await tg.route([routeItem({ key: PROJECT, text: 'for live node' })])).toEqual({
+      ok: true,
+      note: offlineHeldNote('Atlas 1'),
+    })
+    expect(held).toHaveLength(1)
+    expect(w.io.calls.filter(c => c[0] === 'pane' && c[1] === 'run')).toEqual([])
+
+    // Same for topic key when offline node has a live session.
+    expect(await tg.route([routeItem({ key: 'topic:Main', text: 'for live node topic' })])).toEqual({
+      ok: true,
+      note: offlineHeldNote('Atlas 1'),
+    })
+    expect(held).toHaveLength(2)
+    expect(w.io.calls.filter(c => c[0] === 'pane' && c[1] === 'run')).toEqual([])
+
+    // B. When the offline node only has a sleeping session, liveOnly skips holding so the local sleeper wakes.
+    nodeSleeping = true
+    startsOnRun(w.io, localPane, w.claude, SID)
+    expect(await tg.route([routeItem({ key: PROJECT, text: 'wake local' })])).toEqual({
+      ok: true,
+      note: '⏰ Разбудил сессию «Local chat».',
+    })
+    expect(held).toHaveLength(2)
+
+    // C. Offline node with empty cache + live_panes hint under liveOnly returns retry instead of waking local sleeper.
+    const nodesHintOnly = createNodesTelegram({
+      cfg,
+      links: { link: () => null },
+      aggregate: { devicePart: () => ({ items: [], launches: [], schedules: [], machine: 'SRV1' }) },
+      deviceState: () => 'offline',
+      log: () => {},
+    })
+    expect(await nodesHintOnly.route({ items: [routeItem({ live_panes: ['SRV1:w1:p9'] })], liveOnly: true })).toEqual({
+      status: 200,
+      body: { matched: true, result: { retry: 60, note: offlineRetryNote('Atlas 1') } },
+    })
+
+    // D. Other setups unchanged: standalone (hasRemote=false) wakes local sleeper with 0 remote calls; local live delivers locally with 0 remote calls.
+    const standPane = shellPane('w1:p1')
+    const wStand = world({
+      panes: [standPane],
+      shells: { 'w1:p1': 'bash' },
+      sessions: f => ({
+        'w1:p1': {
+          session: SID,
+          name: 'Standalone',
+          title: 'Standalone',
+          cwd: PROJECT,
+          seen_at: Date.now() - 1000,
+          slept_at: Date.now() - 1000,
+          profileDir: f.claude,
+        },
+      }),
+    })
+    startsOnRun(wStand.io, standPane, wStand.claude, SID)
+    let standaloneRemoteCalls = 0
+    const tgStand = createTelegram({
+      engine: createWakeEngine(wStand.deps),
+      herdr: wStand.io,
+      target: () => null,
+      machine: 'LAPTOP',
+      pollTimeoutSec: () => 25,
+      log: () => {},
+      hasRemote: () => false,
+      remote: async () => {
+        standaloneRemoteCalls++
+        return { ok: true }
+      },
+    })
+    onTestFinished(() => tgStand.stop())
+    expect(await tgStand.route([routeItem({ key: PROJECT })])).toEqual({
+      ok: true,
+      note: '⏰ Разбудил сессию «Standalone».',
+    })
+    expect(standaloneRemoteCalls).toBe(0)
+
+    const wLive = world({
+      panes: [
+        {
+          pane_id: 'w1:p1',
+          tab_id: 't1',
+          workspace_id: 'w1',
+          cwd: PROJECT,
+          agent: 'claude',
+          agent_status: 'idle',
+          agent_session: { value: SID },
+        },
+      ],
+    })
+    let liveRemoteCalls = 0
+    const tgLive = createTelegram({
+      engine: createWakeEngine(wLive.deps),
+      herdr: wLive.io,
+      target: () => null,
+      machine: 'LAPTOP',
+      pollTimeoutSec: () => 25,
+      log: () => {},
+      hasRemote: () => true,
+      remote: async () => {
+        liveRemoteCalls++
+        return { ok: true }
+      },
+    })
+    onTestFinished(() => tgLive.stop())
+    expect(await tgLive.route([routeItem({ key: PROJECT })])).toEqual({ ok: true })
+    expect(liveRemoteCalls).toBe(0)
   })
 })

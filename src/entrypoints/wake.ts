@@ -41,7 +41,7 @@ import { cliWakeHerdr } from '../adapters/wake-herdr.ts'
 import { scheduledJobs } from '../adapters/wake-transcripts.ts'
 import { nodeConfig, nodesConfig } from '../core/nodes.ts'
 import { type TelegramTarget, telegramTarget, type WakeConfig, wakeConfig, wakeSwitch } from '../core/wake/config.ts'
-import { isNodeOnly, parseRouteItemsBody } from '../core/wake/node-route.ts'
+import { isNodeOnly, parseRouteItemsBody, wakeMasterTimeoutMs } from '../core/wake/node-route.ts'
 import type { RouteItem } from '../core/wake/route.ts'
 import type { TelegramStatus } from '../core/wake/status.ts'
 import { defaultDeps } from '../services/deps.ts'
@@ -196,7 +196,7 @@ const telegramRouter = (target: () => TelegramTarget | null, onState?: (s: Teleg
         `http://127.0.0.1:${boardPort()}/api/nodes/telegram`,
         items,
         opts,
-        (settings().wakeTimeoutSec + 60) * 1000,
+        wakeMasterTimeoutMs(settings().wakeTimeoutSec),
         log,
       )
     },

@@ -43,7 +43,6 @@ import {
 } from '../../adapters/wake-files.ts'
 import type { WakeHerdr } from '../../adapters/wake-herdr.ts'
 import { AGY_AGENT, isAgySession } from '../../core/agy.ts'
-import { sameDir } from '../../core/launch/names.ts'
 import { isPiSessionFile, parsePiTail, piProvider, piSessionCwd, piSessionId } from '../../core/pi.ts'
 import { absoluteProfileDir, defaultProfileDir, type ProfileSet, profileForDir } from '../../core/profiles.ts'
 import { SESSION_ID } from '../../core/resume.ts'
@@ -102,11 +101,13 @@ import {
   type SleepMarks,
   type Timing,
   type WakeOutcome,
+  wakeClaudeEntry,
   wakeInPane,
+  wakeProfileFor,
   withPane,
 } from './pane-ops.ts'
 import { defaultPiOps, type PiOps, putPiToSleep, wakePi } from './pi.ts'
-import { openTab, type TabOps } from './tabs.ts'
+import type { TabOps } from './tabs.ts'
 
 export interface WakeEngineDeps {
   herdr: WakeHerdr
@@ -951,8 +952,6 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     return findSession(target, { ...snap, panes }, claudeSessions())
   }
 
-  const isDefault = (dir: string): boolean => sameDir(dir, defaultProfileDir(homedir(), platform))
-
   /**
    * The id `board resume --profile` gets for a session in `dir`: the listed profile's. None for a
    * folder no listed profile has, and none for the default folder when its id is not a plain word:
@@ -960,11 +959,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
    * shell's profile, which can be any (#151). In another folder such an id is kept, and refused by
    * pane-ops (and by the "can wake" rule before it): without --profile it would not wake in its own.
    */
-  function lineProfile(set: ProfileSet, dir: string | undefined): string | null {
-    const id = listedId(set, dir)
-    if (!id || !dir) return null
-    return plainProfile(id) || !isDefault(dir) ? id : null
-  }
+  const lineProfile = (set: ProfileSet, dir: string | undefined): string | null => wakeProfileFor(set, dir, platform)
 
   /** Why the session could not be woken again once asleep (call 9), or null. */
   function cannotWake(hit: LiveHit, set: ProfileSet, onPath: boolean, transcript: Transcript): string | null {
@@ -1130,32 +1125,26 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
   async function openAndWake(key: string, set: ProfileSet): Promise<WakeOutcome> {
     const entry = sessions[key]
     if (!isFreed(entry)) return { ok: false, why: 'line', error: `no session asleep under ${key}` }
-    const dir = entry.profileDir ?? defaultProfileDir(homedir(), platform)
-    const found = lineFor(entry.session, lineProfile(set, dir))
-    if ('error' in found) return { ok: false, why: 'line', error: found.error }
     const name = entry.name || entry.title || ''
     // Its old pane's terminal and shell are not the new pane's (#243): those are noted when seen.
     const { freed: was, terminal: _terminal, shellPid: _pid, ...asleep } = entry
-    const pane = await openTab(
-      tabOps,
-      {
-        ...(was.workspace !== undefined && { workspace: was.workspace }),
-        ...(was.workspaceLabel !== undefined && { workspaceLabel: was.workspaceLabel }),
-        cwd: entry.cwd ?? '',
-        label: name || 'claude',
-        ...(was.tabLabel !== undefined && { tabLabel: was.tabLabel }),
-        ...(was.worktree && { worktree: was.worktree }),
+    return wakeClaudeEntry(key, entry, entry.session, {
+      herdr: deps.herdr,
+      profiles: set,
+      tabs: tabOps,
+      follow,
+      timeoutMs: deps.settings().wakeTimeoutSec * 1000,
+      platform,
+      timing,
+      snapshot: snapshotNow,
+      onOpened(pane) {
+        const { [key]: _gone, ...rest } = sessions
+        sessions = { ...rest, [pane]: asleep }
+        save()
+        deps.log(`${name} wakes in a new tab, ${pane}: its pane ${was.pane} was closed when it went to sleep`)
       },
-      await snapshotNow(),
-    )
-    const { [key]: _gone, ...rest } = sessions
-    sessions = { ...rest, [pane]: asleep }
-    save()
-    deps.log(`${name} wakes in a new tab, ${pane}: its pane ${was.pane} was closed when it went to sleep`)
-    followed(() => follow.paneOpened(entry.session, pane))
-    const outcome = await wakeIn(pane, asleep, set, true)
-    if (!outcome.ok) await deps.herdr.rename(pane, `💤 ${name}`).catch(() => {})
-    return outcome.ok ? { ok: true, pane } : outcome
+      onAwake: pane => awaken(pane),
+    })
   }
 
   async function sleeping(): Promise<SleepingAnswer[]> {
