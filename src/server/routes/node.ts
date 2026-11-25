@@ -11,6 +11,7 @@
 import { MAX_BLOB_BYTES } from '../../adapters/bundle-files.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { t } from '../../core/lang.ts'
+import { RELAY_ANSWER_MAX, RELAY_CHUNK_MAX } from '../../core/master-relay.ts'
 import {
   MAX_BRIDGE_RESPONSE_BYTES,
   MAX_BRIDGE_STREAM_BATCH_BYTES,
@@ -23,6 +24,7 @@ import type { MoveOut } from '../../services/move-out.ts'
 import type { Answer, NodeBundle } from '../../services/node/bundle.ts'
 import type { NodeHandover } from '../../services/node/handover.ts'
 import type { NodeLaunchAnswer } from '../../services/node/launch.ts'
+import type { MasterRelay } from '../../services/node/master-relay.ts'
 import type { NodePilotBridge } from '../../services/node/pilot-bridge.ts'
 import type { NodePilotCall } from '../../services/node/pilot-call.ts'
 import type { NodeSecrets } from '../../services/node/secrets.ts'
@@ -65,6 +67,8 @@ export interface NodeDoorSources {
   pilotCall?: NodePilotCall
   /** `/api/node/pilot-bridge...` (#700): reverse bridge for MokuPilot running on this node. */
   pilotBridge?: NodePilotBridge
+  /** `/api/node/master-relay...` (#764): the stream the master holds for this node's requests to it, and their answers. */
+  masterRelay?: MasterRelay
   /** `POST /api/node/relay-key` (#513): activates a staged fresh relay dial key after claim. */
   relayKey?(publicKey: string): Promise<Answer>
   /** `POST /api/node/telegram` (#701): routes a Telegram topic batch on this node. */
@@ -209,6 +213,7 @@ export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
     ...(update ? updateRoutes(update) : []),
     ...(o.pilotCall ? pilotCallDoorRoutes(o.pilotCall) : []),
     ...(o.pilotBridge ? pilotBridgeDoorRoutes(o.pilotBridge) : []),
+    ...(o.masterRelay ? masterRelayDoorRoutes(o.masterRelay) : []),
     ...(relayKey
       ? [
           {
@@ -452,6 +457,55 @@ function pilotBridgeDoorRoutes(pb: NodePilotBridge): Route[] {
       },
     },
   ]
+}
+
+const MASTER_RELAY_BODY = /^\/api\/node\/master-relay\/req\/([A-Za-z0-9_-]{8,64})\/body$/
+const MASTER_RELAY_RES = /^\/api\/node\/master-relay\/res\/([A-Za-z0-9_-]{8,64})$/
+const MASTER_RELAY_STREAM = /^\/api\/node\/master-relay\/stream\/([A-Za-z0-9_-]{8,64})$/
+
+/** The door's side of the relay to the master (#764, services/node/master-relay.ts): the master's stream and its answers. */
+function masterRelayDoorRoutes(relay: MasterRelay): Route[] {
+  return [
+    { method: 'GET', path: '/api/node/master-relay', handle: req => relay.stream(req) },
+    { method: 'GET', path: MASTER_RELAY_BODY, handle: (_req, ctx) => relay.reqBody(ctx.params[0] ?? '') },
+    {
+      method: 'POST',
+      path: MASTER_RELAY_RES,
+      async handle(req, ctx) {
+        // A whole answer, base64, and its head.
+        const body = await jsonUpTo(req, Math.ceil(RELAY_ANSWER_MAX / 3) * 4 + 64 * 1024)
+        if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+        return answer(relay.respond(ctx.params[0] ?? '', body))
+      },
+    },
+    {
+      method: 'POST',
+      path: MASTER_RELAY_STREAM,
+      async handle(req, ctx) {
+        const body = await jsonUpTo(req, Math.ceil(RELAY_CHUNK_MAX / 3) * 4 + 4096)
+        if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+        return answer(await relay.chunk(ctx.params[0] ?? '', body, req.signal))
+      },
+    },
+  ]
+}
+
+/**
+ * The master relay's route on a node (#764): first in the board's own route table, which the phones'
+ * listener and the tunnel share; a request that is not the relay's goes on to the next route.
+ */
+export function masterRelayRoute(relay: MasterRelay): Route {
+  return {
+    method: 'ANY',
+    path: /^\/api\//,
+    handle: (req, ctx) =>
+      relay.relay(req, {
+        rawPath: ctx.rawPath,
+        search: ctx.url.search,
+        remote: ctx.remote,
+        refuse: guard => ctx.refuse(guard),
+      }),
+  }
 }
 
 /** The plugin's archive as it comes, never read whole first, then the update itself (#590). */

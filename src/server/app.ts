@@ -99,6 +99,7 @@ import {
   LOCAL,
   markRevoked,
   nodeConfig,
+  nodeKey,
   nodesConfig,
   parseNodeKey,
   pickNodeMaster,
@@ -150,6 +151,7 @@ import { createNodeBundle, nodeBundleDeps } from '../services/node/bundle.ts'
 import { createNodeGit } from '../services/node/git-access.ts'
 import { createLocalRelayOps, createNodeHandover } from '../services/node/handover.ts'
 import { createNodeLaunch } from '../services/node/launch.ts'
+import { createMasterRelay, type MasterRelay } from '../services/node/master-relay.ts'
 import { createNodePilotBridge, type NodePilotBridge } from '../services/node/pilot-bridge.ts'
 import { createNodePilotCall, type NodePilotCall } from '../services/node/pilot-call.ts'
 import { createRelayDial, type RelayDial } from '../services/node/relay-dial.ts'
@@ -170,6 +172,7 @@ import {
 } from '../services/nodes/computer-setup-io.ts'
 import { createMasterHandover, type MasterHandover } from '../services/nodes/handover.ts'
 import { createNodeLinks, linkTimes, type NodeLinks } from '../services/nodes/links.ts'
+import { createMasterRelayRunner, type MasterRelayRunner } from '../services/nodes/master-relay.ts'
 import { moveToDevice } from '../services/nodes/move-device.ts'
 import { createPilotBridgeRunner, type PilotBridgeRunner } from '../services/nodes/pilot-bridge.ts'
 import { createNodePilotCalls, type NodePilotCalls } from '../services/nodes/pilot-call.ts'
@@ -233,7 +236,7 @@ import { launchRoutes } from './routes/launch.ts'
 import { linksRoutes } from './routes/links.ts'
 import { mokupilotRoutes } from './routes/mokupilot.ts'
 import { moveRoute } from './routes/move.ts'
-import { nodeCallRoutes, nodeDoorRoutes } from './routes/node.ts'
+import { masterRelayRoute, nodeCallRoutes, nodeDoorRoutes } from './routes/node.ts'
 import { createNodeProxy, type NodeProxy } from './routes/node-proxy.ts'
 import { computerSetupRoutes, handoverRoutes, nodeSetupRoutes, nodesRoutes, relaySetupRoutes } from './routes/nodes.ts'
 import { pageLogRoute } from './routes/page-log.ts'
@@ -258,6 +261,7 @@ import { keepTimeDb, timeRoutes, timeToday } from './routes/time.ts'
 import { todosRoutes } from './routes/todos.ts'
 import { wakeRoutes } from './routes/wake.ts'
 import { createBroadcaster } from './sse.ts'
+import { decoded, remoteRefusal } from './streams.ts'
 import { createTunnelListener } from './tunnel.ts'
 import { openProbeListener } from './tunnel-probe.ts'
 import { pruneUploads, uploadRoutes } from './uploads.ts'
@@ -1386,6 +1390,26 @@ export async function startServer({
     }
   }
 
+  /**
+   * A request a node relayed (#764, services/nodes/master-relay.ts), run against this board's routes as a
+   * remote owner's would be: what stays with this computer's screen or this board alone is refused
+   * (server/streams.ts remoteRefusal; threads are the owner's, #392), writes wait out a handover,
+   * and the guards see a remote caller. This board's own relay route, when it is a node too, is
+   * left out: what a node asks of it is answered here.
+   */
+  async function replayRelayed(req: Request): Promise<Response> {
+    const url = new URL(req.url)
+    const raw = url.pathname
+    const path = decoded(raw)
+    if (path === null) return json(400, { error: 'path' })
+    if (handoverFrozen && req.method !== 'GET' && req.method !== 'HEAD')
+      return json(503, { error: 'handover-frozen', message: 'master handover in progress; writes are frozen' })
+    const refused = remoteRefusal(raw, path, false, false, true, false)
+    if (refused) return refused
+    const table = masterRelayFirst ? routes.filter(r => r !== masterRelayFirst) : routes
+    return dispatch(table, req, url, path, { ...guards, remote: true })
+  }
+
   // No idle timeout: answers that drive a session can take longer than Bun's default 10 s, and the
   // event stream is quiet between pings (main's node:http had none either). Not development: a
   // throw that got past answer() must never serve Bun's error page with the source and the cwd.
@@ -1426,6 +1450,10 @@ export async function startServer({
   let nodeUplink: NodeUplink | null = null
   let nodePilotCall: NodePilotCall | null = null
   let nodePilotBridge: NodePilotBridge | null = null
+  // A node's requests to its master (#764, services/node/master-relay.ts): the route first in this board's
+  // own table (never the door's), and the stream the master holds on the door.
+  let masterRelay: MasterRelay | null = null
+  let masterRelayFirst: Route | null = null
   // A node's update of its plugin (#590), made with the door; on Windows (#699) it is told when the
   // start is whole (the end of startServer).
   let nodeUpdate = null as NodeUpdate | null
@@ -1434,6 +1462,7 @@ export async function startServer({
   let localPilotCallRoutes: Route[] | null = null
   let nodePilotCalls: NodePilotCalls | null = null
   let pilotBridgeRunner: PilotBridgeRunner | null = null
+  let masterRelayRunner: MasterRelayRunner | null = null
 
   function ensureLocalPilotCall(): NodePilotCall {
     if (nodePilotCall) return nodePilotCall
@@ -1471,6 +1500,7 @@ export async function startServer({
     if (door) {
       door.configChanged()
       nodePilotBridge?.sync()
+      masterRelay?.sync()
       relayDialFollows()
       return
     }
@@ -1552,6 +1582,10 @@ export async function startServer({
       profiles: () => deps.profiles(),
       log,
     })
+    const upRelay = createMasterRelay({ cfg, items: board.items, log })
+    masterRelay = upRelay
+    masterRelayFirst = masterRelayRoute(upRelay)
+    routes.unshift(masterRelayFirst)
     const nodeTelegram = createNodeTelegram({ cfg, profiles: () => deps.profiles(), log, refresh })
     refreshLocalPilotCallRoutes()
     const nodeLaunch = createNodeLaunch({
@@ -1634,6 +1668,7 @@ export async function startServer({
           } finally {
             nodePilotCall?.closeAll()
             nodePilotBridge?.close()
+            upRelay.drop()
             nodeStore.forget(master)
           }
         },
@@ -1641,6 +1676,7 @@ export async function startServer({
         move: movers(),
         pilotCall,
         pilotBridge: nodePilotBridge,
+        masterRelay: upRelay,
         telegram: nodeTelegram,
         relayKey: async publicKey => {
           const r = activateNodeRelayKey(publicKey, nodeDir())
@@ -1852,6 +1888,7 @@ export async function startServer({
     if (nodeLinks) {
       nodeLinks.configChanged()
       pilotBridgeRunner?.sync()
+      masterRelayRunner?.sync()
       scheduler?.wakeDevices()
       return
     }
@@ -1936,6 +1973,30 @@ export async function startServer({
       pilotCalls,
       log,
       deviceIds: () => Object.keys(nodesConfig(cfg.nodes)?.devices ?? {}).filter(id => id !== LOCAL),
+    })
+    // Requests a node relays (#764): run here as a remote owner's would be, the node proxy included.
+    const deviceOf = (id: string) => {
+      const d = nodesConfig(cfg.nodes, hostname())?.devices[id]
+      return d && !d.revoked && id !== LOCAL ? d : null
+    }
+    masterRelayRunner = createMasterRelayRunner({
+      links: nodeLinks,
+      log,
+      deviceIds: () => Object.keys(nodesConfig(cfg.nodes)?.devices ?? {}).filter(id => id !== LOCAL),
+      selfId: () => nodesConfig(cfg.nodes, hostname())?.id ?? '',
+      ownerAllowed: id => {
+        const d = deviceOf(id)
+        return !!d && d.owner !== false
+      },
+      sessionKnown(id, key) {
+        if (!deviceOf(id)) return false
+        try {
+          return !!board.findAny(nodeKey(id, key))
+        } catch {
+          return false
+        }
+      },
+      replay: req => replayRelayed(req),
     })
     nodeProxy = createNodeProxy({
       cfg,
@@ -2355,6 +2416,8 @@ export async function startServer({
       await door?.close()
       nodePilotBridge?.close()
       await pilotBridgeRunner?.close()
+      masterRelay?.close()
+      await masterRelayRunner?.close()
       if (nodePilotCall) {
         nodePilotCall.closeAll()
         process.off('exit', nodePilotCall.closeAll)

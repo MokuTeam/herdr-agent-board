@@ -163,6 +163,13 @@ const mainHello = (): string =>
  * through the door, or refused, by accident.
  */
 const CLASSIFIED: Record<string, [method: string, raw: string, door: 'door' | 'refused'][]> = {
+  // The master relay (#764): first in a node's own table, never the door's; what it passes up to
+  // the master is no path of the door's, so a master never asks a node for its own threads.
+  'ANY ^\\/api\\/': [
+    ['GET', '/api/threads', 'refused'],
+    ['GET', '/api/threads/events', 'refused'],
+    ['POST', '/api/threads/atlas-1', 'refused'],
+  ],
   'GET /api/setup': [['GET', '/api/setup', 'refused']],
   'GET /api/process': [['GET', '/api/process', 'refused']],
   'GET /api/hello': [['GET', '/api/hello', 'door']],
@@ -587,8 +594,10 @@ describe('without node', () => {
     const url = `http://127.0.0.1:${webPort}`
     const reloads = (): number => proc.messages.filter(m => (m as { reloaded?: boolean }).reloaded).length
 
-    // The same table, in the same order, as the board with `node`: the door adds no route to it.
-    expect(routeTable(proc)).toEqual(nodeTable)
+    // The same table, in the same order, as the board with `node` without the master relay's route
+    // (#764), which only a node puts first: the door adds no route to it.
+    expect(routeTable(proc)).toEqual(nodeTable.filter(r => !(r.method === 'ANY' && r.path === '^\\/api\\/')))
+    expect(nodeTable[0]).toEqual({ method: 'ANY', path: '^\\/api\\/' })
     expect(await (await fetch(`${url}/api/hello`)).text()).toBe(mainHello())
     expect(await listens(doorPort)).toBe(false)
     if (defaultFree) expect(await listens(NODE_PORT)).toBe(false)

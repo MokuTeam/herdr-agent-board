@@ -4915,6 +4915,66 @@ banner naming the node and master (and a link when a URL is known). Opening the 
 the shared board. Boards without `node` (standalone and master boards) and the herdr TUI board
 are unchanged.
 
+### A node's board asks its master (the master relay)
+
+Some of what a node's own web board is asked belongs to its master: threads live in the master's
+database, not the node's (#764). A node passes such requests up to its master over the link the
+master already holds (it dials, the node never does, so this works behind NAT and through the
+relay), and the master runs them against its own routes and answers: status, headers and body, an
+event stream chunk by chunk. MokuPilot's Threads tab and any other client of the node's
+`127.0.0.1` API see the master's threads as if they asked the master.
+
+What goes up is a declared list, one feature group at a time; today the threads group:
+`GET /api/threads`, `GET /api/threads/<key>`, `GET /api/threads/events` (the stream), and the posts
+to `/api/threads` and `/api/threads/<key>`. A request that names another machine's session
+(`/api/session/@<device>:<key>/...`) goes up too, and the master hands it to its own node proxy.
+Everything else stays on the node as before (`/api/threads-settings` included). The master checks
+the list again itself and never takes another path from a node.
+
+The machines are one mesh: the master takes what any of its nodes relays as the owner's, and
+everything talks to everything. Who the request is only narrows that:
+
+- **The owner**: the node's own page, or a terminal outside any session. It may do what the owner
+  may do from away (as through the tunnel or a paired phone): threads yes, the master's admin
+  panels and its screen no. Any process on the node, an agent too, is the owner this way when it
+  names no session.
+- **A session of the node**: the caller names it with `X-Board-Session: <key or session id>`. It
+  reads (threads, and any machine's session) but does not write through the relay
+  (`master-relay-session-write`): an HTTP write is recorded as the owner's, and a session writes
+  with `board thread` and `board send`, which already go to the master as that session. A name
+  that is no session of the node is refused there (`master-relay-session`).
+- **Never a Team peer**, and never a caller through the node's own remote listeners (its Tailscale
+  or tunnel): 403 `master-relay-remote`.
+
+To take one machine out of this, the master's owner turns it off for that device:
+
+```json
+"nodes": { "devices": { "server-2": { "link": { ... }, "owner": false } } }
+```
+
+Only the owner at the master, or the owner's admin login on a headless master
+(`remote.ownerAdmin`), can set it: in the master's `config.json`, or through the Devices panel's
+own route (`POST /api/nodes` with `{ "op": "set", "id": "server-2", "owner": false }`). The
+device's relayed requests are then refused (403 `master-relay-owner`) and what it had running
+through the relay ends.
+
+When the master is offline, or the link is down, the node answers 503 `node-master-offline` with a
+plain reason, never its own "threads are off". A read whose answer takes longer than 30 seconds is
+504 `master-relay-timeout`. A write that was sent and got no answer (the link went, or the 30
+seconds passed) is 502 or 504 `master-relay-unknown`: it may or may not have been done.
+
+A write carries an idempotency key: the caller's `Idempotency-Key` header, or one the node makes.
+The master remembers the answers per device by key (the last 500, small ones only), so a write
+retried with the same key runs once and gets the first answer again. Send your own key to retry
+safely after `master-relay-unknown`. A failure that may pass (5xx, 429) is not remembered, and the
+same key on another request is 422 `master-relay-idempotency-mismatch`.
+
+The master relay assumes one master per node: a node paired with two online masters serves the
+one whose stream came last.
+
+Boards without `node` (standalone and masters without one) have no such route and no stream, and
+answer as before. The MokuPilot bridge (#700) keeps its own stream for now.
+
 ## Development
 
 [Bun](https://bun.com/docs/installation) 1.4.3 or newer and git on PATH, in a clone with the
