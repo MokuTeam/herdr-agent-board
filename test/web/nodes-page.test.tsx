@@ -660,11 +660,12 @@ describe('nodes.css (#502, #758)', () => {
   })
 
   test('coloured corner adds zero card height, exposes focus tooltip, and stays isolated in Terminal and wrap modes (#758)', () => {
-    // Positioned at the top-left corner: zero card height impact at every width.
+    // Positioned at the bottom-right corner (#771; the card actions sit top-right): zero card height impact at every width.
     expect(css).not.toMatch(/@media[^{]*max-width/)
     expect(body('.card-device-corner')).toContain('position: absolute;')
-    expect(body('.card-device-corner')).toContain('top: 0;')
-    expect(body('.card-device-corner')).toContain('left: 0;')
+    expect(body('.card-device-corner')).toContain('bottom: 0;')
+    expect(body('.card-device-corner')).toContain('right: 0;')
+    expect(body('.card-device-corner')).not.toContain('top: 0;')
     expect(body('.card-device-corner:focus-visible::after')).toContain('content: attr(data-tip);')
     // The greying leaves the card's corner, offline age, and buttons un-dimmed.
     expect(css).toContain('.card.node-offline > :not(.card-top):not(.card-actions):not(.card-device-corner),')
