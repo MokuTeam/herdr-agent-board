@@ -7,6 +7,7 @@ import { OUT_STATES, type OutState, VIAS } from '../../../src/core/team-wire.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import type {
   DraftLine,
+  LineReaction,
   TeamRosterPeer,
   TeamState,
   TeamView,
@@ -16,7 +17,7 @@ import type {
 import { ago } from './card.ts'
 import { remotePage, teamPage } from './remote-page.ts'
 
-export type { DraftLine, TeamRosterPeer, TeamView, ThreadLine, ThreadView }
+export type { DraftLine, LineReaction, TeamRosterPeer, TeamView, ThreadLine, ThreadView }
 
 const STATES: readonly TeamState[] = ['off', 'connecting', 'online', 'reconnecting', 'revoked', 'error']
 
@@ -137,6 +138,14 @@ export function draftWhere(d: DraftLine, threads: readonly ThreadView[], view: T
 const isReceipt = (v: unknown): boolean =>
   isObj(v) && typeof v.peer === 'string' && typeof v.name === 'string' && isDelivery(v.state)
 
+const isReaction = (v: unknown): v is LineReaction =>
+  isObj(v) &&
+  typeof v.emoji === 'string' &&
+  typeof v.count === 'number' &&
+  typeof v.me === 'boolean' &&
+  Array.isArray(v.peers) &&
+  v.peers.every(p => typeof p === 'string')
+
 const isThreadLine = (v: unknown): v is ThreadLine =>
   isObj(v) &&
   typeof v.id === 'string' &&
@@ -154,7 +163,8 @@ const isThreadLine = (v: unknown): v is ThreadLine =>
   (v.agent === undefined || typeof v.agent === 'string') &&
   (v.reason === undefined || typeof v.reason === 'string') &&
   (v.replyTo === undefined || typeof v.replyTo === 'string') &&
-  (v.file === undefined || isLineFile(v.file))
+  (v.file === undefined || isLineFile(v.file)) &&
+  (v.reactions === undefined || (Array.isArray(v.reactions) && v.reactions.every(isReaction)))
 
 /** A line's file (#371): its state, and its name, size and address when the board has them. */
 const isLineFile = (v: unknown): boolean =>
@@ -384,7 +394,9 @@ export const sendError = (code: unknown, t: Translator): string =>
           code === 'file_big' ||
           code === 'file_name' ||
           code === 'files_hub' ||
-          code === 'files_nobody'
+          code === 'files_nobody' ||
+          code === 'emoji' ||
+          code === 'message'
             ? t(`team.err.${code}`)
             : String(code ?? ''),
       })

@@ -12,7 +12,7 @@ import { type Incoming, toastBody, unreadByThread } from '../core/team-unread.ts
 import { GENERAL } from '../core/team-wire.ts'
 import type { Translator } from '../core/types.ts'
 import type { TeamDesktop } from '../integrations/team-toast.ts'
-import type { InboundEvent } from './team-hub.ts'
+import type { InboundEvent, InboundReactionEvent } from './team-hub.ts'
 
 export interface TeamNotifyOptions {
   desktop: TeamDesktop
@@ -36,6 +36,8 @@ export interface TeamNotifyOptions {
 export interface TeamNotify {
   /** A message came in and was kept: its notification, and the count moves. */
   inbound(e: InboundEvent): void
+  /** A reaction came in for one of this board's own messages (#687): quiet notice only, never moves unread. */
+  reaction?(e: InboundReactionEvent): void
   /** The unread messages of all threads, for the head. */
   unread(): number
   /** Each thread's unread messages, for the panel. */
@@ -153,6 +155,24 @@ export function createTeamNotify(o: TeamNotifyOptions): TeamNotify {
         thread: e.thread,
         title: o.nameOf(e.from),
         body: text === null ? t('team.toast.held') : toastBody(text),
+        label: labelOf(e.thread),
+      })
+    },
+    reaction(e) {
+      if (e.op !== 'add' || e.held || e.ownText === null || mutes()(e.thread)) return
+      const at = now()
+      while (shownAt.length && (shownAt[0] ?? 0) <= at - HOUR_MS) shownAt.shift()
+      if (shownAt.length >= TOASTS_PER_HOUR) return
+      shownAt.push(at)
+      const who = o.nameOf(e.from)
+      const snippet = e.ownText.trim()
+      o.desktop.show({
+        id: e.id,
+        thread: e.thread,
+        title: who,
+        body: snippet
+          ? t('team.toast.reacted', { who, emoji: e.emoji, text: toastBody(snippet, 80) })
+          : t('team.toast.reactedEmpty', { who, emoji: e.emoji }),
         label: labelOf(e.thread),
       })
     },

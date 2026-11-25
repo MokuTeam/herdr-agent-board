@@ -65,6 +65,7 @@ export const profilePanesFile = (): string => join(stateDir(), 'profile-panes.js
 export const teamKeyFile = (): string => join(stateDir(), 'team-key.json')
 export const teamInboxFile = (): string => join(stateDir(), 'team-inbox.json')
 export const teamOutboxFile = (): string => join(stateDir(), 'team-outbox.json')
+export const teamReactionsFile = (): string => join(stateDir(), 'team-reactions.json')
 export const teamPinsFile = (): string => join(stateDir(), 'team-pins.json')
 export const teamAuditFile = (): string => join(stateDir(), 'team-audit.jsonl')
 // What agents drafted for a person to send (`board team draft`); the running board with `team` set writes it.

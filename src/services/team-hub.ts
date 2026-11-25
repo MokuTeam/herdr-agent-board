@@ -16,6 +16,8 @@ import {
   addDraft,
   addInbox,
   addOutbox,
+  addReactionOutbox,
+  applyReaction,
   audit,
   changeBlobs,
   changePins,
@@ -32,6 +34,7 @@ import {
   markAcked,
   type OutboxItem,
   type OutFile,
+  type ReactionOutboxItem,
   readAgents,
   readAllInbox,
   readAllOutbox,
@@ -41,11 +44,16 @@ import {
   readKey,
   readOutbox,
   readPins,
+  readReactionOutbox,
+  readReactions,
   readThreads,
   refuseOut,
+  refuseReactionOut,
   releaseHeld,
+  releaseHeldReactions,
   type SessionRef,
   setOutState,
+  setReactionOutState,
   type ThreadRecord,
   takeDraft,
 } from '../adapters/team-store.ts'
@@ -71,6 +79,7 @@ import {
   hasAssistant,
   hasChannels,
   hasFiles,
+  hasReactions,
   hasReplies,
   hasThreads,
   hasWork,
@@ -87,6 +96,8 @@ import {
   openEnvelope,
   ourCaps,
   parseFrame,
+  REACTION_OPS,
+  type ReactionOp,
   type RosterPeer,
   sealEnvelope,
   sign,
@@ -106,6 +117,7 @@ import {
 import { inboundKey, legacyText, splitKey, TEAM, threadKey } from '../core/team-agents.ts'
 import { NONCE_BYTES, TAG_BYTES, usableBox, wrapSecret } from '../core/team-box.ts'
 import { checkMeta, fileContext, mimeOf, sealFile } from '../core/team-file.ts'
+import { MAX_REACTIONS_PER_MSG, validEmoji } from '../core/team-reactions.ts'
 import { backoffMs } from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
 import { createFileTransfer, saveIncoming } from './team-files.ts'
@@ -251,6 +263,29 @@ export type PostResult =
   | { ok: true; id: string; thread: string; copies: number; skipped: string[] }
   | { ok: false; error: string }
 
+/** Aggregated reaction chip on a message (#687): emoji, total count, whether this board reacted, and peer names. */
+export interface LineReaction {
+  emoji: string
+  count: number
+  me: boolean
+  peers: string[]
+}
+
+/** A reaction that came in (#687): kept in team-reactions.json; never wakes sessions or counts unread. */
+export interface InboundReactionEvent {
+  id: string
+  from: string
+  thread: string
+  target: string
+  emoji: string
+  op: ReactionOp
+  held: boolean
+  /** Text of the target message when this board sent it; null when another peer sent it. */
+  ownText: string | null
+}
+
+export type ReactResult = { ok: true; copies: number; skipped: string[] } | { ok: false; error: string }
+
 /** What came in, for the router (#216): told after the message is kept, never before. */
 export interface InboundEvent {
   id: string
@@ -321,6 +356,8 @@ export interface ThreadLine {
   replyTo?: string
   /** A file with it (#371). */
   file?: LineFile
+  /** Reactions on this message (#687), omitted when none. */
+  reactions?: LineReaction[]
 }
 
 export interface ThreadView extends ThreadRecord {
@@ -361,6 +398,8 @@ export interface TeamService {
    * `work` and whose id the post takes.
    */
   post(target: PostTarget, text: string, source: PostSource, file?: PostFile, work?: WorkPost): Promise<PostResult>
+  /** A reaction to a message (#687), applied locally and sent to peers whose caps say `reactions`. */
+  react(thread: string, message: string, emoji: string, op: ReactionOp, source?: PostSource): Promise<ReactResult>
   /**
    * An agent's draft for a person on the roster, or the team: kept for the person to Send or Discard,
    * never sent by the service. A file with it (#371) is copied into the board's folder at once.
@@ -409,6 +448,8 @@ interface Options {
   /** A message came in and was kept: the router decides whether a session hears of it (#216), the
    * board's notification and unread count hear of it too (#355). */
   onInbound?: (e: InboundEvent) => void
+  /** A reaction came in and flipped a visible reaction (#687): quiet desktop notice only. */
+  onReaction?: (e: InboundReactionEvent) => void
   socket?: (url: string) => WsLike
   clock?: Clock
   random?: () => number
@@ -442,6 +483,7 @@ export function createTeam({
   log,
   onChange,
   onInbound,
+  onReaction,
   socket = url => new WebSocket(url) as unknown as WsLike,
   clock = realClock,
   random = Math.random,
@@ -692,7 +734,7 @@ export function createTeam({
         // A blob of ours, or one being fetched (#371), is settled there.
         if (f.id && files.error(f.id, f.code)) return
         // An error naming a message of ours settles it: it is not sent again on the next connect.
-        if (f.id && refuseOut(f.id, f.code, clock.now())) changed()
+        if (f.id && (refuseOut(f.id, f.code, clock.now()) || refuseReactionOut(f.id, f.code, clock.now()))) changed()
         return
       case 'ping':
         frame({ t: 'pong' })
@@ -713,6 +755,8 @@ export function createTeam({
       for (const i of list)
         if ((i.state === 'queued' || i.state === 'delivered') && (!i.file || up.has(i.file.blob)))
           frame({ t: 'send', env: i.env })
+    for (const r of readReactionOutbox())
+      if (r.state === 'queued' || r.state === 'delivered') frame({ t: 'send', env: r.env })
   }
 
   /**
@@ -775,10 +819,25 @@ export function createTeam({
   }
 
   async function takeState(f: Extract<Frame, { t: 'state' }>): Promise<void> {
+    if (!me) return
     const item = Object.values(readAllOutbox())
       .flat()
       .find(i => i.msg.id === f.id)
-    if (!item || !me) return
+    if (!item) {
+      const rx = readReactionOutbox().find(r => r.id === f.id)
+      if (!rx) return
+      if (f.state === 'acked') {
+        const a = f.ack
+        const ok =
+          !!a && a.by === rx.to && (await verify(a.by, ackBytes({ by: a.by, id: f.id, to: me.peer, ts: a.ts }), a.sig))
+        if (!ok) {
+          audit('drop', rx.to, { why: 'bad_ack', id: f.id })
+          setReactionOutState(f.id, 'delivered', f.at)
+        } else setReactionOutState(f.id, 'acked', f.at)
+      } else setReactionOutState(f.id, f.state, f.at)
+      changed()
+      return
+    }
     if (f.state === 'acked') {
       // Acked counts only with the recipient's own signature over it.
       const a = f.ack
@@ -824,6 +883,8 @@ export function createTeam({
       // Acked all the same: the hub need not bring it again.
       audit('drop', msg.from, { why: 'channel', id: msg.id })
       log('team: dropped a message (a channel this board is not in, or a thread it does not fit)')
+    } else if (msg.body.react) {
+      keepReaction(msg, thread, held)
     } else {
       keep(msg, thread, held)
       if (msg.body.file) files.kick()
@@ -832,7 +893,49 @@ export function createTeam({
     const ts = new Date(clock.now()).toISOString()
     const sig = await sign(me.pkcs8, ackBytes({ by: me.peer, id: msg.id, to: msg.from, ts }))
     frame({ t: 'ack', id: msg.id, ts, sig })
-    markAcked(msg.from, msg.id, clock.now())
+    if (!msg.body.react) markAcked(msg.from, msg.id, clock.now())
+  }
+
+  /**
+   * Keeps an inbound reaction (#687) in team-reactions.json (never inbox, never unread, never wakes sessions).
+   * Fires `onReaction` only when it flips a visible reaction addition on an untrimmed message.
+   */
+  function keepReaction(msg: Message, thread: string, held: boolean): void {
+    const r = msg.body.react
+    if (!r) return
+    const res = applyReaction({
+      thread,
+      target: r.to,
+      by: msg.from,
+      emoji: r.emoji,
+      op: r.op,
+      ts: msg.ts,
+      id: msg.id,
+      ...(held && { held: true }),
+    })
+    if (res.applied) {
+      audit('reaction', msg.from, { id: msg.id, thread, target: r.to, op: r.op, held })
+      changed()
+    }
+    if (res.changed && r.op === 'add' && !held) {
+      const items = threadItems(thread)
+      const ownCopies =
+        items?.posts.get(r.to) ?? [...(items?.posts.values() ?? [])].find(cs => cs.some(c => c.msg.id === r.to))
+      const ownFirst = ownCopies?.[0]
+      const ownText = ownFirst ? (ownFirst.text ?? ownFirst.msg.body.text) : null
+      const inMatch = items?.incoming.find(([, i]) => i.id === r.to || i.post === r.to)?.[1]
+      const localTarget = ownFirst ? (ownFirst.post ?? ownFirst.msg.id) : (inMatch?.id ?? r.to)
+      onReaction?.({
+        id: msg.id,
+        from: msg.from,
+        thread,
+        target: localTarget,
+        emoji: r.emoji,
+        op: r.op,
+        held,
+        ownText,
+      })
+    }
   }
 
   /**
@@ -1107,8 +1210,8 @@ export function createTeam({
       if (via) msgBody.via = via
       if (rich && via && agentName) msgBody.agent = agentName
       if (rich && ref) msgBody.thread = ref
-      if (rich && hasReplies(p)) {
-        if (replyTo) msgBody.replyTo = replyTo
+      if (rich && (hasReplies(p) || hasReactions(p))) {
+        if (replyTo && hasReplies(p)) msgBody.replyTo = replyTo
         if (team) msgBody.post = postId
       }
       if (fileRef) msgBody.file = fileRef
@@ -1197,6 +1300,108 @@ export function createTeam({
     })
     changed()
     return { ok: true, id: postId, thread: key, copies: copies.length, skipped }
+  }
+
+  /**
+   * Adds or removes a reaction on a message (#687): kept locally at once and sent as signed
+   * envelopes to peers whose caps say `reactions` (peers without the cap never receive `body.react`).
+   */
+  async function react(
+    thread: string,
+    message: string,
+    emoji: string,
+    op: ReactionOp,
+    source: PostSource = { by: 'ui' },
+  ): Promise<ReactResult> {
+    if (!config()) return { ok: false, error: 'off' }
+    if (!validEmoji(emoji)) return { ok: false, error: 'emoji' }
+    if (!REACTION_OPS.some(x => x === op)) return { ok: false, error: 'body' }
+    const parts = splitKey(thread)
+    if (!parts || !isThreadId(parts.id)) return { ok: false, error: 'thread' }
+    const team = parts.scope === TEAM
+    if (!team && !isPeerId(parts.scope)) return { ok: false, error: 'thread' }
+    const rec = readThreads()[thread]
+    if (parts.id !== GENERAL && !rec) return { ok: false, error: 'thread' }
+    const pins = readPins()
+    if (!team) {
+      if (!roster.some(p => p.peer === parts.scope)) return { ok: false, error: 'peer' }
+      if (pins[parts.scope]?.status === 'changed') return { ok: false, error: 'changed' }
+    }
+    const wireTarget = wireId(thread, message)
+    if (!wireTarget) return { ok: false, error: 'message' }
+    const changedKey = (p: RosterPeer): boolean => pins[p.peer]?.status === 'changed'
+    const inThread = (p: RosterPeer): boolean => !rec?.members || rec.members.includes(p.peer)
+    const eligible = team
+      ? roster.filter(p => inThread(p) && !changedKey(p))
+      : roster.filter(p => p.peer === parts.scope)
+    const skipped = team ? roster.filter(p => inThread(p) && changedKey(p)).map(p => p.name) : []
+    if (!eligible.length) return { ok: false, error: 'nobody' }
+    const ref: ThreadRef | undefined = team
+      ? {
+          id: parts.id,
+          ...(rec?.title && { title: rec.title }),
+          ...(rec?.link && { link: rec.link }),
+          ...(rec?.members && { members: rec.members }),
+          group: true,
+        }
+      : parts.id === GENERAL
+        ? undefined
+        : {
+            id: parts.id,
+            ...(rec?.title && { title: rec.title }),
+            ...(rec?.link && { link: rec.link }),
+          }
+    const takers = eligible.filter(p => hasReactions(p) && (!ref?.members || hasChannels(p)) && (!ref || hasThreads(p)))
+    const me = await ensureKey()
+    const reactAt = Math.max(clock.now(), lastPostAt + 1)
+    lastPostAt = reactAt
+    const reactTs = new Date(reactAt).toISOString()
+    const via: Via | undefined = source.by === 'agent' ? 'agent' : undefined
+    const session = source.by === 'agent' ? source.session : undefined
+    const agentName = session?.name && validName(session.name) ? session.name : undefined
+    const copies: ReactionOutboxItem[] = []
+    for (const p of takers) {
+      const msgBody: Message['body'] = {
+        text: emoji,
+        ...(via && { via }),
+        ...(via && agentName && { agent: agentName }),
+        ...(ref && { thread: ref }),
+        react: { to: wireTarget, emoji, op },
+      }
+      const msg: Message = {
+        v: TEAM_PROTOCOL,
+        id: crypto.randomUUID(),
+        from: me.pub,
+        to: p.peer,
+        kind: 'question',
+        reply_to: null,
+        ts: reactTs,
+        ttl_s: MAX_TTL_S,
+        body: msgBody,
+      }
+      const env = await sealEnvelope(me, msg)
+      const wire = checkEnvelope(env)
+      if (!wire.ok) return { ok: false, error: wire.code }
+      const checked = checkMessage(env.payload, env.from)
+      if (!checked.ok) return { ok: false, error: checked.code }
+      copies.push({ env, id: msg.id, to: p.peer, state: 'queued', at: clock.now() })
+    }
+    applyReaction({ thread, target: wireTarget, by: 'me', emoji, op, ts: reactTs, id: crypto.randomUUID() })
+    if (copies.length) {
+      addReactionOutbox(copies)
+      if (authed) for (const c of copies) frame({ t: 'send', env: c.env })
+    }
+    audit('react', team ? null : parts.scope, {
+      thread,
+      target: wireTarget,
+      op,
+      copies: copies.length,
+      by: source.by,
+      ...(session && { session: session.key }),
+      ...(source.by === 'agent' && source.claimed && { claimed: true }),
+    })
+    changed()
+    return { ok: true, copies: copies.length, skipped }
   }
 
   /**
@@ -1335,6 +1540,45 @@ export function createTeam({
       if (i.post && !i.held && senders.get(i.post)?.size === 1) claim(i.post, i.id)
     const answers = (name: string | undefined): { replyTo?: string } =>
       name ? { replyTo: lineOf.get(name) ?? name } : {}
+    const reactionsByLine = new Map<
+      string,
+      Map<string, { firstTs: string; firstId: string; me: boolean; peers: Set<string> }>
+    >()
+    for (const e of readReactions()) {
+      if (e.thread !== key || e.op !== 'add' || e.held) continue
+      const lineId = lineOf.get(e.target)
+      if (!lineId) continue
+      let byEmoji = reactionsByLine.get(lineId)
+      if (!byEmoji) {
+        byEmoji = new Map()
+        reactionsByLine.set(lineId, byEmoji)
+      }
+      let bucket = byEmoji.get(e.emoji)
+      if (!bucket) {
+        bucket = { firstTs: e.ts, firstId: e.id, me: false, peers: new Set() }
+        byEmoji.set(e.emoji, bucket)
+      } else if (compareMessageTime({ ts: e.ts, id: e.id }, { ts: bucket.firstTs, id: bucket.firstId }) < 0) {
+        bucket.firstTs = e.ts
+        bucket.firstId = e.id
+      }
+      if (e.by === 'me') bucket.me = true
+      else bucket.peers.add(e.by)
+    }
+    const reactionsFor = (lineId: string): { reactions?: LineReaction[] } => {
+      const byEmoji = reactionsByLine.get(lineId)
+      if (!byEmoji?.size) return {}
+      const list = [...byEmoji.entries()]
+        .sort((a, b) => {
+          const cmp = compareMessageTime({ ts: a[1].firstTs, id: a[1].firstId }, { ts: b[1].firstTs, id: b[1].firstId })
+          return cmp !== 0 ? cmp : a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0
+        })
+        .slice(0, MAX_REACTIONS_PER_MSG)
+        .map(([emoji, b]): LineReaction => {
+          const peers = [...b.peers].map(p => nameOf(p))
+          return { emoji, count: (b.me ? 1 : 0) + b.peers.size, me: b.me, peers }
+        })
+      return list.length ? { reactions: list } : {}
+    }
     const incoming: ThreadLine[] = items.incoming.map(
       ([peer, i]): ThreadLine => ({
         id: i.id,
@@ -1348,6 +1592,7 @@ export function createTeam({
         ...(i.agent && { agent: i.agent }),
         ...(!i.held && answers(i.replyTo)),
         ...(i.file && !i.held && { file: lineFileIn(i.file, i.file.ref?.blob) }),
+        ...(!i.held && reactionsFor(i.id)),
       }),
     )
     const outgoing: ThreadLine[] = [...items.posts.entries()].map(([id, copies]): ThreadLine => {
@@ -1368,6 +1613,7 @@ export function createTeam({
           ? { receipts: copies.map(c => ({ peer: c.msg.to, name: nameOf(c.msg.to), state: c.state })) }
           : { state: first.state, ...(first.code && { code: first.code }) }),
         ...answers(first.replyTo),
+        ...reactionsFor(id),
       }
     })
     const drafts: ThreadLine[] = readDrafts()
@@ -1483,6 +1729,7 @@ export function createTeam({
       return r.ok ? { ok: true, id: r.id, thread: r.thread } : r
     },
     post,
+    react,
     draft(to, text, more = {}) {
       if (!config()) return { ok: false, error: 'off' }
       if (to !== TEAM && (!isPeerId(to) || !roster.some(p => p.peer === to))) return { ok: false, error: 'peer' }
@@ -1663,6 +1910,7 @@ export function createTeam({
       })
       if (ok) {
         releaseHeld(peer)
+        releaseHeldReactions(peer)
         audit('trust', peer)
         changed()
         files.kick()

@@ -3041,7 +3041,10 @@ received (their board's signed ack), expired (it waits up to 24 hours by default
 team chat the slowest member's copy, every member's in its tooltip. An agent's message is outlined,
 with the session's name and whose board it is on. Reply on a message (hover, or the long press)
 quotes it over yours, and a click on a quote goes back to the original; a board whose caps say
-`replies` gets the reply with what it answers, an older one the plain text. Enter sends, Shift+Enter
+`replies` gets the reply with what it answers, an older one the plain text. Reactions on a message
+(hover or long-press on a phone for a quick row or searchable picker) show under the bubble as small
+chips with counts and who reacted; click your own chip to remove it or another's to add yours, and
+older boards ignore reactions without breaking. Enter sends, Shift+Enter
 breaks the line, and what you were writing waits in each thread while you read another. From a
 `general` thread, "New topic" starts one with a title and an optional http(s) link. "People and
 agents" shows each person's key fingerprint, your passkeys and the agent switches. A person whose key
@@ -3151,6 +3154,9 @@ as above: an agent's post is a draft, and what comes in reaches no session. On f
   each message with a ref after its time (`[2026-11-11 14:05 msg 9f8e7d6c]`) and says which message a
   reply answers; `board team reply <thread> --to <message> "<text>"` answers that one in particular
   (#373), as Reply does in the panel. Held as a draft, it still answers it when you press Send.
+  `board team react <thread> <message> <emoji> [--remove]` adds or removes an emoji reaction (or
+  Slack `:shortcode:` such as `:eyes:`) on a message where agents are allowed; reactions do not count
+  as unread or wake sessions, and notify the message's sender quietly.
 - One session is the **listener** (`board team listen`, run from your monitor, master or day
   session while no other is, and confirmed with your passkey if you turned that on; `board team listen off` from the
   listener; you change it in the switches). It hears of every new thread and of every message in a thread nobody handles, and hands

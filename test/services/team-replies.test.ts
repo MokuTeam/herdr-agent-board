@@ -69,7 +69,7 @@ const lineOf = (w: World, key: string, text: string) => w.s.svc.threadLines(key)
 
 describe('the cap', () => {
   test('this board says replies in its hello, beside threads and channels (and files, #371)', () => {
-    expect(OUR_CAPS).toEqual(['threads', 'channels', 'replies', 'files'])
+    expect(OUR_CAPS).toEqual(['threads', 'channels', 'replies', 'files', 'reactions'])
   })
 
   test('a board reads replyTo and post as message ids, and refuses anything else; the hub relays them as signed', async () => {

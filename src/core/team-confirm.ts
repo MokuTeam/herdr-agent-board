@@ -16,6 +16,8 @@
 // confirmed with a passkey there: off so that an agent cannot, on so that the passkey is shown to
 // sign on this computer before anything waits for it.
 
+import type { ReactionOp } from './team-wire.ts'
+
 /** A pending action waits this long for its confirmation, and a challenge for its one use. */
 export const CONFIRM_MS = 2 * 60_000
 /** How long a confirmed send unlocks the owner's sending in that page. */
@@ -70,12 +72,15 @@ export type OwnerAction =
   | { kind: 'thread-share'; thread: string; to: string; history: boolean }
   | { kind: 'thread-history'; thread: string }
   | { kind: 'thread-track'; topic: string; lane: string }
+  /** A reaction to a message (#687). */
+  | { kind: 'react'; thread: string; message: string; emoji: string; op: ReactionOp }
 
 /** Asks the computer's own authenticator first (Touch ID, Windows Hello) over a phone by QR (#367). */
 export const HINTS = ['client-device']
 
 /** The actions whose confirmation unlocks the owner's sending for a while. */
-export const unlocks = (a: OwnerAction): boolean => a.kind === 'send' || a.kind === 'draft' || a.kind === 'thread-send'
+export const unlocks = (a: OwnerAction): boolean =>
+  a.kind === 'send' || a.kind === 'draft' || a.kind === 'thread-send' || a.kind === 'react'
 
 /** The origin of the confirmation window. */
 export const confirmOrigin = (port: number): string => `http://localhost:${port}`

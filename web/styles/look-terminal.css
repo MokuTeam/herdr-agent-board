@@ -626,6 +626,10 @@
 :root[data-look="terminal"] .team-send:disabled { box-shadow: inset 0 0 0 1px var(--t-edge); color: var(--label-3); }
 :root[data-look="terminal"] .team-body .team-send-text, :root[data-look="terminal"] .team-body .mini.primary { background: none; box-shadow: inset 0 0 0 1px var(--accent); color: var(--accent); }
 :root[data-look="terminal"] .team-unread { border-radius: 4px; }
+:root[data-look="terminal"] .team-react-chip { border-radius: var(--radius); background: none; border-color: var(--t-edge); }
+:root[data-look="terminal"] .team-react-chip.me { border-color: var(--accent); background: none; color: var(--accent); }
+:root[data-look="terminal"] .team-emoji-picker { border-radius: var(--radius); background: var(--surface); border-color: var(--t-edge); box-shadow: 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] .team-emoji-search, :root[data-look="terminal"] .team-react-pick, :root[data-look="terminal"] .team-emoji-btn { border-radius: var(--radius); }
 
 /* Threads (#392, threads.css): square chips and rows, outlined status and lane pills, the
    question and the proposed close as rules on the left, as the rest of the look does. */

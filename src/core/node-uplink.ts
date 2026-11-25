@@ -91,7 +91,7 @@ export function isKeptCall(cmd: string, argv: readonly string[]): boolean {
   return cmd === 'team' && (argv[0] ?? '') === 'draft'
 }
 
-const TEAM_WRITE_SUBS: ReadonlySet<string> = new Set(['draft', 'post', 'reply', 'assign', 'release', 'listen'])
+const TEAM_WRITE_SUBS: ReadonlySet<string> = new Set(['draft', 'post', 'reply', 'react', 'assign', 'release', 'listen'])
 
 /**
  * Whether a call's result is remembered by call id on the master so a retry never writes twice (#508, #644, #698).

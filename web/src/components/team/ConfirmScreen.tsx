@@ -117,6 +117,14 @@ export function confirmLines(a: Reply, t: Translator): ConfirmLines {
         title: t('team.confirm.members', { channel: typeof a.channel === 'string' ? a.channel : '' }),
         items: Array.isArray(a.members) ? a.members.map(String) : [t('team.confirm.unknown')],
       }
+    case 'react': {
+      const emoji = typeof a.emoji === 'string' ? a.emoji : ''
+      const un = a.op === 'remove'
+      const title = who
+        ? t(un ? 'team.confirm.unreact' : 'team.confirm.react', { emoji, who })
+        : t(un ? 'team.confirm.unreactTeam' : 'team.confirm.reactTeam', { emoji })
+      return { title, note: unlocks }
+    }
     case 'passkey-add':
       return { title: t('team.confirm.add') }
     case 'passkey-remove':

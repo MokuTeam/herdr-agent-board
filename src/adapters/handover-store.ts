@@ -58,6 +58,7 @@ import {
   teamOutboxFile,
   teamPasskeysFile,
   teamPinsFile,
+  teamReactionsFile,
   teamThreadsFile,
   threadFilesDir,
 } from './paths.ts'
@@ -262,6 +263,7 @@ export function collectMasterState(
     addSpec('team-passkeys.json', teamPasskeysFile(), 'team', PRIVATE_MODE)
     addSpec('team-inbox.json', teamInboxFile(), 'team')
     addSpec('team-outbox.json', teamOutboxFile(), 'team')
+    addSpec('team-reactions.json', teamReactionsFile(), 'team')
     addSpec('team-pins.json', teamPinsFile(), 'team')
     addSpec('team-audit.jsonl', teamAuditFile(), 'team')
     addSpec('team-drafts.json', teamDraftsFile(), 'team')
@@ -628,6 +630,7 @@ export function takeLocalBackup(id: string, now: number = Date.now()): BackupMan
     ['team-passkeys.json', teamPasskeysFile(), PRIVATE_MODE],
     ['team-inbox.json', teamInboxFile(), undefined],
     ['team-outbox.json', teamOutboxFile(), undefined],
+    ['team-reactions.json', teamReactionsFile(), undefined],
     ['team-pins.json', teamPinsFile(), undefined],
     ['team-audit.jsonl', teamAuditFile(), undefined],
     ['team-drafts.json', teamDraftsFile(), undefined],

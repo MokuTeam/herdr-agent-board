@@ -22,9 +22,10 @@ import {
   threadRef,
   validLoop,
 } from '../core/team-agents.ts'
+import { normalizeEmoji } from '../core/team-reactions.ts'
 
 export const AGENT_USAGE =
-  'board team post <name|peer-id|team> [--new "<title>"] [--link <url>] [--file <path>] "<text>" | board team reply <thread> [--to <message>] [--file <path>] "<text>" | board team thread <thread> [--json] [--read] | board team drafts | board team assign <thread> <session> | board team release <thread> | board team listen [off] | board team loop <name|peer-id|team> [<1-100>|default]'
+  'board team post <name|peer-id|team> [--new "<title>"] [--link <url>] [--file <path>] "<text>" | board team reply <thread> [--to <message>] [--file <path>] "<text>" | board team react <thread> <message> <emoji> [--remove] | board team thread <thread> [--json] [--read] | board team drafts | board team assign <thread> <session> | board team release <thread> | board team listen [off] | board team loop <name|peer-id|team> [<1-100>|default]'
 
 export interface SessionWord {
   key: string
@@ -384,6 +385,40 @@ export async function teamAgents(op: string, args: string[], ctx: Ctx): Promise<
     })
     return said(reply, status, await whoOfThread(ctx, key))
   }
+  if (op === 'react') {
+    const { flags, after } = cutAtDashes(rest)
+    const remove = flags.includes('--remove')
+    const words = [...flags.filter(a => a !== '--remove'), ...after]
+    if (words.length !== 3) throw new Error(`usage: ${AGENT_USAGE}`)
+    const [where = '', msgRef = '', rawEmoji = ''] = words
+    const emoji = normalizeEmoji(rawEmoji)
+    if (!emoji) throw new Error(`not sent: ${refusedWhy('emoji')}`)
+    const key = await threadKeyOf(ctx, where)
+    const message = await messageOf(ctx, key, msgRef)
+    const self = await ctx.self()
+    const { status, reply } = await call(ctx.webPort, '/api/team/agent-react', {
+      thread: key,
+      message,
+      emoji,
+      ...(remove && { remove: true }),
+      session: asSession(self),
+      ...(self.claimed && { claimed: true }),
+    })
+    if (!isRecord(reply)) throw new Error(`the board answered ${status}`)
+    const who = await whoOfThread(ctx, key)
+    if (reply.ok !== true) {
+      const code = String(reply.error ?? status)
+      if (status === 403 && code === 'off')
+        throw new Error(`not sent: the owner has not let agents react for ${who} on their own`)
+      if (status === 403 && code === 'lane') throw new Error(`not sent: this session's lane is not shared with ${who}`)
+      throw new Error(`not sent: ${refusedWhy(code)}`)
+    }
+    return printable(
+      remove
+        ? `ok · removed ${emoji} from ${messageRef(message)} in ${who}`
+        : `ok · reacted ${emoji} to ${messageRef(message)} in ${who}`,
+    )
+  }
   if (op === 'thread') {
     const { flags, after } = cutAtDashes(rest)
     const json = flags.includes('--json')
@@ -533,6 +568,15 @@ export function threadData(
       ...(l.dir === 'draft' && l.reason !== undefined && { reason: l.reason }),
       ...(isRecord(l.file) && { file: fileData(l.file, hideFilePaths) }),
       ...(typeof l.replyTo === 'string' && { replyTo: l.replyTo }),
+      ...(Array.isArray(l.reactions) &&
+        l.reactions.length > 0 && {
+          reactions: l.reactions.filter(isRecord).map(r => ({
+            emoji: str(r.emoji),
+            count: Number(r.count) || 0,
+            me: r.me === true,
+            peers: Array.isArray(r.peers) ? r.peers.map(p => String(p)) : [],
+          })),
+        }),
       text: str(l.text),
     })),
   }
@@ -621,6 +665,21 @@ export function framedThread(
     const whose = o.dir === 'in' ? `${printable(String(o.who ?? 'them'))}'s message` : "this board's message"
     return `  (answers ${whose} ${messageRef(String(o.id))})`
   }
+  const reactionsLine = (l: Record<string, unknown>): string | null => {
+    if (!Array.isArray(l.reactions) || !l.reactions.length) return null
+    const parts = l.reactions
+      .filter(isRecord)
+      .map(r => {
+        const emoji = typeof r.emoji === 'string' ? printable(r.emoji) : ''
+        const count = typeof r.count === 'number' ? r.count : 0
+        const names: string[] = []
+        if (r.me === true) names.push('you')
+        if (Array.isArray(r.peers)) for (const p of r.peers) if (typeof p === 'string') names.push(printable(p))
+        return emoji && count > 0 ? `${emoji} ${count} (${names.join(', ')})` : ''
+      })
+      .filter(Boolean)
+    return parts.length ? `  [reactions: ${parts.join(', ')}]` : null
+  }
   for (const l of lines) {
     // The time as the board reads it, never the sender's text: a date string may carry more than a date.
     const at = typeof l.ts === 'string' ? new Date(l.ts) : null
@@ -639,6 +698,8 @@ export function framedThread(
       )
       const f = l.text === null ? null : fileLine(l.file, hideFilePaths)
       if (f) out.push(f)
+      const rx = l.text === null ? null : reactionsLine(l)
+      if (rx) out.push(rx)
     } else if (l.dir === 'out') {
       const state = Array.isArray(l.receipts)
         ? l.receipts
@@ -651,6 +712,8 @@ export function framedThread(
       out.push(quoted(String(l.text ?? '')))
       const f = fileLine(l.file, hideFilePaths)
       if (f) out.push(f)
+      const rx = reactionsLine(l)
+      if (rx) out.push(rx)
     } else {
       out.push(`[${when}] a draft waiting for the owner${l.reason ? ` (held: ${String(l.reason)})` : ''}:`)
       if (answer) out.push(answer)

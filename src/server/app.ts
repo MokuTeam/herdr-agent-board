@@ -782,6 +782,13 @@ export async function startServer({
       }
       board.publish()
     },
+    onReaction: e => {
+      try {
+        notifyOf().reaction?.(e)
+      } catch (err) {
+        log(`team: a reaction notification failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    },
   })
   // The master's devices in the payload (#500): made with the links below, the first time
   // config.json has `nodes`; until then the board's payload is what it was without them.

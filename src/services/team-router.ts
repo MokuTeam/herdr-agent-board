@@ -24,7 +24,15 @@ import {
   type SessionRef,
 } from '../adapters/team-store.ts'
 import { categoryInfo } from '../core/categories.ts'
-import { DEFAULT_MAX_FILE_BYTES, GENERAL, isPeerId, MAX_TEXT, type WorkPost } from '../core/team.ts'
+import {
+  DEFAULT_MAX_FILE_BYTES,
+  GENERAL,
+  isPeerId,
+  MAX_TEXT,
+  REACTION_OPS,
+  type ReactionOp,
+  type WorkPost,
+} from '../core/team.ts'
 import {
   type AgentLimits,
   agentLimits,
@@ -42,8 +50,9 @@ import {
   threadKey,
   threadRef,
 } from '../core/team-agents.ts'
+import { validEmoji } from '../core/team-reactions.ts'
 import type { Config } from '../core/types.ts'
-import type { InboundEvent, PostResult, PostTarget, TeamService } from './team-hub.ts'
+import type { InboundEvent, PostResult, PostTarget, ReactResult, TeamService } from './team-hub.ts'
 
 /** A session as the router needs it: its card key, name and lane. */
 export interface RouterItem {
@@ -166,6 +175,15 @@ export interface TeamRouter {
       work?: WorkPost
     },
   ): Promise<AgentPostResult>
+  /** A session's reaction (`board team react`): allowed only where the session may post to that thread. */
+  agentReact(p: {
+    thread: string
+    message: string
+    emoji: string
+    op: ReactionOp
+    session: SessionRef
+    claimed?: boolean
+  }): Promise<ReactResult>
   /** The hub client kept a message: a notice for the session that handles its thread, or the listener. */
   inbound(e: InboundEvent): void
   /** Hands a thread to a session (a lane shared with the peer, or the listener), or back (null). */
@@ -212,6 +230,8 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
   const globalOff = (off: boolean): boolean => off || teamCfg(cfg).agents === false
   /** When a notice last went to a session for a thread, so the next one waits its gap. */
   const lastNotice = new Map<string, number>()
+  /** In-memory reaction timestamps per session for hourly rate limiting (#687). */
+  const recentReacts = new Map<string, number[]>()
 
   const laneOf = (key: string): string | null => items().find(i => i.key === key)?.category ?? null
 
@@ -376,6 +396,39 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       const rec = readThreads()[r.thread]
       if (rec && rec.id !== GENERAL && !rec.handler && !listener) team.setThread(r.thread, { handler: session })
       return { ...r, sent: true }
+    },
+
+    async agentReact({ thread, message, emoji, op, session, claimed }) {
+      const view = team.view()
+      if (!view) return { ok: false, error: 'off' }
+      const parts = splitKey(thread)
+      if (!parts) return { ok: false, error: 'thread' }
+      if (!validEmoji(emoji)) return { ok: false, error: 'emoji' }
+      if (!REACTION_OPS.some(o => o === op)) return { ok: false, error: 'body' }
+      const line = team.threadLines(thread).find(l => l.id === message && l.dir !== 'draft' && !l.held)
+      if (!line) return { ok: false, error: 'message' }
+      const s = readAgents()
+      const peer = s.peers[switchesKey(parts.scope, thread)]
+      if (globalOff(s.off) || !peer?.on) return { ok: false, error: 'off' }
+      const listener = s.listener?.key === session.key
+      if (!listener && !sharesLane(peer, laneOf(session.key) ?? '')) return { ok: false, error: 'lane' }
+      const t = now()
+      const maxReacts = limits().sessionHour * 3
+      const kept = (recentReacts.get(session.key) ?? []).filter(at => at >= t - HOUR)
+      if (kept.length >= maxReacts) {
+        recentReacts.set(session.key, kept)
+        return { ok: false, error: 'rate_session' }
+      }
+      const r = await team.react(thread, message, emoji, op, {
+        by: 'agent',
+        session,
+        ...(claimed && { claimed: true }),
+      })
+      if (r.ok) {
+        kept.push(t)
+        recentReacts.set(session.key, kept)
+      }
+      return r
     },
 
     inbound(e) {

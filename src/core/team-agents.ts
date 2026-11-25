@@ -303,6 +303,10 @@ export function refusedWhy(error: string, detail?: string): string {
       return 'the team is off'
     case 'reply':
       return "that message is not one to answer in that thread: board team thread prints each one's ref"
+    case 'emoji':
+      return 'the reaction must be a single emoji or a known :shortcode:'
+    case 'message':
+      return "no such message in that thread: board team thread prints each one's ref"
     // Files (#371).
     case 'file':
       return 'no such file, or it is not a regular file'

@@ -123,10 +123,39 @@
 .team-delivery.bad { color: var(--red); font-weight: 500; }
 .team-msg.out:has(.team-delivery.bad) .team-bubble { background: color-mix(in srgb, var(--red) 8%, var(--panel)); box-shadow: inset 0 0 0 1px var(--red); color: var(--label); }
 .team-msg.out:has(.team-delivery.bad) .team-msg-foot { opacity: 1; }
+.team-msg-actions { display: flex; align-items: center; gap: 2px; opacity: 0; transition: opacity 120ms ease; }
+.team-msg:hover .team-msg-actions, .team-msg:focus-within .team-msg-actions, .team-msg-actions.open { opacity: 1; }
 .team-msg-reply { opacity: 0; transition: opacity 120ms ease, transform 100ms ease-out, background 120ms ease; }
-.team-msg:hover .team-msg-reply, .team-msg:focus-within .team-msg-reply { opacity: 1; }
-@media (hover: none) { .team-msg-reply { display: none; } }
+.team-msg:hover .team-msg-reply, .team-msg:focus-within .team-msg-reply, .team-msg-actions .team-msg-reply { opacity: 1; }
+@media (hover: none) { .team-msg-actions, .team-msg-reply { display: none; } }
 .team-msg-when { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; color: var(--label-2); font-size: 11.5px; }
+
+/* Reactions (#687): chips under a message, quick row, and searchable emoji picker. */
+.team-reactions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
+.team-msg.out .team-reactions { justify-content: flex-end; }
+.team-react-chip { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 7px; border: 1px solid var(--border); border-radius: var(--r-sm, 6px); background: var(--surface); color: var(--label); font: inherit; font-size: 12px; line-height: 1; cursor: pointer; transition: background 120ms ease, border-color 120ms ease, transform 100ms ease-out; }
+.team-react-chip:hover:not(:disabled) { border-color: var(--border-strong); background: var(--fill-2); }
+.team-react-chip:active:not(:disabled) { transform: scale(0.95); }
+.team-react-chip:disabled { cursor: default; opacity: 0.85; }
+.team-react-chip.me { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-soft, color-mix(in srgb, var(--accent) 12%, transparent)); color: var(--accent); font-weight: 600; }
+.team-react-emoji { font-size: 13.5px; line-height: 1; }
+.team-react-count { font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.team-react-add { min-width: 24px; justify-content: center; padding: 0 5px; color: var(--label-2); opacity: 0; transition: opacity 120ms ease, background 120ms ease, border-color 120ms ease; }
+.team-msg:hover .team-react-add, .team-msg:focus-within .team-react-add, .team-react-add:focus-visible { opacity: 1; }
+@media (hover: none) { .team-react-add { opacity: 0.7; } }
+.team-react-quick { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; width: 100%; }
+.team-react-pick { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid transparent; border-radius: var(--r-sm, 6px); background: var(--fill-2); color: inherit; font: inherit; font-size: 15px; line-height: 1; cursor: pointer; transition: background 120ms ease, transform 100ms ease-out; }
+.team-react-pick:hover { background: var(--fill); }
+.team-react-pick:active { transform: scale(0.92); }
+.team-react-pick.me { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-soft, color-mix(in srgb, var(--accent) 12%, transparent)); }
+.team-react-more { font-size: 14px; font-weight: 600; color: var(--label-2); }
+.team-emoji-picker { display: flex; flex-direction: column; gap: 6px; width: min(272px, calc(100vw - 32px)); margin-top: 6px; padding: 8px; border: 1px solid var(--border); border-radius: var(--r-md, 8px); background: var(--panel-float); box-shadow: var(--shadow-lift); z-index: 3; }
+.team-emoji-search { width: 100%; box-sizing: border-box; padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--r-sm, 6px); background: var(--surface); color: inherit; font: inherit; font-size: 12.5px; }
+.team-emoji-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; max-height: 180px; overflow-y: auto; overscroll-behavior: contain; }
+.team-emoji-btn { display: grid; place-items: center; height: 32px; padding: 0; border: 1px solid transparent; border-radius: var(--r-sm, 6px); background: none; font-size: 17px; line-height: 1; cursor: pointer; }
+.team-emoji-btn:hover { background: var(--fill); }
+.team-emoji-btn.me { border-color: color-mix(in srgb, var(--accent) 45%, transparent); background: var(--accent-soft, color-mix(in srgb, var(--accent) 12%, transparent)); }
+.team-emoji-empty { padding: 8px 4px; text-align: center; }
 
 /* An agent's message: outlined, not filled, with the agent's mark over its text. */
 .team-msg.agent.in .team-bubble { background: color-mix(in srgb, var(--purple) 6%, var(--surface)); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--purple) 45%, transparent); }
@@ -208,7 +237,7 @@ button.team-quote:hover { background: color-mix(in srgb, var(--accent) 15%, tran
   .team-body[data-pane] .team-thread, .team-body[data-pane] .team-people, .team-body[data-pane="list"] .team-side { animation: team-fade 150ms ease; }
   .team-jump { animation: team-fade 150ms ease; }
   .team-msg.flash .team-bubble { animation: none; outline: 2px solid var(--accent); outline-offset: 2px; }
-  .team-row, .team-icon-button, .team-send, .team-body .mini { transition: none; }
+  .team-row, .team-icon-button, .team-send, .team-body .mini, .team-react-chip, .team-react-pick { transition: none; }
 }
 @media (prefers-reduced-transparency: reduce) {
   .team-day span, .team-jump { background: var(--panel-float); backdrop-filter: none; -webkit-backdrop-filter: none; }

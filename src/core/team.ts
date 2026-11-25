@@ -7,6 +7,7 @@
 //   "team": { "hub": "ws://100.64.0.7:7443", "name": "anna" }
 // Only an object with a ws:// or wss:// hub counts.
 import { createHash } from 'node:crypto'
+import { validEmoji } from './team-reactions.ts'
 import {
   BLOB_CHUNK,
   type BoxClaim,
@@ -33,6 +34,8 @@ import {
   MAX_WORK_LINE,
   MAX_WORK_N,
   type Message,
+  REACTION_OPS,
+  type ReactBody,
   type RosterPeer,
   TEAM_PROTOCOL,
   type ThreadRef,
@@ -153,6 +156,9 @@ export const hasChannels = (p: { caps?: string[] | undefined } | undefined): boo
 export const hasReplies = (p: { caps?: string[] | undefined } | undefined): boolean => !!p?.caps?.includes('replies')
 /** Whether a roster peer's board takes files (#371); its box must verify too before one goes to it. */
 export const hasFiles = (p: { caps?: string[] | undefined } | undefined): boolean => !!p?.caps?.includes('files')
+/** Whether a roster peer's board understands message reactions (#687). */
+export const hasReactions = (p: { caps?: string[] | undefined } | undefined): boolean =>
+  !!p?.caps?.includes('reactions')
 /**
  * Whether a roster peer is an assistant's bridge (#386, docs/design/assistant-bridge): it says so
  * with the `assistant` cap. A board never says it of itself; the panel only ticks "All lanes" by
@@ -359,7 +365,7 @@ export function checkMessage(
   return { ok: true, msg }
 }
 
-const BODY_KEYS = ['text', 'via', 'agent', 'thread', 'replyTo', 'post', 'file', 'work']
+const BODY_KEYS = ['text', 'via', 'agent', 'thread', 'replyTo', 'post', 'file', 'work', 'react']
 const THREAD_KEYS = ['id', 'title', 'link', 'group', 'members']
 
 /**
@@ -407,7 +413,29 @@ function readBodyExtras(body: Record<string, unknown>): {
     if (w && t && t.id !== GENERAL) extras.work = w
     else ok = false
   }
+  // A reaction to a message (#687): standalone (cannot combine with file, work, replyTo, or post).
+  if (Object.hasOwn(body, 'react')) {
+    const r = readReact(body.react)
+    if (
+      r &&
+      !Object.hasOwn(body, 'file') &&
+      !Object.hasOwn(body, 'work') &&
+      !Object.hasOwn(body, 'replyTo') &&
+      !Object.hasOwn(body, 'post')
+    )
+      extras.react = r
+    else ok = false
+  }
   return { ok, extras }
+}
+
+const REACT_KEYS = ['to', 'emoji', 'op']
+
+/** A reaction body as a board accepts it (#687): target message id, valid single emoji, add or remove. */
+export function readReact(v: unknown): ReactBody | null {
+  if (!isRecord(v) || Object.keys(v).length !== REACT_KEYS.length || !onlyKeys(v, REACT_KEYS)) return null
+  if (!isMessageId(v.to) || !validEmoji(v.emoji) || !REACTION_OPS.some(o => o === v.op)) return null
+  return { to: v.to, emoji: v.emoji, op: v.op as ReactBody['op'] }
 }
 
 const WORK_KEYS = ['n', 'at', 'type', 'set', 'head', 'auto', 'share', 'unshare', 'hist']

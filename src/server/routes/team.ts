@@ -54,10 +54,12 @@ import {
 } from '../../adapters/team-store.ts'
 import { markWelcomed, readWelcomed } from '../../adapters/team-welcome.ts'
 import { categoryInfo } from '../../core/categories.ts'
-import { isMessageId, isPeerId, isThreadId, MAX_TEXT, validName } from '../../core/team.ts'
-import { agentLimits, TEAM, threadKey, validLoop } from '../../core/team-agents.ts'
+import { isMessageId, isPeerId, isThreadId, MAX_TEXT, type ReactionOp, validName } from '../../core/team.ts'
+import { agentLimits, splitKey, TEAM, threadKey, validLoop } from '../../core/team-agents.ts'
 import { type OwnerAction, unlocks, widens } from '../../core/team-confirm.ts'
 import { checkMeta } from '../../core/team-file.ts'
+import { normalizeEmoji } from '../../core/team-reactions.ts'
+import { isThreadKey } from '../../core/team-unread.ts'
 import { MAX_MEMBERS } from '../../core/team-wire.ts'
 import type { Config } from '../../core/types.ts'
 import { safeName } from '../../core/upload-name.ts'
@@ -246,6 +248,10 @@ function peerOf(a: OwnerAction): string | null {
   if (a.kind === 'trust') return a.peer
   if (a.kind === 'agents') return typeof a.change.peer === 'string' && isPeerId(a.change.peer) ? a.change.peer : null
   if (a.kind === 'welcome') return a.peer
+  if (a.kind === 'react') {
+    const s = splitKey(a.thread)?.scope
+    return s && isPeerId(s) ? s : null
+  }
   return null
 }
 
@@ -310,6 +316,10 @@ export function teamRoutes(
     if (a.kind === 'members') {
       const r = team.addMembers(a.key, a.add)
       return { status: r.ok ? 200 : r.error === 'thread' ? 404 : 400, body: { ...r } }
+    }
+    if (a.kind === 'react') {
+      const r = await team.react(a.thread, a.message, a.emoji, a.op, { by: 'ui' })
+      return { status: r.ok ? 200 : 400, body: { ...r } }
     }
     if (a.kind === 'welcome') {
       // Checked again as it stands now: the window may answer a while after the ask.
@@ -418,6 +428,10 @@ export function teamRoutes(
     }
     if (a.kind === 'passkey-remove')
       return { kind: a.kind, label: confirm?.passkeys().find(p => p.id === a.id)?.label ?? null }
+    if (a.kind === 'react') {
+      const s = splitKey(a.thread)?.scope ?? ''
+      return { kind: a.kind, who: s === TEAM ? null : team.nameOf(s), emoji: a.emoji, op: a.op }
+    }
     return { kind: a.kind }
   }
 
@@ -473,6 +487,63 @@ export function teamRoutes(
         if (wait) return wait
         const r = await perform(action)
         return json(r.status, r.body)
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/team/react',
+      async handle(req, ctx) {
+        if (!team.view()) return undefined
+        const refused = ctx.refuse('board-header') ?? ctx.refuse('origin')
+        if (refused) return refused
+        const raw = await ctx.rawBody()
+        const body = isRecord(raw) ? raw : {}
+        if (!isThreadKey(body.thread)) return json(400, { ok: false, error: 'thread' })
+        if (!isMessageId(body.message)) return json(400, { ok: false, error: 'message' })
+        const emoji = typeof body.emoji === 'string' ? normalizeEmoji(body.emoji) : null
+        if (!emoji) return json(400, { ok: false, error: 'emoji' })
+        if (body.remove !== undefined && typeof body.remove !== 'boolean')
+          return json(400, { ok: false, error: 'body' })
+        const op: ReactionOp = body.remove === true ? 'remove' : 'add'
+        const line = team.threadLines(body.thread).find(l => l.id === body.message && l.dir !== 'draft' && !l.held)
+        if (!line) return json(400, { ok: false, error: 'message' })
+        const action: OwnerAction = { kind: 'react', thread: body.thread, message: body.message, emoji, op }
+        const wait = held(req, action)
+        if (wait) return wait
+        const r = await perform(action)
+        return json(r.status, r.body)
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/team/agent-react',
+      async handle(_req, ctx) {
+        if (!team.view() || !router) return undefined
+        const refused = ctx.refuse('board-header') ?? ctx.refuse('origin')
+        if (refused) return refused
+        const raw = await ctx.rawBody()
+        const body = isRecord(raw) ? raw : {}
+        const session = sessionFrom(body.session)
+        if (!session) return json(400, { ok: false, error: 'body' })
+        if (!isThreadKey(body.thread)) return json(400, { ok: false, error: 'thread' })
+        if (!isMessageId(body.message)) return json(400, { ok: false, error: 'message' })
+        const emoji = typeof body.emoji === 'string' ? normalizeEmoji(body.emoji) : null
+        if (!emoji) return json(400, { ok: false, error: 'emoji' })
+        if (body.remove !== undefined && typeof body.remove !== 'boolean')
+          return json(400, { ok: false, error: 'body' })
+        const op: ReactionOp = body.remove === true ? 'remove' : 'add'
+        const r = await router.agentReact({
+          thread: body.thread,
+          message: body.message,
+          emoji,
+          op,
+          session,
+          ...(body.claimed === true && { claimed: true }),
+        })
+        return json(
+          r.ok ? 200 : r.error.startsWith('rate') ? 429 : r.error === 'off' || r.error === 'lane' ? 403 : 400,
+          r,
+        )
       },
     },
     {

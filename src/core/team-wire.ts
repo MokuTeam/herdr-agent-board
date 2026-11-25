@@ -28,7 +28,7 @@ export const MAX_DRAFTS = 20
  * key (RosterPeer.box); a member whose board does not say so, or whose box did not come through,
  * gets FILE_LINE instead.
  */
-export const CAPS = ['threads', 'channels', 'replies', 'files'] as const
+export const CAPS = ['threads', 'channels', 'replies', 'files', 'reactions'] as const
 export type Cap = (typeof CAPS)[number]
 /**
  * Shared threads (#394, docs/design/threads 11): a topic that carries a status, in the signed body
@@ -205,6 +205,17 @@ export const ERROR_CODES = [
 ] as const
 export type ErrorCode = (typeof ERROR_CODES)[number]
 
+/** Reaction operations carried in `body.react` (#687). */
+export const REACTION_OPS = ['add', 'remove'] as const
+export type ReactionOp = (typeof REACTION_OPS)[number]
+
+/** A reaction on a message (#687): the target message id (or team post id), the emoji, and add/remove. */
+export interface ReactBody {
+  to: string
+  emoji: string
+  op: ReactionOp
+}
+
 /** What a sender signs: a question, as the fields of the message. It travels as the JSON text of this object. */
 export interface Message {
   v: number
@@ -221,6 +232,7 @@ export interface Message {
    * `post`: on a team post's copy, the post's id (its first copy's). Both only to a peer with `replies`.
    * `file` (#371): only to a peer with `files` and a box, and then `text` may be empty.
    * `work` (#394): a shared thread's entry, only to a peer with `work`, in a topic.
+   * `react` (#687): a reaction to a message, only to a peer with `reactions`.
    */
   body: {
     text: string
@@ -231,6 +243,7 @@ export interface Message {
     post?: string
     file?: FileRef
     work?: WorkBody
+    react?: ReactBody
   }
 }
 

@@ -90,6 +90,8 @@ export interface TeamSource {
    * door, delivery follows), and a new topic is then the thread on show; false: refused, and toasted.
    */
   send(text: string, topic?: NewTopic, replyTo?: string, file?: SendFile): Promise<boolean>
+  /** Adds or removes an emoji reaction on a message (#687). */
+  react(message: string, emoji: string, remove: boolean): Promise<boolean>
   trust(peer: string): Promise<void>
   /** Sends an agent's draft (it goes marked as an agent request); false: refused, and toasted. */
   sendDraft(id: string): Promise<boolean>
@@ -263,6 +265,19 @@ export function teamSource(deps: TeamDeps): TeamSource {
       void load()
       return true
     },
+    async react(message, emoji, remove) {
+      const thread = now.get().selected
+      if (!thread) return false
+      try {
+        await ownerPost('/api/team/react', { thread, message, emoji, ...(remove && { remove: true }) })
+      } catch (err) {
+        const code = err instanceof ApiError ? err.reply.error : undefined
+        deps.toast(sendError(code, deps.t()), code !== 'confirm')
+        return false
+      }
+      void load()
+      return true
+    },
     trust: peer => change('/api/team/trust', { peer }),
     async sendDraft(id) {
       try {
@@ -332,6 +347,7 @@ export function useTeam(open: boolean): TeamNow & Omit<TeamSource, 'now' | 'sync
     ...state,
     select: source.select,
     send: source.send,
+    react: source.react,
     trust: source.trust,
     sendDraft: source.sendDraft,
     discardDraft: source.discardDraft,

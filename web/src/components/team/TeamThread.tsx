@@ -79,6 +79,7 @@ export interface TeamThreadProps {
   onSend(): void
   onMute(key: string, muted: boolean): void
   onReply(id: string | null): void
+  onReact?: ((id: string, emoji: string, remove: boolean) => void) | undefined
   onAddMembers?(key: string, peers: string[]): void
   /** The files that go with the next message (#371): uploading, ready or failed. */
   files?: readonly Attachment[]
@@ -167,6 +168,7 @@ export function TeamThread(props: TeamThreadProps) {
                     quote={item.line.replyTo ? quoteOf(item.line.replyTo, messages, t) : null}
                     flash={scroll.flash === item.line.id}
                     onReply={canWrite && item.line.text !== null ? pickReply : undefined}
+                    onReact={canWrite && item.line.text !== null ? props.onReact : undefined}
                     onQuote={scroll.jumpTo}
                   />
                 ),

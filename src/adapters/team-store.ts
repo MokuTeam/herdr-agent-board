@@ -18,6 +18,7 @@ import {
 import { join } from 'node:path'
 import {
   type Ack,
+  compareMessageTime,
   type DeliveryState,
   type Envelope,
   type ErrorCode,
@@ -27,6 +28,7 @@ import {
   type KeyPair,
   type Message,
   type OutState,
+  type ReactionOp,
   type Via,
   type WorkPost,
 } from '../core/team.ts'
@@ -46,6 +48,7 @@ import {
   teamOutboxFile,
   teamPasskeysFile,
   teamPinsFile,
+  teamReactionsFile,
   teamThreadsFile,
 } from './paths.ts'
 
@@ -334,6 +337,169 @@ export function refuseOut(id: string, code: ErrorCode, at: number): boolean {
           hit = true
         }
     return hit
+  })
+}
+
+// ---- Reactions (#687)
+
+/** One reactor's latest state on a message in a thread (`by` is `'me'` or a peer id). */
+export interface ReactionEntry {
+  thread: string
+  /** Wire message id (a pair message id, or a team post id). */
+  target: string
+  by: string
+  emoji: string
+  op: ReactionOp
+  ts: string
+  id: string
+  held?: boolean
+}
+
+/** An outgoing reaction copy waiting to be delivered/acked through the hub. */
+export interface ReactionOutboxItem {
+  env: Envelope
+  id: string
+  to: string
+  state: OutState
+  at: number
+  code?: ErrorCode
+}
+
+export const KEEP_REACTION_ENTRIES = 5000
+export const KEEP_REACTION_OUTBOX = 500
+
+type ReactionsFile = { v: 1; entries: ReactionEntry[]; outbox: ReactionOutboxItem[] }
+const isReactions = (v: unknown): v is ReactionsFile =>
+  isRecord(v) && v.v === 1 && Array.isArray(v.entries) && Array.isArray(v.outbox)
+
+const readReactionsFile = (): ReactionsFile | null => readJson(teamReactionsFile(), isReactions)
+
+/** Reaction entries kept on this board. Creates nothing. */
+export const readReactions = (): ReactionEntry[] => readReactionsFile()?.entries ?? []
+
+/** Outgoing reaction copies kept on this board. Creates nothing. */
+export const readReactionOutbox = (): ReactionOutboxItem[] => readReactionsFile()?.outbox ?? []
+
+function changeReactions<R>(fn: (file: ReactionsFile) => R): R {
+  mkdirSync(stateDir(), { recursive: true })
+  let result: R | undefined
+  updateJson(
+    teamReactionsFile(),
+    (cur: ReactionsFile | null) => {
+      const f: ReactionsFile = cur
+        ? { v: 1, entries: [...cur.entries], outbox: [...cur.outbox] }
+        : { v: 1, entries: [], outbox: [] }
+      result = fn(f)
+      if (f.entries.length > KEEP_REACTION_ENTRIES) {
+        // Prune oldest removed entries first, then oldest remaining entries.
+        const excess = f.entries.length - KEEP_REACTION_ENTRIES
+        const removes = f.entries
+          .map((e, i) => ({ e, i }))
+          .filter(x => x.e.op === 'remove')
+          .sort((a, b) => compareMessageTime({ ts: a.e.ts, id: a.e.id }, { ts: b.e.ts, id: b.e.id }))
+        const drop = new Set(removes.slice(0, excess).map(x => x.i))
+        if (drop.size < excess) {
+          const rest = f.entries
+            .map((e, i) => ({ e, i }))
+            .filter(x => !drop.has(x.i))
+            .sort((a, b) => compareMessageTime({ ts: a.e.ts, id: a.e.id }, { ts: b.e.ts, id: b.e.id }))
+          for (const x of rest.slice(0, excess - drop.size)) drop.add(x.i)
+        }
+        f.entries = f.entries.filter((_, i) => !drop.has(i))
+      }
+      if (f.outbox.length > KEEP_REACTION_OUTBOX) {
+        const settled = f.outbox
+          .map((o, i) => ({ o, i }))
+          .filter(x => x.o.state !== 'queued' && x.o.state !== 'delivered')
+          .sort((a, b) => a.o.at - b.o.at)
+        const excess = f.outbox.length - KEEP_REACTION_OUTBOX
+        const drop = new Set(settled.slice(0, excess).map(x => x.i))
+        f.outbox = f.outbox.filter((_, i) => !drop.has(i))
+      }
+      return f
+    },
+    isReactions,
+    PRIVATE,
+  )
+  return result as R
+}
+
+/**
+ * Applies a reaction entry using LWW convergence on `(ts, id)`.
+ * Returns whether the entry won (`applied`) and whether the visible active state flipped (`changed`).
+ */
+export function applyReaction(entry: ReactionEntry): { applied: boolean; changed: boolean } {
+  return changeReactions(f => {
+    const idx = f.entries.findIndex(
+      e => e.thread === entry.thread && e.target === entry.target && e.by === entry.by && e.emoji === entry.emoji,
+    )
+    const existing = idx >= 0 ? f.entries[idx] : undefined
+    if (existing && compareMessageTime({ ts: entry.ts, id: entry.id }, { ts: existing.ts, id: existing.id }) <= 0)
+      return { applied: false, changed: false }
+    const wasActive = existing?.op === 'add' && !existing.held
+    const nowActive = entry.op === 'add' && !entry.held
+    if (idx >= 0) f.entries[idx] = entry
+    else f.entries.push(entry)
+    return { applied: true, changed: wasActive !== nowActive }
+  })
+}
+
+/** Saves outgoing reaction copies (once per id). */
+export function addReactionOutbox(items: ReactionOutboxItem[]): void {
+  if (!items.length) return
+  changeReactions(f => {
+    const ids = new Set(f.outbox.map(o => o.id))
+    for (const item of items) {
+      if (ids.has(item.id)) continue
+      ids.add(item.id)
+      f.outbox.push(item)
+    }
+  })
+}
+
+/** Updates an outgoing reaction copy's delivery state; false when no such reaction copy exists (writes nothing). */
+export function setReactionOutState(id: string, state: DeliveryState, at: number): boolean {
+  if (!readReactionOutbox().some(i => i.id === id)) return false
+  return changeReactions(f => {
+    let hit = false
+    for (const i of f.outbox)
+      if (i.id === id && RANK[state] > RANK[i.state]) {
+        i.state = state
+        i.at = at
+        hit = true
+      }
+    return hit
+  })
+}
+
+/** Refuses an outgoing reaction copy; false when no queued reaction copy matches (writes nothing). */
+export function refuseReactionOut(id: string, code: ErrorCode, at: number): boolean {
+  if (!readReactionOutbox().some(i => i.id === id && i.state === 'queued')) return false
+  return changeReactions(f => {
+    let hit = false
+    for (const i of f.outbox)
+      if (i.id === id && i.state === 'queued') {
+        i.state = 'refused'
+        i.code = code
+        i.at = at
+        hit = true
+      }
+    return hit
+  })
+}
+
+/** Releases held reactions from `peer` once their key is trusted; writes nothing when none are held. */
+export function releaseHeldReactions(peer: string): number {
+  if (!readReactions().some(e => e.by === peer && e.held === true)) return 0
+  return changeReactions(f => {
+    let n = 0
+    for (const e of f.entries) {
+      if (e.by === peer && e.held) {
+        delete e.held
+        n++
+      }
+    }
+    return n
   })
 }
 

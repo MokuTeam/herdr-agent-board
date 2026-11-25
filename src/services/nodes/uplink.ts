@@ -675,7 +675,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     const why = teamRefusal(call.argv)
     if (why) return refused(why)
     const [op = '', ...more] = call.argv
-    const agentOp = ['post', 'reply', 'thread', 'drafts', 'assign', 'release', 'listen', 'loop'].includes(op)
+    const agentOp = ['post', 'reply', 'react', 'thread', 'drafts', 'assign', 'release', 'listen', 'loop'].includes(op)
     const inboxOp = op === 'inbox'
     const folder = join(store.dir(id), 'uplink', call.id)
     try {

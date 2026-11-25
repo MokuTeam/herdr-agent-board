@@ -146,7 +146,7 @@ export const ownerThreads = (path: string): boolean => /^\/api\/threads(\/[^/]+)
  * a desk (isOwnerLogin); never a Tailscale user `remote.allow` lets in.
  */
 const OWNER_TEAM =
-  /^\/api\/team(?:\/(?:thread\/[^/]+|threads(?:\/[^/]+\/[^/]+(?:\/(?:mute|unmute))?)?|send|draft\/[^/]+\/(?:send|discard)|read|unread))?$/
+  /^\/api\/team(?:\/(?:thread\/[^/]+|threads(?:\/[^/]+\/[^/]+(?:\/(?:mute|unmute))?)?|send|react|draft\/[^/]+\/(?:send|discard)|read|unread))?$/
 
 export const ownerTeam = (path: string): boolean => OWNER_TEAM.test(path)
 

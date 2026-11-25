@@ -153,6 +153,7 @@ export function TeamPanel({ open, onClose, back, focus, onFocused }: TeamPanelPr
         onDiscardDraft={id => void team.discardDraft(id)}
         onDraft={text => drafts.setText(key, text)}
         onReply={id => drafts.setReply(key, id)}
+        onReact={(id, emoji, remove) => void team.react(id, emoji, remove)}
         onTopic={setTopic}
         onSend={() => void send()}
         files={files.of(key)}
@@ -226,6 +227,8 @@ export interface TeamBodyProps {
   onDraft(text: string): void
   /** Reply to a line of the thread on show, or let go of the reply (null). */
   onReply?(id: string | null): void
+  /** Add or remove an emoji reaction on a line (#687). */
+  onReact?(id: string, emoji: string, remove: boolean): void
   onTopic(topic: NewTopic | null): void
   onSend(): void
   onMute(key: string, muted: boolean): void
@@ -293,6 +296,7 @@ export function TeamBody(props: TeamBodyProps) {
             onSend={props.onSend}
             onMute={props.onMute}
             onReply={id => props.onReply?.(id)}
+            {...(props.onReact && { onReact: props.onReact })}
             {...(props.onAddMembers && { onAddMembers: props.onAddMembers })}
             {...(props.files && { files: props.files })}
             {...(props.onAddFiles && { onAddFiles: props.onAddFiles })}
