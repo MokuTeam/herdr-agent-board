@@ -1,6 +1,10 @@
 // Quiet banner on a node's local web board (#744), and one-time redirect to the master's
 // public board URL on load when the master is online with a URL and `?local=1` was not asked.
+// Until the payload comes (never, in a tab in the background) the master is the one the node put in
+// the page itself (#797, core/node-master-page.ts).
 import { useEffect, useRef, useState } from 'react'
+import { NODE_MASTER_META, nodeMasterOfMeta } from '../../../../src/core/node-master-page.ts'
+import type { NodeMasterPayload } from '../../../../src/core/payload.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { nodeMasterAction, readStayLocal, type SessionStore } from '../../models/node-master.ts'
 import { remotePage } from '../../models/remote-page.ts'
@@ -14,17 +18,32 @@ export interface NodeMasterBannerProps {
   search?: string
   /** Override for tests: defaults to `sessionStorage`. */
   sessionStore?: SessionStore | null
+  /** Override for tests: defaults to the master the node put in the page (#797). */
+  pageMaster?: NodeMasterPayload | null
+}
+
+/** The master a node put in its page (#797), or null: any other board's page has none. */
+function masterOfPage(): NodeMasterPayload | null {
+  if (typeof document === 'undefined') return null
+  return nodeMasterOfMeta(document.querySelector(`meta[name="${NODE_MASTER_META}"]`)?.getAttribute('content'))
 }
 
 const defaultNavigate = (url: string): void => {
   if (typeof window !== 'undefined') window.location.replace(url)
 }
 
-export function NodeMasterBanner({ navigate = defaultNavigate, search, sessionStore }: NodeMasterBannerProps) {
+export function NodeMasterBanner({
+  navigate = defaultNavigate,
+  search,
+  sessionStore,
+  pageMaster,
+}: NodeMasterBannerProps) {
   const t = useT()
   const { data } = useBoardContext()
   const remote = remotePage()
-  const nodeMaster = data?.nodeMaster
+  const [fromPage] = useState(() => (pageMaster === undefined ? masterOfPage() : pageMaster))
+  // The payload's once it came; before that, the page's.
+  const nodeMaster = data ? data.nodeMaster : (fromPage ?? undefined)
   const decidedRef = useRef(false)
   const [stayBanner, setStayBanner] = useState(false)
 

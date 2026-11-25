@@ -2,7 +2,7 @@
 // few commands go up the relay (callOwner), never the uplink; every other command is refused as
 // before, and a session's call goes down the uplink as it did.
 import { expect, test } from 'bun:test'
-import { forwardNodeCall, type NodeCall } from '../../src/entrypoints/node-call.ts'
+import { callBoardAsOwner, forwardNodeCall, type NodeCall } from '../../src/entrypoints/node-call.ts'
 
 async function forward(o: { cmd: NodeCall['cmd']; argv?: string[]; session: string | null; json?: boolean }) {
   const calls: NodeCall[] = []
@@ -86,4 +86,64 @@ test("the master away: the owner's call says the board's computer is not reachab
     error: 'unreachable',
     message: "the board's computer is not reachable",
   })
+})
+
+test("no session: board thread's reads go up as the owner; its writes are refused and nothing is sent (#797)", async () => {
+  for (const sub of ['list', 'show', 'brief', 'changes', 'link']) {
+    const r = await forward({ cmd: 'thread', argv: [sub, 'atlas-1', 'ünï 100%'], session: null })
+    expect(r).toMatchObject({ code: 0, out: ['as the owner'], calls: [] })
+    expect(r.owners).toEqual([{ cmd: 'thread', argv: [sub, 'atlas-1', 'ünï 100%'] }])
+  }
+  for (const sub of ['post', 'done', 'ask', 'new', 'set', 'watch', 'open', 'share']) {
+    const r = await forward({ cmd: 'thread', argv: [sub, 'atlas-1'], session: null, json: true })
+    expect(r.owners).toEqual([])
+    expect(r.calls).toEqual([])
+    expect(JSON.parse(r.out[0] ?? '{}').error).toBe('no_session')
+  }
+  // A session's read goes down the uplink as before.
+  const s = await forward({ cmd: 'thread', argv: ['list'], session: 'pane-1' })
+  expect(s.owners).toEqual([])
+  expect(s.calls[0]).toMatchObject({ cmd: 'thread', argv: ['list'], session: 'pane-1' })
+})
+
+test('an older master that takes no thread from a terminal: the owner is told to update it (#797)', async () => {
+  const err: string[] = []
+  const code = await forwardNodeCall({
+    cmd: 'thread',
+    argv: ['list'],
+    session: null,
+    port: 1,
+    callOwner: async () => ({
+      state: 'answered',
+      code: 126,
+      out: [],
+      err: ["board thread is not taken from a node's terminal: run it in a session"],
+    }),
+    err: l => err.push(l),
+  })
+  expect(code).toBe(1)
+  expect(err[0]).toContain('update the master board')
+})
+
+test("a master that refuses the call's shape (an older one) reads as one to update, not as an HTTP code (#797)", async () => {
+  const realFetch = globalThis.fetch
+  globalThis.fetch = (async () =>
+    new Response(JSON.stringify({ ok: false, error: 'call' }), { status: 400 })) as unknown as typeof fetch
+  try {
+    const err: string[] = []
+    const code = await forwardNodeCall({
+      cmd: 'thread',
+      argv: ['list'],
+      session: null,
+      port: 1,
+      callOwner: callBoardAsOwner(1),
+      err: l => err.push(l),
+    })
+    expect(code).toBe(1)
+    expect(err).toEqual([
+      "board thread is not supported by the board's computer yet: update the master board to a newer version",
+    ])
+  } finally {
+    globalThis.fetch = realFetch
+  }
 })

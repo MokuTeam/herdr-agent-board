@@ -287,3 +287,57 @@ describe('NodeMasterBanner DOM (#744)', () => {
     expect(went).toEqual([])
   })
 })
+
+describe('NodeMasterBanner before the payload (#797)', () => {
+  const view = { nodeId: 'server-1', name: 'atlas', url: 'https://board.atlas.test/', online: true }
+  const putMeta = (content: string): void => {
+    const meta = dom.window.document.createElement('meta')
+    meta.setAttribute('name', 'board-node-master')
+    meta.setAttribute('content', content)
+    dom.window.document.head.append(meta)
+  }
+  afterEach(() => {
+    for (const m of dom.window.document.head.querySelectorAll('meta[name="board-node-master"]')) m.remove()
+  })
+
+  test('a tab whose payload never came (in the background) goes to the master the node put in the page', () => {
+    putMeta(JSON.stringify(view))
+    const went: string[] = []
+    mountBanner(null, { navigate: url => went.push(url), store: memoryStore() })
+    expect(went).toEqual(['https://board.atlas.test/'])
+  })
+
+  test('staying local, the banner and its link show before the payload comes', () => {
+    putMeta(JSON.stringify({ ...view, name: 'atlas ☃ 100%' }))
+    const went: string[] = []
+    mountBanner(null, { navigate: url => went.push(url), search: '?local=1', store: memoryStore(), lang: 'en' })
+    expect(went).toEqual([])
+    const banner = dom.window.document.getElementById('node-master-banner')
+    expect(banner?.textContent).toContain('atlas ☃ 100%')
+    expect(banner?.querySelector('a')?.getAttribute('href')).toBe('https://board.atlas.test/')
+  })
+
+  test('the payload, once it came, is what counts', () => {
+    putMeta(JSON.stringify(view))
+    const went: string[] = []
+    mountBanner(support.payload({ nodeMaster: { ...view, online: false } }), {
+      navigate: url => went.push(url),
+      store: memoryStore(),
+    })
+    expect(went).toEqual([])
+    expect(dom.window.document.getElementById('node-master-banner')?.textContent).toContain('atlas')
+  })
+
+  test('a page without the tag (any other board) or with a broken one: nothing before the payload, as before', () => {
+    const went: string[] = []
+    mountBanner(null, { navigate: url => went.push(url), store: memoryStore() })
+    expect(went).toEqual([])
+    expect(dom.window.document.getElementById('node-master-banner')).toBeNull()
+    act(() => root?.unmount())
+    root = null
+    putMeta('{"nodeId":1}')
+    mountBanner(null, { navigate: url => went.push(url), store: memoryStore() })
+    expect(went).toEqual([])
+    expect(dom.window.document.getElementById('node-master-banner')).toBeNull()
+  })
+})

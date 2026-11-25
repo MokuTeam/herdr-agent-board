@@ -47,6 +47,7 @@ import {
   type DecisionsConfig,
   type ReservedDecision,
 } from '../core/decisions.ts'
+import { OWNER_THREAD_SUBS } from '../core/master-relay.ts'
 import { hasDecisionFlags, KEPT_SUBS } from '../core/node-uplink.ts'
 import { nodeConfig, parseNodeKey } from '../core/nodes.ts'
 import { OWNER } from '../core/owner-watch.ts'
@@ -91,7 +92,7 @@ import {
   watch,
 } from '../services/work-threads.ts'
 import { giveVerdict, type SelfAnswer, verdictGate } from '../services/work-verify.ts'
-import { callBoard, type NodeCall, type NodeCallAnswer } from './node-call.ts'
+import { callBoard, forwardNodeCall, type NodeCall, type NodeCallAnswer, type OwnerCallBody } from './node-call.ts'
 
 export type { NodeCall, NodeCallAnswer }
 export { callBoard }
@@ -322,6 +323,8 @@ export interface ThreadCmdContext {
   sendOut?: (thread: string, entry: string) => Promise<SentLine | null>
   /** On a node (#508): hands the call to this node's board, `POST /api/node/call`; the tests' stand-in. */
   call?: (body: NodeCall) => Promise<NodeCallAnswer>
+  /** On a node outside a session (#797): a thread read as the owner's, `POST /api/node-cli`; the tests' stand-in. */
+  callOwner?: (body: OwnerCallBody) => Promise<NodeCallAnswer>
   /** Case files (#488): what the board knows of sessions now, and their reminders; asked only for a case's sessions. */
   cases?: CaseResolvers
 }
@@ -448,6 +451,18 @@ async function forward(
     return 1
   }
   const actor = ctx.actor
+  // Outside a session (#797): a read goes up the relay as the owner's, as `board time` does there.
+  if (actor.kind !== 'session' && OWNER_THREAD_SUBS.has(sub))
+    return forwardNodeCall({
+      cmd: 'thread',
+      argv: [sub, ...args],
+      session: null,
+      port: ctx.cfg.port,
+      json,
+      callOwner: ctx.callOwner,
+      out,
+      err,
+    })
   if (actor.kind !== 'session')
     return fail(
       'no_session',

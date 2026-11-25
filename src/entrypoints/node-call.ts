@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto'
 import type { CardDecision } from '../core/decisions.ts'
 import { SPAWN_FOLLOW_MAX_SEC } from '../core/launch/spawn-node.ts'
-import { NODE_CLI_PATH, OWNER_CLI_COMMANDS, RELAY_ERRORS } from '../core/master-relay.ts'
+import { NODE_CLI_PATH, ownerCliCommand, RELAY_ERRORS } from '../core/master-relay.ts'
 import { isRememberedCall, UPLINK_REFUSED, uplinkResultOf } from '../core/node-uplink.ts'
 
 /** A command on a node as it goes to the node's board (services/node/uplink.ts call). */
@@ -118,6 +118,14 @@ export const callBoardAsOwner =
       if (res.status === 503 && reply.error === RELAY_ERRORS.offline) return { state: 'unreachable' }
       const result = res.ok ? uplinkResultOf(value) : null
       if (result) return { state: 'answered', ...result }
+      // A master that does not take this command from a terminal (an older one, #797): said as the uplink says it.
+      if (res.status === 400 && reply.error === 'call')
+        return {
+          state: 'answered',
+          code: UPLINK_REFUSED,
+          out: [],
+          err: [`board ${body.cmd} is not taken from a node's terminal`],
+        }
       // The relay keys every call as a write: an answer that never came may or may not have run.
       if (reply.error === RELAY_ERRORS.unknown || reply.error === RELAY_ERRORS.timeout)
         return {
@@ -156,7 +164,8 @@ export interface ForwardNodeCallOptions {
 /**
  * Forward a CLI command from a node session to its master via the node's local uplink route,
  * printing the master's output/errors and returning its exit code. Outside a session, a command the
- * master takes from the owner (OWNER_CLI_COMMANDS) goes up the relay as the owner's (#780).
+ * master takes from the owner (OWNER_CLI_COMMANDS, and the thread reads since #797) goes up the relay
+ * as the owner's (#780).
  */
 export async function forwardNodeCall(opts: ForwardNodeCallOptions): Promise<number> {
   const out = opts.out ?? ((line: string) => console.log(line))
@@ -167,7 +176,7 @@ export async function forwardNodeCall(opts: ForwardNodeCallOptions): Promise<num
     else err(message)
     return exit
   }
-  if (!opts.session && !OWNER_CLI_COMMANDS.has(opts.cmd))
+  if (!opts.session && !ownerCliCommand(opts.cmd, opts.argv))
     return fail(
       'no_session',
       `run it from a session: on a node, board ${opts.cmd} goes to the board's computer as a session's`,

@@ -38,7 +38,8 @@ describe("the master's flags", () => {
     expect(f).toEqual({
       master: 'laptop',
       on: ['threads', 'calendar', 'decisions', 'presence', 'team', 'watches', 'todos', 'tunnel'],
-      threads: { agents: false, cases: true },
+      // verify and share always said (#797): a node tells "off" from a master that does not say.
+      threads: { agents: false, cases: true, verify: false, share: true },
       todos: { agents: true, autoClose: true },
       decisions: { defaults: false },
     })

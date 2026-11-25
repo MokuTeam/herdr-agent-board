@@ -151,8 +151,8 @@ export function relayedDecisions(
 export const BOARD_SLICES_PATH = '/api/board-slices'
 export const NODE_CLI_PATH = '/api/node-cli'
 
-/** The payload's master-run parts a node's page shows as the master has them (#780). */
-export const BOARD_SLICE_KEYS = ['time', 'calendar', 'journal', 'presence'] as const
+/** The payload's master-run parts a node's page shows as the master has them (#780; threads since #797). */
+export const BOARD_SLICE_KEYS = ['time', 'calendar', 'journal', 'presence', 'threads'] as const
 export type BoardSliceKey = (typeof BOARD_SLICE_KEYS)[number]
 
 /** The commands a sessionless terminal on a node runs on the master as the owner (#780). */
@@ -166,6 +166,16 @@ export const OWNER_CLI_COMMANDS: ReadonlySet<string> = new Set([
   'cats',
 ])
 
+/**
+ * `board thread`'s reads a sessionless terminal on a node runs on the master as the owner (#797): the
+ * threads live there. Every write stays a session's.
+ */
+export const OWNER_THREAD_SUBS: ReadonlySet<string> = new Set(['list', 'show', 'brief', 'changes', 'link'])
+
+/** Whether a sessionless terminal's command goes up as the owner's: one of OWNER_CLI_COMMANDS, or a thread read. */
+export const ownerCliCommand = (cmd: string, argv: readonly unknown[]): boolean =>
+  OWNER_CLI_COMMANDS.has(cmd) || (cmd === 'thread' && OWNER_THREAD_SUBS.has(String(argv[0] ?? '')))
+
 /** A sessionless terminal's command as the node sends it up: the lane is the one its folder maps to there. */
 export interface OwnerCli {
   cmd: string
@@ -177,8 +187,8 @@ export interface OwnerCli {
 export function ownerCliOf(raw: unknown): OwnerCli | null {
   if (!isObject(raw)) return null
   const { cmd, argv, lane } = raw
-  if (typeof cmd !== 'string' || !OWNER_CLI_COMMANDS.has(cmd)) return null
-  if (!Array.isArray(argv) || argv.length > 64) return null
+  if (typeof cmd !== 'string' || !Array.isArray(argv) || argv.length > 64) return null
+  if (!ownerCliCommand(cmd, argv)) return null
   if (!argv.every(a => typeof a === 'string' && a.length <= 8192 && !a.includes('\0'))) return null
   if (
     lane !== undefined &&

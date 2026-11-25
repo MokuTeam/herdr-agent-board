@@ -111,6 +111,7 @@ import { isRoutableNodeAddress } from '../core/mokupilot-mode.ts'
 import { masterHeldIds, withMasterDecisions } from '../core/node-decisions.ts'
 import { dropMovedCards } from '../core/node-items.ts'
 import { JOIN_TTL_MS } from '../core/node-join.ts'
+import { pageWithNodeMaster } from '../core/node-master-page.ts'
 import {
   configuredNodeAddresses,
   deviceIdFromHost,
@@ -118,6 +119,7 @@ import {
   isNodeOnly,
   LOCAL,
   markRevoked,
+  type NodeMasterPayload,
   nodeConfig,
   nodeKey,
   nodesConfig,
@@ -1107,6 +1109,16 @@ export async function startServer({
   // Declared before createBoardState so board.publish() never hits TDZ before doorFollows() runs.
   let door: NodeListener | null = null
   let doorStore: NodeStore | null = null
+  /** A pure node's master as its page shows it (#744); null on any other board. */
+  function nodeMasterNow(): NodeMasterPayload | null {
+    const n = nodeConfig(cfg.node)
+    if (!n || nodesConfig(cfg.nodes) !== null || !door || !doorStore) return null
+    try {
+      return pickNodeMaster(n.id, doorStore.list(), door.connectedMasters())
+    } catch {
+      return null
+    }
+  }
   /** The name of the machine this node's board is served from, for a node's one-line notes (#777); null when none is paired. */
   function masterNameHere(): string | null {
     const n = nodeConfig(cfg.node)
@@ -1151,15 +1163,7 @@ export async function startServer({
     journal,
     turnResume,
     allowCallParent: (device, parentKey) => nodePilotCalls?.allowsCallParent(device, parentKey) ?? false,
-    nodeMaster: () => {
-      const n = nodeConfig(cfg.node)
-      if (!n || nodesConfig(cfg.nodes) !== null || !door || !doorStore) return null
-      try {
-        return pickNodeMaster(n.id, doorStore.list(), door.connectedMasters())
-      } catch {
-        return null
-      }
-    },
+    nodeMaster: nodeMasterNow,
     // A node's master-owned features (#775): only once its master sent them; Settings shows them as the master's.
     masterFlags: () => {
       const f = nodeConfig(cfg.node) ? nodeFlags?.current() : null
@@ -1184,14 +1188,21 @@ export async function startServer({
     // Since #786 also Team's numbers and the master's devices, rebased so this computer is `local`.
     masterSlices: () => {
       const n = nodeConfig(cfg.node)
-      const got = n ? (nodeSlices?.current() ?? null) : null
-      if (!n || !got) return null
-      return nodeSlicesView(got, {
-        self: n.id,
-        ownTeam: teamConfig(cfg.team) !== null,
-        ownDevices: nodesConfig(cfg.nodes) !== null,
-        online: masterRelay?.online() ?? false,
-      })
+      if (!n) return null
+      const got = nodeSlices?.current() ?? null
+      const view = got
+        ? nodeSlicesView(got, {
+            self: n.id,
+            ownTeam: teamConfig(cfg.team) !== null,
+            ownDevices: nodesConfig(cfg.nodes) !== null,
+            online: masterRelay?.online() ?? false,
+          })
+        : null
+      // Threads on at the master (#797): its page shows them, their routes go up the relay, also
+      // before its slices came or from a master whose slices carry none (an older one).
+      if (!view?.threads && nodeFlags?.current()?.on.includes('threads'))
+        return { ...view, threads: { rev: 0, needsOwner: 0 } }
+      return view
     },
     // Threads (#379): while config.json turns them on, the revision and the count that waits on
     // the owner (two queries a refresh); off, nothing is read.
@@ -1527,7 +1538,9 @@ export async function startServer({
         })
       },
     },
-    staticRoute(WEB, bundle, page, viewerExtras),
+    // A pure node's page carries its master (#797): a tab in the background goes to it too. Any
+    // other board's page goes out as it was.
+    staticRoute(WEB, bundle, html => pageWithNodeMaster(page(html), nodeMasterNow()), viewerExtras),
   )
   // The board's own routes, as they are without `nodes`: the master door serves these (a node
   // passes nothing on to nodes of its own), and the node proxy hands them a bulk request's local part.
@@ -1869,6 +1882,10 @@ export async function startServer({
       guard: (file, old) => startGuard(join(old, 'src', 'entrypoints', 'node-update-guard.ts'), file),
       // After the answer, so it reaches the master before the files change and the board restarts.
       go: file => goLater(file, RESTART_AFTER_MS, log),
+      // The board that comes back on an update's commit runs the installer once, as the board's own
+      // update does, so the skills in the Claude profiles are the new code's.
+      installer: () => runInstaller(root),
+      backupSettings: () => backupSettings(),
       restart: old => {
         touchCode(old)
         touchCode(root)
@@ -2711,10 +2728,11 @@ export async function startServer({
   let lastView = viewConfig()
   let lastSettings = tunnelSettings()
 
-  // On Windows (#699) a node's update is settled by the board that came back on its commit: here,
-  // when the whole start is done (a later throw in this function never gets here), and once it
-  // stayed up a while. Nowhere else is anything scheduled.
-  if (nodePlatform === 'win32' && nodeUpdate) {
+  // A node's update is settled by the board that came back on its commit: here, when the whole
+  // start is done (a later throw in this function never gets here), and once it stayed up a while.
+  // On Windows (#699) that takes the guard's record; everywhere the installer an update left runs.
+  // Only a node has one: a board that is no node schedules nothing.
+  if (nodeUpdate) {
     const settled = nodeUpdate
     void pause(UPDATE_STABLE_MS)
       .then(() => settled.started())

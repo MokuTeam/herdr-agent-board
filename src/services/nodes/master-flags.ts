@@ -43,7 +43,15 @@ export function masterFlagsFor(cfg: Config, master: string, presence: Presence |
   return {
     master,
     on: (Object.keys(on) as MasterFlagKey[]).filter(k => on[k]),
-    ...(threads && { threads: { agents: threads.agents, ...(threads.cases && { cases: true as const }) } }),
+    // verify and share always said (#797): a node tells "off" from a master that does not say.
+    ...(threads && {
+      threads: {
+        agents: threads.agents,
+        ...(threads.cases && { cases: true as const }),
+        verify: !!threads.verify,
+        share: threads.share,
+      },
+    }),
     ...(todos && { todos: { agents: todos.agents, ...(todos.autoClose && { autoClose: true as const }) } }),
     ...(decisions && { decisions: { defaults: decisions.defaults } }),
     ...(presenceOn &&

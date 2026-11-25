@@ -458,3 +458,57 @@ describe('the update files never remove or move a .git', () => {
     expect(text(at, '.git', 'HEAD')).toBe('ref')
   })
 })
+
+describe('the installer after a checkout was updated by git', () => {
+  const markFile = (): string => join(dir, 'state', 'node', 'update', 'installer.json')
+  const steps = () => {
+    const calls: string[] = []
+    return {
+      calls,
+      deps: {
+        backupSettings: () => {
+          calls.push('backup')
+          return []
+        },
+        installer: async () => {
+          calls.push('installer')
+          return { ok: true, detail: '' }
+        },
+      } satisfies Partial<NodeUpdateDeps>,
+    }
+  }
+
+  test('a refused update leaves no file; the one that moves the checkout leaves it, and the board that comes back runs the installer', async () => {
+    const { calls, deps } = steps()
+    cloneAtA()
+    writeFileSync(join(root, 'src', 'adapters', 'paths.ts'), 'export const V = 99\n')
+    const refused = make(deps)
+    expect((await send(refused.update, repo.b)).body.error).toBe('git-dirty')
+    expect(existsSync(markFile())).toBe(false)
+    g(root, 'checkout', '-q', '--', 'src/adapters/paths.ts')
+    const { update, restarts } = make(deps)
+    expect((await send(update, repo.b)).status).toBe(200)
+    expect(restarts).toEqual([root])
+    expect(JSON.parse(text(markFile()))).toMatchObject({ from: repo.a, to: repo.b })
+    // the board that handed it over leaves the file to the one that comes back
+    await update.started()
+    expect(calls).toEqual([])
+    const back = make(deps)
+    await back.update.started()
+    expect(calls).toEqual(['backup', 'installer'])
+    expect(existsSync(markFile())).toBe(false)
+    expect(back.logs.join('\n')).toContain(`the installer ran after the update to ${repo.b.slice(0, 12)}`)
+  })
+
+  test('on Windows, with no record and no guard, the file alone lets the installer run', async () => {
+    const { calls, deps } = steps()
+    cloneAtA()
+    const win = { platform: 'win32', guard: never('guard'), go: never('go'), ...deps }
+    expect((await send(make(win).update, repo.b)).status).toBe(200)
+    expect(existsSync(join(dir, 'state', 'node', 'update', 'pending.json'))).toBe(false)
+    expect(existsSync(markFile())).toBe(true)
+    await make(win).update.started()
+    expect(calls).toEqual(['backup', 'installer'])
+    expect(existsSync(markFile())).toBe(false)
+  })
+})

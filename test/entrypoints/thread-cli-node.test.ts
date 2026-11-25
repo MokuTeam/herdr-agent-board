@@ -467,3 +467,32 @@ test('case files on a node: --ref, --state and brief go to the master as typed; 
   expect(r.calls[0]?.files).toEqual([resolve('r.md')])
   expect(nothingWritten()).toBe(true)
 })
+
+test('outside a session on a node, a thread read goes up the relay as the owner; nothing is opened here (#797)', async () => {
+  isolatedHome()
+  const owners: unknown[] = []
+  const r = await run(['list', '--json'], {
+    actor: { kind: 'owner' },
+    over: {
+      callOwner: async body => {
+        owners.push(body)
+        return { state: 'answered', code: 0, out: ['{"ok":true,"threads":[]}'], err: [] }
+      },
+    },
+  })
+  expect(r).toMatchObject({ code: 0, out: ['{"ok":true,"threads":[]}'], calls: [] })
+  expect(owners).toEqual([{ cmd: 'thread', argv: ['list', '--json'] }])
+  expect(nothingWritten()).toBe(true)
+  // The master away: said in words, as for board time.
+  const away = await run(['show', 'atlas-1'], {
+    actor: { kind: 'owner' },
+    over: { callOwner: async () => ({ state: 'unreachable' }) },
+  })
+  expect(away).toMatchObject({ code: 1, calls: [], err: ["the board's computer is not reachable"] })
+  // A write still needs a session, and nothing goes either way.
+  const post = await run(['post', 'atlas-1', 'x'], {
+    actor: { kind: 'owner' },
+    over: { callOwner: async () => Promise.reject(new Error('never')) },
+  })
+  expect(post).toMatchObject({ code: 1, calls: [] })
+})

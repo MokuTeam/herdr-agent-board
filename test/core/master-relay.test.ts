@@ -6,6 +6,8 @@ import {
   masterPath,
   NODE_CLI_PATH,
   OWNER_CLI_COMMANDS,
+  OWNER_THREAD_SUBS,
+  ownerCliCommand,
   ownerCliOf,
   plainPath,
   RELAY_INLINE_BYTES,
@@ -284,4 +286,25 @@ describe('plainPath: the path checked is the path that runs', () => {
     for (const p of ['/api/threads/atlas-1', '/api/session/%40ben%3Apane%2F1/message', '/api/threads/%D0%B0-1'])
       expect([p, plainPath(p)]).toEqual([p, true])
   })
+})
+
+test("ownerCliOf takes board thread's reads from a sessionless terminal, never its writes (#797)", () => {
+  for (const sub of ['list', 'show', 'brief', 'changes', 'link']) {
+    expect(OWNER_THREAD_SUBS.has(sub)).toBe(true)
+    expect(ownerCliOf({ cmd: 'thread', argv: [sub, 'atlas-1', '--json'] })).toEqual({
+      cmd: 'thread',
+      argv: [sub, 'atlas-1', '--json'],
+    })
+  }
+  for (const sub of ['post', 'done', 'ask', 'new', 'set', 'watch', 'unwatch', 'open', 'share', 'import', 'verdict', ''])
+    expect(ownerCliOf({ cmd: 'thread', argv: sub ? [sub, 'atlas-1'] : [] })).toBeNull()
+  expect(ownerCliCommand('thread', [])).toBe(false)
+  expect(ownerCliCommand('send', ['list'])).toBe(false)
+  for (const cmd of OWNER_CLI_COMMANDS) expect(ownerCliCommand(cmd, [])).toBe(true)
+})
+
+test("the master's threads revision and count ride in the slices (#797)", () => {
+  const threads = { rev: 7, needsOwner: 2, cases: true as const }
+  expect(boardSlicesOf({ ok: true, slices: { threads, items: [] } })).toEqual({ threads })
+  expect(slicesOf({ threads: undefined } as never)).toEqual({})
 })

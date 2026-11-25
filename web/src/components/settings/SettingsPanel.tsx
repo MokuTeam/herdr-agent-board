@@ -192,9 +192,14 @@ export function SettingsPanel({
   // A node's master-owned features (#775): shown as the master has them, and written there through
   // the relay (#780); Tasks stay read-only here.
   const masterOwned = data?.masterFlags ?? null
+  // On a node (#797): each row says whose it is, this computer's own or the master's.
+  const onNode = !!masterOwned || !!data?.nodeMaster
+  const headName = masterOwned?.master || data?.nodeMaster?.name || ''
+  const headLabel = headName ? t('node.scope.head', { name: headName }) : t('node.scope.headNone')
+  const hereMark = onNode ? <small className="set-owned">{t('node.scope.here')}</small> : null
   const ownedNote = masterOwned ? (
     <small className="set-owned" title={new Date(masterOwned.at).toLocaleString()}>
-      {t('node.masterOwned', { name: masterOwned.master })}
+      {headLabel}
     </small>
   ) : null
   // As the master has them, not this computer's own (off) values.
@@ -202,7 +207,8 @@ export function SettingsPanel({
   const presenceMode: PresenceMode | 'none' = owned ? owned.presence : (data?.presence?.mode ?? 'none')
   const idleMinutes = data?.presence?.idleMinutes ?? 15
   const todosMode: TodoMode = owned ? owned.todos : todoModeOf(data?.todos ?? null)
-  const threadsInfo = data && canAdmin ? (owned ? { mode: owned.threads, share: undefined } : threadsNow(data)) : null
+  const threadsInfo =
+    data && canAdmin ? (owned ? { mode: owned.threads, share: owned.threadsShare } : threadsNow(data)) : null
   const features =
     data && canAdmin
       ? owned
@@ -212,6 +218,8 @@ export function SettingsPanel({
             ...(owned.decisions && { decisionsDefaults: owned.decisionsDefaults }),
             journal: owned.journal,
             ...(owned.threads !== 'none' && { threadsCases: owned.threadsCases }),
+            ...(owned.threads !== 'none' &&
+              owned.threadsVerify !== undefined && { threadsVerify: owned.threadsVerify }),
           }
         : featuresNow(data)
       : null
@@ -224,7 +232,7 @@ export function SettingsPanel({
 
   const backupProblem = data?.backup?.problem
   const wakeDown = canAdmin && isWakeView(data?.wake) && noteShown(data.wake, now)
-  const systemWarn = !!setup?.shown || !!backupProblem || wakeDown
+  const systemWarn = !!setup?.shown || (!onNode && !!backupProblem) || wakeDown
 
   const pickTheme = (next: string) => {
     setTheme(next, { root: rootEl, keep: v => storage.set(THEME_KEY, v), transition: crossFade() })
@@ -440,6 +448,7 @@ export function SettingsPanel({
                   <div className="set-lbl">
                     <b>{t('set.lang')}</b>
                     <small>{t('set.lang.note')}</small>
+                    {hereMark}
                   </div>
                   <select
                     className="set-select"
@@ -459,9 +468,7 @@ export function SettingsPanel({
                   <div className="set-row">
                     <div className="set-lbl">
                       <b>{t('set.presence')}</b>
-                      <small>
-                        {masterOwned ? t('node.masterOwned', { name: masterOwned.master }) : t('set.presence.note')}
-                      </small>
+                      <small>{masterOwned ? headLabel : t('set.presence.note')}</small>
                     </div>
                     <select
                       className="set-select"
@@ -506,6 +513,7 @@ export function SettingsPanel({
                     <div className="set-lbl">
                       <b>{t('set.compact')}</b>
                       <small>{t('set.compact.note')}</small>
+                      {hereMark}
                     </div>
                     <select
                       className="set-select"
@@ -530,6 +538,7 @@ export function SettingsPanel({
                     <div className="set-lbl">
                       <b>{t('set.turnResume')}</b>
                       <small>{t('set.turnResume.note')}</small>
+                      {hereMark}
                     </div>
                     <Switch
                       checked={turnResumeOn}
@@ -539,7 +548,8 @@ export function SettingsPanel({
                     />
                   </div>
                 )}
-                {isRemote && todosRow}
+                {/* Where Features is not shown (#797): with it, Tasks are there only. */}
+                {isRemote && !canAdmin && todosRow}
               </div>
             </section>
           )}
@@ -759,8 +769,16 @@ export function SettingsPanel({
                 {canAdmin && (
                   <LinkRow
                     label={t('set.backup')}
-                    meta={<span>{backupProblem ? backupNoteText(backupProblem, t) : t('set.integrations.on')}</span>}
-                    warn={!!backupProblem}
+                    meta={
+                      <span>
+                        {onNode
+                          ? headLabel
+                          : backupProblem
+                            ? backupNoteText(backupProblem, t)
+                            : t('set.integrations.on')}
+                      </span>
+                    }
+                    warn={!onNode && !!backupProblem}
                     onClick={openChild(onOpenBackup)}
                   />
                 )}

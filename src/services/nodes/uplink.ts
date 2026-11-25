@@ -5,7 +5,8 @@
 // - Only allowlisted shared-state and cross-session commands (#508, #619, #628, #644, #698;
 //   core/node-uplink.ts UPLINK_COMMANDS); anything else is answered with 126 and a line, whatever
 //   the node sends. Only a session's here: a terminal with no session is the owner's, whose few
-//   commands come up the master relay instead (#780, ownerCall: core/master-relay.ts NODE_CLI_PATH). Owner-only subcommands (such as `thread open`, `thread share`,
+//   commands come up the master relay instead (#780, ownerCall: core/master-relay.ts NODE_CLI_PATH; the
+//   thread reads since #797). Owner-only subcommands (such as `thread open`, `thread share`,
 //   `thread import`, `team join`, `team watch`, `team listen`, `team loop <peer> <n>`) are refused.
 // - Run in this process by each command's own entry (entrypoints/thread-cli.ts threadCmd,
 //   entrypoints/time-cli.ts timeCmd, core/agent-send.ts), as the node's session: its prefixed key
@@ -43,6 +44,7 @@ import {
 } from '../../core/decisions.ts'
 import { takeEvents } from '../../core/event-stream.ts'
 import { t } from '../../core/lang.ts'
+import { OWNER_THREAD_SUBS } from '../../core/master-relay.ts'
 import {
   fileTooBig,
   isCallId,
@@ -77,6 +79,7 @@ import type { CalCmdContext } from '../../entrypoints/cal-cli.ts'
 import type { ThreadCmdContext } from '../../entrypoints/thread-cli.ts'
 import type { TimeCmdContext } from '../../entrypoints/time-cli.ts'
 import type { Known } from '../case-sessions.ts'
+import type { CaseResolvers } from '../work-cases.ts'
 import type { NodeLinks } from './links.ts'
 import type { SpawnFromDeps } from './spawn-from.ts'
 
@@ -523,16 +526,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
       const err: string[] = []
       const actor: Party = { kind: 'session', key, name }
       // Case files (#488): a case's sessions as this board's cards have them, when it has cases on.
-      const cases = threadsConfig(o.cfg.threads)?.cases
-        ? await (async () => {
-            const { liveOf, namesOf, remindersOf } = await import('../case-sessions.ts')
-            return {
-              live: async (keys: readonly string[]) => liveOf(keys, o.caseItems?.() ?? o.items()),
-              reminders: remindersOf,
-              names: async () => namesOf(o.items()),
-            }
-          })()
-        : undefined
+      const cases = await casesNow()
       const verdictSelf =
         sub === 'verdict' && call.self
           ? 'why' in call.self
@@ -1125,6 +1119,17 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     }
   }
 
+  /** Case files (#488): a case's sessions as this board's cards have them, while it has cases on. */
+  async function casesNow(): Promise<CaseResolvers | undefined> {
+    if (!threadsConfig(o.cfg.threads)?.cases) return undefined
+    const { liveOf, namesOf, remindersOf } = await import('../case-sessions.ts')
+    return {
+      live: async (keys: readonly string[]) => liveOf(keys, o.caseItems?.() ?? o.items()),
+      reminders: remindersOf,
+      names: async () => namesOf(o.items()),
+    }
+  }
+
   /**
    * A sessionless terminal's command on node `id` (#780): the owner's, as `board …` outside a session
    * on this computer runs it. A file the command names stays on the node: those run in a session.
@@ -1158,6 +1163,24 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
             actor: 'user',
             out: l => out.push(...l.split('\n')),
             err: l => err.push(...l.split('\n')),
+          })
+          return fit({ code, out, err })
+        }
+        case 'thread': {
+          // The reads alone (#797): a write is a session's, which goes up as one.
+          if (!OWNER_THREAD_SUBS.has(sub))
+            return refused(`board thread ${said(sub)} from a node's terminal runs in a session`)
+          const { threadCmd } = await import('../../entrypoints/thread-cli.ts')
+          const cases = await casesNow()
+          const code = await (o.run ?? threadCmd)(argv, {
+            cfg: { threads: o.cfg.threads, port: o.cfg.port },
+            actor: { kind: 'owner' },
+            lane: null,
+            idle: false,
+            findSession: async word => findSession(word),
+            out: l => out.push(l),
+            err: l => err.push(l),
+            ...(cases && { cases }),
           })
           return fit({ code, out, err })
         }

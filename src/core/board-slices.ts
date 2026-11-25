@@ -1,5 +1,5 @@
 // The payload's master-run parts a node's page shows as its master has them (#780, epic #763 T4a):
-// time, calendar, journal and presence; since T4b (#786) also the Team panel's revision and unread
+// time, calendar, journal and presence (threads' revision and count since #797); since T4b (#786) also the Team panel's revision and unread
 // count, and the master's devices. The master gives them over the relay (GET /api/board-slices,
 // core/master-relay.ts); the node keeps the last ones and puts them in its own payload, whose
 // config.json no longer has these features (the handover took them out). No I/O.

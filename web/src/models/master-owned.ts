@@ -9,6 +9,10 @@ export interface MasterOwnedNow {
   todos: TodoMode
   threads: ThreadMode
   threadsCases: boolean
+  /** Verified done (#797); absent while threads are off there or the master does not say. */
+  threadsVerify?: boolean
+  /** Sharing in Team (#797); absent unless threads and Team are both on there and the master says. */
+  threadsShare?: boolean
   watches: boolean
   decisions: boolean
   decisionsDefaults: boolean
@@ -29,6 +33,8 @@ export function masterOwnedNow(f: MasterFlagsPayload): MasterOwnedNow {
     todos,
     threads: !on('threads') ? 'none' : f.threads?.agents === false ? 'mine' : 'agents',
     threadsCases: on('threads') && f.threads?.cases === true,
+    ...(on('threads') && typeof f.threads?.verify === 'boolean' && { threadsVerify: f.threads.verify }),
+    ...(on('threads') && on('team') && typeof f.threads?.share === 'boolean' && { threadsShare: f.threads.share }),
     watches: on('watches'),
     decisions: on('decisions'),
     decisionsDefaults: on('decisions') && f.decisions?.defaults !== false,

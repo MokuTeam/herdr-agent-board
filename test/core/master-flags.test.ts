@@ -116,3 +116,12 @@ test('stale flags: the age of the last word from the master, nothing while curre
   )
   expect(staleFlagsLine({ at: now - 5 * 3_600_000 }, now)).toContain('5 h ago')
 })
+
+test("threads' verify and share are kept when they are booleans, and absent otherwise (#797)", () => {
+  expect(
+    masterFlagsWireOf({ master: 'laptop', on: ['threads'], threads: { agents: true, verify: true, share: false } }),
+  ).toEqual({ master: 'laptop', on: ['threads'], threads: { agents: true, verify: true, share: false } })
+  expect(
+    masterFlagsWireOf({ master: 'laptop', on: ['threads'], threads: { agents: true, verify: 'on', share: 1 } }),
+  ).toEqual({ master: 'laptop', on: ['threads'], threads: { agents: true } })
+})

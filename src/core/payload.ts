@@ -243,7 +243,7 @@ export interface MasterFlagsPayload {
   at: number
   on: string[]
   /** The fields Settings shows as the master has them (core/master-flags.ts MasterFlagsWire). */
-  threads?: { agents: boolean; cases?: true }
+  threads?: { agents: boolean; cases?: true; verify?: boolean; share?: boolean }
   todos?: { agents: boolean; autoClose?: true }
   decisions?: { defaults: boolean }
   presenceMode?: string

@@ -44,8 +44,8 @@ export interface MasterFlagsWire {
   master: string
   /** The master-owned features that are on at the master. */
   on: MasterFlagKey[]
-  /** Threads: whether agents use them, and case files. */
-  threads?: { agents: boolean; cases?: true }
+  /** Threads: whether agents use them, case files, verified done and sharing in Team (#797; absent from an older master). */
+  threads?: { agents: boolean; cases?: true; verify?: boolean; share?: boolean }
   /** Tasks: whether agents keep them, and close them. */
   todos?: { agents: boolean; autoClose?: true }
   /** Decisions: whether a default may answer. */
@@ -73,7 +73,12 @@ export function masterFlagsWireOf(raw: unknown): MasterFlagsWire | null {
   const keys = MASTER_FLAG_KEYS.filter(k => on.includes(k))
   const out: MasterFlagsWire = { master, on: keys }
   if (keys.includes('threads') && isObject(threads) && typeof threads.agents === 'boolean')
-    out.threads = { agents: threads.agents, ...(threads.cases === true && { cases: true as const }) }
+    out.threads = {
+      agents: threads.agents,
+      ...(threads.cases === true && { cases: true as const }),
+      ...(typeof threads.verify === 'boolean' && { verify: threads.verify }),
+      ...(typeof threads.share === 'boolean' && { share: threads.share }),
+    }
   if (keys.includes('todos') && isObject(todos) && typeof todos.agents === 'boolean')
     out.todos = { agents: todos.agents, ...(todos.agents && todos.autoClose === true && { autoClose: true as const }) }
   if (keys.includes('decisions') && isObject(decisions) && typeof decisions.defaults === 'boolean')
