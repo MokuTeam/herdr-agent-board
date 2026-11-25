@@ -2741,6 +2741,14 @@ const UPDATE_WHY: Record<string, string> = {
   swap: 'the node could not swap the new copy in; the old one stays',
   'not-back': 'the node did not come back on the new commit within 3 minutes',
   timeout: 'the node did not answer in time',
+  git: "git failed in the node's checkout; the checkout is as it was",
+  'git-dirty': "the node's checkout has changes: commit or stash them there, or update it by hand",
+  'git-fetch': "the node's checkout could not fetch from its remote; the checkout is as it was",
+  'git-ahead': "the node's checkout has commits on no remote: push them, or update it by hand",
+  'git-commit': "this board's commit is not on the node's remote yet: push it first",
+  'git-diverged': "the node's branch does not lead to this board's commit: update it by hand",
+  'git-locks': "a lock file is added or removed: update the node's checkout by hand",
+  'kept-old': 'a folder beside the plugin on the node holds a git checkout and is kept: move it away by hand',
 }
 
 /**
@@ -3031,8 +3039,12 @@ function deviceLine(d: Record<string, unknown>, masterId?: string): string {
   const since = typeof link.since === 'number' ? ` since ${clock(link.since)}` : ''
   const next = typeof link.nextAt === 'number' ? `, next try ${clock(link.nextAt, true)}` : ''
   const commit = d.sameCommit === false ? ' · another commit' : ''
+  // How the node takes an update (#793), from a node that says it.
+  const status = isRecord(d.status) ? d.status : null
+  const updates =
+    status?.updates === 'git' ? ' · updates by git' : status?.updates === 'archive' ? ' · updates from archive' : ''
   const held = typeof d.held === 'number' && d.held > 0 ? ` · ${d.held} held` : ''
-  return `${parts.join(' ')}${since}${next}${commit}${held}${said}`
+  return `${parts.join(' ')}${since}${next}${commit}${updates}${held}${said}`
 }
 const TUNNEL_OFF = 'tunnel off · Settings → Remote access… on the web board sets it up'
 /** A time of today for the tunnel's lines: 14:02, or 14:02:07. */

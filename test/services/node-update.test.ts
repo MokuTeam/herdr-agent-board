@@ -187,20 +187,6 @@ describe('a node updates its plugin', () => {
     expect((await update.update({ commit: repo.b, sha256: sha(archive) })).body.error).toBe('busy')
   })
 
-  test('a plugin that is a git checkout is updated the same way: the folder is the archive with its stamp after it', async () => {
-    rmSync(root, { recursive: true, force: true })
-    const checkout = Bun.spawnSync(['git', 'clone', '-q', repo.dir, root])
-    expect(checkout.exitCode).toBe(0)
-    Bun.spawnSync(['git', '-C', root, 'checkout', '-q', repo.a])
-    const { update } = make()
-    const archive = repo.archive(repo.b)
-    await update.blob(stream(archive), archive.length)
-    expect((await update.update({ commit: repo.b, sha256: sha(archive) })).status).toBe(200)
-    expect(existsSync(join(root, '.git'))).toBe(false)
-    expect(text(root, '.archive-commit')).toBe(`${repo.b}\n`)
-    expect(existsSync(join(besidePlugin(root).old, '.git'))).toBe(true)
-  })
-
   test('a wrong sha256 leaves the old copy as it was', async () => {
     const { update, restarts } = make()
     const archive = repo.archive(repo.b)
@@ -401,8 +387,6 @@ const stub = {
 
 describe('a Windows node hands its update to a guard', () => {
   test('a copy of the plugin and the record first, the guard started and heard, then go; nothing of the plugin written', async () => {
-    mkdirSync(join(root, '.git'))
-    writeFileSync(join(root, '.git', 'HEAD'), 'ref')
     const seen: string[] = []
     const gos: string[] = []
     const guard = (file: string, old: string): void => {
@@ -435,9 +419,8 @@ describe('a Windows node hands its update to a guard', () => {
     expect(existsSync(join(root, 'src', 'b.ts'))).toBe(false)
     expect(statSync(root).ino).toBe(folder)
     expect(statSync(join(root, 'src')).ino).toBe(src)
-    // the copy before is whole but for the checkout's .git, which the guard moves
+    // the copy before is whole
     expect(text(old, '.archive-commit')).toBe(`${repo.a}\n`)
-    expect(existsSync(join(old, '.git'))).toBe(false)
     expect(text(fresh, 'src', 'b.ts')).toBe('export const B = true\n')
     expect(restarts).toEqual([])
     expect(logs.join('\n')).toContain('handed to the guard')
@@ -788,32 +771,34 @@ describe('the Windows update files', () => {
     expect(writes).toEqual([])
   })
 
-  test("applyUpdate moves a checkout's .git into the copy before; restorePlugin puts files back and keeps a .git", () => {
+  test('applyUpdate refuses a checkout and never moves its .git (#793); restorePlugin puts files back and keeps a .git', () => {
     put(root, '.git/HEAD', 'ref')
     const { fresh, old } = besidePlugin(root)
     mkdirSync(old)
     put(fresh, 'src/adapters/paths.ts', 'export const V = 2\n')
     put(fresh, '.archive-commit', 'new\n')
+    expect(() => applyUpdate(fresh, root, old)).toThrow('.git')
+    expect(text(root, '.git', 'HEAD')).toBe('ref')
+    expect(existsSync(join(old, '.git'))).toBe(false)
+    expect(text(root, 'src', 'adapters', 'paths.ts')).toBe('export const V = 1\n')
+    expect(text(root, '.archive-commit')).toBe(`${repo.a}\n`)
+    // an archive install takes the new copy, stamp and all
+    rmSync(join(root, '.git'), { recursive: true })
     applyUpdate(fresh, root, old)
-    expect(existsSync(join(root, '.git'))).toBe(false)
-    expect(text(old, '.git', 'HEAD')).toBe('ref')
     expect(text(root, '.archive-commit')).toBe('new\n')
-    // the copy before: what backupPlugin made, with the .git applyUpdate moved
+    expect(text(root, 'src', 'adapters', 'paths.ts')).toBe('export const V = 2\n')
+    // the copy before: what backupPlugin made
     put(old, 'src/adapters/paths.ts', 'export const V = 1\n')
     put(old, '.archive-commit', 'old\n')
+    put(root, '.git/HEAD', 'ref')
     restorePlugin(old, root)
     expect(text(root, 'src', 'adapters', 'paths.ts')).toBe('export const V = 1\n')
     expect(text(root, '.archive-commit')).toBe('old\n')
+    // a .git in the plugin is not taken out by a restore from a copy without one
     expect(text(root, '.git', 'HEAD')).toBe('ref')
-    // a .git that stayed in the plugin is not taken out by a restore from a copy without one
-    rmSync(join(old, '.git'), { recursive: true })
-    put(root, '.git/EXTRA', 'x')
-    restorePlugin(old, root)
-    expect(text(root, '.git', 'EXTRA')).toBe('x')
   })
 
-  test('backupPlugin copies everything but the .git, off the event loop, and replaces an older copy', async () => {
-    put(root, '.git/HEAD', 'ref')
+  test('backupPlugin copies everything, off the event loop, and replaces an older copy', async () => {
     put(root, 'node_modules/dep/index.js', 'dep')
     const old = join(dir, 'home', 'agent-board.old')
     put(old, 'stale.ts', 'stale')
@@ -821,9 +806,20 @@ describe('the Windows update files', () => {
     expect(done).toBeInstanceOf(Promise)
     await done
     expect(existsSync(join(old, 'stale.ts'))).toBe(false)
-    expect(existsSync(join(old, '.git'))).toBe(false)
     expect(text(old, 'node_modules', 'dep', 'index.js')).toBe('dep')
     expect(text(old, 'src', 'adapters', 'paths.ts')).toBe('export const V = 1\n')
+  })
+
+  test('backupPlugin keeps a copy before that holds a .git, and refuses a plugin that is a checkout (#793)', async () => {
+    const old = join(dir, 'home', 'agent-board.old')
+    put(old, '.git/HEAD', 'ref')
+    await expect(backupPlugin(root, old)).rejects.toThrow('.git')
+    expect(text(old, '.git', 'HEAD')).toBe('ref')
+    rmSync(old, { recursive: true })
+    put(root, '.git/HEAD', 'ref')
+    await expect(backupPlugin(root, old)).rejects.toThrow('.git')
+    expect(existsSync(old)).toBe(false)
+    expect(text(root, '.git', 'HEAD')).toBe('ref')
   })
 
   test('claimPending gives the record once and leaves nothing beside it; the phase and the heartbeat', () => {

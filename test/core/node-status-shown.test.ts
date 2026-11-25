@@ -70,3 +70,10 @@ test('its git facts (#609): a login or an identity coming moves the key; a statu
     ]).toEqual([more, false])
   expect(statusShown(status({ programs: ['git'] }))).toBe(statusShown(status()))
 })
+
+test('how it takes an update (#793): a status without it keys as before; git against archive moves the key', () => {
+  const before = statusShown(status())
+  const git = statusShown(status({ updates: 'git' }))
+  expect(git).not.toBe(before)
+  expect(statusShown(status({ updates: 'archive' }))).not.toBe(git)
+})

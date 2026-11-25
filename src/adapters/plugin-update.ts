@@ -44,6 +44,24 @@ export async function pluginCommit(root: string): Promise<string> {
   return (await headCommit(root).catch(() => null)) ?? ''
 }
 
+/**
+ * Whether `dir` holds a `.git` of its own: a checkout's folder, or a worktree's `.git` file (#793).
+ * Such a folder is someone's clone: an update never writes over it, moves it or removes it.
+ */
+export function holdsGit(dir: string): boolean {
+  try {
+    lstatSync(join(dir, '.git'))
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Throws when `dir` holds a `.git`: the last check before a step that would remove or move it (#793). */
+function keepGit(dir: string, step: string): void {
+  if (holdsGit(dir)) throw new Error(`${dir} holds a git checkout (.git): it is kept, not ${step}`)
+}
+
 /** The fresh copy and the one before it, beside the plugin's folder: `<name>.new`, `<name>.old`. */
 export function besidePlugin(root: string): { fresh: string; old: string } {
   const up = dirname(root)
@@ -112,6 +130,7 @@ export function removeKept(file: string): void {
 
 /** `dir` emptied of a copy left before, and the entries written into it: folders and files with their mode. */
 export function writeTree(dir: string, entries: readonly TarEntry[]): void {
+  keepGit(dir, 'emptied')
   rmSync(dir, { recursive: true, force: true })
   mkdirSync(dir, { recursive: true })
   for (const e of entries) {
@@ -125,7 +144,9 @@ export function writeTree(dir: string, entries: readonly TarEntry[]): void {
   }
 }
 
+/** `dir` removed; one that holds a `.git` is kept and said (throws). */
 export function removeTree(dir: string): void {
+  keepGit(dir, 'removed')
   rmSync(dir, { recursive: true, force: true })
 }
 
@@ -169,7 +190,8 @@ export async function loadsIn(dir: string, timeout: number): Promise<{ ok: boole
  * `old` (an older copy there goes first), then each of `fresh`'s into the plugin folder. The
  * folder itself stays: the panes herdr started in it (the board's, wake's) keep a folder that
  * exists, which a moved and later removed folder would not be. A rename that fails puts back what
- * was moved, so the plugin's folder holds the copy it held.
+ * was moved, so the plugin's folder holds the copy it held. A plugin folder or a copy before that
+ * holds a `.git` is refused before anything moves (#793): a checkout is updated by git.
  */
 export function swapIn(
   root: string,
@@ -177,6 +199,8 @@ export function swapIn(
   old: string,
   rename: (from: string, to: string) => void = renameWithRetry,
 ): void {
+  keepGit(root, 'swapped out')
+  keepGit(old, 'removed')
   rmSync(old, { recursive: true, force: true })
   mkdirSync(old, { recursive: true })
   const moved: string[] = []
@@ -325,12 +349,14 @@ export function goLater(
 
 /**
  * A full copy of the plugin's folder in `old` (what was there goes first): the rollback's source.
- * Made off the event loop; a checkout's `.git` is not copied here (applyUpdate moves it).
+ * Made off the event loop. A copy before that holds a `.git` is kept (throws), and so is a plugin
+ * that is a checkout (#793): the guard never moves a `.git`.
  */
 export async function backupPlugin(root: string, old: string): Promise<void> {
+  keepGit(root, 'replaced from an archive')
+  keepGit(old, 'removed')
   await rm(old, { recursive: true, force: true })
-  const git = join(root, '.git')
-  await cp(root, old, { recursive: true, verbatimSymlinks: true, filter: src => src !== git })
+  await cp(root, old, { recursive: true, verbatimSymlinks: true })
 }
 
 /** `file` replaced by `data` through a temp file beside it, renamed over it (a `.tmp` name no watcher takes for code). */
@@ -437,17 +463,12 @@ export function mirrorTree(
 }
 
 /**
- * The new copy `fresh` put into the plugin's folder (the guard's work): a checkout's `.git` moves
- * into the copy before first (the new copy has none), then the files go in with the commit stamp
- * last.
+ * The new copy `fresh` put into the plugin's folder (the guard's work), the commit stamp last. A
+ * plugin that is a git checkout is refused before anything is written (#793): its `.git` is never
+ * moved, and the guard puts the copy before back (a restore keeps the `.git`).
  */
-export function applyUpdate(fresh: string, root: string, old: string, write?: Write): void {
-  const git = join(root, '.git')
-  if (kindOf(git) !== null) {
-    rmSync(join(old, '.git'), { recursive: true, force: true })
-    mkdirSync(old, { recursive: true })
-    renameWithRetry(git, join(old, '.git'))
-  }
+export function applyUpdate(fresh: string, root: string, _old: string, write?: Write): void {
+  keepGit(root, 'replaced from an archive')
   mirrorTree(fresh, root, write, { last: [ARCHIVE_COMMIT_FILE] })
 }
 

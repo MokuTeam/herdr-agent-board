@@ -9,9 +9,18 @@
 // sha256, an archive with a path outside, an install without the network, a web board that does not
 // load) leaves the old copy in place and working. The swap moves the folder's entries, not the
 // folder (adapters/plugin-update.ts swapIn), and puts them back when a move fails. The copy before
-// stays beside it as `<name>.old` until the next update. A plugin that is a git checkout (set up by
-// hand) is updated the same way: after it the folder is the archive's content with the stamp, and
-// the checkout, its own commits too, is in `<name>.old` until the next update removes it.
+// stays beside it as `<name>.old` until the next update.
+//
+// A plugin that is a git checkout (a `.git` folder, or the `.git` file of a worktree; set up by hand)
+// is never unpacked over, moved or removed (#793): the archive is dropped and the checkout is updated
+// in place with git, on every platform alike (no guard: git rewrites the files where they are, as the
+// board's own update from git does, services/self-update.ts). It must be clean, with no commit of its
+// own that its remotes lack; the remote is fetched, the lock files and `bun install` come first when
+// they change (the old code still runs), then a branch is fast-forwarded to the commit, or a
+// detached HEAD checks it out. Anything else (changes, own commits, a commit the remote lacks, a
+// branch that does not lead to it) is refused with the reason and the checkout left as it was. A
+// `<name>.old` or `<name>.new` that holds a `.git` (a checkout an older board moved there) is kept:
+// the update is refused and says so, and the owner moves it away.
 //
 // On Windows (#699) a folder whose files a running process holds open cannot be renamed, and a
 // board that writes its own files can be restarted by run.ts half way (it watches src), so the
@@ -27,7 +36,7 @@
 // archive and to an update, so a second update never removes `.old` or `.new` from under a guard;
 // a record that is never settled is left for a person. A node whose board has no guard to give (an
 // older one) answers `platform`.
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { pause } from '../../adapters/pacing.ts'
 import {
@@ -35,6 +44,7 @@ import {
   backupPlugin,
   besidePlugin,
   claimPending,
+  holdsGit,
   installProduction,
   keepStream,
   loadsIn,
@@ -49,8 +59,11 @@ import {
   writePending,
   writeTree,
 } from '../../adapters/plugin-update.ts'
+import { bunInstall, gitIn } from '../../adapters/self-update.ts'
 import { ARCHIVE_COMMIT_FILE } from '../../core/node-texts.ts'
+import { firstLines, lockChanges, planFor } from '../../core/self-update.ts'
 import { readTar, type TarEntry } from '../../core/tar.ts'
+import type { GitResult, StepResult } from '../self-update.ts'
 
 /** The archive, at most this many bytes: the board's checkout is about 20 MB as a tar, and the door's server takes 128 MB at most. */
 export const MAX_ARCHIVE_BYTES = 100 * 1024 * 1024
@@ -96,6 +109,12 @@ export interface NodeUpdateDeps {
   alive?: (file: string) => number | null
   /** Windows: how long the guard may take to say it runs (15 s). */
   ackMs?: number
+  /** Whether a folder holds a `.git` (a checkout, or a worktree's `.git` file): never unpacked over, moved or removed (#793). */
+  holdsGit?: (dir: string) => boolean
+  /** git in the plugin's folder (adapters/self-update.ts gitIn), for a checkout's update. */
+  git?: (args: string[], timeoutMs?: number) => Promise<GitResult>
+  /** A checkout's `bun install` with its lockfile as it is (adapters/self-update.ts bunInstall). */
+  installCheckout?: () => Promise<StepResult>
   log(text: string): void
 }
 
@@ -110,6 +129,8 @@ export interface NodeUpdate {
   started(): Promise<void>
 }
 
+/** A checkout's fetch may take this long. */
+const FETCH_MS = 120_000
 const COMMIT = /^[0-9a-f]{40}([0-9a-f]{24})?$/
 const SHA256 = /^[0-9a-f]{64}$/
 const short = (sha: string): string => sha.slice(0, 12)
@@ -135,7 +156,12 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
   const go = d.go ?? markGo
   const alive = d.alive ?? aliveAt
   const ackMs = d.ackMs ?? 15_000
+  const gitInside = d.holdsGit ?? holdsGit
+  const git = d.git ?? ((args: string[], ms?: number) => gitIn(d.root, args, ms))
+  const installCheckout = d.installCheckout ?? (() => bunInstall(d.root))
   const pendingFile = join(d.dir, 'pending.json')
+  /** A checkout's lock files taken from the commit while bun install runs: `{ from, to, files }`, put back by the next update when the board died in between. */
+  const locksFile = join(d.dir, 'git-locks.json')
   let busy = false
   /** An archive is coming in: an update, or a second archive, waits for it. */
   let uploading = false
@@ -191,6 +217,128 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
     removeAlive(pendingFile)
     dropFresh(fresh)
     return refuse(500, 'swap', `the guard that puts the copy before back did not start: ${why}`)
+  }
+
+  /** The lock files back as HEAD has them, and the dependencies with them. */
+  async function putLocksBack(files: string[], said: (r: GitResult) => string): Promise<void> {
+    const r = await git(['checkout', 'HEAD', '--', ...files])
+    if (!r.ok) d.log(`node: could not put ${files.join(', ')} back: ${said(r)}`)
+    const again = await installCheckout()
+    if (!again.ok) d.log(`node: bun install after putting the lock files back failed: ${firstLines(again.detail, 2)}`)
+  }
+
+  /**
+   * Lock files a board that ended during its checkout's install left taken from the commit: put back,
+   * but only while HEAD is where that update started and each file is still as the commit has it (a
+   * change of someone's since is left alone). The record goes either way.
+   */
+  async function mendLocks(said: (r: GitResult) => string): Promise<void> {
+    if (!existsSync(locksFile)) return
+    try {
+      const j: unknown = JSON.parse(readFileSync(locksFile, 'utf8'))
+      const { from, to, files } = (j && typeof j === 'object' ? j : {}) as Record<string, unknown>
+      const list = Array.isArray(files) ? files.filter((f): f is string => typeof f === 'string') : []
+      if (typeof from === 'string' && typeof to === 'string' && COMMIT.test(to) && list.length) {
+        const head = (await git(['rev-parse', 'HEAD'])).out.trim()
+        if (head === from && (await git(['diff', '--quiet', to, '--', ...list])).ok) {
+          d.log(`node: putting back ${list.join(', ')} left from an update by git that did not finish`)
+          await putLocksBack(list, said)
+        }
+      }
+    } catch (err) {
+      d.log(`node: ${locksFile} could not be read: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    rmSync(locksFile, { force: true })
+  }
+
+  /**
+   * A checkout updated in place with git (#793): nothing of it is moved or removed. A refusal says
+   * why and leaves the checkout as it was; the answer is the same as the archive's otherwise.
+   */
+  async function byGit(commit: string): Promise<Answer> {
+    const no = (status: number, error: string, detail: string): Answer => {
+      d.log(`node: the update by git to ${short(commit)} is refused (${error}): ${firstLines(detail, 1)}`)
+      return refuse(status, error, detail)
+    }
+    const said = (r: GitResult): string => firstLines(r.err || r.out) || 'git failed'
+    removeKept(kept)
+    d.log(`node: updating to ${short(commit)}: the plugin is a git checkout, updated in place with git`)
+    await mendLocks(said)
+    /** A refusal when the tree has changes, else null. */
+    const dirty = async (): Promise<Answer | null> => {
+      const status = await git(['status', '--porcelain', '--untracked-files=no'])
+      if (!status.ok) return no(500, 'git', said(status))
+      if (status.out.trim())
+        return no(409, 'git-dirty', `the checkout has changes; commit or stash them:\n${firstLines(status.out)}`)
+      return null
+    }
+    const changes = await dirty()
+    if (changes) return changes
+    // `HEAD` on a detached HEAD, else the branch's name; a git that fails says so
+    const branchOf = await git(['rev-parse', '--abbrev-ref', 'HEAD'])
+    if (!branchOf.ok || !branchOf.out.trim()) return no(500, 'git', said(branchOf))
+    const branch = branchOf.out.trim() === 'HEAD' ? null : branchOf.out.trim()
+    const remote = (branch && (await git(['config', `branch.${branch}.remote`])).out.trim()) || 'origin'
+    const fetched = await git(['fetch', '--quiet', remote], FETCH_MS)
+    if (!fetched.ok) return no(409, 'git-fetch', `git fetch ${remote}: ${said(fetched)}`)
+    // HEAD's commits that no remote branch has: a move away from them could lose them.
+    const own = await git(['rev-list', '--count', 'HEAD', '--not', '--remotes'])
+    if (!own.ok) return no(500, 'git', said(own))
+    if (!/^\d+$/.test(own.out.trim())) return no(500, 'git', `git rev-list did not count: ${own.out.trim()}`)
+    const ahead = Number(own.out.trim())
+    if (ahead > 0)
+      return no(409, 'git-ahead', `${ahead} commit(s) of the checkout are on no remote; push them or update by hand`)
+    const has = await git(['rev-parse', '--verify', '--quiet', `${commit}^{commit}`])
+    if (!has.ok) return no(409, 'git-commit', `${short(commit)} is not on ${remote} after a fetch; push it first`)
+    const from = (await git(['rev-parse', 'HEAD'])).out.trim()
+    if (branch && !(await git(['merge-base', '--is-ancestor', 'HEAD', commit])).ok)
+      return no(409, 'git-diverged', `the branch ${branch} does not lead to ${short(commit)}; update by hand`)
+    // The dependencies first, while the old code runs: no code file changes yet.
+    const diff = await git(['diff', '--name-only', from, commit])
+    if (!diff.ok) return no(500, 'git', said(diff))
+    let locks: string[] = []
+    if (planFor(diff.out.split(/\r?\n/).filter(Boolean)).install) {
+      const ns = await git(['diff', '--name-status', from, commit, '--', 'package.json', 'bun.lock', 'packages'])
+      if (!ns.ok) return no(500, 'git', said(ns))
+      const lc = lockChanges(ns.out)
+      if (lc === 'lockfiles') return no(409, 'git-locks', 'a lock file is added or removed; update by hand')
+      locks = lc
+    }
+    const putBack = async (): Promise<void> => {
+      if (!locks.length) return
+      await putLocksBack(locks, said)
+      rmSync(locksFile, { force: true })
+    }
+    if (locks.length) {
+      // a change made while the fetch ran is not written over
+      const late = await dirty()
+      if (late) return late
+      mkdirSync(d.dir, { recursive: true })
+      writeFileSync(locksFile, `${JSON.stringify({ from, to: commit, files: locks })}\n`)
+      const co = await git(['checkout', commit, '--', ...locks])
+      if (!co.ok) {
+        await putBack()
+        return no(500, 'install', said(co))
+      }
+      const installed = await installCheckout()
+      if (!installed.ok) {
+        await putBack()
+        return no(500, 'install', firstLines(installed.detail))
+      }
+    }
+    const moved = branch
+      ? await git(['merge', '--ff-only', '--quiet', commit])
+      : await git(['checkout', '--quiet', '--detach', commit])
+    if (!moved.ok) {
+      await putBack()
+      return no(500, 'git', said(moved))
+    }
+    rmSync(locksFile, { force: true })
+    d.log(
+      `node: updated by git to ${short(commit)}${branch ? ` (${branch} fast-forwarded)` : ' (detached)'}; the board restarts on it`,
+    )
+    d.restart(d.root)
+    return { status: 200, body: { ok: true, commit, restarting: true } }
   }
 
   return {
@@ -255,6 +403,21 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
           removeKept(kept)
           return { status: 200, body: { ok: true, current: true, commit } }
         }
+        // A checkout is never unpacked over (#793): git updates it where it is.
+        if (gitInside(d.root)) {
+          const r = await byGit(commit)
+          done = r.status === 200
+          return r
+        }
+        // A copy before or a new copy that holds a .git is someone's checkout: kept, never removed.
+        for (const at of [old, fresh])
+          if (gitInside(at)) {
+            removeKept(kept)
+            d.log(
+              `node: the update to ${short(commit)} is refused: ${at} holds a .git and is kept; move it away by hand`,
+            )
+            return refuse(409, 'kept-old', `${at} holds a git checkout (.git) and is kept; move it away by hand`)
+          }
         const archive = readKept(kept)
         if (!archive) return refuse(409, 'blob')
         if (archive.sha256 !== sha256) {
@@ -266,6 +429,11 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
           removeKept(kept)
           d.log(`node: the update to ${short(commit)} is refused: ${read.error}`)
           return refuse(422, 'archive', read.error)
+        }
+        // An archive never carries a checkout's .git (git archive has none): one that does is refused.
+        if (read.entries.some(e => e.path === '.git' || e.path.startsWith('.git/'))) {
+          removeKept(kept)
+          return refuse(422, 'archive', 'the archive holds a .git')
         }
         // `git archive <commit>` names its commit: an archive of another one is not this update.
         if (read.comment !== null && read.comment !== commit) {
@@ -283,20 +451,20 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
         try {
           unpack(fresh, [...read.entries.filter(e => e.path !== ARCHIVE_COMMIT_FILE), stamp])
         } catch (err) {
-          removeTree(fresh)
+          dropFresh(fresh)
           return refuse(500, 'unpack', err instanceof Error ? err.message : String(err))
         }
         removeKept(kept)
         const installed = await install(fresh)
         if (!installed.ok) {
-          removeTree(fresh)
+          dropFresh(fresh)
           d.log(`node: the update to ${short(commit)} stopped: bun install --production failed`)
           return refuse(500, 'install', installed.detail)
         }
         // A copy whose web board does not load would leave this node with no door to be mended through.
         const loads = await check(fresh)
         if (!loads.ok) {
-          removeTree(fresh)
+          dropFresh(fresh)
           d.log(`node: the update to ${short(commit)} stopped: its web board does not load`)
           return refuse(500, 'loads', loads.detail)
         }
@@ -320,7 +488,7 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
         try {
           swap(d.root, fresh, old)
         } catch (err) {
-          removeTree(fresh)
+          dropFresh(fresh)
           return refuse(500, 'swap', err instanceof Error ? err.message : String(err))
         }
         done = true

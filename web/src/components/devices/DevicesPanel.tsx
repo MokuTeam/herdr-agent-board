@@ -586,6 +586,7 @@ function DeviceRowView({
                   {row.same ? t('node.dev.versionSame') : t('node.dev.versionOther')}
                 </span>
               )}
+              {row.updates && ` · ${row.updates}`}
             </span>
           )}
           {row.bundles.map(b => (

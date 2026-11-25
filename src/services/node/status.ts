@@ -54,6 +54,8 @@ export interface StatusSources {
   agyLimits?: () => BoardAgyLimits | null | undefined
   /** Non-internal interface addresses of this node (#700). */
   addresses?: () => readonly string[]
+  /** How this board takes an update (#793): by git in a checkout, else from an archive. No `updates` without it. */
+  updates?: () => 'git' | 'archive'
   platform?: string
   arch?: string
   home?: string
@@ -150,6 +152,7 @@ export function createNodeStatus(src: StatusSources): { answer(): Promise<NodeSt
         ...(git && { git }),
         ...(agyLimits !== undefined && { agyLimits }),
         ...(src.addresses && { addresses: [...src.addresses()].slice(0, 32) }),
+        ...(src.updates && { updates: src.updates() }),
         at: (src.now ?? Date.now)(),
       }
     },

@@ -235,13 +235,13 @@ describe('the guard on files', () => {
     }
   }
 
-  function scene() {
+  function scene(checkout = false) {
     const root = join(dir, 'agent-board')
     const old = join(dir, 'agent-board.old')
     const fresh = join(dir, 'agent-board.new')
     put(root, 'src/a.ts', 'A')
     put(root, '.archive-commit', 'a\n')
-    put(root, '.git/HEAD', 'ref')
+    if (checkout) put(root, '.git/HEAD', 'ref')
     put(old, 'src/a.ts', 'A')
     put(old, '.archive-commit', 'a\n')
     put(fresh, 'src/a.ts', 'B')
@@ -253,26 +253,34 @@ describe('the guard on files', () => {
     return { root, old, fresh, file }
   }
 
-  test('the board that settles the record: the new copy stays, the checkout is in the copy before', async () => {
+  test('the board that settles the record: the new copy stays', async () => {
     const { root, old, fresh, file } = scene()
     expect(await guardUpdate(real(file, true, 2000))).toBe('started')
     expect(text(root, 'src', 'a.ts')).toBe('B')
     expect(text(root, 'src', 'b.ts')).toBe('B')
     expect(text(root, '.archive-commit')).toBe('b\n')
-    expect(existsSync(join(root, '.git'))).toBe(false)
-    expect(text(old, '.git', 'HEAD')).toBe('ref')
+    expect(existsSync(join(old, '.git'))).toBe(false)
     expect(existsSync(fresh)).toBe(false)
     expect(readdirSync(join(dir, 'state')).filter(f => f !== 'pending.json.alive')).toEqual([])
     expect(aliveAt(file)).not.toBeNull()
   })
 
-  test('a board that does not come back: the plugin is the copy before again, the checkout too, the record gone', async () => {
+  test('a board that does not come back: the plugin is the copy before again, the record gone', async () => {
     const { root, file } = scene()
     expect(await guardUpdate(real(file, false, 60))).toBe('rolled-back')
     expect(text(root, 'src', 'a.ts')).toBe('A')
     expect(existsSync(join(root, 'src', 'b.ts'))).toBe(false)
     expect(text(root, '.archive-commit')).toBe('a\n')
-    expect(text(root, '.git', 'HEAD')).toBe('ref')
     expect(readdirSync(join(dir, 'state')).filter(f => f !== 'pending.json.alive')).toEqual([])
+  })
+
+  test('a plugin that is a checkout (#793): nothing applied, its .git never moved, the copy before put back at once', async () => {
+    const { root, old, file } = scene(true)
+    expect(await guardUpdate(real(file, true, 2000))).toBe('rolled-back')
+    expect(text(root, '.git', 'HEAD')).toBe('ref')
+    expect(existsSync(join(old, '.git'))).toBe(false)
+    expect(text(root, 'src', 'a.ts')).toBe('A')
+    expect(existsSync(join(root, 'src', 'b.ts'))).toBe(false)
+    expect(text(root, '.archive-commit')).toBe('a\n')
   })
 })

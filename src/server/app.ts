@@ -51,7 +51,7 @@ import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
 import { knobMs, pace, pause } from '../adapters/pacing.ts'
 import { archiveDir, cardsDir, pluginRoot, ROOT, scheduleDir } from '../adapters/paths.ts'
-import { goLater, pluginCommit, startGuard, touchCode } from '../adapters/plugin-update.ts'
+import { goLater, holdsGit, pluginCommit, startGuard, touchCode } from '../adapters/plugin-update.ts'
 import { fetchProbe, PROBE_TIMEOUT_MS, probeOrigin, probeOriginAt } from '../adapters/probe.ts'
 import { programsOnPath } from '../adapters/process.ts'
 import { inheritedProfileDir } from '../adapters/profiles.ts'
@@ -1822,8 +1822,11 @@ export async function startServer({
       git: () => nodeGit.facts(),
       agyLimits: () => localAgyLimits(cfg.launch),
       addresses: () => ownAddresses().filter(isRoutableNodeAddress),
+      // A checkout updates by git in place, anything else from the master's archive (#793).
+      updates: () => (holdsGit(pluginRoot()) ? 'git' : 'archive'),
     })
-    // The plugin at the master's commit (#590): unpacked beside this one, installed, swapped in.
+    // The plugin at the master's commit (#590): unpacked beside this one, installed, swapped in; a
+    // plugin that is a git checkout is updated in place by git instead, never replaced (#793).
     // Then the board ends with 75 and run.ts, the pane's process, starts it again from the plugin's
     // folder: herdr and the agents' panes are not touched. The code touched first wakes the watchers
     // of run.ts and wake-run.ts, so wake comes back on the new code too. On Windows (#699) the folder

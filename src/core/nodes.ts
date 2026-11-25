@@ -609,6 +609,8 @@ export function statusShown(s: NodeStatus | null): string {
             : null,
         ]
       : []),
+    // Only from a node that says it (#793): a status without it keys as before.
+    ...(s.updates ? [s.updates] : []),
   ])
 }
 
@@ -642,6 +644,11 @@ export interface NodeStatus {
   agyLimits?: BoardAgyLimits | null
   /** Non-internal interface addresses of this node (#700); absent from a node of an older board. */
   addresses?: string[]
+  /**
+   * How its board takes an update (#793): `git` in place in a checkout, `archive` unpacked beside
+   * the plugin; absent from a node of an older board.
+   */
+  updates?: 'git' | 'archive'
   at: number
 }
 
@@ -731,6 +738,7 @@ export function nodeStatusOf(raw: unknown): NodeStatus | null {
       s.addresses.every(a => typeof a === 'string' && a.length > 0 && a.length <= 64) && {
         addresses: [...(s.addresses as string[])],
       }),
+    ...((s.updates === 'git' || s.updates === 'archive') && { updates: s.updates }),
     at: s.at as number,
   }
 }

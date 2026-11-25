@@ -587,6 +587,28 @@ describe('what the owner reads (#510, polish)', () => {
   })
 })
 
+describe('how a device takes an update (#793)', () => {
+  test('its row says by git or from archive beside the version; nothing for a node that does not say, nor this computer', () => {
+    const rows = deviceRows(
+      [
+        device('server-1', { status: status('server-1', 0, { updates: 'git' }) }),
+        device('server-2', { status: status('server-2', 0, { updates: 'archive' }) }),
+        device('server-3', { status: status('server-3', 0) }),
+        device('local', { status: status('laptop', 0, { updates: 'git' }) }),
+      ],
+      NOW,
+      t,
+    )
+    expect(rows.map(r => r.updates)).toEqual(['updates by git', 'updates from archive', null, null])
+    const ru = deviceRows(
+      [device('server-1', { status: status('server-1', 0, { updates: 'git' }) })],
+      NOW,
+      translator('ru'),
+    )
+    expect(ru[0]?.updates).toBe('обновляется через git')
+  })
+})
+
 describe('Update, on a node on another version (#590)', () => {
   afterEach(() => {
     restoreFetch()
@@ -625,6 +647,33 @@ describe('Update, on a node on another version (#590)', () => {
     })
     expect(failed('no-checkout')?.offer).toBe(false)
     expect(failed('teapot')?.text).toBe('The update failed: the device said teapot')
+    // a checkout the node does not move by itself, and a folder with a .git it keeps (#793): words, no button
+    expect(failed('git-dirty')).toEqual({
+      state: 'failed',
+      text: 'The update failed: its checkout has changes: commit or stash them there, or update it by hand',
+      offer: false,
+    })
+    for (const code of ['git-ahead', 'git-diverged', 'git-locks', 'kept-old']) expect(failed(code)?.offer).toBe(false)
+    for (const code of ['git', 'git-fetch', 'git-commit']) {
+      expect(failed(code)?.offer).toBe(true)
+      expect(failed(code)?.text).not.toContain('the device said')
+    }
+    for (const code of [
+      'git',
+      'git-dirty',
+      'git-fetch',
+      'git-ahead',
+      'git-commit',
+      'git-diverged',
+      'git-locks',
+      'kept-old',
+    ])
+      expect(
+        updateLine(
+          device('s', { sameCommit: false, update: { state: 'failed', commit: 'b', error: code, at } }),
+          translator('ru'),
+        )?.text,
+      ).not.toContain('{')
     // offline: said, with no button; revoked: nothing; a node that knows no commit is behind
     const away = { state: 'offline' as const, since: NOW, heardAt: null }
     expect(updateLine(device('s', { sameCommit: false, link: away }), en)).toMatchObject({

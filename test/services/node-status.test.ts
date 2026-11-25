@@ -239,3 +239,18 @@ describe('Antigravity (Gemini) usage on a node (#647)', () => {
     expect(nodeStatusOf(JSON.parse(JSON.stringify(withAgy)))?.agyLimits).toEqual(reading)
   })
 })
+
+describe('how the node takes an update (#793)', () => {
+  test('said only when given: git or archive; the master keeps those two and drops anything else', async () => {
+    const without = await createNodeStatus(sources()).answer()
+    expect(without && 'updates' in without).toBe(false)
+    for (const how of ['git', 'archive'] as const) {
+      const s = await createNodeStatus(sources({ updates: () => how })).answer()
+      expect(s?.updates).toBe(how)
+      expect(nodeStatusOf(s)?.updates).toBe(how)
+    }
+    const odd = nodeStatusOf({ ...(without as object), updates: 'tarball' })
+    expect(odd && 'updates' in odd).toBe(false)
+    expect(nodeStatusOf(without)).toEqual(without as never)
+  })
+})

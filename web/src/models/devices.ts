@@ -269,6 +269,8 @@ export interface DeviceRow {
   /** Its version, and whether it runs this board's commit (null: not known). */
   version: string | null
   same: boolean | null
+  /** How it takes an update (#793), in words: by git or from an archive; null for this computer or a node that does not say. */
+  updates: string | null
   /** Another version, an update on its way or one that failed (#590), in words; `offer`: the Update button. */
   update: UpdateLine | null
   /** Each profile's bundle as the status has it. */
@@ -299,7 +301,19 @@ export interface UpdateLine {
 }
 
 /** Failures the button cannot mend: the row says to update by hand instead. */
-const BY_HAND: ReadonlySet<string> = new Set(['platform', 'no-checkout', 'restart', 'not-built', 'revoked'])
+const BY_HAND: ReadonlySet<string> = new Set([
+  'platform',
+  'no-checkout',
+  'restart',
+  'not-built',
+  'revoked',
+  // a checkout the node does not move by itself, or a folder with a .git it keeps (#793)
+  'git-dirty',
+  'git-ahead',
+  'git-diverged',
+  'git-locks',
+  'kept-old',
+])
 /** The codes the panel has words for; any other is quoted. */
 const UPDATE_CODES: ReadonlySet<string> = new Set([
   'offline',
@@ -323,6 +337,14 @@ const UPDATE_CODES: ReadonlySet<string> = new Set([
   'update',
   'loads',
   'node',
+  'git',
+  'git-dirty',
+  'git-fetch',
+  'git-ahead',
+  'git-commit',
+  'git-diverged',
+  'git-locks',
+  'kept-old',
 ])
 
 /**
@@ -464,6 +486,7 @@ export function deviceRows(
       memory,
       version: s?.version || null,
       same: here ? null : d.sameCommit,
+      updates: here || !s?.updates ? null : t(s.updates === 'git' ? 'node.dev.updatesGit' : 'node.dev.updatesArchive'),
       update: updateLine(d, t),
       bundles: (s?.profiles ?? []).flatMap(p =>
         p.bundle ? [t('node.dev.bundle', { profile: p.id, seq: p.bundle.seq })] : [],
