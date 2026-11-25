@@ -379,4 +379,34 @@ describe('the aggregate', () => {
     expect(agg.find('@server-1:pane-1')).toBeUndefined()
     agg.close()
   })
+
+  test('boardDevice omits pilotBridge when enabled by default or true, and includes pilotBridge: false when off (#738)', () => {
+    const cfg = {
+      nodes: {
+        id: 'laptop',
+        devices: {
+          'server-1': { link: { kind: 'direct', url: 'http://127.0.0.1:9' } },
+          'server-2': { pilotBridge: false, link: { kind: 'direct', url: 'http://127.0.0.1:8' } },
+        },
+      },
+    } as unknown as Config
+    const { api } = fakeLinks(cfg, [fakeLink('server-1'), fakeLink('server-2')])
+    const agg = createNodeAggregate({
+      links: api,
+      cfg,
+      log: () => {},
+      onChange: () => {},
+      store: createDeviceStore({ dir: mkdtempSync(join(tmpdir(), 'agg-')) }),
+      clock: manualClock(),
+      hostName: 'laptop',
+    })
+    const devs = agg.part()?.devices ?? []
+    const s1 = devs.find(d => d.id === 'server-1')
+    const s2 = devs.find(d => d.id === 'server-2')
+    const loc = devs.find(d => d.id === 'local')
+    expect(s1 && 'pilotBridge' in s1).toBe(false)
+    expect(loc && 'pilotBridge' in loc).toBe(false)
+    expect(s2?.pilotBridge).toBe(false)
+    agg.close()
+  })
 })

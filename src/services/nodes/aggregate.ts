@@ -100,7 +100,7 @@ function boardDevice(
     paused: device?.paused ?? false,
     drain: device?.drain ?? false,
     ...(device?.giveSecrets === false && { giveSecrets: false as const }),
-    ...(device?.pilotBridge === true && { pilotBridge: true as const }),
+    ...(device?.pilotBridge === false && { pilotBridge: false as const }),
     maxSessions: device?.maxSessions ?? null,
     minFreeMemMb: device?.minFreeMemMb ?? null,
     maxLoad: device?.maxLoad ?? null,

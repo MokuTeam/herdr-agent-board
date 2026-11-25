@@ -508,26 +508,26 @@ describe('nodeConfig', () => {
       assert.equal(nodeConfig(raw), null, JSON.stringify(raw))
       assert.deepEqual(nodeProblems(raw), [problem], JSON.stringify(raw))
     }
-    assert.equal(nodeConfig({ id: 's', pilotBridge: false })?.pilotBridge, undefined)
-    assert.equal(nodeConfig({ id: 's', pilotBridge: true })?.pilotBridge, true)
+    assert.equal(nodeConfig({ id: 's' })?.pilotBridge, undefined)
+    assert.equal(nodeConfig({ id: 's', pilotBridge: true })?.pilotBridge, undefined)
+    assert.equal(nodeConfig({ id: 's', pilotBridge: false })?.pilotBridge, false)
   })
 })
 
-describe('configuredNodeAddresses (#730)', () => {
-  test('only includes routable non-private addresses of non-revoked pilotBridge-opted-in devices', () => {
+describe('configuredNodeAddresses (#730, #738)', () => {
+  test('includes routable non-private addresses of non-revoked nodes unless pilotBridge is false', () => {
     const c = conf({
       devices: {
-        'tailnet-opted': { pilotBridge: true, link: { kind: 'tailnet', address: '100.64.0.12', port: 12430 } },
-        'tailnet-unopted': { link: { kind: 'tailnet', address: '100.64.0.13', port: 12430 } },
+        'tailnet-default': { link: { kind: 'tailnet', address: '100.64.0.12', port: 12430 } },
+        'tailnet-optout': { pilotBridge: false, link: { kind: 'tailnet', address: '100.64.0.13', port: 12430 } },
         'tailnet-revoked': {
-          pilotBridge: true,
           revoked: true,
           link: { kind: 'tailnet', address: '100.64.0.14', port: 12430 },
         },
-        'lan-ssh': { pilotBridge: true, link: { kind: 'ssh', host: '192.168.1.50', user: 'anna' } },
-        'pub-ssh': { pilotBridge: true, link: { kind: 'ssh', host: '203.0.113.10', user: 'anna' } },
-        'direct-loopback': { pilotBridge: true, link: { kind: 'direct', url: 'http://127.0.0.1:45001' } },
-        'direct-https': { pilotBridge: true, link: { kind: 'direct', url: 'https://100.64.0.15:12430' } },
+        'lan-ssh': { link: { kind: 'ssh', host: '192.168.1.50', user: 'anna' } },
+        'pub-ssh': { link: { kind: 'ssh', host: '203.0.113.10', user: 'anna' } },
+        'direct-loopback': { link: { kind: 'direct', url: 'http://127.0.0.1:45001' } },
+        'direct-https': { link: { kind: 'direct', url: 'https://100.64.0.15:12430' } },
       },
     })
     assert.deepEqual(configuredNodeAddresses(c), ['100.64.0.12', '203.0.113.10', '100.64.0.15'])

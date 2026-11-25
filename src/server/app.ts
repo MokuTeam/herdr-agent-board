@@ -1626,11 +1626,14 @@ export async function startServer({
     if (!conf || !nodeLinks?.on()) return []
     const out = [...configuredNodeAddresses(conf)]
     for (const dev of nodeLinks.view().devices) {
+      const cfgDev = conf.devices[dev.id]
       if (
+        !cfgDev ||
+        cfgDev.revoked ||
         dev.revoked ||
         dev.link?.state !== 'online' ||
         !dev.status?.addresses ||
-        conf.devices[dev.id]?.pilotBridge !== true
+        cfgDev.pilotBridge === false
       )
         continue
       for (const addr of dev.status.addresses) {

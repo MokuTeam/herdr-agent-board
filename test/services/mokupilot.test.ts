@@ -491,7 +491,7 @@ test('under auto at this computer without MokuPilot: the error says it is not in
   useLanguage('en')
 })
 
-test('link mode with non-inherited profile only bypasses refusal for registered node viewers (#700)', async () => {
+test('link mode with non-inherited profile only bypasses refusal for registered node viewers (#700, #738)', async () => {
   const DEFAULT = { id: 'default', title: 'Default', dir: '/home/u/.claude', color: 'indigo', hidden: false }
   const WORK = { id: 'work', title: 'Work', dir: '/home/u/.claude-work', color: 'teal', hidden: false }
   const SET = profileSet([DEFAULT, WORK], DEFAULT.dir)
@@ -502,11 +502,13 @@ test('link mode with non-inherited profile only bypasses refusal for registered 
     nodes: {
       id: 'laptop',
       devices: {
-        'server-1': { pilotBridge: true, link: { kind: 'tailnet' as const, address: '100.64.0.12', port: 12430 } },
-        'server-unopted': { link: { kind: 'tailnet' as const, address: '100.64.0.13', port: 12430 } },
-        'server-lan': { pilotBridge: true, link: { kind: 'tailnet' as const, address: '192.168.1.50', port: 12430 } },
+        'server-1': { link: { kind: 'tailnet' as const, address: '100.64.0.12', port: 12430 } },
+        'server-optout': {
+          pilotBridge: false,
+          link: { kind: 'tailnet' as const, address: '100.64.0.13', port: 12430 },
+        },
+        'server-lan': { link: { kind: 'tailnet' as const, address: '192.168.1.50', port: 12430 } },
         'server-old': {
-          pilotBridge: true,
           revoked: true,
           link: { kind: 'tailnet' as const, address: '100.64.0.99', port: 12430 },
         },
@@ -525,7 +527,7 @@ test('link mode with non-inherited profile only bypasses refusal for registered 
   assert.equal(plain.ok, false)
   assert.match(plain.ok ? '' : plain.error, /wrong account/)
 
-  // Even WITH `nodes`, an unregistered viewer, non-opted-in node, private LAN IP, or revoked node is refused.
+  // Even WITH `nodes`, an unregistered viewer, pilotBridge: false node, private LAN IP, or revoked node is refused.
   for (const viewer of [
     phone.viewer,
     { peer: '100.64.0.7', forwardedFor: null },

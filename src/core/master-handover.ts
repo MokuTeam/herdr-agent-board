@@ -422,9 +422,10 @@ export function parseReverseLinkSpec(o: {
 const pickDeviceLimits = (raw: Record<string, unknown> | undefined): Record<string, unknown> => {
   const out: Record<string, unknown> = {}
   if (!raw) return out
-  for (const key of ['title', 'maxSessions', 'minFreeMemMb', 'maxLoad', 'tags', 'drain', 'pilotBridge'] as const) {
+  for (const key of ['title', 'maxSessions', 'minFreeMemMb', 'maxLoad', 'tags', 'drain'] as const) {
     if (raw[key] !== undefined) out[key] = structuredClone(raw[key])
   }
+  if (raw.pilotBridge === false) out.pilotBridge = false
   return out
 }
 
@@ -583,6 +584,13 @@ export function buildOldMasterNodeConfig(
   },
 ): Record<string, unknown> {
   const next: Record<string, unknown> = structuredClone(oldConfigRaw)
+  const oldLocal =
+    isObj(oldConfigRaw.nodes) && isObj(oldConfigRaw.nodes.devices) && isObj(oldConfigRaw.nodes.devices[LOCAL])
+      ? oldConfigRaw.nodes.devices[LOCAL]
+      : null
+  const oldNode = isObj(oldConfigRaw.node) ? oldConfigRaw.node : null
+  const bridgeOff =
+    typeof oldLocal?.pilotBridge === 'boolean' ? oldLocal.pilotBridge === false : oldNode?.pilotBridge === false
   const node: Record<string, unknown> = {
     id: opts.nodeConfig.id,
     port: opts.nodeConfig.port,
@@ -590,6 +598,7 @@ export function buildOldMasterNodeConfig(
     ...(opts.nodeConfig.listen !== undefined && { listen: opts.nodeConfig.listen }),
     ...(opts.nodeConfig.tls && { tls: true }),
     ...(opts.nodeConfig.relay && { relay: structuredClone(opts.nodeConfig.relay) }),
+    ...(bridgeOff && { pilotBridge: false }),
   }
   next.node = node
   if (!opts.keepNodesFrozen) {

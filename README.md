@@ -4783,8 +4783,9 @@ and its first arguments, one per element, no shell, the board adding `call --cla
 `"auto"`, `"local"` or `"link"`, where a call starts, set by Settings → MokuPilot…, the older
 `"link": true` read as `"link"`).
 
-MokuPilot node bridge (off by default; no UI toggle yet): set `node.pilotBridge: true` in the
-node's `config.json` and `nodes.devices.<id>.pilotBridge: true` (or `nodes.devices.local.pilotBridge: true`) on the master.
+MokuPilot node bridge (on by default for paired devices and `local`; no UI toggle yet): set
+`node.pilotBridge: false` in the node's `config.json` or `nodes.devices.<id>.pilotBridge: false`
+(or `nodes.devices.local.pilotBridge: false`) on the master to turn it off.
 
 `tunnel` (the board [through your own domain](#another-computer-or-a-tablet-through-your-own-domain);
 Settings → Remote access… and `board tunnel on|off` set it): `on` (false), `host` (the server),

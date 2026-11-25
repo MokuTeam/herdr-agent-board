@@ -170,15 +170,19 @@ describe('giveSecrets (#604)', () => {
   })
 })
 
-describe('pilotBridge (#730)', () => {
+describe('pilotBridge (#730, #738)', () => {
   const devices = (nodes: Record<string, unknown>) => nodes.devices as Record<string, Record<string, unknown>>
 
-  test('absent or false is off; true is on; non-boolean is flagged', () => {
-    const off = nodesConfig(section(), 'laptop')
-    expect(off?.devices['server-1'] && 'pilotBridge' in off.devices['server-1']).toBe(false)
-    const on = section()
-    devices(on)['server-1'] = { ...devices(on)['server-1'], pilotBridge: true }
-    expect(nodesConfig(on, 'laptop')?.devices['server-1']?.pilotBridge).toBe(true)
+  test('absent or true is on (key omitted); false turns it off; non-boolean is flagged', () => {
+    const on = nodesConfig(section(), 'laptop')
+    expect(on?.devices['server-1'] && 'pilotBridge' in on.devices['server-1']).toBe(false)
+    const explicitOn = section()
+    devices(explicitOn)['server-1'] = { ...devices(explicitOn)['server-1'], pilotBridge: true }
+    const explicitCfg = nodesConfig(explicitOn, 'laptop')
+    expect(explicitCfg?.devices['server-1'] && 'pilotBridge' in explicitCfg.devices['server-1']).toBe(false)
+    const off = section()
+    devices(off)['server-1'] = { ...devices(off)['server-1'], pilotBridge: false }
+    expect(nodesConfig(off, 'laptop')?.devices['server-1']?.pilotBridge).toBe(false)
     const bad = section()
     devices(bad)['server-1'] = { ...devices(bad)['server-1'], pilotBridge: 'yes' }
     const cfg = nodesConfig(bad, 'laptop')
@@ -186,12 +190,12 @@ describe('pilotBridge (#730)', () => {
     expect(cfg?.problems).toContainEqual({ device: 'server-1', key: 'pilotBridge', why: 'type' })
   })
 
-  test('the switch works on remote nodes and local; false removes the key', () => {
+  test('the switch works on remote nodes and local; true removes the key', () => {
     for (const id of ['server-1', 'local']) {
-      const { r, nodes } = applied({ op: 'set', id, pilotBridge: true })
+      const { r, nodes } = applied({ op: 'set', id, pilotBridge: false })
       expect(r).toEqual({ changed: true })
-      expect(devices(nodes)[id]?.pilotBridge).toBe(true)
-      const back = applyNodesEdit(nodes, read({ op: 'set', id, pilotBridge: false }))
+      expect(devices(nodes)[id]?.pilotBridge).toBe(false)
+      const back = applyNodesEdit(nodes, read({ op: 'set', id, pilotBridge: true }))
       expect(back).toEqual({ changed: true })
       expect('pilotBridge' in (devices(nodes)[id] ?? {})).toBe(false)
     }

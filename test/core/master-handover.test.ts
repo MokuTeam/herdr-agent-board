@@ -286,10 +286,74 @@ describe('core/master-handover (#697)', () => {
       tls: true,
       relay: { host: 'relay.example.com', sshPort: 22, user: 'agent-board-relay-n', socket: 'laptop' },
     })
+
+    const committedOptOut = buildOldMasterNodeConfig(
+      {
+        ...oldCfg,
+        nodes: { ...oldNodes, devices: { ...oldNodes.devices, local: { title: 'Laptop', pilotBridge: false } } },
+      },
+      {
+        nodeConfig: {
+          id: 'laptop',
+          port: 12430,
+          tls: true,
+          relay: buildOldMasterRelayNodeConfig(oldNodes.relay, 'laptop'),
+        },
+        keepNodesFrozen: false,
+      },
+    )
+    expect((committedOptOut.node as Record<string, unknown>).pilotBridge).toBe(false)
   })
 
-  test('flipNodesConfig carries pilotBridge between target device, local, and old master (#730)', () => {
-    const withTargetEnabled = flipNodesConfig(
+  test('flipNodesConfig carries pilotBridge: false between target device, local, and old master (#730, #738)', () => {
+    const withBothDisabled = flipNodesConfig(
+      {
+        id: 'laptop',
+        order: ['local', 'server-1'],
+        devices: {
+          local: { title: 'Laptop', pilotBridge: false },
+          'server-1': {
+            title: 'Server 1',
+            pilotBridge: false,
+            link: { kind: 'direct', url: 'http://127.0.0.1:12430' },
+          },
+        },
+      },
+      {
+        oldMasterId: 'laptop',
+        targetId: 'server-1',
+        reverseLink: { kind: 'direct', url: 'http://127.0.0.1:12431' },
+      },
+    )
+    expect((withBothDisabled.devices as Record<string, Record<string, unknown>>).local?.pilotBridge).toBe(false)
+    expect((withBothDisabled.devices as Record<string, Record<string, unknown>>).laptop?.pilotBridge).toBe(false)
+
+    const withDefaultEnabled = flipNodesConfig(
+      {
+        id: 'laptop',
+        order: ['local', 'server-1'],
+        devices: {
+          local: { title: 'Laptop' },
+          'server-1': {
+            title: 'Server 1',
+            link: { kind: 'direct', url: 'http://127.0.0.1:12430' },
+          },
+        },
+      },
+      {
+        oldMasterId: 'laptop',
+        targetId: 'server-1',
+        reverseLink: { kind: 'direct', url: 'http://127.0.0.1:12431' },
+      },
+    )
+    expect('pilotBridge' in ((withDefaultEnabled.devices as Record<string, Record<string, unknown>>).local ?? {})).toBe(
+      false,
+    )
+    expect(
+      'pilotBridge' in ((withDefaultEnabled.devices as Record<string, Record<string, unknown>>).laptop ?? {}),
+    ).toBe(false)
+
+    const withExplicitTrue = flipNodesConfig(
       {
         id: 'laptop',
         order: ['local', 'server-1'],
@@ -308,33 +372,12 @@ describe('core/master-handover (#697)', () => {
         reverseLink: { kind: 'direct', url: 'http://127.0.0.1:12431' },
       },
     )
-    expect((withTargetEnabled.devices as Record<string, Record<string, unknown>>).local?.pilotBridge).toBe(true)
-    expect((withTargetEnabled.devices as Record<string, Record<string, unknown>>).laptop?.pilotBridge).toBe(true)
-
-    const withNeitherEnabled = flipNodesConfig(
-      {
-        id: 'laptop',
-        order: ['local', 'server-1'],
-        devices: {
-          local: { title: 'Laptop' },
-          'server-1': {
-            title: 'Server 1',
-            link: { kind: 'direct', url: 'http://127.0.0.1:12430' },
-          },
-        },
-      },
-      {
-        oldMasterId: 'laptop',
-        targetId: 'server-1',
-        reverseLink: { kind: 'direct', url: 'http://127.0.0.1:12431' },
-      },
-    )
-    expect('pilotBridge' in ((withNeitherEnabled.devices as Record<string, Record<string, unknown>>).local ?? {})).toBe(
+    expect('pilotBridge' in ((withExplicitTrue.devices as Record<string, Record<string, unknown>>).local ?? {})).toBe(
       false,
     )
-    expect(
-      'pilotBridge' in ((withNeitherEnabled.devices as Record<string, Record<string, unknown>>).laptop ?? {}),
-    ).toBe(false)
+    expect('pilotBridge' in ((withExplicitTrue.devices as Record<string, Record<string, unknown>>).laptop ?? {})).toBe(
+      false,
+    )
   })
 
   test('parseMasterCliArgs and formatters handle handover, dry-run, rollback, and status', () => {

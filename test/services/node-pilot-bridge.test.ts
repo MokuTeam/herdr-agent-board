@@ -63,7 +63,7 @@ function makeBridge(over: Partial<Parameters<typeof createNodePilotBridge>[0]> =
     closeAll: () => {},
   }
   const bridge = createNodePilotBridge({
-    cfg: { node: { id: 'server-1', port: 12430, workRoot: dir, pilotBridge: true } } as Config,
+    cfg: { node: { id: 'server-1', port: 12430, workRoot: dir } } as Config,
     port: () => 12422,
     localPilotCall,
     items: () => [],
@@ -228,7 +228,7 @@ describe('NodePilotBridge reconnect, back-pressure, and timeouts (#729)', () => 
           nodes: {
             id: 'laptop',
             devices: {
-              'server-1': { pilotBridge: true, link: { kind: 'direct', url: 'http://127.0.0.1:12430' } },
+              'server-1': { link: { kind: 'direct', url: 'http://127.0.0.1:12430' } },
             },
           },
         } as Config,
@@ -463,9 +463,8 @@ describe('NodePilotCalls security isolation & viewer check (#729)', () => {
         nodes: {
           id: 'laptop',
           devices: {
-            local: { pilotBridge: true },
-            'server-1': { pilotBridge: true, link: { kind: 'tailnet', address: '100.64.0.11', port: 12430 } },
-            'server-2': { pilotBridge: true, link: { kind: 'tailnet', address: '100.64.0.12', port: 12430 } },
+            'server-1': { link: { kind: 'tailnet', address: '100.64.0.11', port: 12430 } },
+            'server-2': { link: { kind: 'tailnet', address: '100.64.0.12', port: 12430 } },
           },
         },
       } as Config,
@@ -547,7 +546,7 @@ describe('NodePilotCalls security isolation & viewer check (#729)', () => {
         nodes: {
           id: 'laptop',
           devices: {
-            'server-1': { pilotBridge: true, link: { kind: 'tailnet', address: '100.64.0.12', port: 12430 } },
+            'server-1': { link: { kind: 'tailnet', address: '100.64.0.12', port: 12430 } },
           },
         },
       } as unknown as Config,
@@ -583,15 +582,30 @@ describe('NodePilotCalls security isolation & viewer check (#729)', () => {
   })
 })
 
-describe('MokuPilot bridge caps, opt-in, stdin order, and stream safety (#730)', () => {
-  test('NodePilotBridge refuses /open, /sessions, and /pilot-bridge SSE when node.pilotBridge is not opted in', async () => {
+describe('MokuPilot bridge caps, opt-out, stdin order, and stream safety (#730, #738)', () => {
+  test('NodePilotBridge is on by default for node, and refuses /open, /sessions, and /pilot-bridge SSE when pilotBridge: false or node missing', async () => {
     const dir = scratchDir()
-    const bridge = makeBridge({
+    const defaultBridge = makeBridge({
       cfg: { node: { id: 'server-1', port: 12430, workRoot: dir } } as Config,
     })
-    expect((await bridge.open({ session: SID_MASTER })).status).toBe(403)
-    expect((await bridge.sessions()).status).toBe(403)
-    expect(bridge.stream(new Request('http://127.0.0.1/api/node/pilot-bridge')).status).toBe(404)
+    expect((await defaultBridge.open({ session: SID_MASTER })).status).toBe(503)
+    expect((await defaultBridge.sessions()).status).toBe(200)
+    expect(defaultBridge.stream(new Request('http://127.0.0.1/api/node/pilot-bridge')).status).toBe(200)
+
+    const optedOut = makeBridge({
+      cfg: { node: { id: 'server-1', port: 12430, workRoot: dir, pilotBridge: false } } as Config,
+    })
+    const openOff = await optedOut.open({ session: SID_MASTER })
+    expect(openOff.status).toBe(403)
+    const openOffBody = (await openOff.json()) as { error: string }
+    expect(openOffBody.error).not.toContain('config.json')
+    expect((await optedOut.sessions()).status).toBe(403)
+    expect(optedOut.stream(new Request('http://127.0.0.1/api/node/pilot-bridge')).status).toBe(404)
+
+    const noNode = makeBridge({ cfg: {} as Config })
+    expect((await noNode.open({ session: SID_MASTER })).status).toBe(403)
+    expect((await noNode.sessions()).status).toBe(403)
+    expect(noNode.stream(new Request('http://127.0.0.1/api/node/pilot-bridge')).status).toBe(404)
   })
 
   test('NodePilotBridge.streamChunk rejects newline-injected event data with 400', async () => {
@@ -640,7 +654,7 @@ describe('MokuPilot bridge caps, opt-in, stdin order, and stream safety (#730)',
     expect(text).not.toContain('event: exit')
   })
 
-  test('NodePilotCalls enforces pilotBridge opt-in and per-node grant caps, and allowsCallParent tracks active/recent grants', async () => {
+  test('NodePilotCalls enables bridge by default, enforces pilotBridge: false opt-out and per-node grant caps, and allowsCallParent tracks active/recent grants', async () => {
     const dir = scratchDir()
     const masterItem = makeItem({ key: SID_MASTER, session: SID_MASTER, cwd: join(dir, 'anna-master') })
     const localCall: NodePilotCall = {
@@ -658,8 +672,8 @@ describe('MokuPilot bridge caps, opt-in, stdin order, and stream safety (#730)',
       nodes: {
         id: 'laptop',
         devices: {
-          'server-1': { pilotBridge: true, link: { kind: 'tailnet', address: '100.64.0.11', port: 12430 } },
-          'server-2': { link: { kind: 'tailnet', address: '100.64.0.12', port: 12430 } },
+          'server-1': { link: { kind: 'tailnet', address: '100.64.0.11', port: 12430 } },
+          'server-2': { pilotBridge: false, link: { kind: 'tailnet', address: '100.64.0.12', port: 12430 } },
         },
       },
     } as Config
@@ -676,16 +690,18 @@ describe('MokuPilot bridge caps, opt-in, stdin order, and stream safety (#730)',
     })
     onTestFinished(() => calls.close())
 
-    // Master local /open and /sessions are off unless nodes.devices.local.pilotBridge is true.
-    expect((await calls.openLocal({ session: SID_MASTER })).status).toBe(403)
-    expect(calls.sessionsLocal().status).toBe(403)
+    // Master local /open and /sessions are on by default when nodes is configured.
+    expect(calls.bridgeEnabled('local')).toBe(true)
+    expect((await calls.openLocal({ session: SID_MASTER })).status).toBe(200)
+    expect(calls.sessionsLocal().status).toBe(200)
 
-    // Non-opted-in server-2 is rejected with 403.
+    // Opted-out server-2 is rejected with 403.
     expect((await calls.openForNode('server-2', { session: SID_MASTER })).status).toBe(403)
     expect(calls.bridgeEnabled('server-2')).toBe(false)
     expect(calls.allowsCallParent('server-2', SID_MASTER)).toBe(false)
 
-    // Opted-in server-1 can open up to maxGrantsPerNode (2); 3rd gets 429.
+    // Default-enabled server-1 can open up to maxGrantsPerNode (2); 3rd gets 429.
+    expect(calls.bridgeEnabled('server-1')).toBe(true)
     const g1 = await calls.openForNode('server-1', { session: SID_MASTER })
     const g2 = await calls.openForNode('server-1', { session: SID_MASTER })
     expect(g1.status).toBe(200)
@@ -707,6 +723,31 @@ describe('MokuPilot bridge caps, opt-in, stdin order, and stream safety (#730)',
     calls.revokeForNode('server-1')
     expect(calls.allowsCallParent('server-1', SID_MASTER)).toBe(false)
     expect(calls.authorizeForNode('server-1', (g3.body as { grantId: string }).grantId)).toBeNull()
+
+    // Explicit local pilotBridge: false turns off local /open and /sessions; missing nodes leaves all off.
+    const localOffCalls = createNodePilotCalls({
+      cfg: { nodes: { id: 'laptop', devices: { local: { pilotBridge: false } } } } as Config,
+      links: { link: () => null, onChange: () => () => {} },
+      port: () => 12422,
+      log: () => {},
+      localPilotCall: localCall,
+      ownItems: () => [masterItem],
+      masterId: () => 'laptop',
+    })
+    onTestFinished(() => localOffCalls.close())
+    expect(localOffCalls.bridgeEnabled('local')).toBe(false)
+    expect((await localOffCalls.openLocal({ session: SID_MASTER })).status).toBe(403)
+    expect(localOffCalls.sessionsLocal().status).toBe(403)
+
+    const plainCalls = createNodePilotCalls({
+      cfg: {} as Config,
+      links: { link: () => null, onChange: () => () => {} },
+      port: () => 12422,
+      log: () => {},
+    })
+    onTestFinished(() => plainCalls.close())
+    expect(plainCalls.bridgeEnabled('local')).toBe(false)
+    expect(plainCalls.bridgeEnabled('server-1')).toBe(false)
   })
 
   test('PilotBridgeRunner enforces per-device dispatch, hasBody, and stream caps and orders stdin per run', async () => {
@@ -750,9 +791,9 @@ describe('MokuPilot bridge caps, opt-in, stdin order, and stream safety (#730)',
         nodes: {
           id: 'laptop',
           devices: {
-            'server-1': { pilotBridge: true, link: { kind: 'tailnet', address: '100.64.0.11', port: 12430 } },
-            'server-2': { pilotBridge: true, link: { kind: 'tailnet', address: '100.64.0.12', port: 12430 } },
-            'server-off': { link: { kind: 'tailnet', address: '100.64.0.13', port: 12430 } },
+            'server-1': { link: { kind: 'tailnet', address: '100.64.0.11', port: 12430 } },
+            'server-2': { link: { kind: 'tailnet', address: '100.64.0.12', port: 12430 } },
+            'server-off': { pilotBridge: false, link: { kind: 'tailnet', address: '100.64.0.13', port: 12430 } },
           },
         },
       } as Config,

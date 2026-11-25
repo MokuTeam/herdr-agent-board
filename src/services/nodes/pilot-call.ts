@@ -60,7 +60,7 @@ export interface NodePilotCalls {
   openLocal(rawBody: unknown): Promise<Response>
   /** List callable sessions for MokuPilot running on the master itself (#700, #730). */
   sessionsLocal(): Response
-  /** Whether MokuPilot node bridge opt-in is enabled for `device` (`local` or a non-revoked node id, #730). */
+  /** Whether MokuPilot node bridge is enabled for `device` (`local` or a non-revoked node id, #730, #738). */
   bridgeEnabled(device: string): boolean
   /** Whether a node item may set `call.parent` to `parentKey` under an active/recent bridge grant (#730). */
   allowsCallParent(callingDevice: string, parentKey: string): boolean
@@ -185,7 +185,7 @@ export function createNodePilotCalls(deps: NodePilotCallsDeps): NodePilotCalls {
 
   function bridgeEnabled(device: string): boolean {
     const dev = nodesConfig(deps.cfg.nodes)?.devices[device]
-    return !!dev && !dev.revoked && dev.pilotBridge === true
+    return !!dev && !dev.revoked && dev.pilotBridge !== false
   }
 
   function grantsForNode(callingDevice: string): number {

@@ -56,10 +56,11 @@ export interface DeviceConfig {
    */
   giveSecrets?: false
   /**
-   * Whether this device is opted in to the MokuPilot node bridge (#730): `pilotBridge: true` enables
-   * `/open`, `/sessions`, the reverse bridge stream, and registered-node viewer link bypass. Off by default.
+   * Whether the MokuPilot node bridge is off for this device (#730, #738): `pilotBridge: false`
+   * turns off `/open`, `/sessions`, the reverse bridge stream, and registered-node viewer link
+   * bypass; absent, it is on. Only here when off.
    */
-  pilotBridge?: true
+  pilotBridge?: false
 }
 
 /**
@@ -96,8 +97,8 @@ export interface NodeConfig {
   listen: 'loopback' | 'tailnet'
   tls: boolean
   relay: { host: string; sshPort: number; user: string; socket: string } | null
-  /** Whether MokuPilot on this node may call sessions via its remote master (#730). Off by default. */
-  pilotBridge?: true
+  /** Whether MokuPilot on this node may call sessions via its remote master (#730, #738). `false` turns it off; absent, on. */
+  pilotBridge?: false
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -357,7 +358,7 @@ function deviceOf(
     mcp,
     accept: words('accept'),
     ...(o.giveSecrets === false && { giveSecrets: false as const }),
-    ...(o.pilotBridge === true && { pilotBridge: true as const }),
+    ...(o.pilotBridge === false && { pilotBridge: false as const }),
   }
   return ok ? device : null
 }
@@ -472,7 +473,7 @@ function readNode(raw: unknown): { config: NodeConfig | null; problems: NodesPro
       listen: (raw.listen as NodeConfig['listen'] | null | undefined) ?? 'loopback',
       tls: raw.tls === true,
       relay,
-      ...(raw.pilotBridge === true && { pilotBridge: true as const }),
+      ...(raw.pilotBridge === false && { pilotBridge: false as const }),
     },
     problems,
   }
@@ -675,8 +676,8 @@ export function nodeStatusOf(raw: unknown): NodeStatus | null {
 }
 
 /**
- * Routable non-private addresses configured for non-revoked, bridge-opted-in nodes in `nodes`
- * (`tailnet` address, `ssh` host, `direct` hostname). Relay links and non-opted-in nodes are omitted.
+ * Routable non-private addresses configured for non-revoked, bridge-enabled nodes in `nodes`
+ * (`tailnet` address, `ssh` host, `direct` hostname). Relay links and `pilotBridge: false` nodes are omitted.
  */
 export function configuredNodeAddresses(nodes: NodesConfig | null): string[] {
   if (!nodes) return []
@@ -689,7 +690,7 @@ export function configuredNodeAddresses(nodes: NodesConfig | null): string[] {
     out.push(addr)
   }
   for (const device of Object.values(nodes.devices)) {
-    if (device.revoked || !device.link || device.pilotBridge !== true) continue
+    if (device.revoked || !device.link || device.pilotBridge === false) continue
     if (device.link.kind === 'tailnet') push(device.link.address)
     else if (device.link.kind === 'ssh') push(device.link.host)
     else if (device.link.kind === 'direct') {
@@ -907,7 +908,7 @@ export function applyNodesEdit(
         if (trimmed === '' || trimmed === edit.id) delete entry.title
         else entry.title = trimmed
       } else if (key === 'giveSecrets' && v === true) delete entry[key]
-      else if (key === 'pilotBridge' && v === false) delete entry[key]
+      else if (key === 'pilotBridge' && v === true) delete entry[key]
       else entry[key] = v
     if (edit.id === LOCAL && Object.keys(entry).length === 0) {
       delete devices[LOCAL]

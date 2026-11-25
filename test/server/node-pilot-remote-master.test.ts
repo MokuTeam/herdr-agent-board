@@ -404,8 +404,8 @@ describe('MokuPilot with a master on another device (#700)', () => {
       masterCfg: {
         mokupilot: { mode: 'auto' },
       },
-      nodeCfg: id => (id === 'server-1' ? { node: { pilotBridge: true } } : {}),
-      deviceCfg: id => (id === 'server-1' ? { pilotBridge: true } : {}),
+      nodeCfg: id => (id === 'server-2' ? { node: { pilotBridge: false } } : {}),
+      deviceCfg: id => (id === 'server-2' ? { pilotBridge: false } : {}),
       masterEnv: { CLAUDE_BIN: fakeClaude },
       nodeEnv: () => ({ CLAUDE_BIN: fakeClaude }),
     })
@@ -494,26 +494,26 @@ describe('MokuPilot with a master on another device (#700)', () => {
       expect(parsedUrl.searchParams.get('cwd')).toBe(expectedCwd)
     }
 
-    // Opt-in enforcement (#730): master local and non-opted-in server-2 refuse /open and /sessions with 403.
+    // Default-on + opt-out enforcement (#730, #738):
+    // - Master local /open and /sessions work by default (no pilotBridge key needed).
+    // - server-2 with pilotBridge: false refuses /open and /sessions with 403 and no config.json hint.
     expect(
       (
         await fetch(`${pair.master.url}/api/mokupilot/node-call/open`, {
           method: 'POST',
           headers: { 'x-board': '1', 'content-type': 'application/json' },
-          body: JSON.stringify({ session: MASTER_SID }),
+          body: JSON.stringify({ session: MASTER_SID, cwd: masterCwd }),
         })
       ).status,
-    ).toBe(403)
-    expect((await fetch(`${pair.master.url}/api/mokupilot/node-call/sessions`)).status).toBe(403)
-    expect(
-      (
-        await fetch(`${server2.url}/api/mokupilot/node-call/open`, {
-          method: 'POST',
-          headers: { 'x-board': '1', 'content-type': 'application/json' },
-          body: JSON.stringify({ session: THIRD_SID }),
-        })
-      ).status,
-    ).toBe(403)
+    ).toBe(200)
+    expect((await fetch(`${pair.master.url}/api/mokupilot/node-call/sessions`)).status).toBe(200)
+    const server2OpenOff = await fetch(`${server2.url}/api/mokupilot/node-call/open`, {
+      method: 'POST',
+      headers: { 'x-board': '1', 'content-type': 'application/json' },
+      body: JSON.stringify({ session: THIRD_SID }),
+    })
+    expect(server2OpenOff.status).toBe(403)
+    expect(((await server2OpenOff.json()) as { error: string }).error).not.toContain('config.json')
     expect((await fetch(`${server2.url}/api/mokupilot/node-call/sessions`)).status).toBe(403)
 
     // 2. Node server-1's MokuPilot lists callable sessions across all devices.
@@ -835,5 +835,25 @@ describe('MokuPilot with a master on another device (#700)', () => {
       resolved: 'link',
       why: 'mode-link',
     })
+  })
+
+  test('master with nodes.devices.local.pilotBridge: false refuses local /open and /sessions with 403 (#738)', async () => {
+    const pair = await nodePair({
+      masterPanes: box => {
+        const cwd = join(box.dir, 'anna-local-off')
+        mkdirSync(cwd, { recursive: true })
+        writeTranscript(join(box.env.HOME ?? box.dir, '.claude'), cwd, MASTER_SID)
+        return [{ pane_id: 'p1', agent: 'claude', agent_session: { value: MASTER_SID }, agent_status: 'idle', cwd }]
+      },
+      nodesCfg: { devices: { local: { pilotBridge: false } } },
+    })
+    const openRes = await fetch(`${pair.master.url}/api/mokupilot/node-call/open`, {
+      method: 'POST',
+      headers: { 'x-board': '1', 'content-type': 'application/json' },
+      body: JSON.stringify({ session: MASTER_SID }),
+    })
+    expect(openRes.status).toBe(403)
+    expect(((await openRes.json()) as { error: string }).error).not.toContain('config.json')
+    expect((await fetch(`${pair.master.url}/api/mokupilot/node-call/sessions`)).status).toBe(403)
   })
 })

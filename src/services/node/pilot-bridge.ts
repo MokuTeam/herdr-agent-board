@@ -142,7 +142,10 @@ export function createNodePilotBridge(deps: NodePilotBridgeDeps): NodePilotBridg
   let ping: ReturnType<typeof setInterval> | null = null
   let closed = false
 
-  const enabled = (): boolean => nodeConfig(deps.cfg.node)?.pilotBridge === true
+  const enabled = (): boolean => {
+    const nc = nodeConfig(deps.cfg.node)
+    return nc !== null && nc.pilotBridge !== false
+  }
 
   function disconnectAll(): void {
     if (ping) {
