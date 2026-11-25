@@ -34,6 +34,7 @@ import {
   type DecisionsPayload,
   type DecisionView,
   type DefaultedView,
+  decisionAnswerOf,
   decisionsConfig,
   defaultLine,
   durationWords,
@@ -529,8 +530,10 @@ function settleLeftOvers(db: BoardDb, cards: ReadonlyMap<string, Card>, now: num
 
 /**
  * Node sessions' open decisions (#781) their node's card no longer carries (answered at the node,
- * withdrawn by `board doing`, replaced by a plain ask): withdrawn here, with this board's copy of
- * the card's ask, and their default taken back. A card the master does not see is left as it is.
+ * withdrawn by `board doing`, replaced by a plain ask): closed here, with this board's copy of the
+ * card's ask, and their default taken back. The owner's answer when the node's card notes it (#784:
+ * typed in the session's terminal), else withdrawn. A card the master does not see is left as it
+ * is, and so is one whose answer this board is typing in (the page's answer closes it).
  */
 export function settleNodeDecisions(
   db: BoardDb,
@@ -545,13 +548,18 @@ export function settleNodeDecisions(
     const cd = cardDecisionOf(card.decision)
     if (!cd || !card.ask) continue
     const askedAt = typeof card.askSince === 'number' ? card.askSince : 0
-    if (nodeDecisionState(byKey.get(key), cd.id, askedAt, now) !== 'gone') continue
+    const item = byKey.get(key)
+    if (nodeDecisionState(item, cd.id, askedAt, now) !== 'gone' || answeringOf(card, now)) continue
+    const typed = decisionAnswerOf(item?.decisionAnswer)
+    const owner = typed?.id === cd.id
     try {
       closeCardDecision(
         db,
         key,
-        { answer: null, answeredBy: 'withdrawn', via: 'cleared', at: now },
-        { id: cd.id, ask: true, schedule },
+        owner
+          ? { answer: typed.answer, answeredBy: 'owner', via: 'prompt', at: now }
+          : { answer: null, answeredBy: 'withdrawn', via: 'cleared', at: now },
+        { id: cd.id, ask: true, schedule, ...(owner && { by: 'owner' }) },
       )
     } catch {}
   }

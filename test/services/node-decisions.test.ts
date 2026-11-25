@@ -23,6 +23,7 @@ import {
   askDecision,
   decisionsPayload,
   defaultDue,
+  markAnswering,
   NODE_SETTLE_MS,
   nodeItemsDecisions,
   settleNodeDecisions,
@@ -277,6 +278,34 @@ describe('the node card is what keeps it open', () => {
     expect(readCard(DEV)?.ask).toBeUndefined()
     expect(readCard(DEV)?.decision).toBeUndefined()
     expect(listEntries()).toEqual([])
+  })
+
+  test("the owner's answer typed at the node (#784): recorded as the owner's; a note of another question is not", () => {
+    isolatedHome()
+    const settle = (item: Item) =>
+      withDecisionsDb(db =>
+        settleNodeDecisions(db, [item], new Map([[DEV, readCard(DEV) as never]]), NOW + NODE_SETTLE_MS * 2),
+      )
+    const r = askFor()
+    settle({ ...nodeItem(DEV), decisionAnswer: { id: r.id, answer: 'After review', at: NOW + 5000 } })
+    expect(row(r.id)).toMatchObject({ answer: 'After review', answeredBy: 'owner', via: 'prompt' })
+    expect(readCard(DEV)?.ask).toBeUndefined()
+    expect(readCard(DEV)?.decision).toBeUndefined()
+    expect(listEntries()).toEqual([])
+    // The card still notes the answer to the one before: this one is withdrawn, as without a note.
+    const next = askFor()
+    settle({ ...nodeItem(DEV), decisionAnswer: { id: r.id, answer: 'After review', at: NOW + 5000 } })
+    expect(row(next.id)).toMatchObject({ answer: null, answeredBy: 'withdrawn', via: 'cleared' })
+  })
+
+  test("left alone while this board types the page's answer in (#784): the answer's route closes it", () => {
+    isolatedHome()
+    const r = askFor()
+    const now = NOW + NODE_SETTLE_MS * 2
+    expect(markAnswering(DEV, r.id, 'button', now)).toBe(true)
+    withDecisionsDb(db => settleNodeDecisions(db, [nodeItem(DEV)], new Map([[DEV, readCard(DEV) as never]]), now))
+    expect(row(r.id)?.answeredAt).toBeNull()
+    expect(cardDecisionOf(readCard(DEV)?.decision)?.id).toBe(r.id)
   })
 
   test("the master's page shows its own copy on the node's card, none once closed or while off; the queue has it", () => {

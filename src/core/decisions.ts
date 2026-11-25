@@ -251,6 +251,32 @@ export const masterHeld = (d: CardDecision): CardDecision => ({ ...d, master: tr
 export const heldByMaster = (raw: unknown): boolean =>
   typeof raw === 'object' && raw !== null && (raw as Record<string, unknown>).master === true
 
+/**
+ * The owner's own answer to a question its master holds (#784): a node's hook notes it on the card
+ * when the owner types it in the session's terminal, and the master, seeing the card without the
+ * question, records it as the owner's instead of withdrawn.
+ */
+export interface DecisionAnswer {
+  id: string
+  /** The prompt's first line, clipped (answerText). */
+  answer: string
+  at: number
+}
+
+/** What the node's hook notes for the master-held decision `raw` on the owner's prompt; null for any other prompt. */
+export function decisionAnswerFor(raw: unknown, prompt: unknown, now: number): DecisionAnswer | null {
+  const id = cardDecisionOf(raw)?.id
+  return id && ownerPrompt(prompt) ? { id, answer: answerText(prompt), at: now } : null
+}
+
+/** A noted answer as a card or a node's item carries it, or null. */
+export function decisionAnswerOf(raw: unknown): DecisionAnswer | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
+  const { id, answer, at } = raw as Record<string, unknown>
+  if (typeof id !== 'string' || !id || id.length > 64 || typeof answer !== 'string' || answer.length > 500) return null
+  return typeof at === 'number' && Number.isFinite(at) ? { id, answer, at } : null
+}
+
 /** A card's decision as kept, when it reads as one. */
 export function cardDecisionOf(raw: unknown): CardDecision | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null

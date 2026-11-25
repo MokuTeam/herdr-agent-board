@@ -71,6 +71,8 @@ export interface BoardState {
   payload(): string
   /** The latest payload's master-run parts, for a node's page (#780, GET /api/board-slices over the relay). */
   slices(): BoardSlices
+  /** The latest payload's decisions (#487), for a node's page (#784, cut to its sessions); null while off. */
+  decisions(): DecisionsPayload | null
   items(): Item[]
   observation(): BoardObservation | null
   find(key: string): Item | undefined
@@ -163,6 +165,17 @@ interface Options {
    * gave them (#780); null elsewhere. They stand for the node's own, which its config.json no longer has.
    */
   masterSlices?: () => Partial<BoardPayload> | null
+  /**
+   * A node's decisions as its master holds them (#784, core/node-decisions.ts withMasterDecisions):
+   * its own cards' and its queue; null elsewhere, and on a node before its master gave them.
+   */
+  masterDecisions?: () => MasterDecisions | null
+}
+
+/** What masterDecisions gives: this board's own cards, and its queue, with the master's decisions. */
+export interface MasterDecisions {
+  items<T extends Pick<Item, 'key' | 'decision'>>(list: readonly T[]): T[]
+  queue(own: DecisionsPayload | null): DecisionsPayload | null
 }
 
 // The colors the category editor offers (aliases left out).
@@ -257,6 +270,8 @@ function calendarOf(calendar: Options['calendar']): { calendar?: CalendarPayload
   return line ? { calendar: line } : {}
 }
 
+const queueOf = (line: DecisionsPayload | null): { decisions?: DecisionsPayload } => (line ? { decisions: line } : {})
+
 function decisionsOf(decisions: Options['decisions'], items: readonly Item[]): { decisions?: DecisionsPayload } {
   const line = decisions?.(items) ?? null
   return line ? { decisions: line } : {}
@@ -322,6 +337,7 @@ export function createBoardState({
   nodeMaster,
   masterFlags,
   masterSlices,
+  masterDecisions,
 }: Options): BoardState {
   const { cfg, log } = deps
   /** Nodes' cards as this board shows their decisions (#781); as they came without the option. */
@@ -380,9 +396,12 @@ export function createBoardState({
     // process and its pipe.
     // Tasks (#202) only while config.json turns them on: off, the page sees none.
     const todos = todosConfig(cfg.todos)
-    const list = items.map(({ transcript, claudeRoot, alive, since, pipe, apiError, todos: own, ...rest }) =>
+    const mine = items.map(({ transcript, claudeRoot, alive, since, pipe, apiError, todos: own, ...rest }) =>
       launches.decorate(todos && own ? { ...rest, todos: own } : rest),
     )
+    // A node's own cards show its questions with options as its master holds them (#784).
+    const fromMaster = masterDecisions?.() ?? null
+    const list = fromMaster ? fromMaster.items(mine) : mine
     // Another device's cards carry their tasks only while this board's config turns them on, as its own.
     const theirs = nodeDecisions(
       others?.items.map(({ todos: own, ...rest }) => (todos && own ? { ...rest, todos: own } : rest)),
@@ -515,7 +534,10 @@ export function createBoardState({
       ...journalOf(journal),
       // decisions: only while config.json turns them on (#487)
       // A node's sessions' too (#781): their questions with options are this board's.
-      ...decisionsOf(decisions, others?.items.length ? [...items, ...others.items] : items),
+      // On a node, the queue as its master holds it (#784).
+      ...(fromMaster
+        ? queueOf(fromMaster.queue(decisionsOf(decisions, items).decisions ?? null))
+        : decisionsOf(decisions, others?.items.length ? [...items, ...others.items] : items)),
       ...(workdeskLine && { workdesk: workdeskLine }),
       ...(dialogLine && { workdeskDialog: dialogLine }),
       // accessRev: the panel's cue to fetch the Remote access view again (never the view itself).
@@ -550,11 +572,13 @@ export function createBoardState({
   // changed (stale included): a refresh time that moves every few seconds alone is no news.
   let sent = ''
   let lastSlices: BoardSlices = {}
+  let lastDecisions: DecisionsPayload | null = null
   function publish(): void {
     // Turned off in config.json: no pane stays on show.
     if (!terminalOn(cfg)) terminals?.stopAll()
     const next = board()
     lastSlices = slicesOf(next)
+    lastDecisions = next.decisions ?? null
     const key = JSON.stringify(next)
     payload = JSON.stringify({ ...next, lastSuccessfulRefreshAt })
     if (key === sent) return
@@ -702,6 +726,7 @@ export function createBoardState({
   return {
     payload: () => payload,
     slices: () => lastSlices,
+    decisions: () => lastDecisions,
     items: () => items,
     observation: () => (lastSuccessfulRefreshAt && !isStale() ? { items, observedAt: lastSuccessfulRefreshAt } : null),
     find: key => items.find(i => i.key === key),

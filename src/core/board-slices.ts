@@ -3,8 +3,10 @@
 // count, and the master's devices. The master gives them over the relay (GET /api/board-slices,
 // core/master-relay.ts); the node keeps the last ones and puts them in its own payload, whose
 // config.json no longer has these features (the handover took them out). No I/O.
+import type { DecisionsPayload } from './decisions.ts'
 import { deviceMarkerOf } from './device-marker.ts'
 import { BOARD_SLICE_KEYS } from './master-relay.ts'
+import { decisionsForNode, decisionsSliceOf } from './node-decisions.ts'
 import type { BoardDevice, BoardPayload } from './payload.ts'
 
 /** What devicesForNode reads of a device row: the payload's and GET /api/nodes' rows both have it. */
@@ -18,7 +20,13 @@ export type BoardSlices = Partial<
     BoardPayload,
     (typeof BOARD_SLICE_KEYS)[number] | (typeof BOARD_SLICE_TEAM_KEYS)[number] | 'devices' | 'deviceMarker'
   >
->
+> & {
+  /**
+   * The master's queue and what went by default for the asking node's sessions only, their keys as
+   * the node names them (#784, core/node-decisions.ts): only in the answer to a node (withNodeDecisions).
+   */
+  decisions?: DecisionsPayload
+}
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
@@ -40,7 +48,22 @@ export function slicesOf(payload: Partial<BoardPayload> | null): BoardSlices {
 /** The parts as a master's answer carries them, or null when it is not an answer of that kind. */
 export function boardSlicesOf(raw: unknown): BoardSlices | null {
   if (!isObject(raw) || raw.ok !== true || !isObject(raw.slices)) return null
-  return slicesOf(raw.slices as Partial<BoardPayload>)
+  const out = slicesOf(raw.slices as Partial<BoardPayload>)
+  // A master since #784 gives the node's part of its decisions; an older one none (the node's own stay).
+  const decisions = raw.slices.decisions === undefined ? null : decisionsSliceOf(raw.slices.decisions)
+  return decisions ? { ...out, decisions } : out
+}
+
+/**
+ * The master's answer to node `device`'s GET /api/board-slices (#784): the parts, with its decisions
+ * (the latest payload's) cut to that node's sessions. A master with decisions off sends none.
+ */
+export function withNodeDecisions(
+  slices: BoardSlices,
+  decisions: DecisionsPayload | null,
+  device: string,
+): BoardSlices {
+  return decisions ? { ...slices, decisions: decisionsForNode(decisions, device) } : slices
 }
 
 /**
@@ -87,7 +110,8 @@ export function nodeSlicesView(
   slices: BoardSlices,
   o: { self: string; ownTeam: boolean; ownDevices: boolean; online: boolean },
 ): Partial<BoardPayload> {
-  const { devices, deviceMarker, teamRev, teamUnread, ...rest } = slices
+  // Decisions (#784) go with the node's own queue and cards (core/node-decisions.ts withMasterDecisions).
+  const { devices, deviceMarker, teamRev, teamUnread, decisions: _decisions, ...rest } = slices
   const out: Partial<BoardPayload> = { ...rest }
   if (!o.ownTeam) {
     if (teamRev !== undefined) out.teamRev = teamRev

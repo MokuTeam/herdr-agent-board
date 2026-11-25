@@ -63,7 +63,14 @@ const makeWith = nodes => now({ deps: defaultDeps({ ...cfg, nodes }), launches, 
 const boards = { main: make(main), now: make(now), off: make(now, { nodes: () => null }), master: make(now, { nodes: () => aggregate }),
   journaled: make(now, { nodes: () => aggregate, journal: journaled }),
   marked: makeWith({ marker: { style: 'stripe', position: 'top', size: 'large' } }),
-  markedDefault: makeWith({ marker: { style: 'corner' } }) }
+  markedDefault: makeWith({ marker: { style: 'corner' } }),
+  // A node whose master gave its decisions (#784): its own cards and queue as the stand-in gives them.
+  fromMaster: make(now, { masterDecisions: () => ({
+    items: list => list.map(i => (i.key === 'pane-1' ? { ...i, decision: { id: 'd1', options: ['a', 'b'], held: 0 } } : i)),
+    queue: own => ({ items: [], defaulted: [{ id: 'd0', key: 'pane-1', who: 'one', question: 'q', answer: 'a', at: 1 }], defaults: own === null }),
+  }) }),
+  noMaster: make(now, { masterDecisions: () => null }),
+  decided: make(now, { decisions: () => ({ items: [], defaulted: [], defaults: true }) }) }
 for (const b of Object.values(boards)) await b.refresh()
 await boards.journaled.refresh()
 journal.stop()
@@ -88,6 +95,9 @@ console.log(JSON.stringify({
   findAny: [m.findAny('pane-1')?.key ?? null, m.findAny('@server-1:pane-1')?.key ?? null, m.findAny('@server-2:pane-1')?.key ?? null],
   observed: m.observation()?.items.map(i => i.key) ?? null,
   journaled: { payload: payload(boards.journaled), fed: [...fed], recorded },
+  fromMaster: payload(boards.fromMaster),
+  noMaster: payload(boards.noMaster),
+  decisionsLine: [boards.now.decisions(), boards.decided.decisions()],
 }))
 process.exit(0)
 `
@@ -180,6 +190,23 @@ test('without nodes the payload is main’s; with devices the payload has their 
   expect(got.journaled.recorded.sort()).toEqual([...got.items].sort())
   expect(got.journaled.payload.journal).toEqual({ strip: null, last: null })
   expect(got.journaled.payload.items.map((i: { key: string }) => i.key)).toEqual(keys)
+
+  // A node with its master's decisions (#784): its cards and queue as they come from them, the rest
+  // as main's; one before its master gave them, as main's. decisions(): the latest payload's line.
+  const fromMaster = got.fromMaster.items.find((i: { key: string }) => i.key === 'pane-1')
+  expect(fromMaster.decision).toEqual({ id: 'd1', options: ['a', 'b'], held: 0 })
+  expect(got.fromMaster.decisions).toEqual({
+    items: [],
+    defaulted: [{ id: 'd0', key: 'pane-1', who: 'one', question: 'q', answer: 'a', at: 1 }],
+    defaults: true,
+  })
+  const plain = (p: Record<string, unknown>) => {
+    const { items, decisions, ...others } = p
+    return { ...others, items: (items as { key: string }[]).map(({ decision, ...i }: Record<string, unknown>) => i) }
+  }
+  expect(plain(got.fromMaster)).toEqual(plain(got.main))
+  expect(got.noMaster).toEqual(got.main)
+  expect(got.decisionsLine).toEqual([null, { items: [], defaulted: [], defaults: true }])
 }, 30_000)
 
 test('#642 awake source card marked moved is dropped from master payload when moved card is present, kept when absent', async () => {

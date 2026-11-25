@@ -2794,9 +2794,12 @@ records it as withdrawn. The page's Dismiss, the terminal board and a Codex sess
 question as before; the record calls it withdrawn once the web board next tidies up, so only while
 the web board runs.
 
-Decisions are this computer's. A device's sessions (#501) ask on their own board: the master shows
-their question on the card and in the queue with no buttons (Open goes to the session), and a
-default never runs on the master for a device's session. A thread's default writes the board's line
+A node's sessions (#781) ask their questions with options on the master, which holds them: the
+buttons, Hold and the default are the master's, from either page. The node's page shows them as
+the master has them (#784): held, or when the default goes, and "went by default" is the master's
+list for that node's sessions. An answer the owner types in the node session's terminal is in the
+master's record as the owner's. A question the node asked before #781 shows there as a plain ask,
+answered in the terminal or with the owner's words typed into the session. A thread's default writes the board's line
 in the thread as a private entry, so on a shared thread the peers get none of it.
 
 ```json
@@ -4983,14 +4986,17 @@ What goes up is a declared list, one feature group at a time:
   hands them back; anything else stays with the node's own route.
 
 A request that names another machine's session (`/api/session/@<device>:<key>/...`) goes up too,
-and the master hands it to its own node proxy. Everything else stays on the node as before;
-decisions stay there until a node's sessions ask their questions on the master (#781). The master
-checks the list again itself and never takes another path from a node.
+and the master hands it to its own node proxy. Everything else stays on the node as before. The
+master checks the list again itself and never takes another path from a node.
 
 Two more paths are the master's answers for a node only, never routes of its own:
 
 - `GET /api/board-slices`: the master's `time`, `calendar`, `journal` and `presence` parts of its
-  payload, and since #786 Team's `teamRev` and `teamUnread` and its `devices`. The node asks for
+  payload, and since #786 Team's `teamRev` and `teamUnread` and its `devices`. Since #784 also its
+  `decisions` cut to the asking node's sessions (their keys as the node names them): the node's
+  cards and queue show a question the master holds as the master has it, while the node's card
+  still carries it and the master still lists it, and "went by default" is the master's. The node
+  asks again at once when the questions its cards carry for the master change. The node asks for
   them every 15 seconds while the master's stream is up and its flags came, and when they change; it puts them in its own payload, so its page
   shows those panels with the master's data, and their calls go up the relay. While the master is
   away the node keeps the last ones, its calls answer 503 and the page's banner says the shared

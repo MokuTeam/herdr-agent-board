@@ -87,7 +87,7 @@ import {
 } from '../adapters/ssh.ts'
 import { rekeySession } from '../adapters/work-thread-store.ts'
 import { connectWorkdeskEvents } from '../adapters/workdesk-events.ts'
-import { nodeSlicesView, nodesAnswerForNode } from '../core/board-slices.ts'
+import { nodeSlicesView, nodesAnswerForNode, withNodeDecisions } from '../core/board-slices.ts'
 import { NODE_PROGRAMS } from '../core/bundle.ts'
 import { answerText, decisionsConfig } from '../core/decisions.ts'
 import { journalConfig } from '../core/journal.ts'
@@ -108,6 +108,7 @@ import {
 } from '../core/master-relay.ts'
 import { messageGate } from '../core/message-gate.ts'
 import { isRoutableNodeAddress } from '../core/mokupilot-mode.ts'
+import { masterHeldIds, withMasterDecisions } from '../core/node-decisions.ts'
 import { dropMovedCards } from '../core/node-items.ts'
 import { JOIN_TTL_MS } from '../core/node-join.ts'
 import {
@@ -1120,6 +1121,8 @@ export async function startServer({
   let nodeFlags: NodeMasterFlags | null = null
   // A node's copy of its master's payload parts (#780, services/node/master-slices.ts); null without `node`.
   let nodeSlices: NodeMasterSlices | null = null
+  /** The questions this node's cards carry for its master, as masterDecisions last saw them (#784). */
+  let heldForMaster = ''
   const board = createBoardState({
     deps,
     launches,
@@ -1203,6 +1206,24 @@ export async function startServer({
     decisions: items => {
       const on = decisionsConfig(cfg.decisions)
       return on ? decisionsPayload(items, allCards(), { now: Date.now(), defaults: on.defaults }) : null
+    },
+    // A node's questions with options as its master holds them (#784): only on a node, once its
+    // master gave them. A change of what its cards carry for the master asks the master again, so a
+    // question just asked shows at once.
+    masterDecisions: () => {
+      if (!nodeSlices) return null
+      const cards = allCards()
+      const held = masterHeldIds(cards)
+      if (held !== heldForMaster) {
+        heldForMaster = held
+        nodeSlices.poke()
+      }
+      const got = nodeSlices.current()?.decisions
+      if (!got) return null
+      return {
+        items: list => withMasterDecisions(list, null, got, cards).items,
+        queue: own => withMasterDecisions([], own, got, cards).decisions,
+      }
     },
     // Nodes' cards (#781): a decision shows as this board holds it; the cards are read only for one that has any.
     nodeDecisions: items =>
@@ -1592,7 +1613,8 @@ export async function startServer({
     if (req.method === 'GET' && raw === BOARD_SLICES_PATH) {
       // The node's own page asks as the owner; a node session reads its panels by their own paths.
       if (from?.who.kind !== 'owner') return json(403, { ok: false, error: 'owner' })
-      return json(200, { ok: true, slices: board.slices() })
+      // Since #784 with the master's decisions for that node's sessions.
+      return json(200, { ok: true, slices: withNodeDecisions(board.slices(), board.decisions(), from.device) })
     }
     if (req.method === 'POST' && raw === NODE_CLI_PATH) {
       if (from?.who.kind !== 'owner') return json(403, { ok: false, error: 'owner' })

@@ -33,7 +33,7 @@ import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
 import { readStdin } from '../adapters/stdin.ts'
 import { BRIEF_VERSION, brief, waitReminder } from '../core/brief.ts'
 import { calendarConfig } from '../core/calendar.ts'
-import { decisionsConfig, heldByMaster } from '../core/decisions.ts'
+import { type DecisionAnswer, decisionAnswerFor, decisionsConfig, heldByMaster } from '../core/decisions.ts'
 import { heldQuestionOf } from '../core/held-question.ts'
 import { briefFlags, staleFlagsLine, withMasterFlags } from '../core/master-flags.ts'
 import { isNotice } from '../core/notices.ts'
@@ -146,12 +146,19 @@ async function main(): Promise<void> {
   const boardCard = boardKey ? readCard(boardKey) : card
   // Decisions (#487): the decision the ask carries is closed first, the owner's answer or withdrawn,
   // from the cards as read: the board, seeing a card without it, would take it for one left behind.
+  // A node's card (#784): the owner's answer to the question its master holds, noted on the card.
+  const typed = new Map<typeof card, DecisionAnswer>()
   if (event === 'UserPromptSubmit' && !fromBoard) {
     for (const c of [card, boardKey ? boardCard : null]) {
       if (!c?.ask || c.decision === undefined) continue
       // A node's card (#781) carries the decision its master holds: the card loses it below, which
-      // the master reads as answered or withdrawn; this computer's database is not opened for it.
-      if (heldByMaster(c.decision)) continue
+      // the master reads as withdrawn, or as the owner's answer noted here (#784); this computer's
+      // database is not opened for it.
+      if (heldByMaster(c.decision)) {
+        const note = decisionAnswerFor(c.decision, input.prompt, Date.now())
+        if (note) typed.set(c, note)
+        continue
+      }
       const { closeOnPrompt } = await import('../services/decisions.ts')
       try {
         closeOnPrompt(c, input.prompt, Date.now())
@@ -161,7 +168,11 @@ async function main(): Promise<void> {
   if (event === 'UserPromptSubmit') {
     const done = answered(card)
     if (done) Object.assign(patch, done)
+    const note = typed.get(card)
+    if (note) patch.decisionAnswer = note
     const piPatch: CardPatch = boardKey ? { ...profileReport(boardCard, dir, profiles), ...answered(boardCard) } : {}
+    const piNote = boardKey ? typed.get(boardCard) : undefined
+    if (piNote) piPatch.decisionAnswer = piNote
     if (boardKey && Object.keys(piPatch).length) writeCard(boardKey, piPatch)
   }
   let context: string | null = null

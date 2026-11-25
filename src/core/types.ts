@@ -4,7 +4,7 @@ import type { BgTaskSummary, RunningBgTask } from './bg-task.ts'
 import type { CallView } from './call-agent.ts'
 import type { Checklist } from './checklist.ts'
 import type { CompactView } from './compact.ts'
-import type { CardDecision } from './decisions.ts'
+import type { CardDecision, DecisionAnswer } from './decisions.ts'
 import type { FormQuestion } from './dialogs/question-form.ts'
 import type { HelperSummary } from './helpers.ts'
 import type { FailureKind } from './launch/launcher-command.ts'
@@ -435,6 +435,11 @@ export interface Item {
   bgTasks?: BgTaskSummary
   /** Its open question's options, recommendation and default (#487), while config.json turns decisions on; absent when none. */
   decision?: CardDecision
+  /**
+   * On a node (#784): the owner's answer typed in the terminal to the question its master held, as
+   * the hook noted it on the card; the master records it as the owner's. Absent on any other board.
+   */
+  decisionAnswer?: DecisionAnswer
   /** Its auto-compact (#378, core/compact.ts compactView): absent when neither it nor Settings has a limit. */
   compact?: CompactView
   /**

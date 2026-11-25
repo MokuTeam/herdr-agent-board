@@ -22,7 +22,13 @@ import { besideParents, type CallAgent, type CallView } from '../core/call-agent
 import { categoryFor } from '../core/categories.ts'
 import { isCodexItem } from '../core/codex.ts'
 import { compactView } from '../core/compact.ts'
-import { type CardDecision, cardDecisionOf, decisionsConfig } from '../core/decisions.ts'
+import {
+  type CardDecision,
+  cardDecisionOf,
+  type DecisionAnswer,
+  decisionAnswerOf,
+  decisionsConfig,
+} from '../core/decisions.ts'
 import { waitingTool } from '../core/held-question.ts'
 import { type HelperSummary, summarize } from '../core/helpers.ts'
 import { t } from '../core/lang.ts'
@@ -75,6 +81,12 @@ export function agyAutoName(opts: {
 /** MokuPilot's call agents (#326), read only where it is not turned off and has run here (looked up once a minute). */
 const callAgentsHere = callAgentsGate()
 const daySessionHere = dayGate()
+
+/** The owner's answer a node's hook noted on the card (#784, core/decisions.ts DecisionAnswer); only a node's hook writes it. */
+const decisionAnswerField = (card: Card): { decisionAnswer?: DecisionAnswer } => {
+  const decisionAnswer = decisionAnswerOf(card.decisionAnswer)
+  return decisionAnswer ? { decisionAnswer } : {}
+}
 
 /** A card's open decision (#487), only while config.json turns decisions on and the card still asks. */
 const decisionField = (cfg: Config, card: Card): { decision?: CardDecision } => {
@@ -557,6 +569,7 @@ export async function collect(
       ...(compact && { compact }), // its auto-compact (#378), when there is any
       ...secretsField(cfg, card), // what it asks the user to fill in (#273), when it does
       ...decisionField(cfg, card), // its open question's options and default (#487), while decisions are on
+      ...(card.decisionAnswer !== undefined && decisionAnswerField(card)), // a node card's typed answer (#784)
       helpers: own, // its subagents, forks, workflow agents and teammates in short, or null
       // a fork's card says whose fork it is, and when it started; a call agent's file says it
       ...(typeof card.forkOf === 'string'

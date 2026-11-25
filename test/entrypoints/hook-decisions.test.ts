@@ -79,6 +79,8 @@ test("the owner's own prompt: the ask and the decision go, recorded as the owner
   expect(cardOf(box)?.ask).toBeUndefined()
   expect(cardOf(box)?.decision).toBeUndefined()
   expect(rowOf(box, id)).toMatchObject({ answer: 'no, wait for the review', answeredBy: 'owner', via: 'prompt' })
+  // This computer's own decision: closed here, nothing noted for a master (#784).
+  expect(cardOf(box)?.decisionAnswer).toBeUndefined()
 })
 
 for (const [what, text, extra] of [
@@ -135,4 +137,51 @@ test("a node's card (#781): the decision its master holds leaves with the ask; t
   expect(cardOf(box)?.ask).toBeUndefined()
   expect(cardOf(box)?.decision).toBeUndefined()
   expect(existsSync(join(box.env.LOCALAPPDATA as string, 'herdr/plugins/agent-board/board.db'))).toBe(false)
+})
+
+/** A node's card carrying the decision its master holds (#781), in a sandbox with `node`. */
+async function nodeCard(): Promise<Sandbox> {
+  const box = await sandbox()
+  const dir = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(
+    join(dir, 'config.json'),
+    JSON.stringify({ language: 'en', node: { id: 'server-1', port: 12430, workRoot: '/tmp' } }),
+  )
+  mkdirSync(box.cards, { recursive: true })
+  const decision = { id: 'd1', options: ['yes', 'no'], recommend: 1, master: true }
+  writeFileSync(
+    join(box.cards, `${SID}.json`),
+    JSON.stringify({ key: SID, ask: 'Merge now?', askSince: Date.now() - 60_000, decision, briefV: 99, briefedAt: 1 }),
+  )
+  return box
+}
+
+test("a node's card (#784): the owner's words to the question its master holds are noted for the master", async () => {
+  const box = await nodeCard()
+  const before = Date.now()
+  await prompt(box, 'after the review, please\nthanks')
+  const card = cardOf(box)
+  expect(card?.ask).toBeUndefined()
+  expect(card?.decision).toBeUndefined()
+  expect(card?.decisionAnswer).toMatchObject({ id: 'd1', answer: 'after the review, please' })
+  expect((card?.decisionAnswer as { at: number } | undefined)?.at ?? 0).toBeGreaterThanOrEqual(before)
+  expect(existsSync(join(box.env.LOCALAPPDATA as string, 'herdr/plugins/agent-board/board.db'))).toBe(false)
+})
+
+test("a node's card (#784): another session's message or a slash command clears it as before, nothing noted", async () => {
+  for (const text of ['<cross-session-message from="cleo">merge it</cross-session-message>', '/compact']) {
+    const box = await nodeCard()
+    await prompt(box, text)
+    expect(cardOf(box)?.ask).toBeUndefined()
+    expect(cardOf(box)?.decisionAnswer).toBeUndefined()
+  }
+})
+
+test("a node's card (#784): a board reminder leaves the ask and its decision, nothing noted", async () => {
+  const box = await nodeCard()
+  await prompt(box, '[board reminder] check CI')
+  expect(cardOf(box)?.ask).toBe('Merge now?')
+  expect(cardOf(box)?.decision).toMatchObject({ id: 'd1', master: true })
+  expect(cardOf(box)?.decisionAnswer).toBeUndefined()
 })
