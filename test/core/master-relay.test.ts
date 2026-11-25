@@ -160,6 +160,12 @@ describe("the owner switch on a device (nodes.devices.<id>.owner): on unless the
 })
 
 describe('plainPath: the path checked is the path that runs', () => {
+  test('a letter spelled as %XX is another spelling of a path, not plain', () => {
+    expect(plainPath('/api/threads/%65vents')).toBe(false)
+    expect(plainPath('/api/thr%65ads')).toBe(false)
+    expect(plainPath('/api/threads/events')).toBe(true)
+  })
+
   test('dot segments in any spelling and backslashes are not plain; encoded keys are', () => {
     for (const p of [
       '/api/threads/..',

@@ -452,6 +452,24 @@ describe('the ledger keeps what a retry may reuse, and only that', () => {
   })
 })
 
+describe('one spelling of a path, one form of a key', () => {
+  test('the events stream spelled another way is refused on the node, so it never slips past the stream cap', async () => {
+    const r = await rig()
+    const res = await r.ask('/api/threads/%65vents')
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toBe('master-relay-path')
+    expect(r.master.seen).toHaveLength(0)
+  })
+
+  test('an Idempotency-Key that is no key is refused, not replaced', async () => {
+    const r = await rig()
+    const res = await r.ask('/api/threads/atlas-1', post({ op: 'post' }, { 'idempotency-key': 'has space' }))
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toBe('master-relay-bad-idempotency-key')
+    expect(r.master.writes()).toBe(0)
+  })
+})
+
 describe('a write that was sent and got no answer', () => {
   test("the link goes while it runs: 502 master-relay-unknown, not a plain 'try again'", async () => {
     const r = await rig()
@@ -531,6 +549,7 @@ describe('the master holds what a node sends to the table itself', () => {
       '/api/session/%40ben%3Ak/%2e%2e/%2e%2e/board',
       '/api/session/@ben:k/../../board',
       '/api/threads/a%5Cb',
+      '/api/threads/%65vents',
     ].entries()) {
       const head = await h.ask(`hostile-${i}xx`, path)
       expect([path, head?.status]).toEqual([path, 400])

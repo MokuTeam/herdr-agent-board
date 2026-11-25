@@ -113,6 +113,7 @@ export const RELAY_ERRORS = {
   tooBig: 'master-relay-too-big',
   unknown: 'master-relay-unknown',
   idemMismatch: 'master-relay-idempotency-mismatch',
+  badIdem: 'master-relay-bad-idempotency-key',
 } as const
 
 /** The plain reason beside each code. */
@@ -130,6 +131,7 @@ export const RELAY_MESSAGES: Readonly<Record<string, string>> = {
   [RELAY_ERRORS.busy]: 'Too many requests from this computer at once.',
   [RELAY_ERRORS.unknown]:
     'The link to the master went before its answer: the write may or may not have been done. Check before trying again, or retry with the same Idempotency-Key.',
+  [RELAY_ERRORS.badIdem]: 'Idempotency-Key is 1 to 64 letters, digits, "-" or "_".',
   [RELAY_ERRORS.idemMismatch]: 'This Idempotency-Key was used for another request.',
   [RELAY_ERRORS.tooBig]: 'The request or its answer is too large for the relay.',
 }
@@ -290,6 +292,10 @@ export function relayChunkOf(raw: unknown): RelayChunk | null {
  */
 export function plainPath(raw: string): boolean {
   if (raw.includes('\\') || /%5c/i.test(raw)) return false
+  // A letter, digit or -._~ spelled as %XX reads as another path to a string route
+  // (`/api/threads/%65vents` is `/api/threads/events`): one spelling only.
+  for (const m of raw.matchAll(/%([0-9a-f]{2})/gi))
+    if (/[A-Za-z0-9\-._~]/.test(String.fromCharCode(Number.parseInt(m[1] ?? '', 16)))) return false
   for (const seg of raw.split('/')) {
     let word: string
     try {

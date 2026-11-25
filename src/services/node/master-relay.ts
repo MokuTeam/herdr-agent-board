@@ -13,6 +13,7 @@ import {
   IDEMPOTENCY_HEADER,
   isIdemKey,
   isRelayId,
+  plainPath,
   RELAY_BODY_MAX,
   RELAY_ERRORS,
   RELAY_INLINE_BYTES,
@@ -295,6 +296,10 @@ export function createMasterRelay(deps: MasterRelayDeps): MasterRelay {
       const who = whoOf(req, req.method)
       if (who instanceof Response) return who
       if (caller.rawPath.length + caller.search.length > RELAY_PATH_MAX) return refused(414, RELAY_ERRORS.tooBig)
+      // A path in a spelling the master does not take is refused here, at once.
+      if (!plainPath(caller.rawPath)) return refused(400, RELAY_ERRORS.path)
+      const given = req.headers.get(IDEMPOTENCY_HEADER)
+      if (write && given !== null && !isIdemKey(given)) return refused(400, RELAY_ERRORS.badIdem)
       if (!clients.size) return refused(503, RELAY_ERRORS.offline)
       let bytes: Uint8Array<ArrayBuffer> | null = new Uint8Array(0)
       if (write) {
@@ -307,7 +312,6 @@ export function createMasterRelay(deps: MasterRelayDeps): MasterRelay {
         if (v !== null) headers[name] = v
       }
       const id = newId()
-      const given = req.headers.get(IDEMPOTENCY_HEADER)
       const large = bytes.byteLength > RELAY_INLINE_BYTES
       const sent: RelayRequest = {
         id,
@@ -315,7 +319,7 @@ export function createMasterRelay(deps: MasterRelayDeps): MasterRelay {
         path: `${caller.rawPath}${caller.search}`,
         headers,
         who,
-        ...(write && { idem: isIdemKey(given) ? given : newId() }),
+        ...(write && { idem: given ?? newId() }),
         ...(write && bytes.byteLength > 0 && !large && { body: Buffer.from(bytes).toString('base64') }),
         ...(large && { hasBody: true as const, bodySha: createHash('sha256').update(bytes).digest('hex') }),
       }
