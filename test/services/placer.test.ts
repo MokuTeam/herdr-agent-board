@@ -998,3 +998,20 @@ test('a start held on its way to a node retries there on master restart and star
   again.proc.kill()
   await again.proc.exited
 }, 90_000)
+
+test("#786: a start from a node's own page goes to the master's placer, which places it on another node", async () => {
+  const pair = await placing({ nodes: { order: ['server-2', 'server-1', 'local'] } })
+  const [one, two] = pair.nodes as [Pair['nodes'][0], Pair['nodes'][0]]
+  // The master holds its relay stream on server-1's door: the start window's options come from it.
+  for (let end = Date.now() + 15_000; (await fetch(`${one.url}/api/launch/options`)).status !== 200; ) {
+    if (Date.now() > end) throw new Error('the master never held its relay stream on server-1')
+    await Bun.sleep(50)
+  }
+  const id = await startAt(one.url, pair.checkout, 'atlas from server-1')
+  // Placed by the master's order: server-2's herdr starts it, neither server-1's nor the master's.
+  await until(() => started(two.box).length === 1, 30_000)
+  assert.deepEqual(started(one.box), [])
+  assert.deepEqual(started(pair.master.box), [])
+  assert.ok(id)
+  await settled(pair.master.url)
+}, 90_000)

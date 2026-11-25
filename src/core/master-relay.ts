@@ -492,18 +492,21 @@ export const BULK_FIELD: Readonly<Record<string, 'targets' | 'keys'>> = {
 
 /**
  * Whether a body-gated entry (RelayEntry.when) goes up for this body (#786): a move to a device
- * other than this computer (`local`), or a bulk request naming a session of another machine than
- * `self`. Anything else, a body that is no JSON object too, stays with this board's own route.
+ * other than this computer (`local`) or of another machine's session here, or a bulk request
+ * naming a session of another machine than `self`. Anything else, a body that is no JSON object too, stays with this board's own route.
  */
 export function relayBodyWants(when: 'device' | 'foreign', path: string, body: unknown, self: string): boolean {
   if (!isObject(body)) return false
-  if (when === 'device') return typeof body.device === 'string' && body.device !== '' && body.device !== 'local'
   const field = BULK_FIELD[path]
   const list = field && Array.isArray(body[field]) ? (body[field] as unknown[]) : []
-  return list.some(t => {
+  const foreign = list.some(t => {
     const at = typeof t === 'string' ? parseNodeKey(t) : null
     return !!at && at.device !== self
   })
+  if (when === 'foreign') return foreign
+  if (typeof body.device !== 'string' || body.device === '') return false
+  // A move here (`local`) of another machine's session pulls it to this computer: the master moves it.
+  return body.device !== 'local' || foreign
 }
 
 /**
@@ -572,3 +575,19 @@ export const relayOwnerTeam = (method: string, rawPath: string): boolean =>
 /** Devices and its setup forms (#786): a master's alone, which it answers a relayed owner (never a session). */
 export const relayDevicesPath = (rawPath: string): boolean =>
   /^\/api\/nodes(?:\/(?:setup|relay\/setup|computer\/setup))?$/.test(rawPath)
+
+/**
+ * Devices' `POST /api/nodes` from node `device`'s page as the master runs it (#786): that page
+ * names itself `local` and the master by its id (core/board-slices.ts devicesForNode), so a device
+ * id (`id`, and `ids` of a new order) is read the master's way: `local` is `device`, the master's
+ * own id is `local`. Every other field as it came.
+ */
+export function masterNodesBody(body: unknown, device: string, selfId: string): unknown {
+  if (!isObject(body) || !device || !selfId) return body
+  const id = (v: unknown): unknown => (v === 'local' ? device : v === selfId ? 'local' : v)
+  return {
+    ...body,
+    ...(typeof body.id === 'string' && { id: id(body.id) }),
+    ...(Array.isArray(body.ids) && { ids: body.ids.map(id) }),
+  }
+}

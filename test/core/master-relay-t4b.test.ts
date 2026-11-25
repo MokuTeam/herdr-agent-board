@@ -2,9 +2,10 @@
 // Team, Devices, starts, body-gated moves; how a node names its own sessions in a bulk body and how
 // the master reads its own; the devices as a node's page shows them.
 import { expect, test } from 'bun:test'
-import { devicesForNode, nodeSlicesView, slicesOf } from '../../src/core/board-slices.ts'
+import { devicesForNode, nodeSlicesView, nodesAnswerForNode, slicesOf } from '../../src/core/board-slices.ts'
 import {
   masterBulkBody,
+  masterNodesBody,
   nodeBulkBody,
   relayBodyWants,
   relayDevicesPath,
@@ -51,6 +52,9 @@ test('Team, Devices and its forms, starts and their follow-ups are in the table;
 test("a body-gated path goes up only for a move to another device or another machine's session", () => {
   expect(relayBodyWants('device', '/api/move', { targets: ['a'], device: 'atlas' }, 'ben')).toBe(true)
   expect(relayBodyWants('device', '/api/move', { targets: ['a'], device: 'local' }, 'ben')).toBe(false)
+  // Another machine's session moved here: the master moves it.
+  expect(relayBodyWants('device', '/api/move', { targets: ['@cleo:k1'], device: 'local' }, 'ben')).toBe(true)
+  expect(relayBodyWants('device', '/api/move', { targets: ['@ben:k1'], device: 'local' }, 'ben')).toBe(false)
   expect(relayBodyWants('device', '/api/move', { targets: ['a'], profile: 'work' }, 'ben')).toBe(false)
   expect(relayBodyWants('foreign', '/api/sleep', { targets: ['@cleo:k1'] }, 'ben')).toBe(true)
   expect(relayBodyWants('foreign', '/api/sleep', { targets: ['@ben:k1', 'p1'] }, 'ben')).toBe(false)
@@ -143,10 +147,64 @@ test("the slices in a node's payload: Team's numbers unless it runs its own, dev
   // What waits for the passkey stays on the master's screen.
   expect('teamWaiting' in slices).toBe(false)
   const plain = nodeSlicesView(slices, { self: 'ben', ownTeam: false, ownDevices: false, online: true })
-  expect(plain).toMatchObject({ teamRev: 4, teamUnread: 2, relayedDevices: true })
+  expect(plain).toMatchObject({ teamRev: 4, teamUnread: 2, relayedDevices: { master: 'atlas' } })
   expect(plain.devices?.map(d => d.id)).toEqual(['atlas', 'local'])
   const own = nodeSlicesView(slices, { self: 'ben', ownTeam: true, ownDevices: true, online: true })
   expect(own).toEqual({})
   // A master that gave none of them: nothing added.
   expect(nodeSlicesView({}, { self: 'ben', ownTeam: false, ownDevices: false, online: true })).toEqual({})
+})
+
+test("Devices from a node's page: its ids read the master's way, the answer in the node's terms", () => {
+  // The node (ben) names itself local and the master (atlas) by its id.
+  expect(masterNodesBody({ op: 'set', id: 'local', title: 'Ben desk' }, 'ben', 'atlas')).toEqual({
+    op: 'set',
+    id: 'ben',
+    title: 'Ben desk',
+  })
+  expect(masterNodesBody({ op: 'set', id: 'atlas', color: 'green' }, 'ben', 'atlas')).toEqual({
+    op: 'set',
+    id: 'local',
+    color: 'green',
+  })
+  expect(masterNodesBody({ op: 'set', id: 'cleo', paused: true }, 'ben', 'atlas')).toEqual({
+    op: 'set',
+    id: 'cleo',
+    paused: true,
+  })
+  expect(masterNodesBody({ op: 'order', ids: ['cleo', 'local', 'atlas'] }, 'ben', 'atlas')).toEqual({
+    op: 'order',
+    ids: ['cleo', 'ben', 'local'],
+  })
+  expect(masterNodesBody({ op: 'whenFull', whenFull: 'local' }, 'ben', 'atlas')).toEqual({
+    op: 'whenFull',
+    whenFull: 'local',
+  })
+  expect(masterNodesBody(null, 'ben', 'atlas')).toBeNull()
+
+  const answer = nodesAnswerForNode(
+    {
+      devices: [dev('local', { selfId: 'atlas' }), dev('ben'), dev('cleo')],
+      settings: {
+        whenFull: 'local',
+        defaults: { local: { maxSessions: 9 }, ben: { maxSessions: 3 } },
+        hosts: { ben: { host: 'h', sshPort: 22 } },
+        noToken: ['cleo', 'ben'],
+        next: 'ben',
+      },
+    },
+    'ben',
+    'atlas',
+  ) as { master: string; devices: BoardDevice[]; settings: unknown }
+  expect(answer.master).toBe('atlas')
+  expect(answer.devices.map((d: BoardDevice) => d.id)).toEqual(['atlas', 'local', 'cleo'])
+  expect(answer.settings).toEqual({
+    whenFull: 'local',
+    defaults: { atlas: { maxSessions: 9 }, local: { maxSessions: 3 } },
+    hosts: { local: { host: 'h', sshPort: 22 } },
+    noToken: ['cleo', 'local'],
+    next: 'local',
+  })
+  expect(nodesAnswerForNode({ ok: true }, 'ben', 'atlas')).toEqual({ ok: true, master: 'atlas' })
+  expect(nodesAnswerForNode('odd', 'ben', 'atlas')).toBe('odd')
 })

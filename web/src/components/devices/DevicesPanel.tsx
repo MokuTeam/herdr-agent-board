@@ -86,6 +86,8 @@ export function DevicesPanel({ open, onClose, back, initial, setup, computerSetu
   const master = !!data?.devices
   // a node and not a master (the payload's machine, #701): devices are added on the master (#777)
   const nodeOnly = !master && !!data?.machine
+  // a node's own page with its master's devices (#786): this computer is the row with no link
+  const relayed = data?.relayedDevices ?? null
   useEffect(() => {
     if (open && master) refresh()
     if (!open) setPalette(null)
@@ -203,6 +205,17 @@ export function DevicesPanel({ open, onClose, back, initial, setup, computerSetu
               send={send}
               onMove={by => move(row.id, by)}
               onUpdate={() => update(row.id)}
+              role={
+                relayed
+                  ? row.here
+                    ? t('node.dev.here')
+                    : row.id === relayed.master
+                      ? t('node.dev.master')
+                      : null
+                  : row.here
+                    ? t('node.dev.master')
+                    : null
+              }
             />
           ))}
         </div>
@@ -216,9 +229,7 @@ export function DevicesPanel({ open, onClose, back, initial, setup, computerSetu
           />
         )}
         {/* Moving the master role is done on the master (#786: a node's page shows its devices, relayed). */}
-        {master && !data?.relayedDevices && (
-          <MasterHandover open={open} devices={shown} {...(handover && { initial: handover })} />
-        )}
+        {master && !relayed && <MasterHandover open={open} devices={shown} {...(handover && { initial: handover })} />}
         {master && <LanesSection settings={settings} disabled={!canEdit} send={send} />}
         {master && (
           <section className="devices-section">
@@ -255,6 +266,8 @@ interface RowProps {
   onMove(by: number): void
   /** Ships this board's version to the device now (#590). */
   onUpdate(): void
+  /** The row's role beside its title: the master's own, or this computer on a node's page (#786); null for none. */
+  role: string | null
 }
 
 /** One device: handle, colour legend/picker, title and link, the bars, the version, Pause and Drain, the thresholds. */
@@ -269,6 +282,7 @@ function DeviceRowView({
   send,
   onMove,
   onUpdate,
+  role,
 }: RowProps) {
   const t = useT()
   const [editing, setEditing] = useState<string | null>(null)
@@ -436,7 +450,7 @@ function DeviceRowView({
               </span>
             </button>
           )}
-          {row.here && <span className="devices-role">{t('node.dev.master')}</span>}
+          {role && <span className="devices-role">{role}</span>}
           {row.link && <span className="devices-link">{row.link}</span>}
           {next && <span className="devices-next">{t('node.dev.next')}</span>}
         </div>

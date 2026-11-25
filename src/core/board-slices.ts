@@ -6,6 +6,9 @@
 import { BOARD_SLICE_KEYS } from './master-relay.ts'
 import type { BoardDevice, BoardPayload } from './payload.ts'
 
+/** What devicesForNode reads of a device row: the payload's and GET /api/nodes' rows both have it. */
+type DeviceRow = Pick<BoardDevice, 'id' | 'kind' | 'link' | 'status' | 'selfId' | 'revoked' | 'update' | 'held'>
+
 /** The Team panel's numbers (#786): its revision and what is unread. What waits for the passkey stays on the master's screen. */
 export const BOARD_SLICE_TEAM_KEYS = ['teamRev', 'teamUnread'] as const
 
@@ -38,17 +41,17 @@ export function boardSlicesOf(raw: unknown): BoardSlices | null {
  * link (`local`), as a master's page shows its own, and the master's own row is named by its id,
  * heard while its relay stream is up (`online`). Null when the master does not list this node.
  */
-export function devicesForNode(devices: readonly BoardDevice[], self: string, online: boolean): BoardDevice[] | null {
+export function devicesForNode<T extends DeviceRow>(devices: readonly T[], self: string, online: boolean): T[] | null {
   const mine = devices.find(d => d.id === self)
   const master = devices.find(d => d.id === 'local')
   if (!mine || !master) return null
   const masterId = master.selfId || master.status?.id || ''
   if (!masterId || masterId === self) return null
   const now = Date.now()
-  return devices.map(d => {
+  return devices.map((d): T => {
     if (d === mine) {
       const { selfId: _s, revoked: _r, update: _u, held: _h, ...rest } = d
-      return { ...rest, id: 'local', selfId: self, kind: null, link: null }
+      return { ...rest, id: 'local', selfId: self, kind: null, link: null } as T
     }
     if (d === master) {
       const { selfId: _s, ...rest } = d
@@ -61,7 +64,7 @@ export function devicesForNode(devices: readonly BoardDevice[], self: string, on
           since: now,
           heardAt: online ? now : (mine.link?.heardAt ?? null),
         },
-      }
+      } as T
     }
     return d
   })
@@ -70,7 +73,7 @@ export function devicesForNode(devices: readonly BoardDevice[], self: string, on
 /**
  * The parts as they go into node `self`'s payload (#786): Team's numbers only while this board
  * runs no Team of its own, the devices only on a node that is no master itself (its own devices
- * stay), rebased by devicesForNode and marked `relayedDevices` for the page.
+ * stay), rebased by devicesForNode and marked `relayedDevices` (with the master's id) for the page.
  */
 export function nodeSlicesView(
   slices: BoardSlices,
@@ -84,9 +87,40 @@ export function nodeSlicesView(
   }
   if (!o.ownDevices && devices) {
     const mine = devicesForNode(devices, o.self, o.online)
-    if (mine) {
+    const master = devices.find(d => d.id === 'local')
+    if (mine && master) {
       out.devices = mine
-      out.relayedDevices = true
+      out.relayedDevices = { master: master.selfId || master.status?.id || '' }
+    }
+  }
+  return out
+}
+
+/**
+ * Devices' answer (GET or POST /api/nodes) as node `device`'s page and terminal read it (#786), in
+ * the same terms as its payload: the rows by devicesForNode, the settings' per-device keys (`defaults`,
+ * `hosts`, `secrets`, `noToken`, `next`) renamed the same way (`device` is `local`, the master's
+ * `local` its id `selfId`), and `master`: that id. Anything that is no such answer as it came.
+ */
+export function nodesAnswerForNode(raw: unknown, device: string, selfId: string): unknown {
+  if (!isObject(raw) || !device || !selfId) return raw
+  const id = (v: string): string => (v === device ? 'local' : v === 'local' ? selfId : v)
+  const keyed = (v: unknown): unknown =>
+    isObject(v) ? Object.fromEntries(Object.entries(v).map(([k, x]) => [id(k), x])) : v
+  const out: Record<string, unknown> = { ...raw, master: selfId }
+  if (Array.isArray(raw.devices)) {
+    const rows = devicesForNode(raw.devices as DeviceRow[], device, true)
+    if (rows) out.devices = rows
+  }
+  if (isObject(raw.settings)) {
+    const s = raw.settings
+    out.settings = {
+      ...s,
+      ...(s.defaults !== undefined && { defaults: keyed(s.defaults) }),
+      ...(s.hosts !== undefined && { hosts: keyed(s.hosts) }),
+      ...(s.secrets !== undefined && { secrets: keyed(s.secrets) }),
+      ...(Array.isArray(s.noToken) && { noToken: s.noToken.map(v => (typeof v === 'string' ? id(v) : v)) }),
+      ...(typeof s.next === 'string' && { next: id(s.next) }),
     }
   }
   return out

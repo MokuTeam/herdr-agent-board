@@ -207,10 +207,11 @@ export interface BoardPayload {
   devices?: BoardDevice[]
   /**
    * On a node's own page (#786): `devices` are its master's, given over the relay
-   * (core/board-slices.ts nodeSlicesView), this computer the row with no link. Devices' changes and
+   * (core/board-slices.ts nodeSlicesView), this computer the row with no link, `master` the id of the
+   * master's row. Devices' changes and
    * Add a server / Add a computer go to the master; moving the master role stays there.
    */
-  relayedDevices?: true
+  relayedDevices?: { master: string }
   /**
    * This computer's name (`COMPUTERNAME || hostname()`), populated on nodes so the master can
    * match Telegram `X-Herdr-Pane` hints against this device (#701).

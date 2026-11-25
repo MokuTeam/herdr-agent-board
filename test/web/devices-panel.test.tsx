@@ -1118,13 +1118,29 @@ describe('rename a device (#601)', () => {
 describe("a node's own page (#786): its master's devices, relayed", () => {
   test('Add a server and Add a computer are offered (they go to the master); Move master role is not', () => {
     const relayed = draw(
-      payload({ devices: DEVICES, categories: CATEGORIES, machine: 'server-1', relayedDevices: true }),
+      payload({
+        devices: DEVICES,
+        categories: CATEGORIES,
+        machine: 'server-1',
+        relayedDevices: { master: 'server-2' },
+      }),
     )
     const words = text(relayed)
     expect(words).toContain(t('node.add.title'))
     expect(words).not.toContain(t('node.handover.title'))
     expect(words).not.toContain(t('node.add.onNode'))
     expect(rowsOf(relayed)).toHaveLength(DEVICES.length)
+    // This computer's row says so; the master's row is the master.
+    const roleOf = (id: string) =>
+      text(
+        findAll(
+          rowsOf(relayed).filter(r => r.attrs.get('data-id') === id),
+          el => hasClass(el, 'devices-role'),
+        ),
+      )
+    expect(roleOf('local')).toBe(t('node.dev.here'))
+    expect(roleOf('server-2')).toBe(t('node.dev.master'))
+    expect(roleOf('server-1')).toBe('')
   })
 
   test("a master's own page is as before: Move master role is there", () => {

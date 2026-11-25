@@ -11,7 +11,7 @@
 // - a node's own paths stay its own: a sleep of its own session, a move to itself.
 // And a board without node answers as before.
 import { expect, test } from 'bun:test'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { serveBoard } from '../support/board-server.ts'
 import { nodePair, type PairNode } from '../support/node-pair.ts'
@@ -87,13 +87,46 @@ test("a node's page reaches the master's Devices, Add a server, Team and starts;
     return r.status === 200 && Array.isArray(r.body.devices) ? r.body : null
   })
   const masterView = (await getJson(`${master}/api/nodes`)).body
-  expect((seen.devices as Device[]).map(d => d.id)).toEqual((masterView.devices as Device[]).map(d => d.id))
   const masterId = (masterView.devices as Device[]).find(d => d.id === 'local')?.selfId ?? ''
-  expect(masterId).not.toBe('')
+  expect(masterId).toBe('laptop')
+  // In the node's terms: it is `local`, the master its id.
+  const nodeTerms = (id: string) => (id === a.id ? 'local' : id === 'local' ? masterId : id)
+  expect((seen.devices as Device[]).map(d => d.id)).toEqual((masterView.devices as Device[]).map(d => nodeTerms(d.id)))
+  expect(seen.master).toBe(masterId)
+  expect((seen.devices as Device[]).find(d => d.id === 'local')).toMatchObject({ kind: null, link: null, selfId: a.id })
+
+  // Edits from the node's page land on the right machine's entry in the master's config.json.
+  const masterFile = join(pair.master.box.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json')
+  writeFileSync(masterFile, JSON.stringify(pair.masterConfig, null, 2))
+  const onDisk = () =>
+    JSON.parse(readFileSync(masterFile, 'utf8')).nodes as {
+      order: string[]
+      devices: Record<string, { title?: string; color?: string } | undefined>
+    }
+  // This computer renamed: the node's own entry, never the master's `local`.
+  const renamed = await post(`${a.url}/api/nodes`, { op: 'set', id: 'local', title: 'Ben desk ☃ 100%' })
+  expect(renamed.status).toBe(200)
+  expect(onDisk().devices[a.id]?.title).toBe('Ben desk ☃ 100%')
+  expect(onDisk().devices.local?.title).toBeUndefined()
+  // The master's row recoloured: the master's own `local` entry.
+  expect((await post(`${a.url}/api/nodes`, { op: 'set', id: masterId, color: '#30d158' })).status).toBe(200)
+  expect(onDisk().devices.local?.color).toBe('#30d158')
+  expect(onDisk().devices[a.id]?.color).toBeUndefined()
+  // A new order in the node's terms is the master's order in its own.
+  const order = [b.id, 'local', masterId]
+  const reordered = await post(`${a.url}/api/nodes`, { op: 'order', ids: order })
+  expect(reordered.status).toBe(200)
+  expect(onDisk().order).toEqual([b.id, a.id, 'local'])
+  // The answer is in the node's terms too.
+  const after = (await reordered.json()) as { settings?: { next?: string | null } }
+  expect(after.settings).toBeTruthy()
 
   // An action from the node is the master's (its link to node b tried again), in its admin log.
   const retried = await post(`${a.url}/api/nodes`, { op: 'retry', id: b.id })
-  expect({ status: retried.status, body: await retried.json() }).toEqual({ status: 200, body: { ok: true } })
+  expect({ status: retried.status, body: await retried.json() }).toEqual({
+    status: 200,
+    body: { ok: true, master: masterId },
+  })
   const log = (await getJson(`${master}/api/links/log`)).body as { edges?: Record<string, unknown>[] }
   expect(log.edges?.find(e => e.kind === 'admin' && e.path === '/api/nodes')).toMatchObject({
     via: 'relay',
@@ -120,7 +153,7 @@ test("a node's page reaches the master's Devices, Add a server, Team and starts;
     const p = (await getJson(`${a.url}/api/board`)).body
     return Array.isArray(p.devices) ? p : null
   })
-  expect(payload.relayedDevices).toBe(true)
+  expect(payload.relayedDevices).toEqual({ master: masterId })
   const rows = payload.devices as Device[]
   expect(rows.find(d => d.id === 'local')).toMatchObject({ kind: null, link: null, selfId: a.id })
   expect(rows.find(d => d.id === masterId)?.link).toMatchObject({ state: 'online' })
@@ -162,6 +195,29 @@ test("a node's page reaches the master's Devices, Add a server, Team and starts;
   const own = await post(`${a.url}/api/sleep`, { targets: [S1] })
   const ownBody = await own.json()
 
+  // A move of node b's session here (device local) and of node a's own to the master go to the
+  // master's mover (on main: node a's own route, which moves to no device); it answers for each.
+  const pulled = await post(`${a.url}/api/move`, { targets: [bKey], device: 'local', dryRun: true })
+  expect(pulled.status).toBe(200)
+  const pulledBody = (await pulled.json()) as { results: Record<string, unknown>[] }
+  // The master's mover planned it from node b to node a (refused here only for the conversation the fakes lack).
+  expect(pulledBody.results).toHaveLength(1)
+  expect(pulledBody.results[0]).toMatchObject({ target: bKey, from: b.id, to: a.id })
+  const pushed = await post(`${a.url}/api/move`, { targets: [S1], device: masterId, dryRun: true })
+  expect(pushed.status).toBe(200)
+  const pushedBody = (await pushed.json()) as { results: Record<string, unknown>[] }
+  expect(pushedBody.results).toHaveLength(1)
+  expect(pushedBody.results[0]).toMatchObject({ from: a.id })
+
+  // A fork of node b's session from node a is node b's own answer, through the master.
+  const bOwn = bKey.slice(bKey.indexOf(':') + 1)
+  const forkVia = await post(`${a.url}/api/session/${encodeURIComponent(bKey)}/fork`, { name: 'atlas fork' })
+  const forkThere = await post(`${b.url}/api/session/${encodeURIComponent(bOwn)}/fork`, { name: 'atlas fork' })
+  expect({ status: forkVia.status, body: await forkVia.json() }).toEqual({
+    status: forkThere.status,
+    body: await forkThere.json(),
+  })
+
   // The CLI on the node: board nodes reads the master's devices, board update asks the master to
   // ship its commit here, board sleep names node b's session.
   nodeCliConfig(a)
@@ -176,6 +232,16 @@ test("a node's page reaches the master's Devices, Add a server, Team and starts;
   const sleptCli = await a.box.run('cli', { args: ['sleep', bKey], env: {} }).exited
   expect(sleptCli.stdout).toMatch(/^ok · /)
   expect(sleptCli.stdout).not.toContain('no such session')
+
+  // Archive of node b's session from node a: node b takes it off its board, through the master.
+  const archived = await post(`${a.url}/api/archive`, { op: 'archive', keys: [bKey] })
+  const archivedBody = (await archived.json()) as {
+    done: { key: string }[]
+    failed: { key: string; error: string; why?: string }[]
+  }
+  expect([...archivedBody.done, ...archivedBody.failed].map(e => e.key)).toEqual([bKey])
+  // Node b's herdr was asked to close its pane (its fake knows no `pane get`): the archive ran there.
+  expect(archivedBody.failed[0]?.why ?? 'done').toMatch(/^(archive\.why\.herdr|done)$/)
 
   // The link down: Devices answer 503 node-master-offline, never the node's own "off".
   await a.proxy.cut('drop')

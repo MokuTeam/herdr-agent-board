@@ -2770,15 +2770,18 @@ async function nodesOnNode(op: string, id: string): Promise<void> {
   if (plain) throw new Error(plain)
   const devices = Array.isArray(r.body.devices) ? r.body.devices.filter(isRecord) : null
   if (!devices) throw new Error(`the board said ${r.status}${r.body.error ? `: ${String(r.body.error)}` : ''}`)
-  const masterId = String(devices.find(d => d.id === 'local')?.selfId ?? 'local')
-  const self = nodeConfig(cfg.node)?.id
+  // In this computer's terms (core/board-slices.ts nodesAnswerForNode): it is `local`, the master its id.
+  const masterId = typeof r.body.master === 'string' ? r.body.master : ''
+  const self = nodeConfig(cfg.node)?.id ?? 'local'
   console.log(
     [
       `master ${masterId}`,
       ...devices.map(d =>
         d.id === 'local'
-          ? `${masterId} · the master`
-          : `${deviceLine(d, masterId)}${d.id === self ? ' · this computer' : ''}`,
+          ? `${self} · this computer`
+          : d.id === masterId
+            ? `${masterId} · the master · ${String(isRecord(d.link) ? d.link.state : '')}`
+            : deviceLine(d, masterId),
       ),
     ].join('\n'),
   )

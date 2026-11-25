@@ -86,7 +86,7 @@ import {
 } from '../adapters/ssh.ts'
 import { rekeySession } from '../adapters/work-thread-store.ts'
 import { connectWorkdeskEvents } from '../adapters/workdesk-events.ts'
-import { nodeSlicesView } from '../core/board-slices.ts'
+import { nodeSlicesView, nodesAnswerForNode } from '../core/board-slices.ts'
 import { NODE_PROGRAMS } from '../core/bundle.ts'
 import { answerText, decisionsConfig } from '../core/decisions.ts'
 import { journalConfig } from '../core/journal.ts'
@@ -96,6 +96,7 @@ import {
   BULK_FIELD,
   DECISIONS_PATH,
   masterBulkBody,
+  masterNodesBody,
   NODE_CLI_PATH,
   ownerCliOf,
   type RelayWho,
@@ -1597,7 +1598,18 @@ export async function startServer({
                 ? localRelaySetupRoutes
                 : localComputerSetupRoutes
       if (!picked) return json(404, { ok: false, error: 'not found' })
-      return replayAdmin(req, url, path, picked, from.device, req.method !== 'GET')
+      if (raw !== '/api/nodes') return replayAdmin(req, url, path, picked, from.device, req.method !== 'GET')
+      // The node's page names itself `local` and this board by its id: its device ids are read
+      // this board's way, and the answer goes back in its terms (core/board-slices.ts).
+      const selfId = nodesConfig(cfg.nodes, hostname())?.id ?? ''
+      if (req.method === 'POST') {
+        const body = masterNodesBody(await req.json().catch(() => null), from.device, selfId)
+        req = new Request(url, { method: req.method, headers: req.headers, body: JSON.stringify(body) })
+      }
+      const res = await replayAdmin(req, url, path, picked, from.device, req.method !== 'GET')
+      if (!(res.headers.get('content-type') ?? '').includes('application/json')) return res
+      const answer = await res.json().catch(() => null)
+      return json(res.status, nodesAnswerForNode(answer, from.device, selfId))
     }
     // The settings of the features the master runs for every machine (#780), which a remote
     // listener keeps on this computer (localOnly), are the owner's on each of its paired devices
