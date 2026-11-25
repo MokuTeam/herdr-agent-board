@@ -1039,6 +1039,57 @@ describe("the master's side", () => {
     }
   })
 
+  test('#760 spawn-agent’s start waits BOARD_NODE_SPAWN_MS, and one with no answer is never "unreachable"', async () => {
+    const prev = { read: process.env.BOARD_NODE_READ_MS, spawn: process.env.BOARD_NODE_SPAWN_MS }
+    process.env.BOARD_NODE_READ_MS = '40'
+    process.env.BOARD_NODE_SPAWN_MS = '400'
+    const dir = isolatedHome()
+    const up = createNodeUplink({ outbox: createOutbox({ dir: join(dir, 'outbox') }), log: () => {} })
+    const ac = new AbortController()
+    try {
+      // No master's stream: nothing was sent, so the node may start it itself.
+      expect((await up.call({ cmd: 'spawn', argv: ['{}'], session: 's-1' })).body).toEqual({ state: 'unreachable' })
+      const streamRes = up.stream(new Request('http://n/api/node/uplink', { signal: ac.signal }))
+      let answer = true
+      void (async () => {
+        const reader = (streamRes.body as ReadableStream<Uint8Array>).getReader()
+        let buf = ''
+        for (;;) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buf += new TextDecoder().decode(value)
+          const parts = buf.split('\n\n')
+          buf = parts.pop() ?? ''
+          for (const p of parts) {
+            if (!p.startsWith('event: call\n')) continue
+            const c = JSON.parse(p.split('\n')[1]?.slice('data: '.length) ?? 'null') as { id: string }
+            if (answer) setTimeout(() => up.answer(c.id, { code: 0, out: ['pane=@server-2:w1:p1'], err: [] }), 120)
+          }
+        }
+      })()
+      // Answered after READ_MS: a start waits its own, longer time.
+      expect((await up.call({ cmd: 'spawn', argv: ['{}'], session: 's-1' })).body).toMatchObject({
+        state: 'answered',
+        code: 0,
+      })
+      // Taken and never answered: it may run by now, so it fails rather than reading as not sent.
+      answer = false
+      expect((await up.call({ cmd: 'spawn', argv: ['{}'], session: 's-1' })).body).toEqual({
+        state: 'answered',
+        code: 1,
+        out: [],
+        err: ["the board's computer did not say what became of the start: see the board before starting it again"],
+      })
+    } finally {
+      ac.abort()
+      up.close()
+      if (prev.read === undefined) delete process.env.BOARD_NODE_READ_MS
+      else process.env.BOARD_NODE_READ_MS = prev.read
+      if (prev.spawn === undefined) delete process.env.BOARD_NODE_SPAWN_MS
+      else process.env.BOARD_NODE_SPAWN_MS = prev.spawn
+    }
+  })
+
   test('#698 board team refuses join/watch/listen/loop-set, pulls post --file, deduplicates writes, and allows uplink files in boardOwnFile', async () => {
     const dir = isolatedHome()
     // Verify boardOwnFile allows nodes/<id>/uplink/<callId>/file.txt and blocks nodes/<id>/token.

@@ -22,6 +22,7 @@ import {
 import { failureKind } from '../../core/launch/launcher-command.ts'
 import { sameDir } from '../../core/launch/names.ts'
 import { refusalText } from '../../core/launch/place-text.ts'
+import type { NodeFolderFacts } from '../../core/launch/spawn-node.ts'
 import { forkCard } from '../../core/links.ts'
 import { nodesConfig } from '../../core/nodes.ts'
 import { isPiItem, piSessionId } from '../../core/pi.ts'
@@ -77,6 +78,12 @@ export interface StartOptions {
   sessionId?: string | null
   /** A verifier's start on a worker's node (#675): placed there with that node's own folder and profile. */
   remote?: string | null
+  /**
+   * spawn-agent on a node (#760, services/nodes/spawn-from.ts): the folder is that node's, as its
+   * facts say, and the placer applies the rule of core/portable.ts to them. `nodeProfile`: the
+   * request's profile is the node's own id, which this board does not have.
+   */
+  origin?: { device: string; facts: NodeFolderFacts; nodeProfile?: boolean } | null
 }
 
 /** How a launch went, for a start of the server's own that waits on it (a verifier, #492); null once it is gone. */
@@ -235,6 +242,7 @@ export function createLaunches({
       sessionId = null,
       remote = null,
       codexFork,
+      origin = null,
     }: StartOptions = {},
   ): Promise<StartResult> {
     if (frozen()) {
@@ -246,6 +254,8 @@ export function createLaunches({
     // verifier (#675, `remote` set) goes through the placer, pinned to its worker's node.
     const placing = resume || fork || node || (sessionId && !remote) ? null : placer()
     if (remote && !placing) return { ok: false, field: 'pin', error: t('place.refuse.no-device', { pin: remote }) }
+    if (origin && !placing)
+      return { ok: false, field: 'pin', error: t('place.refuse.no-device', { pin: origin.device }) }
     // Only the board's own spawn-agent types a profile's start command: the others never read it.
     const launcher = launcherFor(deps.cfg.launch, { resume: !!resume, fork: !!fork, ...(codexFork && { codexFork }) })
     const r = await checkRequest(body, {
@@ -269,6 +279,8 @@ export function createLaunches({
       // "Where" and a node's folder are read only while the board places (#504).
       ...(placing && { pins: true }),
       ...(placing && remote && { remote, nodeProfile: true }),
+      ...(placing &&
+        origin && { remote: origin.device, anyPin: true, ...(origin.nodeProfile && { nodeProfile: true }) }),
     })
     if (!r.ok) return r
     // launch.agent whose arguments pick the session cannot resume one: refused before anything runs.
@@ -290,6 +302,7 @@ export function createLaunches({
     // a copy of its source's in the source's folder: no worktree.
     const request = resume ? { ...r.launch, message: '' } : fork ? { ...r.launch, worktree: null } : r.launch
     const l = newLaunch(request, items, resume, fork)
+    if (origin) l.originFacts = origin.facts
     if (node) {
       l.id = node.session
       l.sessionGiven = node.session

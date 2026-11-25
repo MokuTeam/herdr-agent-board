@@ -344,11 +344,17 @@ test('the skill install copies is upstream’s, word for word, but for what `boa
   // #380: --model, in the command line, the PowerShell names and a line of its own.
   // #505: where a worker may run on another device, and what spawn-agent's device= and queued= lines mean.
   // #628: cross-agent ListAgents/SendMessage (agy MCP + board agents/board send).
+  // #760: --device, in the command line and the PowerShell names, the board placing from a node too,
+  // and two lines of their own.
   const ours = read(root, 'skills', 'herdr-agents', 'SKILL.md')
+    .replace(' [--device <id|local>]', '')
+    .replace(' -Device`)', '`)')
     .replace(' [--model <id or alias>]\n```', '\n```')
     .replace(' -Workspace -Model`)', ' -Workspace`)')
+    .replace(/- `--device <id>` starts it on that machine[^\n]*\n/, '')
+    .replace(/- On a node, when the master cannot be reached[^\n]*\n/, '')
     .replace(/- An agent on another model than the profile's default: [^\n]*\n/, '')
-    .replace(/- Where the board has other devices, a worker may run on one of them [^\n]*\n/, '')
+    .replace(/- Where the board has other devices, [^\n]*\n/, '')
     .replace(/- A line ending in `device=<device> session=<id>` means [^\n]*\n/, '')
     .replace(/- Other agents \(`agy`, `pi`, Codex\) and other devices: [^\n]*\n/, '')
     .replace(

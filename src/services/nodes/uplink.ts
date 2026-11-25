@@ -71,6 +71,7 @@ import type { ThreadCmdContext } from '../../entrypoints/thread-cli.ts'
 import type { TimeCmdContext } from '../../entrypoints/time-cli.ts'
 import type { Known } from '../case-sessions.ts'
 import type { NodeLinks } from './links.ts'
+import type { SpawnFromDeps } from './spawn-from.ts'
 
 export interface UplinkRunner {
   close(): Promise<void>
@@ -107,6 +108,14 @@ export interface UplinkRunnerOptions {
   runTeam?: (argv: readonly string[], ctx: { key: string; name: string; lane: string | null }) => Promise<UplinkResult>
   /** Tests: `board decisions`'s entry. */
   runDecisions?: (words: readonly string[], now: number, out: (line: string) => void) => void
+  /**
+   * spawn-agent's start from a node's session (#760, spawn-from.ts): this board's launches, profiles
+   * and herdr. Absent: such a call is refused, and the node starts the session itself.
+   */
+  spawn?: Pick<SpawnFromDeps, 'start' | 'profiles' | 'workspaces' | 'herdrName'> & {
+    /** Tests: the board's payload; `GET /api/board` on the web port by default. */
+    payload?: SpawnFromDeps['payload']
+  }
   /** Tests: `board journal`'s entry. */
   runJournal?: (
     args: readonly string[],
@@ -453,6 +462,8 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
         return scheduleWriteFrom(id, call)
       case 'unschedule':
         return unscheduleFrom(id, call)
+      case 'spawn':
+        return spawnCall(id, call)
     }
     const sub = call.argv[0] ?? 'help'
     const not = Object.hasOwn(NOT_FROM_NODE, sub) ? NOT_FROM_NODE[sub] : undefined
@@ -873,6 +884,47 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     } catch (e) {
       return failed(messageOf(e))
     }
+  }
+
+  /** spawn-agent's start from a node's session (#760): placed by this board (spawn-from.ts). */
+  async function spawnCall(id: string, call: UplinkCall): Promise<UplinkResult> {
+    const who = sessionOf(id, call.session)
+    if (!who) return refused('not a session of the node')
+    const s = o.spawn
+    if (!s) return refused('spawn-agent is not taken from a node by this board')
+    const payload =
+      s.payload ??
+      (async (): Promise<Record<string, unknown> | null> => {
+        try {
+          const res = await fetch(`http://127.0.0.1:${webPort()}/api/board`, { signal: AbortSignal.timeout(5000) })
+          const body: unknown = await res.json()
+          return res.ok && isRecord(body) ? body : null
+        } catch {
+          return null
+        }
+      })
+    const { spawnFrom } = await import('./spawn-from.ts')
+    return spawnFrom(id, { key: who.key, item: who.item, lane: who.lane || call.lane || null }, call, {
+      cfg: o.cfg,
+      start: s.start,
+      payload,
+      profiles: s.profiles,
+      online: online,
+      workspaces: s.workspaces,
+      herdrName: s.herdrName,
+      // Sent again before it was answered (this board started over meanwhile): not a second start.
+      taken: () => {
+        try {
+          store.rememberCall(id, call.id, {
+            code: 1,
+            out: [],
+            err: ["the board's computer took this start already: see the board before starting it again"],
+          })
+        } catch (err) {
+          o.log(`node ${id}: the uplink's ledger: ${messageOf(err)}`)
+        }
+      },
+    })
   }
 
   /** `board unschedule <id>` from a node (#698): removes an entry belonging to or created by the calling node session. */

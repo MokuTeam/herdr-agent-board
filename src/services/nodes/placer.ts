@@ -41,6 +41,7 @@ import { knobMs, pace } from '../../adapters/pacing.ts'
 import { ROOT } from '../../adapters/paths.ts'
 import { t } from '../../core/lang.ts'
 import { checkBranch } from '../../core/launch/names.ts'
+import type { NodeFolderFacts } from '../../core/launch/spawn-node.ts'
 import { NODE_API } from '../../core/node-door.ts'
 import { defaultThresholds, LOCAL, type NodeStatus, type NodesConfig, nodeKey, nodesConfig } from '../../core/nodes.ts'
 import {
@@ -128,6 +129,13 @@ export interface PlacerOptions {
     identity?: typeof checkoutIdentity
   }
   exists?: (path: string) => boolean
+  /**
+   * A repository as a folder of this computer (services/node/checkout.ts), for a start a node's
+   * session asked for (#760) that runs here. Absent: such a start is turned away here.
+   */
+  checkout?: (
+    source: Extract<NodeSource, { kind: 'repo' }>,
+  ) => Promise<{ ok: true; cwd: string } | { ok: false; why: string }>
 }
 
 export interface Placer extends LaunchPlacer {
@@ -158,6 +166,8 @@ interface Held {
   sentAt: number | null
   /** The node whose profile is being synced before the launch request (#588). */
   syncing: string | null
+  /** A node's repository this computer could not check out (#760), why: it is not cloned again. */
+  noCheckout?: string
   /**
    * Last `sent` / `syncing` written to queue.json for this entry, so toQueue avoids redundant
    * writes yet never leaves stale markers on disk.
@@ -423,7 +433,46 @@ export function createPlacer(o: PlacerOptions): Placer {
     timerFollows()
   }
 
-  function runHere(h: Held, v: Extract<Verdict, { on: string }>): void {
+  async function runHere(h: Held, v: Extract<Verdict, { on: string }>): Promise<'ran' | 'turned'> {
+    // A node's folder that may leave (#760): this computer runs it in a checkout of its own.
+    if (h.task.origin !== LOCAL && h.source?.kind === 'repo') {
+      const url = h.source.url
+      let why = h.noCheckout
+      if (why === undefined) {
+        h.l.step = 'cloning'
+        o.launches.changed()
+        const got = o.checkout
+          ? await o.checkout(h.source)
+          : { ok: false as const, why: 'no checkout on this computer' }
+        if (h.gone || closed) {
+          release(h.l.sessionGiven ?? '')
+          return 'ran'
+        }
+        if (got.ok) {
+          h.l.cwd = got.cwd
+          delete h.l.remote
+        } else {
+          why = got.why
+          h.noCheckout = why
+          o.log(`placer: ${h.l.name}: no checkout of ${url} here: ${why}`)
+        }
+      }
+      if (why !== undefined) {
+        // Another device may still take it; this computer is not asked to clone it again.
+        const pin = h.task.pin
+        const here = !!pin && 'device' in pin && pin.device === LOCAL
+        if (!here && (nodes()?.order ?? []).some(id => id !== LOCAL && !h.left.has(id))) return turn(h, LOCAL, 'repo')
+        const p = placeOf(h)
+        delete p.device
+        delete p.wait
+        p.checkout = why
+        h.l.state = 'failed'
+        h.l.error = `this computer could not check out ${url}: ${why}`
+        release(h.l.sessionGiven ?? '')
+        letGo(h)
+        return 'ran'
+      }
+    }
     const p = placeOf(h)
     delete p.device
     delete p.wait
@@ -432,6 +481,7 @@ export function createPlacer(o: PlacerOptions): Placer {
     h.l.step = 'prepare'
     letGo(h)
     o.launches.runLocal(h.l)
+    return 'ran'
   }
 
   function toQueue(h: Held, wait: Blocker | undefined): void {
@@ -485,7 +535,11 @@ export function createPlacer(o: PlacerOptions): Placer {
       model: l.model ?? '',
       message: l.message,
       workspace: l.workspaceLabel,
-      source: h.source,
+      // A node's own folder (#760) goes back to it as that folder, not as a clone of its repository.
+      source:
+        h.source?.kind === 'repo' && h.task.origin !== LOCAL && device === h.task.origin
+          ? { kind: 'path', cwd: l.cwd, worktree: l.worktree }
+          : h.source,
       ...(l.exactSession && { exactSession: true }),
     }
   }
@@ -704,7 +758,10 @@ export function createPlacer(o: PlacerOptions): Placer {
           return
         }
         if ('on' in v) {
-          if (v.on === LOCAL) return runHere(h, v)
+          if (v.on === LOCAL) {
+            if ((await runHere(h, v)) === 'turned') continue
+            return
+          }
           if ((await send(h, v.on)) === 'turned') continue
           return
         }
@@ -803,6 +860,50 @@ export function createPlacer(o: PlacerOptions): Placer {
 
   // ---------------------------------------------------------------- a start the placer takes
 
+  /**
+   * A start a node's session asked for (#760), its folder that node's (`origin`): it stays there (its
+   * own folder) unless the lane may leave, the node's checkout is clean and pushed to a remote any
+   * device can clone, and the brief names no file of the node. Then it goes anywhere as a repository,
+   * and back to the node as its folder (bodyOf).
+   */
+  function originTask(
+    l: Launch,
+    base: Omit<Task, 'origin' | 'portable'>,
+    origin: string,
+    facts: NodeFolderFacts,
+    cfg: NodesConfig,
+  ): { task: Task; source: NodeSource } {
+    const stay = (p: Portable): { task: Task; source: NodeSource } => ({
+      task: { ...base, origin, portable: p },
+      source: { kind: 'path', cwd: l.cwd, worktree: l.worktree },
+    })
+    const c = facts.checkout
+    const verdict = portable({
+      lane: l.category,
+      lanes: cfg.lanes,
+      checkout: c ? { remote: c.url, clean: c.clean, headPushed: c.headPushed && !!c.branch } : null,
+      worktree: null,
+      brief: '',
+      exists: () => false,
+    })
+    if (!verdict.ok) return stay(verdict)
+    if (facts.localPath) return stay({ ok: false, why: { kind: 'local-path', path: facts.localPath } })
+    if (!c?.url || c.subdir === null) return stay({ ok: false, why: { kind: 'no-remote' } })
+    if (c.branch && checkBranch(c.branch)) return stay({ ok: false, why: { kind: 'name', name: c.branch } })
+    if (!subdirTravels(c.subdir)) return stay({ ok: false, why: { kind: 'name', name: c.subdir } })
+    return {
+      task: { ...base, origin, portable: verdict },
+      source: {
+        kind: 'repo',
+        url: c.url,
+        ref: c.branch,
+        subdir: c.subdir,
+        worktree: l.worktree,
+        ...(facts.identity && { identity: facts.identity }),
+      },
+    }
+  }
+
   /** What the task is: its lane may leave, its folder travels in git, its brief names nothing of here. */
   async function taskOf(
     l: Launch,
@@ -817,6 +918,8 @@ export function createPlacer(o: PlacerOptions): Placer {
       byHand,
       ...(l.pin && { pin: l.pin }),
     }
+    // spawn-agent on a node (#760): the rule of core/portable.ts over what the node read of its folder.
+    if (l.remote && l.originFacts) return originTask(l, base, l.remote, l.originFacts, cfg)
     if (l.remote) {
       // A folder of the pinned node: it starts there or nowhere.
       return {

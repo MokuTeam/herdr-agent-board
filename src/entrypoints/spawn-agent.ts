@@ -47,6 +47,12 @@
 // name=<Name> waiting=<device>:<kind>", exit 0). The spawn-agent the board's own launcher runs never
 // asks it back.
 //
+// --device <id|local> (#760) pins a placed start to that machine (local: the board's own computer);
+// a device the board does not list, one offline, or a board that cannot be asked fails at once. On a
+// node (`node` without `nodes`) a new session is the master's to place (services/launch/spawn-node.ts):
+// it goes up the node's uplink, and a master that cannot be asked or that does not place it leaves
+// it to this computer, saying why, unless --device names another machine.
+//
 // --thread <key> (case files, #488, services/launch/case-start.ts) starts a fresh session from the
 // case's brief, always on this computer, and gives it the thread; the line ends in " thread=<key>".
 import { homedir } from 'node:os'
@@ -144,22 +150,63 @@ try {
     // Case files (#488): --thread starts here, never placed, from the case's brief.
     if (o.thread) await startCase(o, cfg)
     else {
-      // With `nodes` the board places a new session (#505); without it, nothing of that is loaded.
-      const placed =
-        cfg.nodes !== undefined && cfg.nodes !== null && cfg.nodes !== false && !launcherChild
-          ? await (await import('../services/launch/spawn-board.ts')).askBoard(o, cfg, {
-              profiles: loadProfiles({ home: homedir() }),
-              env: process.env,
-              home: homedir(),
-            })
-          : null
-      if (placed !== null) console.log(placed)
-      else await startHere(o, cfg)
+      const hasNodes = cfg.nodes !== undefined && cfg.nodes !== null && cfg.nodes !== false
+      const hasNode = cfg.node !== undefined && cfg.node !== null && cfg.node !== false
+      // On a node (#760) the master places a new session; nothing of that is loaded elsewhere.
+      const node = hasNode && !hasNodes && !launcherChild ? await nodeStart(o, cfg) : undefined
+      if (node !== undefined) {
+        if (node !== null) console.log(node)
+        else await startHere(o, cfg)
+      } else {
+        // With `nodes` the board places a new session (#505); without it, nothing of that is loaded.
+        const placed =
+          hasNodes && !launcherChild
+            ? await (await import('../services/launch/spawn-board.ts')).askBoard(o, cfg, {
+                profiles: loadProfiles({ home: homedir() }),
+                env: process.env,
+                home: homedir(),
+              })
+            : null
+        if (placed !== null) console.log(placed)
+        else {
+          // --device (#760) on a board with no other machine: only its own computer is one.
+          if (o.device !== undefined && o.device !== 'local' && !hasNodes && !launcherChild)
+            throw new Error(`--device ${o.device}: this board has no other devices (no nodes in its config.json)`)
+          await startHere(o, cfg)
+        }
+      }
     }
   }
 } catch (err) {
   console.error(`spawn-agent: ${err instanceof Error ? err.message : String(err)}`)
   process.exitCode = 1
+}
+
+/**
+ * On a node (#760): the start the master made (its line), null to start it here, or undefined when
+ * the master is not asked at all: not a node board after all, or a start the placer does not take.
+ */
+async function nodeStart(o: SpawnOptions, cfg: Config): Promise<string | null | undefined> {
+  const [{ askMaster, boardHere, pureNode }, { placeable }] = await Promise.all([
+    import('../services/launch/spawn-node.ts'),
+    import('../core/launch/spawn-board.ts'),
+  ])
+  const node = await pureNode(cfg)
+  if (!node || !placeable(o)) return undefined
+  const [{ callBoard }, { herdrName }] = await Promise.all([
+    import('./node-call.ts'),
+    import('../services/launch/spawn-board.ts'),
+  ])
+  return askMaster(o, node, {
+    profiles: loadProfiles({ home: homedir() }),
+    env: process.env,
+    home: homedir(),
+    call: callBoard(cfg.port),
+    board: boardHere(cfg.port),
+    herdrName,
+    log: line => console.error(`spawn-agent: ${line}`),
+    ownLauncher: !!(cfg.launch?.command || cfg.launch?.agent),
+  })
 }
 
 /**

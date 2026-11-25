@@ -147,6 +147,7 @@ import { mokupilotCheck } from '../services/mokupilot.ts'
 import { createMoveIn, type MoveIn } from '../services/move-in.ts'
 import { createMoveOut, type MoveOut } from '../services/move-out.ts'
 import { createNodeBundle, nodeBundleDeps } from '../services/node/bundle.ts'
+import { createCheckouts } from '../services/node/checkout.ts'
 import { createNodeGit } from '../services/node/git-access.ts'
 import { createLocalRelayOps, createNodeHandover } from '../services/node/handover.ts'
 import { createNodeLaunch } from '../services/node/launch.ts'
@@ -1999,7 +2000,22 @@ export async function startServer({
       webPort: () => Number(server.port) || Number(cfg.port) || 12422,
       setPresence: (state, from) => presence.set(state, from),
       frozen: () => handoverFrozen,
+      // spawn-agent on a node (#760): placed by this board as one of its own starts.
+      spawn: {
+        start: (body, options) => {
+          const masterId = nodesConfig(cfg.nodes, hostname())?.id ?? ''
+          return launches.start(
+            body,
+            dropMovedCards([...board.items(), ...(aggregate.part()?.items ?? [])], masterId),
+            options,
+          )
+        },
+        profiles: () => deps.profiles(),
+        workspaces: () => workspaceList(8000),
+        herdrName: async pane => (await import('../services/launch/spawn-board.ts')).herdrName(pane),
+      },
     })
+    const masterCheckouts = createCheckouts()
     const placer = createPlacer({
       cfg,
       links: nodeLinks,
@@ -2012,6 +2028,11 @@ export async function startServer({
       updating: id => nodeUpdater?.updating(id) ?? false,
       // board-state.ts tells the placer this computer's sessions after each read of herdr.
       awaitsBoard: true,
+      // A node's repository a session it asked for runs in here (#760).
+      checkout: async source => {
+        const got = await masterCheckouts.folderOf(nodesConfig(cfg.nodes, hostname())?.workRoot ?? '~/work', source)
+        return got.ok ? { ok: true, cwd: got.cwd } : got
+      },
       fillThresholds: (id, given) => {
         const r = editNodes(raw => fillThresholds(raw, id, given))
         if (!r.ok) log(`placer: the thresholds of ${id} were not written: ${r.error}`)

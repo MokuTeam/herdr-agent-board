@@ -10,7 +10,7 @@
 import { hasUnprintable } from './team.ts'
 import { FILE_MAX_BYTES, FILES_MAX } from './work-threads.ts'
 
-/** The commands a master takes from a node: `board thread` (stage 1, 10 item 6), `board send` (#619), `board agents` (#628), `board time` (#644), and shared-state commands (#698). */
+/** The commands a master takes from a node: `board thread` (stage 1, 10 item 6), `board send` (#619), `board agents` (#628), `board time` (#644), shared-state commands (#698), and spawn-agent's start (#760, `spawn`). */
 export const UPLINK_COMMANDS: ReadonlySet<string> = new Set([
   'thread',
   'threads',
@@ -28,6 +28,7 @@ export const UPLINK_COMMANDS: ReadonlySet<string> = new Set([
   'remind',
   'every',
   'unschedule',
+  'spawn',
 ])
 
 /** The exit code of a call the master does not take, whatever the node sent. */
@@ -100,6 +101,8 @@ export function isRememberedCall(cmd: string, argv: readonly string[]): boolean 
   const sub = argv[0] ?? ''
   if (cmd === 'thread' || cmd === 'threads') return sub === 'verdict'
   if (cmd === 'send' || cmd === 'away' || cmd === 'remind' || cmd === 'every' || cmd === 'unschedule') return true
+  // spawn-agent's start (#760): a call sent again on a new stream must not start a second session.
+  if (cmd === 'spawn') return true
   if (cmd === 'time') return TIME_WRITE_SUBS.has(sub)
   if (cmd === 'cal') return CAL_WRITE_SUBS.has(sub)
   if (cmd === 'team') {

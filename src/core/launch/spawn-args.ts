@@ -3,11 +3,12 @@
 // text typed into a prompt is still on screen. The board's own launcher
 // (services/launch/launcher.ts) uses the same rules.
 import { t } from '../lang.ts'
+import { DEVICE_ID, LOCAL } from '../node-key.ts'
 import { MODEL_MAX, readModel } from './model.ts'
 import { checkName } from './names.ts'
 
 export const USAGE =
-  'spawn-agent --name <Name> --cwd <folder> [--label <tab label>] [--brief-file <file> | --brief <text>] [--workspace <herdr workspace id>] [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>] [--pane <pane id>] [--profile <id>] [--model <id or alias>] [--agent claude|pi|agy|codex] [--trust] [--workdesk-worker] [--effort <level>] [--approval on-request|never] [--sandbox read-only|workspace-write|danger-full-access]'
+  'spawn-agent --name <Name> --cwd <folder> [--label <tab label>] [--brief-file <file> | --brief <text>] [--workspace <herdr workspace id>] [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>] [--pane <pane id>] [--profile <id>] [--model <id or alias>] [--agent claude|pi|agy|codex] [--device <id|local>] [--trust] [--workdesk-worker] [--effort <level>] [--approval on-request|never] [--sandbox read-only|workspace-write|danger-full-access]'
 
 /** `spawn-agent --help`: the usage, then what is easy to get wrong. */
 export const HELP = `${USAGE}
@@ -21,7 +22,11 @@ default of every later session in the profile.
 own id), no Claude profile (--profile, --config-dir, --keep-env) and no --trust (Codex asks about the
 folder in its own dialog). --model is Codex's -m; --effort <level> is model_reasoning_effort for that
 model; --approval and --sandbox are Codex's -a and -s. Without them Codex runs on the user's
-config.toml. If config.json sets \`codexHome\`, the tab gets CODEX_HOME=<that folder>.`
+config.toml. If config.json sets \`codexHome\`, the tab gets CODEX_HOME=<that folder>.
+
+--device <id|local> starts the session on that machine of the board's (#760): an id from the board's
+devices, or local for the board's own computer (the master). On a node the start goes to the master,
+which places it. Without it the board places the session by its rules, as before.`
 
 /**
  * Set by the board's own launcher on the spawn-agent it runs (services/launch/launcher.ts): that one
@@ -93,6 +98,11 @@ export interface SpawnOptions {
    * With it --name and --cwd may be left out: the key, and the folder of a session that held the case.
    */
   thread?: string
+  /**
+   * The machine to start on (#760): a device id of the board's `nodes`, or `local` for the board's
+   * own computer (the master). Only a start the board may place takes it.
+   */
+  device?: string
   help?: never
 }
 
@@ -136,6 +146,7 @@ const OPTIONS: Record<string, Key> = {
   trust: 'trust',
   workdeskworker: 'workdeskWorker',
   thread: 'thread',
+  device: 'device',
   help: 'help',
   h: 'help',
 }
@@ -280,6 +291,24 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
   const effort = out.effort?.trim()
   if (effort !== undefined && !/^[a-z][a-z0-9_-]{0,31}$/i.test(effort))
     throw new Error(`--effort must be a reasoning level such as low, medium or high, not "${out.effort}"`)
+  // A machine (#760): only a new session the board may place goes to one.
+  const device = out.device?.trim()
+  if (device !== undefined) {
+    if (device !== LOCAL && !DEVICE_ID.test(device))
+      throw new Error(`--device must be a device id of the board's or local, not "${out.device}"`)
+    const fixed = [
+      ...(resume !== undefined ? ['--resume'] : []),
+      ...(fork !== undefined ? ['--fork'] : []),
+      ...(pane !== undefined ? ['--pane'] : []),
+      ...(sessionId !== undefined ? ['--session-id'] : []),
+      ...(configDir !== undefined ? ['--config-dir'] : []),
+      ...(keepEnv ? ['--keep-env'] : []),
+      ...(trust ? ['--trust'] : []),
+      ...(workdeskWorker ? ['--workdesk-worker'] : []),
+      ...(thread ? ['--thread'] : []),
+    ]
+    if (fixed.length) throw new Error(`--device places a new session: give it no ${fixed.join(', ')}`)
+  }
   return {
     name,
     cwd: out.cwd ?? '',
@@ -303,6 +332,7 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
     ...(trust && { trust: true }),
     ...(workdeskWorker && { workdeskWorker: true }),
     ...(thread && { thread }),
+    ...(device !== undefined && { device }),
   }
 }
 

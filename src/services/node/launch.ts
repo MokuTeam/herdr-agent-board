@@ -20,30 +20,22 @@
 // - Below the hard floor (512 MB available) 409 `full`; a profile this node does not have, or one
 //   not logged in, 409 `profile`. The master then tries its next device.
 import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { basename, isAbsolute, join, relative } from 'node:path'
+import { basename, join } from 'node:path'
 import { replaceFile } from '../../adapters/json-store.ts'
-import {
-  cloneRepo,
-  fetchRepo,
-  moveTo,
-  type RepoDone,
-  type RepoState,
-  repoIdentity,
-  repoState,
-  setRepoIdentity,
-} from '../../adapters/node-repo.ts'
 import { nodeDir } from '../../adapters/node-store.ts'
 import { memAvailableMb } from '../../adapters/sysload.ts'
-import { type GitIdentity, identityOf, sameIdentity } from '../../core/git-access.ts'
+import { type GitIdentity, identityOf } from '../../core/git-access.ts'
 import { checkBranch } from '../../core/launch/names.ts'
 import type { NodeConfig } from '../../core/nodes.ts'
 import type { NodeTurn } from '../../core/placement.ts'
-import { repoAddress, subdirTravels } from '../../core/portable.ts'
+import { subdirTravels } from '../../core/portable.ts'
 import type { ProfileSet } from '../../core/profiles.ts'
 import type { LaunchView } from '../../core/types.ts'
 import type { StartResult } from '../launch/launches.ts'
-import { expandHome, loggedIn } from './status.ts'
+import { createCheckouts, type RepoOps } from './checkout.ts'
+import { loggedIn } from './status.ts'
+
+export { cloneUrl, type RepoOps } from './checkout.ts'
 
 /** Below this much memory available the node takes no start, whatever the master thought (6.3). */
 export const FLOOR_MB = 512
@@ -81,16 +73,6 @@ export type NodeLaunchAnswer =
   | { status: 409; body: { error: NodeTurn; detail?: string } }
   | { status: 400; body: { error: 'body' | 'launch'; field: string; detail?: string } }
   | { status: 503; body: { error: 'node' } }
-
-/** The git a start needs (adapters/node-repo.ts), handed in so tests can stand in. */
-export interface RepoOps {
-  clone(url: string, dir: string): Promise<RepoDone>
-  fetch(dir: string): Promise<RepoDone>
-  state(dir: string, ref: string): ReturnType<typeof repoState>
-  move(dir: string, state: RepoState): Promise<RepoDone>
-  identity(dir: string): Promise<GitIdentity | null>
-  setIdentity(dir: string, id: GitIdentity): Promise<RepoDone>
-}
 
 export interface NodeLaunchDeps {
   node: () => NodeConfig | null
@@ -173,16 +155,6 @@ export function launchRequestOf(raw: unknown): NodeLaunchRequest | { field: stri
   }
 }
 
-/**
- * The URL to clone an address from: the master's own when it is https or ssh for that same address
- * (a token in it is gone already: the master sends no login), else `https://<address>.git`.
- */
-export function cloneUrl(address: string, sent: string): string {
-  const https = /^https:\/\//i.test(sent)
-  const ssh = /^ssh:\/\//i.test(sent) || /^[A-Za-z0-9._-]+@[A-Za-z0-9.-]{2,}:(?!\/\/)/.test(sent)
-  return (https || ssh) && repoAddress(sent) === address ? sent : `https://${address}.git`
-}
-
 export interface NodeLaunch {
   answer(raw: unknown): Promise<NodeLaunchAnswer>
 }
@@ -190,19 +162,10 @@ export interface NodeLaunch {
 export function createNodeLaunch(d: NodeLaunchDeps): NodeLaunch {
   const now = d.now ?? Date.now
   const dir = d.dir ?? join(nodeDir(), 'launches')
-  const repo: RepoOps = d.repo ?? {
-    clone: cloneRepo,
-    fetch: fetchRepo,
-    state: repoState,
-    move: moveTo,
-    identity: repoIdentity,
-    setIdentity: setRepoIdentity,
-  }
+  const checkouts = createCheckouts({ ...(d.repo && { repo: d.repo }), ...(d.home !== undefined && { home: d.home }) })
   const platform = d.platform ?? process.platform
   /** Starts being made, by id: a second request for one waits for the first's answer. */
   const making = new Map<string, Promise<NodeLaunchAnswer>>()
-  /** One start at a time in a checkout: two clones into one folder would fail each other. */
-  const checkouts = new Map<string, Promise<unknown>>()
 
   const recordOf = (id: string): string => join(dir, `${id}.json`)
 
@@ -234,67 +197,6 @@ export function createNodeLaunch(d: NodeLaunchDeps): NodeLaunch {
     body: detail ? { error, detail } : { error },
   })
 
-  function oneAtATime<T>(key: string, fn: () => Promise<T>): Promise<T> {
-    const before = checkouts.get(key) ?? Promise.resolve()
-    const next = before.then(fn, fn)
-    const tail = next.catch(() => {})
-    checkouts.set(key, tail)
-    void tail.then(() => {
-      if (checkouts.get(key) === tail) checkouts.delete(key)
-    })
-    return next
-  }
-
-  /** The repository as a folder of this node, or the refusal. */
-  async function folderOf(
-    node: NodeConfig,
-    source: Extract<NodeLaunchRequest['source'], { kind: 'repo' }>,
-  ): Promise<{ ok: true; cwd: string; label: string } | { ok: false; why: string }> {
-    const address = repoAddress(source.url)
-    if (!address) return { ok: false, why: 'address' }
-    const segments = address.split('/')
-    const root = expandHome(node.workRoot, d.home ?? homedir())
-    const checkout = join(root, ...segments)
-    // The address rule keeps it below the work folder; checked here too, as the folder is made from it.
-    const below = relative(root, checkout)
-    if (!below || below.startsWith('..') || isAbsolute(below)) return { ok: false, why: 'address' }
-    return oneAtATime(checkout, async () => {
-      let st = await repo.state(checkout, source.ref)
-      if (!st.ok && !existsDir(checkout)) {
-        mkdirSync(join(checkout, '..'), { recursive: true })
-        const cloned = await repo.clone(cloneUrl(address, source.url), checkout)
-        if (!cloned.ok) return { ok: false, why: cloned.why }
-      } else if (st.ok) {
-        const fetched = await repo.fetch(checkout)
-        if (!fetched.ok) return { ok: false, why: fetched.why }
-      } else return { ok: false, why: st.why }
-      st = await repo.state(checkout, source.ref)
-      if (!st.ok) return { ok: false, why: st.why }
-      const s = st.state
-      if (!s.target) return { ok: false, why: `no branch ${s.ref}` }
-      // At the branch's remote commit already: a new worktree starts from it whatever the tree
-      // holds. Otherwise the checkout moves, which only a clean one may.
-      const there = s.branch === s.ref && s.head === s.target
-      if (!there || !source.worktree) {
-        if (!s.clean) return { ok: false, why: 'changes' }
-        if (!there) {
-          const moved = await repo.move(checkout, s)
-          if (!moved.ok) return { ok: false, why: moved.why }
-        }
-      }
-      const cwd = source.subdir ? join(checkout, ...source.subdir.split('/')) : checkout
-      if (!existsDir(cwd)) return { ok: false, why: 'no such folder' }
-      // Last, so a start turned away for anything else writes nothing. Two starts of one repository
-      // with different authors on the master: the later one's stays.
-      const given = source.identity
-      if (given && !sameIdentity(await repo.identity(checkout), given)) {
-        const set = await repo.setIdentity(checkout, given)
-        if (!set.ok) return { ok: false, why: `identity not set: ${set.why}` }
-      }
-      return { ok: true, cwd, label: segments.at(-1) ?? '' }
-    })
-  }
-
   async function workspaceFor(label: string): Promise<{ id: string; label: string } | { create: string }> {
     try {
       const found = (await d.workspaces()).find(w => w.label === label)
@@ -314,7 +216,7 @@ export function createNodeLaunch(d: NodeLaunchDeps): NodeLaunch {
     let cwd: string
     let label: string
     if (r.source.kind === 'repo') {
-      const got = await folderOf(node, r.source)
+      const got = await checkouts.folderOf(node.workRoot, r.source)
       if (!got.ok) return turn('repo', got.why)
       cwd = got.cwd
       label = got.label
@@ -367,13 +269,5 @@ export function createNodeLaunch(d: NodeLaunchDeps): NodeLaunch {
       making.set(r.id, next)
       return next
     },
-  }
-}
-
-function existsDir(p: string): boolean {
-  try {
-    return statSync(p).isDirectory()
-  } catch {
-    return false
   }
 }

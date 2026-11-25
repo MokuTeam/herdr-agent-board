@@ -1,7 +1,7 @@
 // spawn-agent asks the board (#505, docs/design/nodes 8.5), the logic without the network: which
 // starts the board may place, the request spawn-agent posts for one, and what the board's payload
 // says became of it, as the line spawn-agent prints. services/launch/spawn-board.ts asks.
-import { nodeKey, parseNodeKey } from '../nodes.ts'
+import { LOCAL, nodeKey, parseNodeKey } from '../nodes.ts'
 import { isPiItem, piSessionId } from '../pi.ts'
 import type { Item, LaunchView, Translator } from '../types.ts'
 import { deviceName, refusalText } from './place-text.ts'
@@ -61,8 +61,43 @@ export function launchBody(o: SpawnOptions, f: BoardStartFacts): Record<string, 
     ...(f.parent && { parent: f.parent }),
     ...(o.model && { model: o.model }),
     ...(o.agent && { agent: o.agent }),
+    // --device (#760): the board's "Where", read only while it has `nodes`.
+    ...(o.device && { pin: { device: o.device } }),
     byHand: false,
   }
+}
+
+/** A folder as spawn-agent was given it, trimmed and unquoted: one of another machine, not resolved here. */
+export const writtenDir = (p: string): string =>
+  String(p)
+    .trim()
+    .replace(/^["']|["']$/g, '')
+
+/**
+ * The device --device names (#760), as the board's payload lists its devices: `local`, or the
+ * master's own id (the local row's `selfId`), is the board's own computer; another id must be a
+ * device of the board that is not revoked and whose link is online. Throws with what is wrong.
+ */
+export function pinnedDevice(devices: unknown, asked: string): string {
+  if (asked === LOCAL) return LOCAL
+  const list = Array.isArray(devices)
+    ? devices.filter((d): d is Record<string, unknown> => typeof d === 'object' && d !== null)
+    : []
+  if (list.some(d => d.id === LOCAL && d.selfId === asked)) return LOCAL
+  const found = list.find(d => d.id === asked)
+  if (!found) {
+    const known = list.map(d => (d.id === LOCAL && typeof d.selfId === 'string' ? d.selfId : String(d.id)))
+    throw new Error(
+      `--device ${asked}: the board has no such device${known.length ? ` (it has ${known.join(', ')}; local is the board's own computer)` : ''}`,
+    )
+  }
+  if (found.revoked) throw new Error(`--device ${asked}: the device was taken off the board`)
+  const link = typeof found.link === 'object' && found.link !== null ? (found.link as { state?: unknown }) : null
+  if (link?.state !== 'online')
+    throw new Error(
+      `--device ${asked}: the device is ${typeof link?.state === 'string' ? link.state : 'not connected'}, so the start cannot go there now`,
+    )
+  return asked
 }
 
 /** The start as spawn-agent follows it: the launch's id, the session id the board gave it, and what was seen so far. */

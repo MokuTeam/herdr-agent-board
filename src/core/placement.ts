@@ -144,6 +144,11 @@ export interface LaunchPlace {
   turned?: { device: DeviceId; error: NodeTurn }[]
   /** Refused because 50 starts wait already (8.3). */
   queueFull?: true
+  /**
+   * A node's start (#760) this computer could not check out the repository of, why: it failed here
+   * before anything ran.
+   */
+  checkout?: string
 }
 
 /** What one start is counted as on its device until the device shows it (8.2). */

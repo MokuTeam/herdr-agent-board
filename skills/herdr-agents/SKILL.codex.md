@@ -30,7 +30,7 @@ The board's hook told you at the start how to keep your card current. Your shell
 ## Start another session
 
 ```bash
-spawn-agent --name <Name> --cwd <folder> [--label "<tab label>"] [--brief-file <utf-8 file> | --brief "<text>"] [--workspace <herdr workspace id>] [--model <id or alias>] [--agent claude|pi|codex]
+spawn-agent --name <Name> --cwd <folder> [--label "<tab label>"] [--brief-file <utf-8 file> | --brief "<text>"] [--workspace <herdr workspace id>] [--model <id or alias>] [--agent claude|pi|codex] [--device <id|local>]
 ```
 
 It opens a tab, starts the agent the way this computer is set up to, names the session, sends the brief and prints `pane=<id> name=<Name> agent=<herdr name>`. The board links the two sessions by that line. `spawn-agent --help` lists what this copy takes: `--agent codex` only where it is listed; without `--agent` it starts Claude.
@@ -39,6 +39,7 @@ It opens a tab, starts the agent the way this computer is set up to, names the s
 - `--workspace` takes the workspace id (`wP`), not its label. Without it the session lands in your workspace.
 - Do not start an agent with `herdr agent start` or a bare command in a pane: it gets no name, no brief and none of this computer's launcher settings.
 - A new folder may show a "trust this folder" dialog: spawn-agent stops and says so; the user answers it in that tab.
+- Where the board has other devices it places the new session, also when you run on a node (spawn-agent asks the master then). `--device <id>` starts it on that machine (`local` is the master itself) and fails at once when the device is unknown, offline, or the folder cannot go there.
 - A one-off session that has finished can be taken off the board with `board archive --session <name>`, but only one you started, or when the user asks.
 
 ## Hand work out by thread, hear the result in one line

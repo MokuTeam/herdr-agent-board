@@ -131,6 +131,7 @@ export async function checkRequest(
     pins = false,
     remote: forcedRemote,
     nodeProfile: isNodeProfile = false,
+    anyPin = false,
     codexFork,
   }: {
     categories?: Set<string> | null
@@ -144,6 +145,11 @@ export async function checkRequest(
     pins?: boolean
     remote?: string
     nodeProfile?: boolean
+    /**
+     * A node's own start (#760): `remote` is the folder's device whatever the pin says, as the
+     * placer may still send the start elsewhere by the folder's checkout.
+     */
+    anyPin?: boolean
   } & ({ codexFork: true; profiles?: never } | { codexFork?: never; profiles: ProfileSet }),
 ): Promise<CheckResult> {
   const fail = (field: string, key: string, vars?: Vars): CheckResult => ({ ok: false, field, error: t(key, vars) })
@@ -158,7 +164,7 @@ export async function checkRequest(
   }
   let cwd = ''
   let remote: string | undefined
-  if (pins && forcedRemote && pin && 'device' in pin && pin.device === forcedRemote) {
+  if (pins && forcedRemote && (anyPin || (pin && 'device' in pin && pin.device === forcedRemote))) {
     // A node's own folder (#675): never resolved or stat'd on the master, even when the same path exists here.
     cwd = String(b.cwd ?? '').trim()
     if (!cwd) return fail('cwd', 'launch.err.cwdEmpty')

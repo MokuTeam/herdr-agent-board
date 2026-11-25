@@ -45,6 +45,7 @@ import {
   uniqueSlug,
   worktreePath,
 } from '../../core/launch/names.ts'
+import type { NodeFolderFacts } from '../../core/launch/spawn-node.ts'
 import { forkCard } from '../../core/links.ts'
 import { nodeConfig, nodesConfig } from '../../core/nodes.ts'
 import { PI_AGENT } from '../../core/pi.ts'
@@ -86,6 +87,8 @@ export interface Launch extends LaunchRequest {
   exactSession?: boolean
   /** A master's start (#504, services/nodes/placer.ts): where it goes, as its card shows it; absent without `nodes`. */
   place?: LaunchPlace
+  /** spawn-agent on a node (#760): what the node read of its folder (`remote`), for the placer's rule. */
+  originFacts?: NodeFolderFacts
   /** The key whose card has its lane. */
   carded: string | null
   rootPane: string | null

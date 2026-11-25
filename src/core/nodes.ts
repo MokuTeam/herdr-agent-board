@@ -88,6 +88,11 @@ export interface NodesConfig {
    */
   devices: Record<string, DeviceConfig>
   problems: NodesProblem[]
+  /**
+   * Where this computer clones a repository a node's session started a session from (#760), when
+   * it runs that session itself: `<workRoot>/<host>/<path>`, as a node's own `workRoot`. Absent: `~/work`.
+   */
+  workRoot?: string
 }
 
 export interface NodeConfig {
@@ -118,7 +123,7 @@ const given = (v: unknown): boolean => v !== undefined && v !== null
 const bare = <T>(): Record<string, T> => Object.create(null) as Record<string, T>
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
 
-const TOP_KEYS = ['id', 'order', 'whenFull', 'lanes', 'relay', 'devices']
+const TOP_KEYS = ['id', 'order', 'whenFull', 'lanes', 'relay', 'devices', 'workRoot']
 const DEVICE_KEYS = [
   'title',
   'link',
@@ -447,7 +452,11 @@ export function nodesConfig(raw: unknown, hostName = ''): NodesConfig | null {
   for (const dev of Object.keys(devices)) if (dev !== LOCAL && !order.includes(dev)) order.push(dev)
   if (!order.includes(LOCAL)) order.push(LOCAL)
 
-  return { id, order, whenFull, lanes, relay, devices, problems }
+  let workRoot: string | undefined
+  if (isText(raw.workRoot, 1024)) workRoot = raw.workRoot
+  else if (given(raw.workRoot)) flag('workRoot', 'type')
+
+  return { id, order, whenFull, lanes, relay, devices, problems, ...(workRoot !== undefined && { workRoot }) }
 }
 
 /** config.json's `node` and what does not check out in it. */

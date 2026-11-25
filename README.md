@@ -999,7 +999,21 @@ session runs here, `pane=@<device>:<pane> name=<Name> agent=@<device>:<session> 
 session=<id>` when it runs on a node, or `queued=<launch id> name=<Name> waiting=<device>:<kind>`
 (exit 0) when every device is full. With the board down, without `nodes`, or with a launcher of
 the owner's own (`launch.command`, `launch.agent`), it starts the session itself as above. The
-spawn-agent the board runs as its launcher never asks the board back. It fails (exit code 1, the reason on stderr) when
+spawn-agent the board runs as its launcher never asks the board back.
+
+`--device <id|local>` (#760) names the machine: a device id of `nodes`, or `local` (or the
+master's own id) for the master itself. The start is posted pinned to it (`pin`), and fails at
+once when the board does not list that device or its link is not online, or when the board cannot
+be asked (down, no `nodes`, a launcher of the owner's own); `--device local` then starts here.
+On a node (`node` in config.json, no `nodes`) a new session is the master's to place, `--device`
+or not: spawn-agent sends it up the node's uplink (the call `spawn`) with what only the node can
+read of the folder (its git checkout, whether the brief names a file of the node), and the master
+places it by the same rule as its own starts. A clean, pushed checkout may go to any device (the
+master clones it under `nodes.workRoot`, default `~/work`, to run it itself); anything else runs on
+the node in its own folder. The line is the master's, a session placed on the node itself shown
+with its local pane. Without `--device`, a master that cannot be reached, or that does not place
+the start, leaves it to the node as before, saying why on stderr; with `--device` naming another
+machine that is an error. It fails (exit code 1, the reason on stderr) when
 the folder is not there, Claude is not ready in time, or Claude waits for a dialog first (the
 folder trust): answer it in that tab, then name and brief the session there. `--trust` answers
 two such dialogs with Yes instead: the folder-trust one when it names `--cwd` itself, and "Allow

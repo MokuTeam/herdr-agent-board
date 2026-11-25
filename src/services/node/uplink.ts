@@ -22,6 +22,7 @@ import { readFileSync, statSync } from 'node:fs'
 import { basename } from 'node:path'
 import { createOutbox, type Outbox, type OutboxCall } from '../../adapters/node-outbox.ts'
 import { knobMs } from '../../adapters/pacing.ts'
+import { SPAWN_FOLLOW_MAX_SEC } from '../../core/launch/spawn-node.ts'
 import {
   fileTooBig,
   isCallId,
@@ -41,6 +42,8 @@ export const KEPT_MS = 20_000
 export const SLOW_MS = 35_000
 /** Any other read waits this long while a master's stream is open. */
 export const READ_MS = 10_000
+/** spawn-agent's start (#760): the master follows it up to SPAWN_FOLLOW_MAX_SEC, then answers. */
+export const SPAWN_MS = (SPAWN_FOLLOW_MAX_SEC + 30) * 1000
 const PING_MS = 20_000
 
 /** A call as the stream carries it, as the board's other streams name an event (server/sse.ts). */
@@ -212,17 +215,29 @@ export function createNodeUplink(o: NodeUplinkOptions): NodeUplink {
       for (const client of [...clients]) write(client, event)
     }
     const verdict = (cmd === 'thread' || cmd === 'threads') && argv[0] === 'verdict'
+    // spawn-agent's start (#760): the master follows it until it shows, up to SPAWN_FOLLOW_MAX_SEC.
+    const spawn = cmd === 'spawn'
     const ms =
       keep || verdict
         ? knobMs('BOARD_NODE_KEPT_MS', KEPT_MS)
-        : isSlowCall(cmd, argv as string[])
-          ? knobMs('BOARD_NODE_SLOW_MS', SLOW_MS)
-          : knobMs('BOARD_NODE_READ_MS', READ_MS)
+        : spawn
+          ? knobMs('BOARD_NODE_SPAWN_MS', SPAWN_MS)
+          : isSlowCall(cmd, argv as string[])
+            ? knobMs('BOARD_NODE_SLOW_MS', SLOW_MS)
+            : knobMs('BOARD_NODE_READ_MS', READ_MS)
     const result = await wait(id, ms)
     if (result) return { status: 200, body: answered(result) }
     if (keep) return { status: 200, body: { state: 'kept', id } satisfies CallAnswer }
     // Not kept: no master takes it later.
     outbox.remove(id)
+    // A start the master took may run by now: never "unreachable", which would start it here too.
+    if (spawn)
+      return {
+        status: 200,
+        body: failed(
+          "the board's computer did not say what became of the start: see the board before starting it again",
+        ),
+      }
     return { status: 200, body: { state: 'unreachable' } satisfies CallAnswer }
   }
 

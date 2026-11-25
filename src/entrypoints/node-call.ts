@@ -1,5 +1,6 @@
 // Shared client helper for CLI commands forwarded from a node to its master over the uplink (#508, #698).
 import { randomUUID } from 'node:crypto'
+import { SPAWN_FOLLOW_MAX_SEC } from '../core/launch/spawn-node.ts'
 import { isRememberedCall, UPLINK_REFUSED } from '../core/node-uplink.ts'
 
 /** A command on a node as it goes to the node's board (services/node/uplink.ts call). */
@@ -22,6 +23,7 @@ export interface NodeCall {
     | 'remind'
     | 'every'
     | 'unschedule'
+    | 'spawn'
   argv: string[]
   session: string
   lane: string | null
@@ -44,6 +46,13 @@ export type NodeCallAnswer =
 const CALL_WAIT_MS = 45_000
 /** `board agents` is a read the caller waits on (ListAgents): a hanging board falls back to the local list soon. */
 const AGENTS_WAIT_MS = 5_000
+/** spawn-agent's start (#760): the master follows it up to SPAWN_FOLLOW_MAX_SEC, the node's board waits past that. */
+const SPAWN_WAIT_MS = (SPAWN_FOLLOW_MAX_SEC + 40) * 1000
+
+/** Nothing listens on the port: the call never reached a board. */
+const refusedConnection = (err: unknown): boolean =>
+  err instanceof Error &&
+  /ConnectionRefused|ECONNREFUSED|Unable to connect/i.test(`${(err as { code?: unknown }).code ?? ''} ${err.message}`)
 
 /** `POST /api/node/call` on this computer's board; null when no board answers there. */
 export const callBoard =
@@ -54,7 +63,9 @@ export const callBoard =
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-board': '1' },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(body.cmd === 'agents' ? AGENTS_WAIT_MS : CALL_WAIT_MS),
+        signal: AbortSignal.timeout(
+          body.cmd === 'agents' ? AGENTS_WAIT_MS : body.cmd === 'spawn' ? SPAWN_WAIT_MS : CALL_WAIT_MS,
+        ),
       })
       if (!res.ok) {
         await res.body?.cancel()
@@ -65,6 +76,14 @@ export const callBoard =
       // The board took the call and never answered: it may be kept there, so this is no "not sent".
       if (err instanceof Error && err.name === 'TimeoutError')
         return { state: 'answered', code: 1, out: [], err: ['the board on this computer did not answer in time'] }
+      // spawn-agent's start (#760): a board that took it and dropped the line may have sent it on.
+      if (body.cmd === 'spawn' && !refusedConnection(err))
+        return {
+          state: 'answered',
+          code: 1,
+          out: [],
+          err: ['the board on this computer dropped the start: see the board before starting it again'],
+        }
       return null
     }
   }
