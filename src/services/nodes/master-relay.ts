@@ -7,8 +7,9 @@
 // session goes the same way, which hands it to the node proxy (server/routes/node-proxy.ts).
 //
 // What a node sends is its word only: the path is held to the declared table again here, and who
-// it is to the rules there (a session of that node, reads only; the owner only from a device the
-// owner marked, `nodes.devices.<id>.owner`). A write's idempotency key is remembered per device with
+// it is to the rules there (the machines are one mesh: a device's requests are the owner's unless
+// the master's owner turned it off, `nodes.devices.<id>.owner: false`; a session of that node reads
+// only; never a Team peer). A write's idempotency key is remembered per device with
 // its answer, so a write retried after a broken link runs once: the same answer comes back again.
 // Made by server/app.ts only once `nodes` is configured.
 import { createHash } from 'node:crypto'
@@ -46,7 +47,7 @@ export interface MasterRelayRunnerOptions {
   deviceIds?: () => readonly string[]
   /** This board's own device id: a session key with it is one of this board's own. */
   selfId(): string
-  /** The owner marked the device as one they work at (`nodes.devices.<id>.owner: true`). */
+  /** The device's requests are taken as the owner's: on unless `nodes.devices.<id>.owner: false` (or revoked). */
   ownerAllowed(device: string): boolean
   /** `key` is a session of `device` this board knows (its card in the nodes' part). */
   sessionKnown(device: string, key: string): boolean
@@ -168,7 +169,7 @@ export function createMasterRelayRunner(o: MasterRelayRunnerOptions): MasterRela
   function changed(id: string): void {
     if (closed) return
     const held = following.get(id)
-    // A device that lost the owner's mark (or was revoked) keeps nothing running here.
+    // A device turned off (`owner: false`) or revoked keeps nothing running here.
     if (!o.ownerAllowed(id)) endDevice(id)
     if (online(id)) {
       if (!held || held.ac.signal.aborted) follow(id)
@@ -200,7 +201,7 @@ export function createMasterRelayRunner(o: MasterRelayRunnerOptions): MasterRela
 
   /** The request as this board's routes take it, or the refusal. */
   function check(device: string, req: RelayRequest): { path: string } | Recorded {
-    // The mark first: a device the owner did not mark asks nothing here, whoever it says it is.
+    // The device first: one turned off asks nothing here, whoever it says it is.
     if (!o.ownerAllowed(device)) return failure(403, RELAY_ERRORS.owner)
     // The path held to the table is the path that runs: a plain one only (core/master-relay.ts plainPath).
     const raw = rawPathOf(req.path)

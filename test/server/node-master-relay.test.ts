@@ -54,9 +54,9 @@ test("a node's web board serves the master's threads through the relay, unless t
     masterPanes: () => [],
     deviceCfg: id => (id === 'server-2' ? { owner: false } : {}),
   })
-  const [marked, unmarked] = pair.nodes as [PairNode, PairNode]
-  await pair.waitDevice(marked.id, d => d.link?.state === 'online', 10_000)
-  await pair.waitDevice(unmarked.id, d => d.link?.state === 'online', 10_000)
+  const [meshed, turnedOff] = pair.nodes as [PairNode, PairNode]
+  await pair.waitDevice(meshed.id, d => d.link?.state === 'online', 10_000)
+  await pair.waitDevice(turnedOff.id, d => d.link?.state === 'online', 10_000)
 
   const made = await post(`${pair.master.url}/api/threads`, { op: 'new', lane: 'atlas', title: 'Relay check ☃' })
   expect(made.status).toBe(200)
@@ -64,20 +64,20 @@ test("a node's web board serves the master's threads through the relay, unless t
 
   // The list, as the master has it (the relay's stream may take a moment after the link).
   const list = await until('the node lists the thread', async () => {
-    const res = await fetch(`${marked.url}/api/threads`)
+    const res = await fetch(`${meshed.url}/api/threads`)
     if (res.status !== 200) return null
     return (await res.json()) as { threads: { key: string; title: string }[] }
   })
   expect(list.threads.map(t => t.key)).toContain(key)
 
   // A post from the node's page lands in the master's thread, once.
-  const posted = await fetch(`${marked.url}/api/threads/${key}`, {
+  const posted = await fetch(`${meshed.url}/api/threads/${key}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-board': '1', 'idempotency-key': 'relay-post-1' },
     body: JSON.stringify({ op: 'post', text: 'from the node' }),
   })
   expect(posted.status).toBe(200)
-  const again = await fetch(`${marked.url}/api/threads/${key}`, {
+  const again = await fetch(`${meshed.url}/api/threads/${key}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-board': '1', 'idempotency-key': 'relay-post-1' },
     body: JSON.stringify({ op: 'post', text: 'from the node' }),
@@ -87,25 +87,25 @@ test("a node's web board serves the master's threads through the relay, unless t
     entries: { text: string }[]
   }
   expect(one.entries.filter(e => e.text === 'from the node')).toHaveLength(1)
-  const viaNode = (await (await fetch(`${marked.url}/api/threads/${key}`)).json()) as { entries: { text: string }[] }
+  const viaNode = (await (await fetch(`${meshed.url}/api/threads/${key}`)).json()) as { entries: { text: string }[] }
   expect(viaNode.entries.map(e => e.text)).toContain('from the node')
 
   // The revision stream is the master's.
-  const events = await fetch(`${marked.url}/api/threads/events`)
+  const events = await fetch(`${meshed.url}/api/threads/events`)
   expect(events.status).toBe(200)
   expect(JSON.parse(await firstEvent(events, 'rev')).rev).toBeGreaterThan(0)
 
   // The device the owner turned off.
   const refused = await until('the node turned off is refused by the master', async () => {
-    const res = await fetch(`${unmarked.url}/api/threads`)
+    const res = await fetch(`${turnedOff.url}/api/threads`)
     return res.status === 403 ? res : null
   })
   expect(((await refused.json()) as { error: string }).error).toBe('master-relay-owner')
 
   // The link down.
-  await marked.proxy.cut('drop')
+  await meshed.proxy.cut('drop')
   const away = await until('the node says the master is away', async () => {
-    const res = await fetch(`${marked.url}/api/threads`)
+    const res = await fetch(`${meshed.url}/api/threads`)
     return res.status === 503 ? res : null
   })
   expect(((await away.json()) as { error: string }).error).toBe('node-master-offline')

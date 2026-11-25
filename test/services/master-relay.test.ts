@@ -5,7 +5,7 @@
 // - GET, POST and the SSE stream of the threads group cross; the caller's Origin and cookie do not.
 // - A write keyed twice runs once; the node keys each write of its own.
 // - No master on the stream: 503 node-master-offline; a slow master: 504.
-// - Who: the owner only from a device the master's owner marked; a session of the node reads but
+// - Who: the owner from any device unless the master's owner turned it off; a session of the node reads but
 //   does not write; one the node does not have, and a caller through a remote listener, are refused.
 // - Another machine's session goes on to the master's node proxy; the master's own key loses its prefix.
 // - What is not the relay's, and a board without `node`, go down the same routes as before.
