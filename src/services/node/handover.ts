@@ -847,13 +847,15 @@ export function createNodeHandover(o: NodeHandoverOptions): NodeHandover {
 
         const id = prev.id
         let result: { restored: number; removed: number }
-        if (scope === 'all') await o.beforeDbReplace()
+        // old-master-committed moves the retired databases back (#777)
+        const replacesDb = scope === 'all' || scope === 'old-master-committed'
+        if (replacesDb) await o.beforeDbReplace()
         try {
           result = await restoreLocalBackup(id, { scope })
           rmSync(handoverStageDir(id), { recursive: true, force: true })
           writeHandoverState({ ...prev, phase: 'rolled-back', at: now() })
         } finally {
-          if (scope === 'all') await o.afterDbReplace()
+          if (replacesDb) await o.afterDbReplace()
         }
         o.log(`handover ${id}: rolled back local state (${result.restored} restored, ${result.removed} removed)`)
         if (b.deferRefresh === true) {

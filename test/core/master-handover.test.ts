@@ -334,6 +334,8 @@ describe('core/master-handover (#697)', () => {
     expect(committedOld.boardEvents).toBeUndefined()
     expect(committedOld.remote).toBeUndefined()
     expect(committedOld.presence).toBeUndefined()
+    // the old master's backups would send its stale board.db to the new master's targets (#777)
+    expect(committedOld.backup).toBeUndefined()
     expect(committedOld.port).toBe(12422)
     expect((committedOld.tunnel as Record<string, unknown>).on).toBe(false)
     expect(committedOld.node).toEqual({
@@ -359,6 +361,16 @@ describe('core/master-handover (#697)', () => {
       },
     )
     expect((committedOptOut.node as Record<string, unknown>).pilotBridge).toBe(false)
+  })
+
+  test('the old master keeps its backup section while frozen and drops it at commit (#777)', () => {
+    const old = { port: 12422, backup: { folder: '/home/anna/Sync' }, nodes: { id: 'laptop', devices: {} } }
+    const nodeConfig = { id: 'laptop', port: 12430 }
+    const frozen = buildOldMasterNodeConfig(old, { nodeConfig, keepNodesFrozen: true })
+    expect(frozen.backup).toEqual({ folder: '/home/anna/Sync' })
+    const committed = buildOldMasterNodeConfig(old, { nodeConfig, keepNodesFrozen: false })
+    expect(committed.backup).toBeUndefined()
+    expect(old.backup).toEqual({ folder: '/home/anna/Sync' })
   })
 
   test('flipNodesConfig carries pilotBridge: false between target device, local, and old master (#730, #738)', () => {

@@ -201,6 +201,22 @@ test('the schedule sends a first snapshot once the database is there, and stops'
   assert.ok(changed > 0)
 })
 
+test('on a node the schedule backs nothing up and checks nothing (#777)', async () => {
+  const { folder } = await setUp()
+  let changed = 0
+  const b = startBackups({
+    cfg: () => ({ backup: { folder } }),
+    onChange: () => changed++,
+    tickMs: 30,
+    firstMs: 5,
+    onNode: () => true,
+  })
+  await Bun.sleep(400)
+  b.stop()
+  assert.equal(readStatus().targets.folder?.lastOk, undefined, 'nothing was backed up')
+  assert.equal(changed, 0)
+})
+
 /** The server target over the fake ssh that runs the real drop script here. */
 async function serverSetUp() {
   const env = await setUp(['on the server'])

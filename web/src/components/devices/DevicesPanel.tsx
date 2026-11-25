@@ -82,6 +82,8 @@ export function DevicesPanel({ open, onClose, back, initial, setup, computerSetu
   }, [])
   // a board without `nodes` has no section to read: it is asked nothing until Add a server opens
   const master = !!data?.devices
+  // a node and not a master (the payload's machine, #701): devices are added on the master (#777)
+  const nodeOnly = !master && !!data?.machine
   useEffect(() => {
     if (open && master) refresh()
     if (!open) setPalette(null)
@@ -176,7 +178,7 @@ export function DevicesPanel({ open, onClose, back, initial, setup, computerSetu
       }
     >
       <div className="sheet-body cats-body devices-body">
-        {!master && <p className="sheet-meta devices-none">{t('node.add.none')}</p>}
+        {!master && <p className="sheet-meta devices-none">{t(nodeOnly ? 'node.add.onNode' : 'node.add.none')}</p>}
         <div className="cats-list devices-list" ref={list}>
           {rows.map(row => (
             <DeviceRowView
@@ -194,13 +196,15 @@ export function DevicesPanel({ open, onClose, back, initial, setup, computerSetu
             />
           ))}
         </div>
-        <AddServer open={open} {...(setup && { initial: setup })} />
-        <AddComputer
-          open={open}
-          devices={shown}
-          {...(hasRelay !== undefined && { hasRelay })}
-          {...(computerSetup && { initial: computerSetup })}
-        />
+        {!nodeOnly && <AddServer open={open} {...(setup && { initial: setup })} />}
+        {!nodeOnly && (
+          <AddComputer
+            open={open}
+            devices={shown}
+            {...(hasRelay !== undefined && { hasRelay })}
+            {...(computerSetup && { initial: computerSetup })}
+          />
+        )}
         {master && <MasterHandover open={open} devices={shown} {...(handover && { initial: handover })} />}
         {master && <LanesSection settings={settings} disabled={!canEdit} send={send} />}
         {master && (

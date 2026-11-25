@@ -1370,7 +1370,13 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
             }).catch(() => {})
           }
 
-          retireShippedOldMasterState(id)
+          // The databases it moves aside must not stay open under it (#777).
+          await o.beforeDbReplace()
+          try {
+            retireShippedOldMasterState(id)
+          } finally {
+            await o.afterDbReplace()
+          }
 
           if (!oldNodeCfg) throw new Error('missing old master node config')
           const finalOldConfig = buildOldMasterNodeConfig(rawCfg, {
@@ -1449,7 +1455,9 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
                 ? 'old-master-committed'
                 : 'old-master-precommit'
               : 'all'
-          if (scope === 'all') await o.beforeDbReplace()
+          // old-master-committed moves the retired databases back (#777)
+          const replacesDb = scope !== 'old-master-precommit'
+          if (replacesDb) await o.beforeDbReplace()
           let res: { restored: number; removed: number }
           try {
             res = await restoreLocalBackup(id, { scope })
@@ -1457,7 +1465,7 @@ export function createMasterHandover(o: MasterHandoverOptions): MasterHandover {
               writeHandoverState({ ...state, phase: 'rolled-back', at: now() })
             }
           } finally {
-            if (scope === 'all') await o.afterDbReplace()
+            if (replacesDb) await o.afterDbReplace()
           }
           await o.reloadConfig()
           o.setFreeze(false)

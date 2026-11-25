@@ -340,6 +340,8 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       "Makes a server of yours a node of this board: it logs in once as the server's admin, looks, shows what it will do, and does it when you say so.",
     'node.add.open': 'Add a server…',
     'node.add.none': 'No device yet: this computer runs every session. Add a server to give the board room elsewhere.',
+    'node.add.onNode':
+      'This computer is a node of the master board. Servers and computers are added on the master, from its Settings → Devices.',
     'node.add.host': 'Server',
     'node.add.sshPort': 'SSH port',
     'node.add.user': 'Login',
@@ -823,6 +825,8 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.add.open': 'Добавить сервер…',
     'node.add.none':
       'Устройств пока нет: все сессии идут на этом компьютере. Добавьте сервер, чтобы у доски было место и там.',
+    'node.add.onNode':
+      'Этот компьютер узел мастер-доски. Серверы и компьютеры добавляются на мастере, в его Настройки → Устройства.',
     'node.add.host': 'Сервер',
     'node.add.sshPort': 'Порт SSH',
     'node.add.user': 'Логин',

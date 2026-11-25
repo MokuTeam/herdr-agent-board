@@ -3,11 +3,15 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { accessFile } from '../../src/adapters/access-store.ts'
+import { keyFile } from '../../src/adapters/backup-store.ts'
+import { calendarDir } from '../../src/adapters/calendar-cache.ts'
 import { dbFile, openDb } from '../../src/adapters/db.ts'
 import {
   applyHandoverFiles,
   checkBackupReadiness,
   collectMasterState,
+  handoverBackupDir,
   makeEphemeralKey,
   rekeyJournalDb,
   restoreLocalBackup,
@@ -17,8 +21,10 @@ import {
   takeLocalBackup,
   unsealHandoverBundle,
 } from '../../src/adapters/handover-store.ts'
-import { openJournalDb } from '../../src/adapters/journal-store.ts'
+import { journalFile, openJournalDb } from '../../src/adapters/journal-store.ts'
 import { createNodeStore } from '../../src/adapters/node-store.ts'
+import { teamKeyFile } from '../../src/adapters/paths.ts'
+import { knownHostsFile } from '../../src/adapters/ssh.ts'
 import { createThread } from '../../src/adapters/work-thread-store.ts'
 import { HANDOVER_VERSION, type HandoverManifest } from '../../src/core/master-handover.ts'
 
@@ -357,5 +363,81 @@ describe('adapters/handover-store (#697)', () => {
     expect(existsSync(join(env.stateDir, 'schedule', 'aa11bb.json'))).toBe(true)
     expect(existsSync(join(env.stateDir, 'calendar-reminders.json'))).toBe(true)
     chmodSync(join(env.stateDir, 'schedule', 'aa11bb.json'), 0o600)
+  })
+
+  test('a commit moves the shipped master state under retired/, and an old-master rollback puts it back (#777)', async () => {
+    const env = makeEnv()
+    writeFileSync(join(env.configDir, 'config.json'), JSON.stringify({ nodes: { id: 'laptop', devices: {} } }))
+    const db = openDb({ create: true })
+    if (!db) throw new Error('openDb failed')
+    db.write('user', tx => {
+      createThread(tx, {
+        lane: 'atlas',
+        title: 'Kept thread',
+        status: 'next',
+        author: { kind: 'session', key: 's-1', name: 'anna' },
+        at: 1000,
+      })
+    })
+    db.close()
+    openJournalDb(true)?.close()
+    const shipped: [string, string][] = [
+      [accessFile(), '{"owner":"anna"}'],
+      [teamKeyFile(), '{"key":"team"}'],
+      [join(calendarDir(), 'cache.json'), '[]'],
+      [knownHostsFile(), 'relay.example.com ssh-ed25519 AAAA'],
+      [keyFile(), '{"key":"backup"}'],
+    ]
+    for (const [p, body] of shipped) {
+      mkdirSync(join(p, '..'), { recursive: true })
+      writeFileSync(p, body)
+    }
+    takeLocalBackup('ho-retire', 1000)
+
+    retireShippedOldMasterState('ho-retire')
+    for (const p of [dbFile(), journalFile(), ...shipped.map(([p]) => p)]) expect(existsSync(p)).toBe(false)
+    const dir = handoverBackupDir('ho-retire')
+    const manifestOf = () => JSON.parse(readFileSync(join(dir, 'backup-manifest.json'), 'utf8'))
+    expect(manifestOf().retired).toEqual(
+      expect.arrayContaining([
+        'board.db',
+        'journal.db',
+        'access.json',
+        'team-key.json',
+        'calendar/cache.json',
+        'tunnel/known_hosts',
+        'backup/backup-key.json',
+      ]),
+    )
+    expect(readFileSync(join(dir, 'retired', 'access.json'), 'utf8')).toBe('{"owner":"anna"}')
+
+    // the node makes a fresh database meanwhile; a retried finalization keeps the first copy
+    openDb({ create: true })?.close()
+    retireShippedOldMasterState('ho-retire')
+    expect(existsSync(join(dir, 'retired', 'board.db'))).toBe(true)
+
+    const rb = await restoreLocalBackup('ho-retire', { scope: 'old-master-committed' })
+    expect(rb.restored).toBeGreaterThanOrEqual(7)
+    for (const [p, body] of shipped) expect(readFileSync(p, 'utf8')).toBe(body)
+    expect(existsSync(journalFile())).toBe(true)
+    const live = new Database(dbFile(), { readonly: true, strict: true })
+    const titles = live.query('SELECT title FROM threads').all() as { title: string }[]
+    live.close(false)
+    expect(titles.map(r => r.title)).toEqual(['Kept thread'])
+    expect(existsSync(join(dir, 'retired', 'board.db'))).toBe(false)
+    expect(manifestOf().retired).toEqual([])
+  })
+
+  test('a backup without a commit retires nothing: an old-master rollback leaves the live state as it was (#777)', async () => {
+    const env = makeEnv()
+    writeFileSync(join(env.configDir, 'config.json'), JSON.stringify({ nodes: { id: 'laptop', devices: {} } }))
+    openDb({ create: true })?.close()
+    writeFileSync(accessFile(), '{"owner":"anna"}')
+    takeLocalBackup('ho-keep', 1000)
+    writeFileSync(accessFile(), '{"owner":"ben"}')
+    await restoreLocalBackup('ho-keep', { scope: 'old-master-committed' })
+    expect(readFileSync(accessFile(), 'utf8')).toBe('{"owner":"ben"}')
+    expect(existsSync(dbFile())).toBe(true)
+    expect(existsSync(join(handoverBackupDir('ho-keep'), 'retired'))).toBe(false)
   })
 })

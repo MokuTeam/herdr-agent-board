@@ -720,14 +720,16 @@ const OLD_MASTER_STRIP_KEYS = [
   'boardEvents',
   'remote',
   'presence',
+  // the old master's backups would send its stale board.db to the same targets as the new master's (#726, #777)
+  'backup',
 ] as const
 
 /**
  * Builds the old master's config.json as a node of the new master.
  * While `keepNodesFrozen` is true (before commit), `nodes` stays present so the old master keeps
  * its outbound link to verify/commit/rollback the new master. On commit (`keepNodesFrozen: false`),
- * master-only sections (`nodes`, `team`, `threads`, `time`, `calendar`, `watches`, etc.) are
- * stripped and `tunnel.on` is turned off so only the new master runs them.
+ * master-only sections (`nodes`, `team`, `threads`, `time`, `calendar`, `watches`, `backup`, etc.)
+ * are stripped and `tunnel.on` is turned off so only the new master runs them.
  */
 export function buildOldMasterNodeConfig(
   oldConfigRaw: Record<string, unknown>,

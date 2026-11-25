@@ -184,6 +184,9 @@ export const BACKUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'backup.cli.sent': 'ok · {target} · {name}',
     'backup.cli.failed': 'failed · {target} · {error}',
     'backup.cli.noTargets': 'no backup target is set (Settings → Backup…)',
+    'backup.cli.onNode':
+      'this computer is a node: the board’s database and its backups are on the master. Run it on the master.',
+    'backup.onNode': 'This computer is a node: the board’s database is backed up on the master, from its Settings.',
     'backup.cli.passphraseSet': 'ok · passphrase set; keep it in your password manager',
     'backup.cli.folderSet': 'ok · folder {folder}',
     'backup.cli.folderOff': 'ok · no folder target',
@@ -376,6 +379,8 @@ export const BACKUP_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'backup.cli.sent': 'ok · {target} · {name}',
     'backup.cli.failed': 'не прошло · {target} · {error}',
     'backup.cli.noTargets': 'цели бэкапа не заданы (Настройки → Бэкап…)',
+    'backup.cli.onNode': 'этот компьютер узел: база доски и её бэкапы на мастере. Запустите это на мастере.',
+    'backup.onNode': 'Этот компьютер узел: бэкап базы доски делает мастер, в его Настройках.',
     'backup.cli.passphraseSet': 'ok · пароль задан; сохраните его в менеджере паролей',
     'backup.cli.folderSet': 'ok · папка {folder}',
     'backup.cli.folderOff': 'ok · без папки',

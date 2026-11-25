@@ -1,6 +1,6 @@
 // Pure Telegram routing helpers across a master and its nodes (#701).
 // No I/O: used by the wake process, master board, and node door handlers.
-import { nodeConfig, nodesConfig } from '../nodes.ts'
+import { isNodeOnly } from '../nodes.ts'
 import type { Item } from '../types.ts'
 import { type RouteItem, samePath } from './route.ts'
 
@@ -18,9 +18,7 @@ export interface NodeRouteCandidate {
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
 /** True when this board is configured only as a node (not a master): a node never polls Telegram itself. */
-export function isNodeOnly(cfg: { nodes?: unknown; node?: unknown }): boolean {
-  return nodeConfig(cfg.node) !== null && nodesConfig(cfg.nodes) === null
-}
+export { isNodeOnly }
 
 /** Machine prefix in an `X-Herdr-Pane` hint (`<machine>:<pane id>`, where `<pane id>` itself has `:`). */
 export function hintMachine(hint: string | null | undefined): string | null {

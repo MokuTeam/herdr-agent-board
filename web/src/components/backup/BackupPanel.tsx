@@ -204,6 +204,13 @@ export function BackupBody({ view, loadError, busy, notes, manual, canEdit, acti
   const t = useT()
   const disabled = !canEdit || !view || busy !== null
   const last = view ? lastGood(view.states) : null
+  // a node: the master backs up, nothing to set here (#777)
+  if (view?.onNode)
+    return (
+      <div className="sheet-body cats-body backup-body">
+        <p className="access-hint">{view.onNode}</p>
+      </div>
+    )
   return (
     <div className="sheet-body cats-body backup-body">
       {loadError && (

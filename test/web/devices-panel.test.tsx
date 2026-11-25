@@ -252,6 +252,22 @@ describe('Settings, Devices (#510)', () => {
     expect(all).not.toContain('Lanes that may leave this computer')
     expect(all).not.toContain('Start on this computer')
   })
+
+  test('a node board: no Add a server, no Add a computer, devices are added on the master (#777)', () => {
+    const nodes = draw(payload({ categories: CATEGORIES, machine: 'server-1' }), 1600, undefined)
+    const all = text([byId(nodes, 'devices-sheet')])
+    expect(rowsOf(nodes)).toEqual([])
+    expect(all).toContain('This computer is a node of the master board.')
+    expect(all).not.toContain('No device yet')
+    expect(all).not.toContain('Add a server…')
+    expect(all).not.toContain('Add a computer')
+  })
+
+  test('a master that is a node too still adds devices (#777)', () => {
+    const all = text([byId(draw(payload({ ...full(), machine: 'laptop' }), 1600, undefined), 'devices-sheet')])
+    expect(all).toContain('Add a server…')
+    expect(all).not.toContain('This computer is a node of the master board.')
+  })
 })
 
 describe('the Settings menu (#510)', () => {

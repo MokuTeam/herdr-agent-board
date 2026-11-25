@@ -4,10 +4,10 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { FOLDER_NAME, writeKey } from '../../src/adapters/backup-store.ts'
-import { openDb } from '../../src/adapters/db.ts'
+import { dbFile, openDb } from '../../src/adapters/db.ts'
 import { snapshotName } from '../../src/core/backup.ts'
 import { makeKey } from '../../src/core/backup-file.ts'
 import { backupNow } from '../../src/services/backup.ts'
@@ -30,6 +30,30 @@ function cli(args: string[]): Promise<{ code: number | null; out: string }> {
     proc.on('close', code => resolve({ code, out: out.trim() }))
   })
 }
+
+test('on a node board backup and board db refuse, and the database stays as it was (#777)', async () => {
+  const dir = isolatedHome()
+  const db = openDb()
+  assert.ok(db)
+  db.write('user', tx => tx.journal({ store: 'test', op: 'add', ref: 'stale' }))
+  db.close()
+  const before = readFileSync(dbFile())
+  const folder = join(dir, 'Sync')
+  mkdirSync(folder)
+  const configDir = join(dir, 'config', 'herdr', 'plugins', 'config', 'agent-board')
+  mkdirSync(configDir, { recursive: true })
+  writeFileSync(
+    join(configDir, 'config.json'),
+    JSON.stringify({ language: 'en', port: 9, backup: { folder }, node: { id: 'server-1', port: 9 } }),
+  )
+  for (const args of [['backup', 'now'], ['backup'], ['db', 'restore', '--target', 'folder'], ['db', 'rekey']]) {
+    const r = await cli(args)
+    assert.notEqual(r.code, 0, `${args.join(' ')}: ${r.out}`)
+    assert.match(r.out, /this computer is a node: the board’s database and its backups are on the master/)
+  }
+  assert.deepEqual(readFileSync(dbFile()), before)
+  assert.equal(readdirSync(folder).length, 0, 'nothing was sent to the folder')
+}, 30_000)
 
 test('board db restore names each newer snapshot it passed over, and why', async () => {
   const dir = isolatedHome()

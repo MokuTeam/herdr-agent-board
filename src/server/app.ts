@@ -96,6 +96,7 @@ import {
   configuredNodeAddresses,
   deviceIdFromHost,
   fillThresholds,
+  isNodeOnly,
   LOCAL,
   markRevoked,
   nodeConfig,
@@ -383,6 +384,13 @@ export interface ServerOptions {
   presenceIntervalMs?: number
 }
 
+/** The forms that add a device to this board (Settings → Devices), a master's alone. */
+const SETUP_PATHS: ReadonlySet<string> = new Set([
+  '/api/nodes/setup',
+  '/api/nodes/relay/setup',
+  '/api/nodes/computer/setup',
+])
+
 /** `deps.cfg` is the live config (liveConfig): call the returned refresh from its onChange. */
 export async function startServer({
   deps,
@@ -559,7 +567,11 @@ export async function startServer({
   // Headless master admin (#694): resolved lazily once board, localNodeRoutes and localSetupRoutes
   // are set up below (never called before start() wires routes and begins listening).
   const remoteAdminRoutes = (path: string): Route[] | null =>
-    path === '/api/nodes' && localNodeRoutes ? localNodeRoutes : path === '/api/nodes/setup' ? localSetupRoutes : null
+    path === '/api/nodes' && localNodeRoutes
+      ? localNodeRoutes
+      : path === '/api/nodes/setup' && !isNodeOnly(cfg)
+        ? localSetupRoutes
+        : null
   const listener = createRemoteListener({
     cfg,
     webPort: port,
@@ -893,11 +905,13 @@ export async function startServer({
   const backupCfg = (): Config => ({ ...cfg, backup: loadConfig().backup })
   // one connection to the database for the board's life: the payload and the Time panel's reads and writes
   keepTimeDb(true)
-  const backups = startBackups({ cfg: backupCfg, onChange: () => board.publish() })
+  // A node's database is the master's old one (#777): no schedule, no line, and the panel says so.
+  const backups = startBackups({ cfg: backupCfg, onChange: () => board.publish(), onNode: () => isNodeOnly(cfg) })
   if (handoverFrozen) backups.pause()
   const backupServer = createBackupServer({ cfg: backupCfg, spawn: spawnRemote })
   const backupLine = (): BackupPayload | null => {
     if (!existsSync(dbFile()) && !cfg.backup) return null
+    if (isNodeOnly(cfg)) return null
     const v = backupView(cfg)
     let last: number | null = null
     for (const s of Object.values(v.states)) if (s?.lastOk && (last === null || s.lastOk > last)) last = s.lastOk
@@ -1266,7 +1280,13 @@ export async function startServer({
     // The calendar (#328): every source's events in a window, Sync, the board's own events; Settings → Calendar here only.
     ...calendarRoutes(cfg, calendar, { reminders, events, shown: eventsShown }),
     // Settings → Backup… (#233): the passphrase, the targets, the server's setup; this computer only.
-    ...backupRoutes({ cfg, server: backupServer, now: () => backups.now(true), changed: () => board.publish() }),
+    ...backupRoutes({
+      cfg,
+      server: backupServer,
+      now: () => backups.now(true),
+      changed: () => board.publish(),
+      onNode: () => isNodeOnly(cfg),
+    }),
     // Settings → Updates… (#617): the board's update of itself from git; this computer only.
     ...selfUpdateRoutes({
       updater: selfUpdate,
@@ -1393,6 +1413,8 @@ export async function startServer({
       }
       if (req.method !== 'GET' && path.startsWith('/api/') && path !== '/api/presence' && ownOrigin(req))
         presence.touch()
+      // Adding a server or a computer on a node would make a second master by accident (#777).
+      if (SETUP_PATHS.has(path) && isNodeOnly(cfg)) return json(409, { ok: false, error: t('node.add.onNode') })
       const selected =
         path === '/api/board-events' || path === '/api/board-events/ack'
           ? localEventRoutes
@@ -1920,6 +1942,12 @@ export async function startServer({
   let nodeUpdater: NodeUpdater | null = null
   let scheduler: ReturnType<typeof startScheduler> | null = null
   function linksFollow(): void {
+    // `nodes` gone from config.json while the board runs (an old master a handover's commit made a
+    // node, #726): what only a master runs is closed, not left idle behind the config's gates.
+    if (nodeLinks && nodesConfig(cfg.nodes) === null) {
+      masterNodesStop(nodeLinks)
+      return
+    }
     if (nodeLinks) {
       nodeLinks.configChanged()
       pilotBridgeRunner?.sync()
@@ -2203,6 +2231,55 @@ export async function startServer({
     )
     // Their ssh dies with the board, also on an exit that skips close().
     process.on('exit', nodeLinks.killNow)
+  }
+
+  /**
+   * Closes and drops what linksFollow made for a master (#726): the node proxy's route and the
+   * Devices routes leave the tables, the runners and the links stop. All of it is dropped at once,
+   * so `nodes` coming back (a rollback) makes everything afresh; the closes finish behind it.
+   */
+  function masterNodesStop(links: NodeLinks): void {
+    if (nodeProxy) {
+      const at = routes.indexOf(nodeProxy.route)
+      if (at >= 0) routes.splice(at, 1)
+    }
+    nodeProxy = null
+    localNodeRoutes = null
+    localTelegramRoutes = null
+    presenceToNodes = () => {}
+    const aggregate = nodeAggregate
+    const bridge = pilotBridgeRunner
+    const relay = masterRelayRunner
+    const uplink = uplinkRunner
+    const calls = nodePilotCalls
+    const parts = [nodePlacer, nodeUpdater, nodeRevoker, bundleSync]
+    nodeAggregate = null
+    pilotBridgeRunner = null
+    masterRelayRunner = null
+    uplinkRunner = null
+    nodePilotCalls = null
+    nodePlacer = null
+    nodeUpdater = null
+    nodeRevoker = null
+    bundleSync = null
+    nodeLinks = null
+    refreshLocalPilotCallRoutes()
+    if (aggregate) {
+      aggregate.close()
+      process.off('exit', aggregate.close)
+    }
+    calls?.close()
+    for (const p of parts) p?.close()
+    void (async () => {
+      await bridge?.close()
+      await relay?.close()
+      await uplink?.close()
+      await links.close()
+      process.off('exit', links.killNow)
+    })()
+      .then(() => log('nodes: off in config.json, the master links are closed'))
+      .catch(err => log(`nodes: closing the master links: ${messageOf(err)}`))
+    board.publish()
   }
 
   const poll = setInterval(refresh, Math.max(1, cfg.refreshSec ?? 2) * 1000)

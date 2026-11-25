@@ -519,6 +519,14 @@ export function nodeConfig(raw: unknown): NodeConfig | null {
   return readNode(raw).config
 }
 
+/**
+ * True when this board is a node and not a master too (`node` checks out, no `nodes`): what the
+ * master owns (backups of the board's database, adding devices) is not this board's (#701, #777).
+ */
+export function isNodeOnly(cfg: { nodes?: unknown; node?: unknown }): boolean {
+  return nodeConfig(cfg.node) !== null && nodesConfig(cfg.nodes) === null
+}
+
 /** What does not check out in config.json's `node`, for the doctor; empty with no key. */
 export function nodeProblems(raw: unknown): NodesProblem[] {
   return readNode(raw).problems

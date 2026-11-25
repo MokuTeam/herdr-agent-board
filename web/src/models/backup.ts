@@ -16,6 +16,8 @@ export interface BackupPanelView {
   dropKey: boolean
   /** The tunnel's server and admin, for a server not set yet; null without a tunnel. */
   suggest: { host: string; port: number; adminUser: string; adminKey: string } | null
+  /** On a node (#777): the sentence that its master backs up the board's database; absent elsewhere. */
+  onNode?: string
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)

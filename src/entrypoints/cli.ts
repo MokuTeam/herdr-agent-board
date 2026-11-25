@@ -196,7 +196,7 @@ import { agyCommand } from '../core/launch/agents.ts'
 import { withMasterFlags } from '../core/master-flags.ts'
 import { parseMoveAny } from '../core/move-device.ts'
 import { isKeptCall, UPLINK_REFUSED } from '../core/node-uplink.ts'
-import { nodeConfig } from '../core/nodes.ts'
+import { isNodeOnly, nodeConfig } from '../core/nodes.ts'
 import { isPiSessionFile, piSessionId } from '../core/pi.ts'
 import { isPresenceState, type PresenceState, presenceConfig, presenceLine } from '../core/presence.ts'
 import { type ProfileSet, profileSet, resolveProfileDir, sessionProfile } from '../core/profiles.ts'
@@ -3214,6 +3214,8 @@ function option(name: string): string | undefined {
 
 /** `board backup …` (#233): the backup of the board's database (services/backup.ts). */
 async function backupCmd(): Promise<void> {
+  // a node's database is the master's old one: its backups are the master's (#777)
+  if (isNodeOnly(cfg)) throw new Error(t('backup.cli.onNode'))
   const [op = 'status', arg] = words
   const backup = await import('../services/backup.ts')
   const { activeTargets, backupConfig, isTarget, problemSentence } = await import('../core/backup.ts')
@@ -3286,6 +3288,8 @@ async function backupCmd(): Promise<void> {
 
 /** `board db restore …` (#233) and `board db rekey …` (#696). */
 async function dbCmd(): Promise<void> {
+  // restore and rekey write the database a node no longer serves (#777)
+  if (isNodeOnly(cfg)) throw new Error(t('backup.cli.onNode'))
   const [op] = words
   if (op === 'rekey') return dbRekeyCmd()
   if (op !== 'restore') throw new Error(t('backup.cli.restoreUsage'))

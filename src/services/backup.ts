@@ -382,6 +382,11 @@ export const TICK_MS = 60_000
 export function startBackups(o: {
   cfg: () => Pick<Config, 'backup'>
   onChange: () => void
+  /**
+   * True while this board is a node (#777): the database it holds is the master's old one, so no
+   * schedule runs and no check of it either; the master backs up its own. Absent: never a node.
+   */
+  onNode?: () => boolean
   tickMs?: number
   firstMs?: number
 }): Backups {
@@ -400,11 +405,11 @@ export function startBackups(o: {
     return running
   }
   const tick = (): void => {
-    if (stopped || paused || !existsSync(dbFile()) || !activeTargets(cfgOf(o.cfg())).length) return
+    if (stopped || paused || o.onNode?.() || !existsSync(dbFile()) || !activeTargets(cfgOf(o.cfg())).length) return
     void run()
   }
   const first = setTimeout(() => {
-    if (stopped || !existsSync(dbFile())) return
+    if (stopped || o.onNode?.() || !existsSync(dbFile())) return
     try {
       const db = openDb({ create: false })
       if (db) {
