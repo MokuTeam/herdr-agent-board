@@ -40,6 +40,8 @@ export function autoUpdateConfig(raw: unknown): AutoUpdateConfig {
 export type SkipReason =
   | 'node'
   | 'no-checkout'
+  | 'archive-dirty'
+  | 'archive'
   | 'detached'
   | 'no-upstream'
   | 'dirty'
@@ -56,6 +58,8 @@ export type FailReason = 'install' | 'merge' | 'installer' | 'not-back' | 'wake'
 export const SKIP_REASONS: readonly SkipReason[] = [
   'node',
   'no-checkout',
+  'archive-dirty',
+  'archive',
   'detached',
   'no-upstream',
   'dirty',

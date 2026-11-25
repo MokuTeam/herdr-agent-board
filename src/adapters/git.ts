@@ -7,6 +7,8 @@ import { ARCHIVE_COMMIT_FILE } from '../core/node-texts.ts'
 import { repoAddress } from '../core/portable.ts'
 import { run } from './process.ts'
 
+export { ARCHIVE_COMMIT_FILE }
+
 const LIMIT = 256 * 1024
 
 interface GitOutput {

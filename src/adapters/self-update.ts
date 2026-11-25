@@ -1,20 +1,24 @@
 // What the board's update of itself (#617, services/self-update.ts) runs on this computer: git and
 // bun in the plugin's folder, the installer, the copies of settings.json, wake's status, and the
 // state file (<state>/self-update.json).
-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
+import { DEFAULT_PLUGIN_REPO } from '../core/node-oneshot.ts'
 import { shownProfiles } from '../core/profiles.ts'
 import {
   FAIL_REASONS,
+  firstLines,
   type PendingUpdate,
   SKIP_REASONS,
+  shortSha,
   type UpdateRecord,
   type UpdateState,
 } from '../core/self-update.ts'
 import { wakeConfig, wakeSwitch } from '../core/wake/config.ts'
-import type { GitResult, StepResult } from '../services/self-update.ts'
+import type { AdoptResult, GitResult, StepResult } from '../services/self-update.ts'
 import { configFile, readConfigFile } from './config-file.ts'
-import { isRecord, readJson, replaceFile } from './json-store.ts'
+import { ARCHIVE_COMMIT_FILE } from './git.ts'
+import { isRecord, readJson, renameWithRetry, replaceFile } from './json-store.ts'
 import { quiet } from './node-repo.ts'
 import { stateDir } from './paths.ts'
 import { run } from './process.ts'
@@ -28,6 +32,8 @@ const backupsDir = (): string => join(stateDir(), 'self-update', 'settings')
 const KEEP_BACKUPS = 10
 const INSTALL_MS = 10 * 60_000
 const INSTALLER_MS = 3 * 60_000
+const ADOPT_FETCH_MS = 120_000
+const COMMIT_RE = /^[0-9a-f]{40}([0-9a-f]{24})?$/
 /** How long the new board waits for wake to come back. */
 const WAKE_BACK_MS = 90_000
 
@@ -100,12 +106,101 @@ export function saveSelfUpdate(state: UpdateState, file = selfUpdateFile()): voi
  * batch mode: a fetch that needs a login fails instead of waiting), without taking the index lock for
  * a read, and with paths unquoted (a name outside ASCII is matched as it is).
  */
+const gitResultOf = (r: Awaited<ReturnType<typeof run>>): GitResult => ({
+  ok: r.code === 0,
+  out: r.stdout,
+  err: r.stderr || (r.error && r.code !== 1 ? r.error.message : ''),
+})
+
 export async function gitIn(root: string, args: string[], timeout = 30_000): Promise<GitResult> {
-  const r = await run('git', ['-C', root, '--no-optional-locks', '-c', 'core.quotePath=false', ...args], {
-    timeout,
-    env: quiet(),
+  return gitResultOf(
+    await run('git', ['-C', root, '--no-optional-locks', '-c', 'core.quotePath=false', ...args], {
+      timeout,
+      env: quiet(),
+    }),
+  )
+}
+
+/**
+ * Turn an archive install (`.archive-commit`, no `.git`) into a git checkout of `repoUrl` at
+ * `commit`, tracking `origin/main`. Staged in a temporary folder inside `root` and verified clean
+ * against `commit` before `.git` is placed; any mismatch or failure cleans up and leaves `root`
+ * untouched.
+ */
+export async function adoptArchive(root: string, commit: string, repoUrl = DEFAULT_PLUGIN_REPO): Promise<AdoptResult> {
+  if (!COMMIT_RE.test(commit)) {
+    return { ok: false, reason: 'archive', detail: `invalid commit in ${ARCHIVE_COMMIT_FILE}` }
+  }
+  const gitDir = join(root, '.git')
+  if (existsSync(gitDir)) return { ok: true }
+
+  let tmp = ''
+  let placed = false
+  const gitBare = async (args: string[], timeout = 30_000): Promise<GitResult> =>
+    gitResultOf(
+      await run('git', ['--git-dir', tmp, '--no-optional-locks', '-c', 'core.quotePath=false', ...args], {
+        timeout,
+        env: quiet(),
+      }),
+    )
+  const gitWork = async (args: string[], timeout = 30_000): Promise<GitResult> =>
+    gitResultOf(
+      await run(
+        'git',
+        ['--git-dir', tmp, '--work-tree', root, '--no-optional-locks', '-c', 'core.quotePath=false', ...args],
+        { timeout, env: quiet() },
+      ),
+    )
+  const fail = (reason: 'fetch' | 'archive-dirty' | 'archive', r: GitResult | string): AdoptResult => ({
+    ok: false,
+    reason,
+    detail: typeof r === 'string' ? r : firstLines(r.err || r.out) || 'git failed',
   })
-  return { ok: r.code === 0, out: r.stdout, err: r.stderr || (r.error && r.code !== 1 ? r.error.message : '') }
+
+  try {
+    tmp = mkdtempSync(join(root, '.git-adopt-'))
+    const init = gitResultOf(await run('git', ['init', '--bare', '--quiet', tmp], { timeout: 30_000, env: quiet() }))
+    if (!init.ok) return fail('archive', init)
+    const bare = await gitBare(['config', 'core.bare', 'false'])
+    if (!bare.ok) return fail('archive', bare)
+    const reflog = await gitBare(['config', 'core.logallrefupdates', 'true'])
+    if (!reflog.ok) return fail('archive', reflog)
+    const remote = await gitBare(['remote', 'add', 'origin', repoUrl])
+    if (!remote.ok) return fail('archive', remote)
+    const fetched = await gitBare(['fetch', '--quiet', 'origin'], ADOPT_FETCH_MS)
+    if (!fetched.ok) return fail('fetch', fetched)
+    const has = await gitBare(['rev-parse', '--verify', '--quiet', `${commit}^{commit}`])
+    if (!has.ok)
+      return fail('archive', `commit ${shortSha(commit)} from ${ARCHIVE_COMMIT_FILE} was not found in ${repoUrl}`)
+    const ref = await gitBare(['update-ref', 'refs/heads/main', commit])
+    if (!ref.ok) return fail('archive', ref)
+    const head = await gitBare(['symbolic-ref', 'HEAD', 'refs/heads/main'])
+    if (!head.ok) return fail('archive', head)
+    const track = await gitBare(['branch', '--set-upstream-to=origin/main', 'main'])
+    if (!track.ok) return fail('archive', track)
+    const reset = await gitWork(['reset', '--mixed', '--quiet', commit])
+    if (!reset.ok) return fail('archive', reset)
+    const status = await gitWork(['status', '--porcelain', '--untracked-files=no'])
+    if (!status.ok) return fail('archive', status)
+    if (status.out.trim() !== '') return fail('archive-dirty', firstLines(status.out))
+    if (!existsSync(gitDir)) {
+      renameWithRetry(tmp, gitDir)
+      placed = true
+    }
+    try {
+      rmSync(join(root, ARCHIVE_COMMIT_FILE), { force: true })
+      rmSync(join(root, '.archive-sha256'), { force: true })
+    } catch {}
+    return { ok: true }
+  } catch (err) {
+    return fail('archive', firstLines(err instanceof Error ? err.message : String(err)) || 'archive')
+  } finally {
+    if (!placed && tmp) {
+      try {
+        rmSync(tmp, { recursive: true, force: true })
+      } catch {}
+    }
+  }
 }
 
 const stepOf = (r: Awaited<ReturnType<typeof run>>): StepResult => ({

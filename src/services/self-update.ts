@@ -41,11 +41,17 @@ export interface StepResult {
   detail: string
 }
 
+export type AdoptResult = { ok: true } | { ok: false; reason: 'fetch' | 'archive-dirty' | 'archive'; detail: string }
+
 export interface SelfUpdateDeps {
   /** git in the plugin's folder. */
   git(args: string[], timeoutMs?: number): Promise<GitResult>
   /** The plugin's folder has a .git of its own. */
   isCheckout(): boolean
+  /** The commit stamp from `.archive-commit` when not a git checkout, or null. */
+  archiveCommit?(): string | null
+  /** Turn an archive install at `commit` into a clean git checkout tracking origin/main. */
+  adoptArchive?(commit: string): Promise<AdoptResult>
   /** config.json has `node`: the board follows its master's commit (#590). */
   node(): boolean
   /** config.json's `autoUpdate` as it is now. */
@@ -217,7 +223,19 @@ export function createSelfUpdate(d: SelfUpdateDeps): SelfUpdate {
     const state = d.load()
     const pending = !!state.pending && !stalePending(state, at)
     if (!pending) await mend()
-    const checkout = d.isCheckout()
+    let checkout = d.isCheckout()
+    if (!checkout && !pending) {
+      const stamp = d.archiveCommit?.() ?? null
+      if (stamp) {
+        if (!d.canRestart) return skip('restart', { commit: stamp })
+        if (d.adoptArchive) {
+          const adopted = await d.adoptArchive(stamp)
+          if (!adopted.ok) return skip(adopted.reason, { commit: stamp, detail: adopted.detail })
+          d.log(`self-update: turned archive install at ${shortSha(stamp)} into a git checkout`)
+          checkout = true
+        }
+      }
+    }
     const branchOf = checkout ? await d.git(['symbolic-ref', '--quiet', '--short', 'HEAD']) : null
     // symbolic-ref says nothing and ends with 1 on a detached HEAD; anything else is git failing
     if (branchOf && !branchOf.ok && branchOf.err.trim())

@@ -472,3 +472,119 @@ test('HEAD past the merged commit (a pull by hand since): the board came back on
   w.repo.descends = true
   expect(await createSelfUpdate(w.deps).resume()).toMatchObject({ outcome: 'updated', commit: 'c'.repeat(40) })
 })
+
+test('archive install with no node role adopts into a checkout and updates normally', async () => {
+  const w = world(
+    { checkout: false, branch: null, upstream: null },
+    {
+      archiveCommit: () => A,
+      adoptArchive: async commit => {
+        expect(commit).toBe(A)
+        w.events.push('adopt')
+        w.repo.checkout = true
+        w.repo.branch = 'main'
+        w.repo.upstream = 'origin/main'
+        return { ok: true }
+      },
+    },
+  )
+  const r = await createSelfUpdate(w.deps).check({ byHand: true })
+  expect(r).toMatchObject({ outcome: 'updated', restarting: true, from: A, to: B })
+  expect(w.events).toEqual(['adopt', 'fetch', 'pending', 'merge', 'restart'])
+})
+
+test('node with archive install skips as node; normal checkout and non-archive folder never adopt', async () => {
+  let askedStamp = 0
+  let adopted = 0
+  const nodeW = world(
+    { checkout: false, branch: null, upstream: null },
+    {
+      node: () => true,
+      archiveCommit: () => {
+        askedStamp++
+        return A
+      },
+      adoptArchive: async () => {
+        adopted++
+        return { ok: true }
+      },
+    },
+  )
+  expect(await createSelfUpdate(nodeW.deps).check()).toMatchObject({ outcome: 'skipped', reason: 'node' })
+  expect(askedStamp).toBe(0)
+  expect(adopted).toBe(0)
+  expect(nodeW.git).toEqual([])
+
+  const gitW = world(
+    {},
+    {
+      archiveCommit: () => {
+        askedStamp++
+        return A
+      },
+      adoptArchive: async () => {
+        adopted++
+        return { ok: true }
+      },
+    },
+  )
+  expect(await createSelfUpdate(gitW.deps).check()).toMatchObject({ outcome: 'updated' })
+  expect(askedStamp).toBe(0)
+  expect(adopted).toBe(0)
+
+  const plainW = world(
+    { checkout: false, branch: null, upstream: null },
+    {
+      archiveCommit: () => null,
+      adoptArchive: async () => {
+        adopted++
+        return { ok: true }
+      },
+    },
+  )
+  expect(await createSelfUpdate(plainW.deps).check()).toMatchObject({ outcome: 'skipped', reason: 'no-checkout' })
+  expect(adopted).toBe(0)
+})
+
+test('archive install without canRestart skips as restart; adoption refusals skip with reason and detail', async () => {
+  let adopted = 0
+  const noRestart = world(
+    { checkout: false, branch: null, upstream: null },
+    {
+      canRestart: false,
+      archiveCommit: () => A,
+      adoptArchive: async () => {
+        adopted++
+        return { ok: true }
+      },
+    },
+  )
+  expect(await createSelfUpdate(noRestart.deps).check()).toMatchObject({
+    outcome: 'skipped',
+    reason: 'restart',
+    commit: A,
+  })
+  expect(adopted).toBe(0)
+  expect(noRestart.git).toEqual([])
+
+  for (const [reason, detail] of [
+    ['archive-dirty', ' M README.md'],
+    ['fetch', 'fatal: could not read from remote'],
+    ['archive', 'commit aaaaaaaa from .archive-commit was not found'],
+  ] as const) {
+    const w = world(
+      { checkout: false, branch: null, upstream: null },
+      {
+        archiveCommit: () => A,
+        adoptArchive: async () => ({ ok: false, reason, detail }),
+      },
+    )
+    expect(await createSelfUpdate(w.deps).check()).toMatchObject({
+      outcome: 'skipped',
+      reason,
+      commit: A,
+      detail,
+    })
+    expect(w.git).toEqual([])
+  }
+})

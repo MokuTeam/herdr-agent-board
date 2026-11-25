@@ -17,10 +17,12 @@ import {
   selfUpdateCheck,
   skipBefore,
   standing,
+  standingText,
   type UpdateRecord,
 } from '../../src/core/self-update.ts'
 
 const english = translator('en')
+const russian = translator('ru')
 const HOUR = 3_600_000
 const MIN = 60_000
 
@@ -202,4 +204,26 @@ test("board doctor's line: none while off with nothing done; an error with its f
   expect(bad?.fix).toContain('git pull')
   const failed = selfUpdateCheck(true, { last: { at: now, outcome: 'failed', reason: 'install' } }, now, english)
   expect(failed?.fix).toContain('board update')
+})
+
+test('archive-dirty and archive skip reasons format as plain sentences in en and ru', () => {
+  const now = 10 * HOUR
+  const on = autoUpdateConfig(true)
+  const dirty = standing(
+    on,
+    { last: { at: now, outcome: 'skipped', reason: 'archive-dirty', detail: ' M README.md' } },
+    now,
+  )
+  expect(dirty).toMatchObject({ level: 'warn', key: 'skipped.archive-dirty' })
+  expect(dirty && standingText(dirty, english)).toContain('differ from .archive-commit')
+  expect(dirty && standingText(dirty, english)).toContain(' M README.md')
+  expect(dirty && standingText(dirty, russian)).toContain('отличаются от .archive-commit')
+  expect(dirty && standingText(dirty, russian)).toContain(' M README.md')
+
+  const bad = standing(on, { last: { at: now, outcome: 'skipped', reason: 'archive', detail: 'missing commit' } }, now)
+  expect(bad).toMatchObject({ level: 'warn', key: 'skipped.archive' })
+  expect(bad && standingText(bad, english)).toContain('turn this archive install into a git checkout')
+  expect(bad && standingText(bad, english)).toContain('missing commit')
+  expect(bad && standingText(bad, russian)).toContain('из архива в git-checkout')
+  expect(bad && standingText(bad, russian)).toContain('missing commit')
 })

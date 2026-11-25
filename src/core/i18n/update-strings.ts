@@ -31,6 +31,9 @@ export const UPDATE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       "The board did not come back after updating to {to}. It came from {from}: look at the board's pane for why.",
     'selfUpdate.skipped.node': "This computer is a node: it follows its master's version.",
     'selfUpdate.skipped.no-checkout': 'Skipped: this copy of the board is not a git checkout.',
+    'selfUpdate.skipped.archive-dirty':
+      'Skipped: files in this folder differ from .archive-commit; restore them or clone by hand. {detail}',
+    'selfUpdate.skipped.archive': 'Skipped: could not turn this archive install into a git checkout. {detail}',
     'selfUpdate.skipped.detached': 'Skipped: the checkout is on no branch (a detached HEAD).',
     'selfUpdate.skipped.no-upstream': 'Skipped: {branch} has no upstream branch to take commits from.',
     'selfUpdate.skipped.dirty': 'Skipped: files of the checkout are changed. Commit or undo them. {detail}',
@@ -85,6 +88,9 @@ export const UPDATE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'Доска не вернулась после обновления до {to}. Была на {from}: причина на экране панели доски.',
     'selfUpdate.skipped.node': 'Этот компьютер узел: он следует версии мастера.',
     'selfUpdate.skipped.no-checkout': 'Пропущено: эта копия доски не git-checkout.',
+    'selfUpdate.skipped.archive-dirty':
+      'Пропущено: файлы в папке отличаются от .archive-commit; восстановите их или клонируйте руками. {detail}',
+    'selfUpdate.skipped.archive': 'Пропущено: не удалось превратить эту копию из архива в git-checkout. {detail}',
     'selfUpdate.skipped.detached': 'Пропущено: checkout не на ветке (detached HEAD).',
     'selfUpdate.skipped.no-upstream': 'Пропущено: у {branch} нет upstream-ветки.',
     'selfUpdate.skipped.dirty': 'Пропущено: файлы checkout изменены. Закоммитьте или отмените. {detail}',

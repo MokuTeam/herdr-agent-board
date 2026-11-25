@@ -22,7 +22,7 @@ import {
 } from '../adapters/config-file.ts'
 import { dbFile } from '../adapters/db.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
-import { archiveCommit, headCommit } from '../adapters/git.ts'
+import { archiveCommit, archiveStamp, headCommit } from '../adapters/git.ts'
 import { gitTools, masterGit } from '../adapters/git-access.ts'
 import {
   handoverStageDir,
@@ -55,6 +55,7 @@ import { inheritedProfileDir } from '../adapters/profiles.ts'
 import { listEntries, watchesDir } from '../adapters/schedule-store.ts'
 import { writeSink } from '../adapters/secret-sinks.ts'
 import {
+  adoptArchive,
   backupSettings,
   bunInstall,
   gitIn,
@@ -465,6 +466,8 @@ export async function startServer({
   const selfUpdate = createSelfUpdate({
     git: (args, ms) => gitIn(pluginRoot(), args, ms),
     isCheckout: () => existsSync(join(pluginRoot(), '.git')),
+    archiveCommit: () => archiveStamp(pluginRoot()),
+    adoptArchive: commit => adoptArchive(pluginRoot(), commit),
     node: () => nodeConfig(cfg.node) !== null,
     config: () => cfg.autoUpdate,
     canRestart: typeof process.send === 'function',
