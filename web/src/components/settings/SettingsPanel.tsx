@@ -48,6 +48,7 @@ import { storage } from '../../state/storage.ts'
 import { classNames } from '../class-names.ts'
 import { ChevIcon, CpuIcon, LayersIcon, PlugIcon, ShieldIcon, SlidersIcon, WarnIcon } from '../icons.tsx'
 import { Panel } from '../panel/Panel.tsx'
+import { Segmented } from './Segmented.tsx'
 import { VerifySettings } from './VerifySettings.tsx'
 
 export type SettingsSection = 'display' | 'board' | 'features' | 'integrations' | 'system'
@@ -97,38 +98,6 @@ function Switch({
       className={classNames('set-switch', checked && 'on')}
       onClick={onToggle}
     />
-  )
-}
-
-function Segmented<T extends string>({
-  value,
-  options,
-  disabled,
-  label,
-  onChange,
-}: {
-  value: T
-  options: readonly { value: T; label: string }[]
-  disabled?: boolean
-  label: string
-  onChange(value: T): void
-}) {
-  return (
-    // biome-ignore lint/a11y/useSemanticElements: group keeps compact inline flex sizing without fieldset min-inline-size
-    <div className="set-seg" role="group" aria-label={label}>
-      {options.map(opt => (
-        <button
-          key={opt.value}
-          type="button"
-          aria-pressed={opt.value === value}
-          disabled={disabled}
-          className={classNames('set-seg-opt', opt.value === value && 'on')}
-          onClick={() => onChange(opt.value)}
-        >
-          {opt.label}
-        </button>
-      ))}
-    </div>
   )
 }
 

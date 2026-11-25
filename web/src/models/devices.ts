@@ -3,7 +3,13 @@
 // of a start placed on a device (8.3), and the words of a node-offline answer. A board without
 // `nodes` sends no `devices` and no item with a `device`: nothing here draws, the switch is not
 // there, and every filter passes what it passed before.
-import { DEVICE_COLORS, deviceColorFallback, resolveDeviceColors } from '../../../src/core/device-color.ts'
+import {
+  AUTO_COLOR_COUNT,
+  DEVICE_COLORS,
+  deviceColorFallback,
+  normalizeDeviceColor,
+  resolveDeviceColors,
+} from '../../../src/core/device-color.ts'
 import { type GitLack, gitLacks } from '../../../src/core/git-access.ts'
 import { parseNodeKey } from '../../../src/core/node-key.ts'
 import type { NodesPanelSettings } from '../../../src/core/nodes.ts'
@@ -15,6 +21,9 @@ import { loggedOut, loginCommand } from './node-setup.ts'
 import type { ProfileOption } from './profiles.ts'
 
 export { DEVICE_COLORS }
+
+/** The automatic colours (#758's seven), in order: the Automatic swatch's wheel (#789). */
+export const AUTO_COLOR_HEXES: readonly string[] = DEVICE_COLORS.slice(0, AUTO_COLOR_COUNT).map(s => s.hex)
 
 type Devices = readonly BoardDevice[] | undefined
 
@@ -223,6 +232,7 @@ export function refusedText(status: number, error: unknown, t: Translator): stri
   if (status !== 400 || typeof error !== 'string') return null
   if (error === 'title') return t('node.dev.refused', { field: t('node.dev.name') })
   if (error === 'color') return t('node.dev.refused', { field: t('node.dev.color') })
+  if (error === 'marker') return t('node.dev.refused', { field: t('node.marker.title') })
   if (['maxSessions', 'minFreeMemMb', 'maxLoad'].includes(error))
     return t('node.dev.refused', { field: t(`node.dev.${error}`) })
   // The list the panel showed is not the board's any more (a device added or left out meanwhile).
@@ -245,6 +255,8 @@ export interface DeviceRow {
   color: string
   /** Palette swatch id or #rrggbb hex currently resolved for this device (#758). */
   colorId: string
+  /** No colour of its own in config.json: the automatic one (#789's Automatic swatch). */
+  autoColor: boolean
   /** This computer: no link line, no Pause. */
   here: boolean
   /** The link in words; null for this computer. */
@@ -444,6 +456,7 @@ export function deviceRows(
       defaultTitle,
       color: resolvedColor.hex,
       colorId: resolvedColor.id,
+      autoColor: normalizeDeviceColor(d.color) === null,
       here,
       link: here ? null : linkWords(d, now, t, settings?.noToken?.includes(d.id) ?? false),
       linkState: d.link?.state ?? null,

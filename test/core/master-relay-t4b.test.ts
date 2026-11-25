@@ -155,6 +155,26 @@ test("the slices in a node's payload: Team's numbers unless it runs its own, dev
   expect(nodeSlicesView({}, { self: 'ben', ownTeam: false, ownDevices: false, online: true })).toEqual({})
 })
 
+test('the machine marker (#789): a node’s page draws its master’s beside its devices, never its own', () => {
+  const marker = { style: 'stripe', position: 'top', size: 'small' } as const
+  const slices = slicesOf({ devices: [dev('local', { selfId: 'atlas' }), dev('ben')], deviceMarker: marker } as never)
+  expect(slices.deviceMarker).toEqual(marker)
+  expect(nodeSlicesView(slices, { self: 'ben', ownTeam: false, ownDevices: false, online: true }).deviceMarker).toEqual(
+    marker,
+  )
+  // A node that is a master itself keeps its own devices and its own marker.
+  expect(nodeSlicesView(slices, { self: 'ben', ownTeam: false, ownDevices: true, online: true })).toEqual({})
+  // A master that does not list this node: no devices, no marker.
+  expect(
+    'deviceMarker' in nodeSlicesView(slices, { self: 'cleo', ownTeam: true, ownDevices: false, online: true }),
+  ).toBe(false)
+  // None given, or one that is not a marker: none taken.
+  expect('deviceMarker' in slicesOf({ devices: [dev('local', { selfId: 'atlas' })] } as never)).toBe(false)
+  expect('deviceMarker' in slicesOf({ deviceMarker: { style: 'ribbon' } } as never)).toBe(false)
+  // The marker op goes to the master as it is: it names no device.
+  expect(masterNodesBody({ op: 'marker', marker }, 'ben', 'atlas')).toEqual({ op: 'marker', marker })
+})
+
 test("Devices from a node's page: its ids read the master's way, the answer in the node's terms", () => {
   // The node (ben) names itself local and the master (atlas) by its id.
   expect(masterNodesBody({ op: 'set', id: 'local', title: 'Ben desk' }, 'ben', 'atlas')).toEqual({

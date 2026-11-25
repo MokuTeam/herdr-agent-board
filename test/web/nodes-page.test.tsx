@@ -630,12 +630,70 @@ describe('the device switch (#502)', () => {
   })
 })
 
+describe('the machine marker as Settings, Devices set it (#789)', () => {
+  const marked = (deviceMarker: BoardPayload['deviceMarker'], devices = DEVICES) =>
+    payload({ items: [local, remote], devices, ...(deviceMarker && { deviceMarker }) })
+  const markOf = (nodes: Node[]) =>
+    findAll(nodes, el => hasClass(el, 'card-device-corner') || hasClass(el, 'card-device-stripe'))
+  const classOf = (nodes: Node[]) => markOf(nodes).map(el => el.attrs.get('class'))
+
+  test('none set, or today’s corner set: the very element #758 drew', () => {
+    const plain = drawCard(remote, marked(undefined))
+    expect(classOf(plain)).toEqual(['card-device-corner'])
+    const same = drawCard(remote, marked({ style: 'corner', position: 'bottom-right', size: 'medium' }))
+    expect(html(same)).toBe(html(plain))
+  })
+
+  test('each place and size of the corner, and the stripe on each side', () => {
+    const cases: [NonNullable<BoardPayload['deviceMarker']>, string][] = [
+      [{ style: 'corner', position: 'top-left', size: 'medium' }, 'card-device-corner at-top-left'],
+      [{ style: 'corner', position: 'top-right', size: 'small' }, 'card-device-corner at-top-right size-small'],
+      [{ style: 'corner', position: 'bottom-left', size: 'large' }, 'card-device-corner at-bottom-left size-large'],
+      [{ style: 'stripe', position: 'left', size: 'medium' }, 'card-device-stripe at-left'],
+      [{ style: 'stripe', position: 'right', size: 'large' }, 'card-device-stripe at-right size-large'],
+      [{ style: 'stripe', position: 'top', size: 'small' }, 'card-device-stripe at-top size-small'],
+      [{ style: 'stripe', position: 'bottom', size: 'medium' }, 'card-device-stripe at-bottom'],
+    ]
+    for (const [m, want] of cases) {
+      const card = drawCard(remote, marked(m))
+      expect(classOf(card)).toEqual([want])
+      const [mark] = markOf(card)
+      // The same words for hover, keyboard and a screen reader, the device's colour.
+      expect(mark?.attrs.get('aria-label')).toBe('Agent on server-1')
+      expect(mark?.attrs.get('data-tip')).toBe('Agent on server-1')
+      expect(mark?.attrs.get('tabindex')).toBe('0')
+      expect(mark?.attrs.get('style')).toMatch(/^--device:#[0-9A-Fa-f]{6}$/)
+    }
+  })
+
+  test('off: no marker, the card otherwise as with one; an offline stripe greys as the corner does', () => {
+    const off = drawCard(remote, marked({ style: 'off', position: 'bottom-right', size: 'medium' }))
+    expect(markOf(off)).toEqual([])
+    const withCorner = drawCard(remote, marked(undefined))
+    const strip = (nodes: Node[]) => html(nodes).replace(/<span class="card-device-corner"[^>]*><\/span>/, '')
+    expect(html(off)).toBe(strip(withCorner))
+    const gone = drawCard(
+      remote,
+      marked({ style: 'stripe', position: 'left', size: 'medium' }, [device('local', 'laptop'), offline()]),
+    )
+    expect(classOf(gone)).toEqual(['card-device-stripe at-left offline'])
+  })
+
+  test('a board without remote devices draws no marker whatever the payload says', () => {
+    const lone = payload({ items: [local], deviceMarker: { style: 'stripe', position: 'top', size: 'large' } })
+    expect(markOf(drawCard(local, lone))).toEqual([])
+    expect(html(drawCard(local, lone))).toBe(html(drawCard(local, payload({ items: [local] }))))
+  })
+})
+
 // ---------------------------------------------------------------- nodes.css, and the phone's width
 
 describe('nodes.css (#502, #758)', () => {
   const css = readFileSync(join(import.meta.dir, '..', '..', 'web', 'styles', 'nodes.css'), 'utf8')
   const OWN = [
     '.card-device-corner',
+    // The stripe a board may pick instead (#789).
+    '.card-device-stripe',
     '.device-chip',
     '.device-dot',
     '.device-title',
@@ -668,7 +726,9 @@ describe('nodes.css (#502, #758)', () => {
     expect(body('.card-device-corner')).not.toContain('top: 0;')
     expect(body('.card-device-corner:focus-visible::after')).toContain('content: attr(data-tip);')
     // The greying leaves the card's corner, offline age, and buttons un-dimmed.
-    expect(css).toContain('.card.node-offline > :not(.card-top):not(.card-actions):not(.card-device-corner),')
+    expect(css).toContain(
+      '.card.node-offline > :not(.card-top):not(.card-actions):not(.card-device-corner):not(.card-device-stripe),',
+    )
     expect(css).toContain('.card.node-offline > .card-top > :not(.device-as-of) {')
     expect(body('.card.node-offline > .card-actions')).not.toContain('opacity')
     expect(body('.device-as-of')).toContain('flex: none;')
@@ -677,6 +737,28 @@ describe('nodes.css (#502, #758)', () => {
     expect(terminalCss).toContain(':root[data-look="terminal"] .card-device-corner:focus-visible::after')
     const wrapCss = readFileSync(join(import.meta.dir, '..', '..', 'web', 'styles', 'card-wrap.css'), 'utf8')
     expect(wrapCss).toContain(':root[data-card-text="wrap"] .card-top > .device-as-of')
+  })
+
+  test('the marker’s places, sizes and stripe (#789): absolute, clear of the card buttons, in every look', () => {
+    expect(body('.card-device-stripe')).toContain('position: absolute;')
+    expect(body('.card-device-stripe.at-left')).toContain('left: 3px;')
+    expect(body('.card-device-stripe.at-top')).toContain('top: 3px;')
+    expect(body('.card-device-stripe.size-small')).toContain('--mark: 2px;')
+    expect(body('.card-device-stripe.size-large')).toContain('--mark: 4px;')
+    expect(body('.card-device-corner.size-small')).toContain('width: 8px;')
+    expect(body('.card-device-corner.size-large')).toContain('width: 14px;')
+    expect(body('.card-device-corner.at-top-left')).toContain('top: 0; left: 0;')
+    expect(body('.card-device-stripe:focus-visible::after')).toContain('content: attr(data-tip);')
+    // Top-right steps aside while the card's buttons show there.
+    expect(css).toContain('.card:hover > .card-device-corner.at-top-right,')
+    expect(css).toMatch(
+      /@media \(hover: none\) \{\n {2}\.card:hover > \.card-device-corner\.at-top-right \{ opacity: 1; \}/,
+    )
+    // Reduced motion and forced colours cover the stripe too.
+    expect(css).toMatch(/prefers-reduced-motion: reduce\) \{[^}]*\.card-device-stripe,/)
+    expect(css).toContain('.card-device-stripe.offline { background: Highlight; }')
+    const terminalCss = readFileSync(join(import.meta.dir, '..', '..', 'web', 'styles', 'look-terminal.css'), 'utf8')
+    expect(terminalCss).toContain(':root[data-look="terminal"] .card-device-stripe:focus-visible::after')
   })
 
   test('the page links it after the sheets it may build on', () => {

@@ -310,3 +310,51 @@ describe('title (#601)', () => {
     expect(devices(base).local).toBeUndefined()
   })
 })
+
+describe('the machine marker on cards (#789)', () => {
+  test('its shape: the whole marker, refused as marker when it is not one', () => {
+    expect(nodesEditOf({ op: 'marker', marker: { style: 'stripe', position: 'top', size: 'small' } })).toEqual({
+      op: 'marker',
+      marker: { style: 'stripe', position: 'top', size: 'small' },
+    })
+    expect(nodesEditOf({ op: 'marker' })).toEqual({ error: 'marker' })
+    expect(nodesEditOf({ op: 'marker', marker: { style: 'ribbon' } })).toEqual({ error: 'marker' })
+    // A place the style does not take.
+    expect(nodesEditOf({ op: 'marker', marker: { style: 'corner', position: 'left' } })).toEqual({ error: 'marker' })
+  })
+
+  test('kept as what differs from today’s corner; today’s corner again: the key goes', () => {
+    const nodes = section()
+    const first = applyNodesEdit(
+      nodes,
+      read({ op: 'marker', marker: { style: 'stripe', position: 'left', size: 'large' } }),
+    )
+    expect(first).toEqual({ changed: true })
+    expect(nodes.marker).toEqual({ style: 'stripe', size: 'large' })
+    expect(nodesConfig(nodes)?.marker).toEqual({ style: 'stripe', position: 'left', size: 'large' })
+    expect(nodesConfig(nodes)?.problems).toEqual([])
+    // The rest of the section as it was.
+    expect({ ...nodes, marker: undefined }).toEqual({ ...section(), marker: undefined })
+    const back = applyNodesEdit(
+      nodes,
+      read({ op: 'marker', marker: { style: 'corner', position: 'bottom-right', size: 'medium' } }),
+    )
+    expect(back).toEqual({ changed: true })
+    expect(nodes).toEqual(section())
+    // The same again changes nothing.
+    expect(applyNodesEdit(nodes, read({ op: 'marker', marker: { style: 'corner' } }))).toEqual({ changed: false })
+  })
+
+  test('nodesConfig: no key, no marker; a bad one is named and leaves the rest working', () => {
+    expect('marker' in (nodesConfig(section()) ?? {})).toBe(false)
+    const bad = nodesConfig({ ...section(), marker: { style: 'ribbon' } })
+    expect(bad?.problems).toEqual([{ key: 'marker', why: 'type' }])
+    expect('marker' in (bad ?? {})).toBe(false)
+    expect(bad?.order).toEqual(nodesConfig(section())?.order)
+    // A section with a bad marker still takes an edit of another key, and a good marker over the bad one.
+    const nodes = { ...section(), marker: { style: 'ribbon' } }
+    expect(applyNodesEdit(nodes, read({ op: 'whenFull', whenFull: 'wait' }))).toEqual({ changed: true })
+    expect(applyNodesEdit(nodes, read({ op: 'marker', marker: { style: 'off' } }))).toEqual({ changed: true })
+    expect(nodes.marker).toEqual({ style: 'off' })
+  })
+})

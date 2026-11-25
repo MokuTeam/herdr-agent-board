@@ -13,6 +13,18 @@
 // `relayedDevices`): the same panel, its changes and Add a server / Add a computer going to the
 // master over the relay; Move master role stays on the master.
 import { type FocusEvent, type KeyboardEvent, useCallback, useEffect, useRef, useState } from 'react'
+import {
+  type CORNER_POSITIONS,
+  type DeviceMarker,
+  defaultMarkerPosition,
+  MARKER_SIZES,
+  MARKER_STYLES,
+  type MarkerPosition,
+  type MarkerSize,
+  type MarkerStyle,
+  markerOrDefault,
+  markerPositions,
+} from '../../../../src/core/device-marker.ts'
 import { ApiError, api, errorText } from '../../api/client.ts'
 import { useHeld } from '../../hooks/useHeld.ts'
 import { useLatest } from '../../hooks/useLatest.ts'
@@ -20,10 +32,12 @@ import { useRowReorder } from '../../hooks/useRowReorder.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import type { ComputerSetupView } from '../../models/computer-setup.ts'
 import {
+  AUTO_COLOR_HEXES,
   DEVICE_COLORS,
   type DeviceRow,
   deviceRows,
   deviceTitleEdited,
+  hasNodes,
   isPanelReply,
   lanesAfter,
   laneTicks,
@@ -40,9 +54,11 @@ import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import { GripGlyph, PencilIcon } from '../icons.tsx'
 import { Panel, type PanelBack } from '../panel/Panel.tsx'
+import { Segmented } from '../settings/Segmented.tsx'
 import { Switch } from '../team/Switch.tsx'
 import { AddComputer } from './AddComputer.tsx'
 import { AddServer, LoginLines } from './AddServer.tsx'
+import { DeviceMarkerMark } from './DeviceChip.tsx'
 import { MasterHandover } from './MasterHandover.tsx'
 
 export interface DevicesPanelProps {
@@ -73,6 +89,8 @@ export function DevicesPanel({ open, onClose, back, initial, setup, computerSetu
   const [order, setOrder] = useState<string[] | null>(null)
   // The device whose colour swatches are open; at most one at a time.
   const [palette, setPalette] = useState<string | null>(null)
+  // A marker just picked (#789), shown until the payload brings it or the change is refused.
+  const [pendingMarker, setPendingMarker] = useState<{ marker: DeviceMarker; was: string } | null>(null)
   const list = useRef<HTMLDivElement>(null)
   const latest = useLatest({ canEdit, t, toast })
 
@@ -160,6 +178,20 @@ export function DevicesPanel({ open, onClose, back, initial, setup, computerSetu
   const rows = deviceRows(shown, now, t, settings, data?.schedules, data?.items)
   if (order) rows.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id))
   const ids = rows.map(r => r.id)
+  const boardMarker = markerOrDefault(data?.deviceMarker)
+  const boardMarkerKey = JSON.stringify(boardMarker)
+  useEffect(() => {
+    if (pendingMarker && pendingMarker.was !== boardMarkerKey) setPendingMarker(null)
+  }, [pendingMarker, boardMarkerKey])
+  const marker = pendingMarker?.was === boardMarkerKey ? pendingMarker.marker : boardMarker
+  const pickMarker = (next: DeviceMarker) => {
+    if (!canEdit || JSON.stringify(next) === JSON.stringify(marker)) return
+    const entry = { marker: next, was: boardMarkerKey }
+    setPendingMarker(entry)
+    void send({ op: 'marker', marker: next }).then(r => {
+      if (!r) setPendingMarker(p => (p === entry ? null : p))
+    })
+  }
   const move = (id: string, by: number) => {
     const next = movedOrder(ids, id, by)
     if (next.join('\n') === ids.join('\n')) return
@@ -199,6 +231,7 @@ export function DevicesPanel({ open, onClose, back, initial, setup, computerSetu
               open={open}
               defaults={settings?.defaults[row.id]}
               next={settings?.next === row.id}
+              marker={marker}
               paletteOpen={palette === row.id}
               onTogglePalette={() => setPalette(was => (was === row.id ? null : row.id))}
               disabled={!canEdit}
@@ -219,6 +252,14 @@ export function DevicesPanel({ open, onClose, back, initial, setup, computerSetu
             />
           ))}
         </div>
+        {master && hasNodes(shown) && rows[0] && (
+          <MarkerSection
+            marker={marker}
+            sample={rows.find(r => !r.here) ?? rows[0]}
+            disabled={!canEdit}
+            onPick={pickMarker}
+          />
+        )}
         {!nodeOnly && <AddServer open={open} {...(setup && { initial: setup })} />}
         {!nodeOnly && (
           <AddComputer
@@ -259,6 +300,8 @@ interface RowProps {
   defaults: Record<Threshold, number> | undefined
   /** The next start would go here: a quiet mark. */
   next: boolean
+  /** How cards show their machine (#789): the legend swatch shows the same. */
+  marker: DeviceMarker
   paletteOpen: boolean
   onTogglePalette(): void
   disabled: boolean
@@ -276,6 +319,7 @@ function DeviceRowView({
   open,
   defaults,
   next,
+  marker,
   paletteOpen,
   onTogglePalette,
   disabled,
@@ -287,7 +331,13 @@ function DeviceRowView({
   const t = useT()
   const [editing, setEditing] = useState<string | null>(null)
   const [pending, setPending] = useState<{ title: string; was: string } | null>(null)
-  const [pendingColor, setPendingColor] = useState<{ colorId: string; color: string; was: string } | null>(null)
+  const [pendingColor, setPendingColor] = useState<{
+    colorId: string
+    color: string
+    auto: boolean
+    was: string
+    wasAuto: boolean
+  } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const titleBtnRef = useRef<HTMLButtonElement>(null)
   const doneRef = useRef(false)
@@ -306,8 +356,9 @@ function DeviceRowView({
   }, [pending, row.rawTitle])
 
   useEffect(() => {
-    if (pendingColor && row.colorId !== pendingColor.was) setPendingColor(null)
-  }, [pendingColor, row.colorId])
+    if (pendingColor && (row.colorId !== pendingColor.was || row.autoColor !== pendingColor.wasAuto))
+      setPendingColor(null)
+  }, [pendingColor, row.colorId, row.autoColor])
 
   useEffect(() => {
     const now = editing !== null
@@ -324,15 +375,24 @@ function DeviceRowView({
   const activePending = pending && pending.was === row.rawTitle ? pending : null
   const currentRaw = activePending ? activePending.title : row.rawTitle
   const shownTitle = activePending ? activePending.title || row.defaultTitle : row.title
-  const activeColor = pendingColor && pendingColor.was === row.colorId ? pendingColor : null
+  const activeColor =
+    pendingColor && pendingColor.was === row.colorId && pendingColor.wasAuto === row.autoColor ? pendingColor : null
+  const shownAuto = activeColor ? activeColor.auto : row.autoColor
   const shownColorId = activeColor ? activeColor.colorId : row.colorId
   const shownColorHex = activeColor ? activeColor.color : row.color
 
-  const pickColor = (id: string) => {
+  // A swatch, or null for Automatic (#789): the colour key goes and the board picks again.
+  const pickColor = (id: string | null) => {
     onTogglePalette()
-    if (disabled || id === shownColorId) return
-    const hex = DEVICE_COLORS.find(s => s.id === id)?.hex ?? row.color
-    const entry = { colorId: id, color: hex, was: row.colorId }
+    if (disabled || (id === null ? shownAuto : !shownAuto && id === shownColorId)) return
+    const hex = id === null ? row.color : (DEVICE_COLORS.find(s => s.id === id)?.hex ?? row.color)
+    const entry = {
+      colorId: id ?? row.colorId,
+      color: hex,
+      auto: id === null,
+      was: row.colorId,
+      wasAuto: row.autoColor,
+    }
     setPendingColor(entry)
     void send({ op: 'set', id: row.id, color: id }).then(r => {
       if (!r) setPendingColor(p => (p === entry ? null : p))
@@ -410,7 +470,11 @@ function DeviceRowView({
         </button>
         <button
           type="button"
-          className="devices-color"
+          className={classNames(
+            'devices-color',
+            marker.style !== 'off' && `mark-${marker.style}`,
+            marker.style !== 'off' && `at-${marker.position}`,
+          )}
           style={{ '--device': shownColorHex }}
           title={t('node.dev.colorPick')}
           aria-label={t('node.dev.colorOf', { name: shownTitle })}
@@ -457,6 +521,17 @@ function DeviceRowView({
       </div>
       {paletteOpen && (
         <div className="devices-palette">
+          <button
+            type="button"
+            className="devices-sw devices-sw-auto"
+            data-color="auto"
+            style={{ '--sw-auto': `conic-gradient(${AUTO_COLOR_HEXES.join(', ')}, ${AUTO_COLOR_HEXES[0]})` }}
+            title={t('node.dev.colorAuto')}
+            aria-label={t('node.dev.colorAuto')}
+            aria-pressed={shownAuto}
+            disabled={disabled}
+            onClick={() => pickColor(null)}
+          />
           {DEVICE_COLORS.map(sw => (
             <button
               type="button"
@@ -466,7 +541,7 @@ function DeviceRowView({
               style={{ '--sw': sw.hex }}
               title={sw.id}
               aria-label={sw.id}
-              aria-pressed={shownColorId === sw.id}
+              aria-pressed={!shownAuto && shownColorId === sw.id}
               disabled={disabled}
               onClick={() => pickColor(sw.id)}
             />
@@ -705,6 +780,101 @@ function LanesSection({ settings, disabled, send }: { settings: PanelSettings | 
           </label>
         ))}
       </div>
+    </section>
+  )
+}
+
+/** Corner places drawn as the corner itself: short, and the same in every language (their words are the titles). */
+const CORNER_GLYPHS: Record<(typeof CORNER_POSITIONS)[number], string> = {
+  'top-left': '◤',
+  'top-right': '◥',
+  'bottom-left': '◣',
+  'bottom-right': '◢',
+}
+
+/**
+ * How cards show their machine (#789): the style, its place and its size, with a small card that
+ * shows the pick at once in the colour of a device of this board. Off hides the place and size.
+ */
+function MarkerSection({
+  marker,
+  sample,
+  disabled,
+  onPick,
+}: {
+  marker: DeviceMarker
+  sample: DeviceRow
+  disabled: boolean
+  onPick(next: DeviceMarker): void
+}) {
+  const t = useT()
+  const pickStyle = (style: MarkerStyle) =>
+    onPick({
+      style,
+      // A place the new style takes stays; else its own default.
+      position: markerPositions(style).includes(marker.position) ? marker.position : defaultMarkerPosition(style),
+      size: marker.size,
+    })
+  const places = markerPositions(marker.style)
+  return (
+    <section className="devices-section devices-marker">
+      <h3 className="devices-head">{t('node.marker.title')}</h3>
+      <div className="devices-marker-body">
+        <div className="devices-marker-controls">
+          <div className="devices-marker-row">
+            <span>{t('node.marker.style')}</span>
+            <Segmented
+              label={t('node.marker.style')}
+              value={marker.style}
+              options={MARKER_STYLES.map(id => ({ value: id, label: t(`node.marker.style.${id}`) }))}
+              disabled={disabled}
+              onChange={pickStyle}
+            />
+          </div>
+          {places.length > 0 && (
+            <div className="devices-marker-row">
+              <span>{t('node.marker.position')}</span>
+              <Segmented<MarkerPosition>
+                label={t('node.marker.position')}
+                value={marker.position}
+                options={places.map(id =>
+                  marker.style === 'corner'
+                    ? {
+                        value: id,
+                        label: CORNER_GLYPHS[id as (typeof CORNER_POSITIONS)[number]],
+                        title: t(`node.marker.pos.${id}`),
+                      }
+                    : { value: id, label: t(`node.marker.pos.${id}`) },
+                )}
+                disabled={disabled}
+                onChange={position => onPick({ ...marker, position })}
+              />
+            </div>
+          )}
+          {places.length > 0 && (
+            <div className="devices-marker-row">
+              <span>{t('node.marker.size')}</span>
+              <Segmented<MarkerSize>
+                label={t('node.marker.size')}
+                value={marker.size}
+                options={MARKER_SIZES.map(id => ({ value: id, label: t(`node.marker.size.${id}`) }))}
+                disabled={disabled}
+                onChange={size => onPick({ ...marker, size })}
+              />
+            </div>
+          )}
+        </div>
+        <div className="devices-marker-preview" role="img" aria-label={t('node.marker.preview')}>
+          <span className="devices-marker-line" />
+          <span className="devices-marker-line short" />
+          <DeviceMarkerMark
+            node={{ id: sample.id, title: sample.title, color: sample.color, offline: false, asOf: '', why: '' }}
+            marker={marker}
+            preview
+          />
+        </div>
+      </div>
+      <p className="sheet-meta">{t('node.marker.about')}</p>
     </section>
   )
 }

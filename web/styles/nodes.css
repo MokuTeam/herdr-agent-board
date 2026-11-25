@@ -16,7 +16,7 @@
   width: 11px;
   height: 11px;
   border-bottom-right-radius: inherit;
-  background: linear-gradient(315deg, color-mix(in srgb, var(--device) 85%, transparent) 0 49%, transparent 51%);
+  background: linear-gradient(var(--mark-angle, 315deg), color-mix(in srgb, var(--device) 85%, transparent) 0 49%, transparent 51%);
   outline: none;
   transition: opacity 150ms ease;
 }
@@ -25,7 +25,7 @@
   height: 9px;
 }
 .card-device-corner.offline {
-  background: linear-gradient(315deg, color-mix(in srgb, var(--device) 45%, var(--gray)) 0 49%, transparent 51%);
+  background: linear-gradient(var(--mark-angle, 315deg), color-mix(in srgb, var(--device) 45%, var(--gray)) 0 49%, transparent 51%);
 }
 .card-device-corner:focus-visible {
   box-shadow: 0 0 0 2px var(--accent);
@@ -47,6 +47,69 @@
   white-space: nowrap;
   pointer-events: none;
 }
+
+/* The corner where Settings, Devices puts it, and its size (#789); the rules above are the default. */
+.card-device-corner.at-top-left,
+.card-device-corner.at-top-right,
+.card-device-corner.at-bottom-left { border-radius: 0; }
+.card-device-corner.at-top-left { --mark-angle: 135deg; top: 0; left: 0; right: auto; bottom: auto; border-top-left-radius: inherit; }
+.card-device-corner.at-top-right { --mark-angle: 225deg; top: 0; bottom: auto; border-top-right-radius: inherit; }
+.card-device-corner.at-bottom-left { --mark-angle: 45deg; left: 0; right: auto; border-bottom-left-radius: inherit; }
+.card-device-corner.size-small { width: 8px; height: 8px; }
+.card-device-corner.size-large { width: 14px; height: 14px; }
+.card.compact .card-device-corner.size-small { width: 7px; height: 7px; }
+.card.compact .card-device-corner.size-large { width: 11px; height: 11px; }
+.card-device-corner.at-top-left:focus-visible::after,
+.card-device-corner.at-top-right:focus-visible::after { top: calc(100% + 4px); bottom: auto; }
+.card-device-corner.at-top-left:focus-visible::after,
+.card-device-corner.at-bottom-left:focus-visible::after { left: 0; right: auto; }
+/* Top-right is where the card's buttons show on hover: the corner steps aside for them. */
+.card:hover > .card-device-corner.at-top-right,
+.card:focus-visible > .card-device-corner.at-top-right { opacity: 0; }
+@media (hover: none) {
+  .card:hover > .card-device-corner.at-top-right { opacity: 1; }
+}
+
+/* The stripe (#789): a thin rounded line just inside one side of the card, clear of its rounded
+   corners; zero text, zero height impact, the same tooltip as the corner. */
+.card-device-stripe {
+  --mark: 3px;
+  position: absolute;
+  z-index: 1;
+  border-radius: var(--mark);
+  background: color-mix(in srgb, var(--device) 85%, transparent);
+  outline: none;
+  transition: opacity 150ms ease;
+}
+.card-device-stripe.size-small { --mark: 2px; }
+.card-device-stripe.size-large { --mark: 4px; }
+.card-device-stripe.at-left { top: 8px; bottom: 8px; left: 3px; width: var(--mark); }
+.card-device-stripe.at-right { top: 8px; right: 3px; bottom: 8px; width: var(--mark); }
+.card-device-stripe.at-top { top: 3px; right: 10px; left: 10px; height: var(--mark); }
+.card-device-stripe.at-bottom { right: 10px; bottom: 3px; left: 10px; height: var(--mark); }
+/* A pointer finds a 2px line by a few pixels around it. */
+.card-device-stripe::before { content: ""; position: absolute; inset: -3px; }
+.card-device-stripe.offline { background: color-mix(in srgb, var(--device) 45%, var(--gray)); }
+.card-device-stripe:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+.card-device-stripe:focus-visible::after {
+  content: attr(data-tip);
+  position: absolute;
+  z-index: 10;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: var(--shadow-lift);
+  color: var(--label);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.35;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.card-device-stripe.at-left:focus-visible::after { top: 0; left: calc(100% + 6px); }
+.card-device-stripe.at-right:focus-visible::after { top: 0; right: calc(100% + 6px); }
+.card-device-stripe.at-top:focus-visible::after { top: calc(100% + 4px); left: 0; }
+.card-device-stripe.at-bottom:focus-visible::after { bottom: calc(100% + 4px); left: 0; }
 
 /* The chip: the session sheet's device badge, a dot in front that is green while the master hears
    the device and gray while it does not. */
@@ -89,7 +152,7 @@
 /* An offline device's card: its last one, greyed. The corner and offline age stay clear, as they
    say why; the card itself keeps its outline, so its focus and selection still show. Its buttons
    keep their own showing on hover and their own motion (app.css): they only lose their color. */
-.card.node-offline > :not(.card-top):not(.card-actions):not(.card-device-corner),
+.card.node-offline > :not(.card-top):not(.card-actions):not(.card-device-corner):not(.card-device-stripe),
 .card.node-offline > .card-top > :not(.device-as-of) {
   filter: grayscale(1);
   opacity: 0.55;
@@ -97,9 +160,10 @@
 }
 .card.node-offline > .card-actions { filter: grayscale(1); }
 @media (prefers-reduced-motion: reduce) {
-  .card.node-offline > :not(.card-top):not(.card-actions):not(.card-device-corner),
+  .card.node-offline > :not(.card-top):not(.card-actions):not(.card-device-corner):not(.card-device-stripe),
   .card.node-offline > .card-top > :not(.device-as-of),
   .card-device-corner,
+  .card-device-stripe,
   .device-as-of { transition: none; }
 }
 
@@ -109,7 +173,10 @@
 @media (forced-colors: active) {
   .device-chip { border: 1px solid CanvasText; }
   .device-dot { forced-color-adjust: none; }
-  .card-device-corner { background: none; border-top: 10px solid Highlight; border-right: 10px solid transparent; }
+  .card-device-corner,
+  .card-device-corner.offline { background: linear-gradient(var(--mark-angle, 315deg), Highlight 0 49%, transparent 51%); }
+  .card-device-stripe,
+  .card-device-stripe.offline { background: Highlight; }
 }
 
 /* Settings, Devices (#510, components/devices/DevicesPanel.tsx): the devices in the order new
@@ -145,6 +212,18 @@
   cursor: pointer;
   transition: transform 100ms ease-out;
 }
+/* The legend shows the marker the cards draw (#789): the corner as a tile with that corner in the
+   colour, the stripe as a tile with that side; off keeps the plain dot. */
+.devices-color.mark-corner,
+.devices-color.mark-stripe { border-radius: 4px; }
+.devices-color.mark-corner { background: linear-gradient(var(--mark-angle, 315deg), var(--device) 0 45%, var(--fill-2) 45%); }
+.devices-color.mark-corner.at-top-left { --mark-angle: 135deg; }
+.devices-color.mark-corner.at-top-right { --mark-angle: 225deg; }
+.devices-color.mark-corner.at-bottom-left { --mark-angle: 45deg; }
+.devices-color.mark-stripe { background: linear-gradient(var(--mark-dir, to right), var(--device) 0 4px, var(--fill-2) 4px); }
+.devices-color.mark-stripe.at-right { --mark-dir: to left; }
+.devices-color.mark-stripe.at-top { --mark-dir: to bottom; }
+.devices-color.mark-stripe.at-bottom { --mark-dir: to top; }
 .devices-color:active:not(:disabled) { transform: scale(0.88); }
 .devices-color:focus-visible { outline: 0; box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
 .devices-color:disabled { cursor: default; }
@@ -161,6 +240,9 @@
 }
 .devices-sw:active:not(:disabled) { transform: scale(0.88); }
 .devices-sw[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--sw); }
+/* Automatic (#789): the automatic colours as one wheel, a little apart from the swatches. */
+.devices-sw-auto { margin-inline-end: 4px; background: var(--sw-auto); }
+.devices-sw-auto[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--label-3); }
 .devices-sw:focus-visible { outline: 0; box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent); }
 .devices-name { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; flex: 1 1 0; min-width: 0; }
 .devices-title {
@@ -304,6 +386,26 @@
 /* The lanes and When everything is full. */
 .devices-section { display: flex; flex-direction: column; gap: 6px; margin-top: 18px; }
 .devices-head { margin: 0; font-size: 13px; font-weight: 600; }
+/* The machine marker (#789): its choices beside a small card that shows them at once. */
+.devices-marker-body { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; }
+.devices-marker-controls { display: flex; flex: 1 1 280px; flex-direction: column; gap: 8px; min-width: 0; }
+.devices-marker-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 10px; font-size: 13px; }
+.devices-marker-preview {
+  position: relative;
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  justify-content: center;
+  gap: 7px;
+  width: 136px;
+  height: 64px;
+  padding: 0 16px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.devices-marker-line { height: 6px; border-radius: 3px; background: var(--fill-2); }
+.devices-marker-line.short { width: 58%; }
 .devices-lanes { display: flex; flex-wrap: wrap; gap: 6px 14px; }
 .devices-lane { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: 13px; }
 .devices-swatch { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--lane); }
@@ -377,5 +479,6 @@
 @media (forced-colors: active) {
   .devices-row, .node-master-banner { border: 1px solid CanvasText; }
   .devices-title-input { border-color: Highlight; box-shadow: none; }
-  .devices-fill, .devices-floor, .devices-swatch, .card-device-corner, .devices-color, .devices-sw { forced-color-adjust: none; }
+  .devices-fill, .devices-floor, .devices-swatch, .card-device-corner, .card-device-stripe, .devices-color, .devices-sw { forced-color-adjust: none; }
+  .devices-marker-preview, .devices-marker-line { border: 1px solid CanvasText; }
 }

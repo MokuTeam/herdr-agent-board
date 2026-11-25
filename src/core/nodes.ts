@@ -8,6 +8,7 @@
 //   "node": { "id": "server-1", "port": 12430, "workRoot": "~/work" }
 import { type BoardAgyLimits, boardAgyLimitsOf } from './agy-limits.ts'
 import { normalizeDeviceColor } from './device-color.ts'
+import { type DeviceMarker, deviceMarkerOf, markerConfigOf } from './device-marker.ts'
 import { type GitFacts, gitFactsOf } from './git-access.ts'
 import { isRoutableNodeAddress, plainAddress } from './mokupilot-mode.ts'
 import { DEVICE_ID, isDevice, LOCAL, parseNodeKey, validMasterUrl } from './node-key.ts'
@@ -102,6 +103,8 @@ export interface NodesConfig {
    * it runs that session itself: `<workRoot>/<host>/<path>`, as a node's own `workRoot`. Absent: `~/work`.
    */
   workRoot?: string
+  /** How a card shows its machine (#789, core/device-marker.ts); absent: today's corner. */
+  marker?: DeviceMarker
 }
 
 export interface NodeConfig {
@@ -132,7 +135,7 @@ const given = (v: unknown): boolean => v !== undefined && v !== null
 const bare = <T>(): Record<string, T> => Object.create(null) as Record<string, T>
 const LOOPBACK = new Set(['localhost', '127.0.0.1', '[::1]'])
 
-const TOP_KEYS = ['id', 'order', 'whenFull', 'lanes', 'relay', 'devices', 'workRoot']
+const TOP_KEYS = ['id', 'order', 'whenFull', 'lanes', 'relay', 'devices', 'workRoot', 'marker']
 const DEVICE_KEYS = [
   'title',
   'color',
@@ -477,7 +480,24 @@ export function nodesConfig(raw: unknown, hostName = ''): NodesConfig | null {
   if (isText(raw.workRoot, 1024)) workRoot = raw.workRoot
   else if (given(raw.workRoot)) flag('workRoot', 'type')
 
-  return { id, order, whenFull, lanes, relay, devices, problems, ...(workRoot !== undefined && { workRoot }) }
+  let marker: DeviceMarker | undefined
+  if (given(raw.marker)) {
+    const m = deviceMarkerOf(raw.marker)
+    if (m) marker = m
+    else flag('marker', 'type')
+  }
+
+  return {
+    id,
+    order,
+    whenFull,
+    lanes,
+    relay,
+    devices,
+    problems,
+    ...(workRoot !== undefined && { workRoot }),
+    ...(marker && { marker }),
+  }
 }
 
 /** config.json's `node` and what does not check out in it. */
@@ -843,8 +863,9 @@ export type NodesEdit =
   | { op: 'set'; id: string; values: Partial<Record<DeviceSetting, string | boolean | number | null>> }
   | { op: 'lanes'; lanes: 'all' | string[]; shown?: string[] }
   | { op: 'whenFull'; whenFull: 'local' | 'wait' }
+  | { op: 'marker'; marker: DeviceMarker }
 
-const EDIT_OPS = ['order', 'set', 'lanes', 'whenFull']
+const EDIT_OPS = ['order', 'set', 'lanes', 'whenFull', 'marker']
 
 /** What `GET /api/nodes` adds for the panel beside the devices (#510). */
 export interface NodesPanelSettings {
@@ -894,6 +915,11 @@ export function nodesEditOf(body: Record<string, unknown>): NodesEdit | { error:
     return body.whenFull === 'local' || body.whenFull === 'wait'
       ? { op: 'whenFull', whenFull: body.whenFull }
       : { error: 'whenFull' }
+  // How a card shows its machine (#789): the whole marker, held to the rules nodesConfig reads with.
+  if (body.op === 'marker') {
+    const marker = deviceMarkerOf(body.marker)
+    return marker ? { op: 'marker', marker } : { error: 'marker' }
+  }
   if (typeof body.id !== 'string' || !DEVICE_ID.test(body.id)) return { error: 'id' }
   const values: Partial<Record<DeviceSetting, string | boolean | number | null>> = {}
   for (const key of DEVICE_SETTINGS) {
@@ -939,7 +965,12 @@ export function applyNodesEdit(
   const selfId = was?.id ?? deviceIdFromHost(hostName)
   if (edit.op === 'order') next.order = [...edit.ids]
   else if (edit.op === 'whenFull') next.whenFull = edit.whenFull
-  else if (edit.op === 'lanes')
+  else if (edit.op === 'marker') {
+    // Kept as what differs from today's corner; nothing that differs: the key goes.
+    const kept = markerConfigOf(edit.marker)
+    if (kept) next.marker = kept
+    else delete next.marker
+  } else if (edit.op === 'lanes')
     next.lanes = edit.lanes === 'all' ? 'all' : [...new Set(edit.lanes.map(l => l.trim().toLowerCase()))]
   else {
     const hadDevices = next.devices !== undefined

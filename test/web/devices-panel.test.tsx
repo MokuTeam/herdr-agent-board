@@ -1099,7 +1099,8 @@ describe('rename a device (#601)', () => {
       })
       const palette = host.querySelector('.devices-palette')
       expect(palette).not.toBeNull()
-      expect(host.querySelectorAll('.devices-sw')).toHaveLength(DEVICE_COLORS.length)
+      // The swatches and, first, Automatic (#789).
+      expect(host.querySelectorAll('.devices-sw')).toHaveLength(DEVICE_COLORS.length + 1)
 
       await act(async () => {
         host
@@ -1108,6 +1109,106 @@ describe('rename a device (#601)', () => {
       })
       expect(host.querySelector('.devices-palette')).toBeNull()
       expect(posted(calls)).toEqual([{ op: 'set', id: 'server-1', color: 'rose' }])
+
+      await act(async () => root.unmount())
+      host.remove()
+    })
+
+    test('Automatic gives the colour back to the board: the key goes (#789)', async () => {
+      const calls = answers([200, { settings: SETTINGS }], [200, { ok: true, settings: SETTINGS }])
+      const host = dom.window.document.createElement('div')
+      dom.window.document.body.appendChild(host)
+      const root = createRoot(host)
+      const devices = [device('server-1', { title: 'Server 1', color: 'rose' }), device('local')]
+      await act(async () => {
+        root.render(
+          <I18nProvider lang="en">
+            <BoardContext.Provider value={board({ data: payload({ devices, categories: CATEGORIES }), now: NOW })}>
+              <PanelProvider viewport={() => VP}>
+                <DevicesPanel open onClose={() => {}} initial={SETTINGS} />
+              </PanelProvider>
+            </BoardContext.Provider>
+          </I18nProvider>,
+        )
+      })
+      const open = async (id: string) =>
+        act(async () => {
+          host
+            .querySelector(`[data-id="${id}"] .devices-color`)
+            ?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+        })
+      await open('server-1')
+      const auto = () => host.querySelector('.devices-sw[data-color="auto"]')
+      expect(auto()?.getAttribute('aria-label')).toBe('Automatic')
+      expect(auto()?.getAttribute('aria-pressed')).toBe('false')
+      expect(host.querySelector('.devices-sw[data-color="rose"]')?.getAttribute('aria-pressed')).toBe('true')
+      await act(async () => {
+        auto()?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+      expect(posted(calls)).toEqual([{ op: 'set', id: 'server-1', color: null }])
+      // Shown as automatic at once, before the payload brings it.
+      await open('server-1')
+      expect(auto()?.getAttribute('aria-pressed')).toBe('true')
+      expect(host.querySelector('.devices-sw[data-color="rose"]')?.getAttribute('aria-pressed')).toBe('false')
+      // A device on its automatic colour: Automatic is the pressed one, and picking it again sends nothing.
+      await open('local')
+      expect(auto()?.getAttribute('aria-pressed')).toBe('true')
+      await act(async () => {
+        auto()?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+      })
+      expect(posted(calls)).toHaveLength(1)
+
+      await act(async () => root.unmount())
+      host.remove()
+    })
+
+    test('the machine marker: a pick goes to the board whole and shows at once in the preview and the legend (#789)', async () => {
+      const ok: [number, unknown] = [200, { ok: true, settings: SETTINGS }]
+      const calls = answers([200, { settings: SETTINGS }], ok, ok, ok)
+      const host = dom.window.document.createElement('div')
+      dom.window.document.body.appendChild(host)
+      const root = createRoot(host)
+      await act(async () => {
+        root.render(
+          <I18nProvider lang="en">
+            <BoardContext.Provider value={board({ data: full(), now: NOW })}>
+              <PanelProvider viewport={() => VP}>
+                <DevicesPanel open onClose={() => {}} initial={SETTINGS} />
+              </PanelProvider>
+            </BoardContext.Provider>
+          </I18nProvider>,
+        )
+      })
+      const groups = () => [...host.querySelectorAll('.devices-marker .set-seg')]
+      const press = async (group: number, label: string) =>
+        act(async () => {
+          ;[...(groups()[group]?.querySelectorAll('button') ?? [])]
+            .find(b => b.textContent === label || b.getAttribute('aria-label') === label)
+            ?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
+        })
+      expect(groups()).toHaveLength(3)
+      expect(host.querySelector('.devices-marker-preview .card-device-corner')?.getAttribute('class')).toBe(
+        'card-device-corner',
+      )
+      await press(0, 'Stripe')
+      expect(posted(calls)).toEqual([{ op: 'marker', marker: { style: 'stripe', position: 'left', size: 'medium' } }])
+      expect(host.querySelector('.devices-marker-preview .card-device-stripe')?.getAttribute('class')).toBe(
+        'card-device-stripe at-left',
+      )
+      expect(host.querySelector('[data-id="server-1"] .devices-color')?.getAttribute('class')).toBe(
+        'devices-color mark-stripe at-left',
+      )
+      await press(2, 'Large')
+      expect(posted(calls).at(-1)).toEqual({
+        op: 'marker',
+        marker: { style: 'stripe', position: 'left', size: 'large' },
+      })
+      // Off: no place, no size, no marker in the preview, the legend a plain dot.
+      await press(0, 'Off')
+      expect(groups()).toHaveLength(1)
+      expect(host.querySelector('.devices-marker-preview [class*="card-device"]')).toBeNull()
+      expect(host.querySelector('[data-id="server-1"] .devices-color')?.getAttribute('class')).toBe('devices-color')
+      expect(posted(calls)).toHaveLength(3)
 
       await act(async () => root.unmount())
       host.remove()
@@ -1145,5 +1246,65 @@ describe("a node's own page (#786): its master's devices, relayed", () => {
 
   test("a master's own page is as before: Move master role is there", () => {
     expect(text(draw(full()))).toContain(t('node.handover.title'))
+  })
+})
+
+describe('the machine marker on cards, in Settings, Devices (#789)', () => {
+  const section = (nodes: Node[]) => findAll(nodes, el => hasClass(el, 'devices-marker'))
+  const legend = (nodes: Node[], id: string) =>
+    findAll(
+      rowsOf(nodes).filter(r => r.attrs.get('data-id') === id),
+      el => hasClass(el, 'devices-color'),
+    )[0]?.attrs.get('class')
+
+  test('a board without remote devices shows no marker setting', () => {
+    expect(section(draw(payload({ categories: CATEGORIES })))).toEqual([])
+    expect(section(draw(payload({ devices: [device('local')], categories: CATEGORIES })))).toEqual([])
+    // Nor a node that is no master (its devices are added on the master).
+    expect(section(draw(payload({ categories: CATEGORIES, machine: 'server-1' })))).toEqual([])
+  })
+
+  test('with remote devices: today’s corner picked, the corner places as glyphs with their words, the legend in kind', () => {
+    const page = draw(full())
+    const [own] = section(page)
+    expect(own).toBeDefined()
+    const words = text(own ? [own] : [])
+    expect(words).toContain(t('node.marker.title'))
+    const pressed = findAll(own ? [own] : [], el => el.tag === 'button' && el.attrs.get('aria-pressed') === 'true')
+    expect(pressed.map(b => b.attrs.get('aria-label') ?? text(b.children))).toEqual([
+      'Corner',
+      'Bottom right',
+      'Medium',
+    ])
+    const places = findAll(own ? [own] : [], el => el.tag === 'button' && !!el.attrs.get('aria-label'))
+    expect(places.map(b => text(b.children))).toEqual(['◤', '◥', '◣', '◢'])
+    expect(legend(page, 'server-1')).toBe('devices-color mark-corner at-bottom-right')
+    // The preview draws the card's own element, in a remote device's colour.
+    const [mark] = findAll(own ? [own] : [], el => hasClass(el, 'card-device-corner'))
+    expect(mark?.attrs.get('class')).toBe('card-device-corner')
+    expect(mark?.attrs.get('aria-hidden')).toBe('true')
+  })
+
+  test('the board’s marker as the payload has it: the stripe’s sides in words, off a plain dot', () => {
+    const stripe = draw(
+      payload({
+        devices: DEVICES,
+        categories: CATEGORIES,
+        deviceMarker: { style: 'stripe', position: 'right', size: 'small' },
+      }),
+    )
+    const [own] = section(stripe)
+    const pressed = findAll(own ? [own] : [], el => el.tag === 'button' && el.attrs.get('aria-pressed') === 'true')
+    expect(pressed.map(b => text(b.children))).toEqual(['Stripe', 'Right', 'Small'])
+    expect(legend(stripe, 'server-1')).toBe('devices-color mark-stripe at-right')
+    const off = draw(
+      payload({
+        devices: DEVICES,
+        categories: CATEGORIES,
+        deviceMarker: { style: 'off', position: 'bottom-right', size: 'medium' },
+      }),
+    )
+    expect(findAll(section(off), el => hasClass(el, 'set-seg'))).toHaveLength(1)
+    expect(legend(off, 'server-1')).toBe('devices-color')
   })
 })

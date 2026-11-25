@@ -275,7 +275,8 @@
 :root[data-look="terminal"] .card-top[data-give~="profile"] > .profile-tag::before { content: "[" attr(data-mark); content: "[" attr(data-mark) / ""; }
 
 /* Card corner keyboard tooltip in Terminal style (#758): outlined box, no shadow. */
-:root[data-look="terminal"] .card-device-corner:focus-visible::after { border-radius: var(--radius); background: var(--bg); box-shadow: 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] .card-device-corner:focus-visible::after,
+:root[data-look="terminal"] .card-device-stripe:focus-visible::after { border-radius: var(--radius); background: var(--bg); box-shadow: 0 0 0 1px var(--accent); }
 
 /* The body: one line each. What it does in the text color, what it said dim, the rest in color. */
 :root[data-look="terminal"] .what,

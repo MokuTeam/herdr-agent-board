@@ -3,6 +3,7 @@
 // count, and the master's devices. The master gives them over the relay (GET /api/board-slices,
 // core/master-relay.ts); the node keeps the last ones and puts them in its own payload, whose
 // config.json no longer has these features (the handover took them out). No I/O.
+import { deviceMarkerOf } from './device-marker.ts'
 import { BOARD_SLICE_KEYS } from './master-relay.ts'
 import type { BoardDevice, BoardPayload } from './payload.ts'
 
@@ -13,7 +14,10 @@ type DeviceRow = Pick<BoardDevice, 'id' | 'kind' | 'link' | 'status' | 'selfId' 
 export const BOARD_SLICE_TEAM_KEYS = ['teamRev', 'teamUnread'] as const
 
 export type BoardSlices = Partial<
-  Pick<BoardPayload, (typeof BOARD_SLICE_KEYS)[number] | (typeof BOARD_SLICE_TEAM_KEYS)[number] | 'devices'>
+  Pick<
+    BoardPayload,
+    (typeof BOARD_SLICE_KEYS)[number] | (typeof BOARD_SLICE_TEAM_KEYS)[number] | 'devices' | 'deviceMarker'
+  >
 >
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -27,6 +31,9 @@ export function slicesOf(payload: Partial<BoardPayload> | null): BoardSlices {
     if (typeof payload[key] === 'number' && Number.isFinite(payload[key])) out[key] = payload[key]
   if (Array.isArray(payload.devices) && payload.devices.every(d => isObject(d) && typeof d.id === 'string'))
     out.devices = payload.devices
+  // How cards show their machine (#789): a node's page draws its master's, so they look alike.
+  const marker = payload.deviceMarker === undefined ? null : deviceMarkerOf(payload.deviceMarker)
+  if (marker) out.deviceMarker = marker
   return out as BoardSlices
 }
 
@@ -73,13 +80,14 @@ export function devicesForNode<T extends DeviceRow>(devices: readonly T[], self:
 /**
  * The parts as they go into node `self`'s payload (#786): Team's numbers only while this board
  * runs no Team of its own, the devices only on a node that is no master itself (its own devices
- * stay), rebased by devicesForNode and marked `relayedDevices` (with the master's id) for the page.
+ * stay), rebased by devicesForNode and marked `relayedDevices` (with the master's id) for the page;
+ * the master's `deviceMarker` (#789) goes with them.
  */
 export function nodeSlicesView(
   slices: BoardSlices,
   o: { self: string; ownTeam: boolean; ownDevices: boolean; online: boolean },
 ): Partial<BoardPayload> {
-  const { devices, teamRev, teamUnread, ...rest } = slices
+  const { devices, deviceMarker, teamRev, teamUnread, ...rest } = slices
   const out: Partial<BoardPayload> = { ...rest }
   if (!o.ownTeam) {
     if (teamRev !== undefined) out.teamRev = teamRev
@@ -91,6 +99,7 @@ export function nodeSlicesView(
     if (mine && master) {
       out.devices = mine
       out.relayedDevices = { master: master.selfId || master.status?.id || '' }
+      if (deviceMarker) out.deviceMarker = deviceMarker
     }
   }
   return out

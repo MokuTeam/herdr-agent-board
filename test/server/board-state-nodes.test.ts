@@ -58,8 +58,12 @@ const aggregate = { part: () => part, find: key => part.items.find(i => i.key ==
 const journal = createJournal({ cfg: { journal: true }, log: () => {}, presence: () => null, viewers: () => 1 })
 const fed = new Set()
 const journaled = { observe: items => { for (const i of items) fed.add(i.key); journal.observe(items) }, view: () => journal.view() }
+// A master whose Settings, Devices moved the machine marker (#789), and one that set it back to today's corner.
+const makeWith = nodes => now({ deps: defaultDeps({ ...cfg, nodes }), launches, version: () => 'v1', push: () => {}, nodes: () => aggregate })
 const boards = { main: make(main), now: make(now), off: make(now, { nodes: () => null }), master: make(now, { nodes: () => aggregate }),
-  journaled: make(now, { nodes: () => aggregate, journal: journaled }) }
+  journaled: make(now, { nodes: () => aggregate, journal: journaled }),
+  marked: makeWith({ marker: { style: 'stripe', position: 'top', size: 'large' } }),
+  markedDefault: makeWith({ marker: { style: 'corner' } }) }
 for (const b of Object.values(boards)) await b.refresh()
 await boards.journaled.refresh()
 journal.stop()
@@ -77,6 +81,8 @@ console.log(JSON.stringify({
   now: payload(boards.now),
   off: payload(boards.off),
   master: payload(m),
+  marked: payload(boards.marked).deviceMarker ?? null,
+  markedDefault: 'deviceMarker' in payload(boards.markedDefault),
   items: m.items().map(i => i.key),
   find: [m.find('pane-1')?.key ?? null, m.find('@server-1:pane-1')?.key ?? null],
   findAny: [m.findAny('pane-1')?.key ?? null, m.findAny('@server-1:pane-1')?.key ?? null, m.findAny('@server-2:pane-1')?.key ?? null],
@@ -131,6 +137,12 @@ test('without nodes the payload is main’s; with devices the payload has their 
   expect(got.off).toEqual(got.main)
   expect(JSON.stringify(got.now)).toBe(JSON.stringify(got.main))
   expect('devices' in got.now).toBe(false)
+  // The machine marker (#789): none without nodes, none on a master that never moved it or set it
+  // back to today's corner; the picked one beside devices otherwise.
+  expect('deviceMarker' in got.now).toBe(false)
+  expect('deviceMarker' in got.master).toBe(false)
+  expect(got.markedDefault).toBe(false)
+  expect(got.marked).toEqual({ style: 'stripe', position: 'top', size: 'large' })
 
   // With devices: their cards after this computer's, pane-1 twice under two keys, `devices`.
   const keys = got.master.items.map((i: { key: string }) => i.key)

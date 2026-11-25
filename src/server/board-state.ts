@@ -20,6 +20,7 @@ import { categoryInfo, colorHex, laneRank, PALETTE } from '../core/categories.ts
 import { isCodexItem } from '../core/codex.ts'
 import { compactDefaultText } from '../core/compact.ts'
 import type { DecisionsPayload } from '../core/decisions.ts'
+import { type DeviceMarker, isDefaultMarker } from '../core/device-marker.ts'
 import { foldModeOf } from '../core/fold-mode.ts'
 import { housekeepingConfig } from '../core/housekeeping.ts'
 import { LANGUAGES } from '../core/i18n/translator.ts'
@@ -529,7 +530,8 @@ export function createBoardState({
       ...omarchyOf(omarchy),
       // devices: only while config.json makes this board a master (#500).
       ...(devices && { devices }),
-      // machine: only on a node board, so the master can match Telegram X-Herdr-Pane hints (#701).
+      // deviceMarker (#789): only beside devices, and only once Settings, Devices moved it off today's corner.
+      ...deviceMarkerPart(devices ? nodesConfig(cfg.nodes, hostname())?.marker : undefined), // machine: only on a node board, so the master can match Telegram X-Herdr-Pane hints (#701).
       ...(nodeConfig(cfg.node) !== null && { machine: process.env.COMPUTERNAME || hostname() }),
       // nodeMaster: only on a pure node with at least one paired master (#744).
       ...nodeMasterOf(nodeMaster),
@@ -728,4 +730,9 @@ export function createBoardState({
       }
     },
   }
+}
+
+/** The payload's `deviceMarker` (#789): none while the marker is today's corner, so such a board's payload stays as it was. */
+function deviceMarkerPart(marker: DeviceMarker | undefined): { deviceMarker?: DeviceMarker } {
+  return marker && !isDefaultMarker(marker) ? { deviceMarker: marker } : {}
 }

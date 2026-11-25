@@ -7,8 +7,10 @@ export interface DeviceColorSwatch {
 }
 
 /**
- * Curated 7-colour palette distinct from card status colours (--green, --orange, --purple, --blue,
- * --red, --gray) and legible against both light and dark card surfaces.
+ * Curated 12-colour palette distinct from card status colours (--green, --orange, --purple, --blue,
+ * --red, --gray) and legible against both light and dark card surfaces. The first seven are the
+ * automatic ones (#758); the last five (#789) are picked by hand only, so adding them moved no
+ * device's automatic colour.
  */
 export const DEVICE_COLORS: readonly DeviceColorSwatch[] = [
   { id: 'teal', hex: '#2A9DB0' },
@@ -18,7 +20,16 @@ export const DEVICE_COLORS: readonly DeviceColorSwatch[] = [
   { id: 'sky', hex: '#38A2DB' },
   { id: 'ochre', hex: '#B8952E' },
   { id: 'slate', hex: '#68778C' },
+  { id: 'pine', hex: '#2F8F76' },
+  { id: 'plum', hex: '#8B4F92' },
+  { id: 'clay', hex: '#B4664C' },
+  { id: 'olive', hex: '#7F8A3C' },
+  { id: 'wine', hex: '#9E3D52' },
 ] as const
+
+/** How many swatches, from the first, the automatic assignment draws from (#758's seven). */
+export const AUTO_COLOR_COUNT = 7
+const AUTO_COLORS = DEVICE_COLORS.slice(0, AUTO_COLOR_COUNT)
 
 const BY_ID = new Map(DEVICE_COLORS.map(s => [s.id, s.hex]))
 const HEX_COLOR = /^#[0-9a-f]{6}$/i
@@ -61,8 +72,8 @@ export function hashDeviceKey(key: string): number {
 
 /** Single-device fallback colour when a card's device is absent from `devices`. */
 export function deviceColorFallback(key: string): DeviceColorSwatch {
-  const idx = hashDeviceKey(key) % DEVICE_COLORS.length
-  return DEVICE_COLORS[idx] ?? { id: 'teal', hex: '#2A9DB0' }
+  const idx = hashDeviceKey(key) % AUTO_COLORS.length
+  return AUTO_COLORS[idx] ?? { id: 'teal', hex: '#2A9DB0' }
 }
 
 /**
@@ -96,19 +107,19 @@ export function resolveDeviceColors(
 
   pending.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
 
-  const n = DEVICE_COLORS.length
+  const n = AUTO_COLORS.length
   for (const p of pending) {
     const base = hashDeviceKey(p.key) % n
     let chosen: DeviceColorSwatch | undefined
     for (let i = 0; i < n; i++) {
-      const candidate = DEVICE_COLORS[(base + i) % n]
+      const candidate = AUTO_COLORS[(base + i) % n]
       if (candidate && !used.has(candidate.id)) {
         chosen = candidate
         used.add(candidate.id)
         break
       }
     }
-    out.set(p.id, chosen ?? DEVICE_COLORS[base] ?? { id: 'teal', hex: '#2A9DB0' })
+    out.set(p.id, chosen ?? AUTO_COLORS[base] ?? { id: 'teal', hex: '#2A9DB0' })
   }
 
   return out

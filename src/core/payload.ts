@@ -3,6 +3,7 @@
 import type { AgyLimitWindow, BoardAgyLimits } from './agy-limits.ts'
 import type { BoardArchive } from './archive.ts'
 import type { DecisionsPayload } from './decisions.ts'
+import type { DeviceMarker } from './device-marker.ts'
 import type { FoldMode } from './fold-mode.ts'
 import type { JournalList } from './journal.ts'
 import type { LimitWindow } from './limits.ts'
@@ -212,6 +213,11 @@ export interface BoardPayload {
    * Add a server / Add a computer go to the master; moving the master role stays there.
    */
   relayedDevices?: { master: string }
+  /**
+   * How a card shows its machine (#789, core/device-marker.ts): only beside `devices`, and only
+   * while Settings, Devices moved it off today's corner. A node's page gets its master's.
+   */
+  deviceMarker?: DeviceMarker
   /**
    * This computer's name (`COMPUTERNAME || hostname()`), populated on nodes so the master can
    * match Telegram `X-Herdr-Pane` hints against this device (#701).
