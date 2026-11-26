@@ -2974,6 +2974,20 @@ owner-question and reminder guidance in their Board brief. Load a new brief afte
 allowlist by starting or resuming the session. An enabled Workdesk integration or a Workdesk lane
 alone does not opt in other sessions.
 
+### Workdesk workflow grants
+
+Workdesk's `grant_task_workflow` (WORKDESK-95, #936) takes the SHA-256 of a `wdplan_` bearer
+for one claimed round; the bearer must reach the assigned native master and no one else. The
+watcher can issue it right after a claim: the exact task, assignment, revision and executor from
+Workdesk's answer, checked against the board's handoff, dialogue binding, thread assignee and the
+one local session that holds the bound SID. The bearer stays in the server's memory; a retry
+reuses its digest, and a round that changes, closes or leaves the list is dropped.
+
+The board has no private channel to one session yet: its own caller identity (`/mcp`, the `board`
+command) is what the caller says, and the protected Codex recipient (#444) is not here. So the
+issuer stays off: without a recipient channel it makes no call, and nothing reaches Workdesk. No
+bearer goes into a thread, prompt, log, file, environment or command line.
+
 ### Workdesk owner dialogue metadata
 
 Set `workdeskDialog` to an object to enable the metadata poller. It uses the existing

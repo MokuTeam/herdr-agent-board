@@ -17,6 +17,7 @@ import {
 } from '../core/workdesk.ts'
 import { type BoardObservation, stableWorkdeskSid, type WorkdeskTopology } from '../core/workdesk-topology.ts'
 import { sessionsFor } from './sleep.ts'
+import { createWorkflowGrants, type RecipientChannel, verifiedRound } from './workdesk-grants.ts'
 import { observeWorkdesk } from './workdesk-topology.ts'
 
 type Options = {
@@ -29,6 +30,8 @@ type Options = {
   streamDriven?(): boolean
   stageTracking?(): boolean
   stages?(rows: StageObservation[]): void
+  /** WORKDESK-95: a private way to the assigned master. Without it no workflow grant is issued. */
+  recipient?: RecipientChannel
 }
 
 const REQUIRED = ['board_heartbeat', 'list_board_tasks', 'claim_task', 'report_task']
@@ -52,7 +55,10 @@ export function createWorkdeskWatcher({
   streamDriven,
   stageTracking,
   stages,
+  recipient,
 }: Options) {
+  const grants = recipient ? createWorkflowGrants(recipient) : null
+  const grantLogged = new Set<string>()
   let status: WorkdeskPayload | null = null
   let config: WorkdeskConfig | null = null
   let signature = ''
@@ -173,7 +179,8 @@ export function createWorkdeskWatcher({
           }
           const byId = new Map(scoped.map(task => [task.id, task]))
           const tasks = [...byId.values()]
-          if (problem !== 'list' && byId.size === scoped.length) {
+          const complete = problem !== 'list' && byId.size === scoped.length
+          if (complete) {
             if (device) observedTasks = byId
             signal.throwIfAborted()
             if (includeStage) stages?.(observedStages)
@@ -252,6 +259,22 @@ export function createWorkdeskWatcher({
                   Date.now(),
                 )
                 observedTasks?.set(claimed.id, claimed)
+                byId.set(claimed.id, claimed)
+              }
+              // WORKDESK-95: the claimed round's workflow grant, only with a recipient channel and a
+              // Workdesk that grants; a partial list never revokes.
+              if (grants?.enabled(tools) && complete) {
+                await grants.reconcile([...byId.values()])
+                for (const task of byId.values()) {
+                  if (targetId !== undefined && task.id !== targetId) continue
+                  const saved = store.find(task.id)
+                  if (!saved?.thread_id || task.executor !== saved.executor) continue
+                  signal.throwIfAborted()
+                  const failed = await grants.issue(mcp, verifiedRound(db, task, items()))
+                  const mark = `${task.id}:${task.assignment?.revision}:${failed}`
+                  if (failed && !grantLogged.has(mark)) log(`Workdesk grant ${task.id}: ${failed}`)
+                  if (failed) grantLogged.add(mark)
+                }
               }
               store.release(active.onlyTaskId, Date.now())
             } finally {
@@ -337,6 +360,7 @@ export function createWorkdeskWatcher({
       signature = next
       current?.abort()
       lastTasks = null
+      void grants?.clear()
       config = workdeskConfig(cfg.workdesk)
       if (config) publish(empty())
       else if (cfg.workdesk == null || cfg.workdesk === false) {
@@ -349,6 +373,7 @@ export function createWorkdeskWatcher({
       clearTimeout(timer)
       current?.abort()
       await inFlight
+      await grants?.clear()
     },
   }
 }

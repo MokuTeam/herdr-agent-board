@@ -13,10 +13,13 @@ export function supportsTopology(schema: unknown): boolean {
 export class WorkdeskToolError extends Error {
   readonly conflict: boolean
   readonly code: 'assignment_mismatch' | 'conflict' | 'role_denied' | 'invalid_cursor' | null
+  /** The tool's error body as Workdesk sent it (its `code` and `status`). */
+  readonly body: Record<string, unknown> | null
 
   constructor(result: unknown) {
     super('Workdesk tool failed')
     const body = object(result)
+    this.body = body
     const code = body?.code
     this.conflict = code === 'conflict' && body?.status === 409
     this.code =

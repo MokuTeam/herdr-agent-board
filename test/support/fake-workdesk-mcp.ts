@@ -12,6 +12,8 @@ type State = {
   topology?: boolean
   rejectHeartbeat?: boolean
   invalidList?: boolean
+  /** WORKDESK-95: offer grant_task_workflow; `grants` holds what it registered, `fail` fails that many calls. */
+  grant?: { grants?: { task_id: number; revision: number; token_hash: string }[]; fail?: number }
   dialog?: {
     events: OwnerEvent[]
     pageSize?: number
@@ -37,7 +39,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     send(id, {
       tools: (state.missing
         ? ['start_codex_review', 'get_codex_review']
-        : [...tools, ...(state.dialog ? dialogTools : [])]
+        : [...tools, ...(state.dialog ? dialogTools : []), ...(state.grant ? ['grant_task_workflow'] : [])]
       ).map(name => ({
         name,
         ...(state.topology &&
@@ -82,6 +84,45 @@ for await (const line of createInterface({ input: process.stdin })) {
       // This path is outside the metadata watcher. Fail tests if it tries to call it.
       send(id, response({ code: 'unexpected_dialog_call', status: 403 }, true))
     }
+  }
+  if (state.grant && params.name === 'grant_task_workflow') {
+    const { task_id, assignment_id, revision, executor, token_hash } = params.arguments
+    const live = state.tasks.find(t => t.id === task_id) as Record<string, unknown> | undefined
+    const grants = state.grant.grants ?? []
+    const prior = grants.find(g => (g.task_id === task_id && g.revision === revision) || g.token_hash === token_hash)
+    let answer: unknown
+    if ((state.grant.fail ?? 0) > 0) answer = response({ code: 'unavailable', status: 503 }, true)
+    else if (
+      !live ||
+      live.executor !== executor ||
+      live.assignment_id !== assignment_id ||
+      live.revision !== revision ||
+      !/^[a-f0-9]{64}$/.test(token_hash)
+    )
+      answer = response({ code: 'assignment_mismatch', status: 409 }, true)
+    else if (prior)
+      answer =
+        prior.task_id === task_id && prior.revision === revision && prior.token_hash === token_hash
+          ? response({ granted: true, replayed: true })
+          : response({ code: 'workflow_grant_conflict', status: 409 }, true)
+    else answer = response({ granted: true })
+    updateJson(
+      statePath,
+      current => {
+        if (!current?.grant) throw new Error('fixture state was removed')
+        const fail = current.grant.fail ?? 0
+        const added = !prior && fail === 0 && (answer as { isError: boolean }).isError === false
+        return {
+          ...current,
+          grant: {
+            fail: Math.max(0, fail - 1),
+            grants: [...(current.grant.grants ?? []), ...(added ? [{ task_id, revision, token_hash }] : [])],
+          },
+        }
+      },
+      isState,
+    )
+    send(id, answer)
   }
   if (params.name !== 'claim_task') continue
 
