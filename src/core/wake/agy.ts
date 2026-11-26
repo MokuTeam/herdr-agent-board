@@ -199,7 +199,7 @@ export function agySleeperPane(
 }
 
 /** An `agy` sleeper as `GET /sleeping?agents=all` lists it. */
-export interface AgySleepingAnswer {
+export interface AgySleepingAnswer<Agent extends 'agy' | 'codex' = 'agy'> {
   name: string
   /** Its own pane while herdr has it as it was left; '' when it wakes in a new tab. */
   pane: string
@@ -207,12 +207,22 @@ export interface AgySleepingAnswer {
   workspace: string
   slept_at: string
   exited: false
-  agent: 'agy'
+  agent: Agent
   cwd: string
 }
 
 /** Every `agy` sleeper, its pane only while still its own (`agySleeperPane`), its workspace's label as herdr has it now. */
-export function agySleepingOf(snap: AgySnapshot, sleepers: AgySleepers): AgySleepingAnswer[] {
+export function agySleepingOf(snap: AgySnapshot, sleepers: AgySleepers): AgySleepingAnswer[]
+export function agySleepingOf<Agent extends 'agy' | 'codex'>(
+  snap: AgySnapshot,
+  sleepers: AgySleepers,
+  agent: Agent,
+): AgySleepingAnswer<Agent>[]
+export function agySleepingOf(
+  snap: AgySnapshot,
+  sleepers: AgySleepers,
+  agent: 'agy' | 'codex' = AGY_AGENT,
+): AgySleepingAnswer<'agy' | 'codex'>[] {
   const labels = new Map(snap.workspaces.map(w => [w.workspace_id, w.label]))
   return Object.values(sleepers).map(s => {
     const own = agySleeperPane(snap, s)
@@ -224,18 +234,20 @@ export function agySleepingOf(snap: AgySnapshot, sleepers: AgySleepers): AgySlee
       workspace,
       slept_at: new Date(s.slept_at).toISOString(),
       exited: false,
-      agent: AGY_AGENT,
+      agent,
       cwd: s.cwd,
     }
   })
 }
 
 /** The sleepers whose session runs again in a pane (woken by hand, by the board or after a restart). */
-export function agyWoken(snap: Pick<AgySnapshot, 'panes'>, sleepers: AgySleepers): string[] {
+export function agyWoken(
+  snap: Pick<AgySnapshot, 'panes'>,
+  sleepers: AgySleepers,
+  agent: 'agy' | 'codex' = AGY_AGENT,
+): string[] {
   const running = new Set(
-    snap.panes.flatMap(p =>
-      p.agent === AGY_AGENT && p.agent_session?.value ? [p.agent_session.value.toLowerCase()] : [],
-    ),
+    snap.panes.flatMap(p => (p.agent === agent && p.agent_session?.value ? [p.agent_session.value.toLowerCase()] : [])),
   )
   return Object.keys(sleepers).filter(id => running.has(id.toLowerCase()))
 }

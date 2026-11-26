@@ -153,10 +153,8 @@ describe('which menu opens', () => {
     expect(stale[0]).toContain('"mokupilot","write')
     const away = await compare({ ...BOARD, mokupilot: true, canMutate: false, canEdit: false }, [right('card-name')])
     expect(away[0]).toContain('"mokupilot (gray)"')
-    const codex = await compare({ ...BOARD, mokupilot: true, items: [{ ...session, agent: 'codex' }] }, [
-      right('card-name'),
-    ])
-    expect(codex[0]).not.toContain('mokupilot')
+    const pi = await compare({ ...BOARD, mokupilot: true, items: [{ ...session, agent: 'pi' }] }, [right('card-name')])
+    expect(pi[0]).not.toContain('mokupilot')
   })
 
   test('a Claude session’s card restarts it (#51); gray while one is on its way, not for one that gave up, nor with stale data', async () => {
@@ -174,8 +172,8 @@ describe('which menu opens', () => {
     expect(other[0]).toContain('"sleep","restart","rename"')
     const stale = await compare({ ...BOARD, canMutate: false }, [right('card-name')])
     expect(stale[0]).toContain('"restart (gray)"')
-    const codex = await compare({ ...BOARD, items: [{ ...session, agent: 'codex' }] }, [right('card-name')])
-    expect(codex[0]).not.toContain('restart')
+    const pi = await compare({ ...BOARD, items: [{ ...session, agent: 'pi' }] }, [right('card-name')])
+    expect(pi[0]).not.toContain('restart')
   })
 
   test('the open session’s head: its card’s menu; none without one open, nor in the rest of a panel', async () => {

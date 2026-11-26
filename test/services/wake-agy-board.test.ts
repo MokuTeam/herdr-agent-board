@@ -4,7 +4,7 @@
 // lifecycle through the scheduler, SessionStart reporting, and web sheet/menu visibility.
 import { expect, setDefaultTimeout, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { t, useLanguage } from '../../src/core/lang.ts'
 import type { Item } from '../../src/core/types.ts'
@@ -67,7 +67,13 @@ function asleepInAgyFile(box: Sandbox, cwd: string): void {
   writeFileSync(join(stateDir(box), 'wake-agy.json'), JSON.stringify({ [ID]: entry }))
 }
 
-function herdrAgy(box: Sandbox, cwd: string, o: { own: boolean; running?: boolean; wokenByWake?: boolean }): void {
+function herdrAgy(
+  box: Sandbox,
+  cwd: string,
+  o: { own: boolean; running?: boolean; wokenByWake?: boolean; codex?: boolean },
+): void {
+  const kind = o.codex ? 'codex' : 'agy'
+  const screen = o.codex ? '› \x1b[2mAsk Codex\x1b[0m' : AGY_SCREEN
   const shell = { pane_id: 'w5:p9', workspace_id: 'w5', tab_id: 't9', cwd }
   const woken = o.own ? 'w5:p9' : 'w5:p20'
   const agy = (pane: string) => ({
@@ -75,7 +81,7 @@ function herdrAgy(box: Sandbox, cwd: string, o: { own: boolean; running?: boolea
     workspace_id: 'w5',
     tab_id: pane === 'w5:p9' ? 't9' : 't20',
     cwd,
-    agent: 'agy',
+    agent: kind,
     agent_status: 'idle',
     agent_session: { value: ID },
     terminal_title_stripped: 'Gemini Dev',
@@ -91,7 +97,7 @@ function herdrAgy(box: Sandbox, cwd: string, o: { own: boolean; running?: boolea
   })
   const before = o.running ? [agy('w5:p9')] : o.own ? [shell] : []
   const after = o.own ? [agy('w5:p9')] : [agy('w5:p20')]
-  const agent = { result: { agent: { agent: 'agy', agent_status: 'idle', agent_session: { value: ID } } } }
+  const agent = { result: { agent: { agent: kind, agent_status: 'idle', agent_session: { value: ID } } } }
   box.state({
     // biome-ignore lint/suspicious/noThenProperty: fake herdr transition
     'api snapshot': { ...snapshot(before), until: ['pane run'], then: snapshot(after) },
@@ -108,8 +114,8 @@ function herdrAgy(box: Sandbox, cwd: string, o: { own: boolean; running?: boolea
       result: { process_info: { shell_pid: 4242, foreground_processes: [{ pid: 4242, name: 'bash' }] } },
     },
     'tab create': { result: { tab: { tab_id: 't20' }, root_pane: { pane_id: 'w5:p20', terminal_id: 'term20' } } },
-    'agent read': { text: AGY_SCREEN },
-    'pane read': { text: AGY_SCREEN },
+    'agent read': { text: screen },
+    'pane read': { text: screen },
     'pane run': { result: {} },
     'pane send-keys': { result: {} },
     'pane rename': { result: {} },
@@ -126,7 +132,7 @@ type Shown = {
   category?: string
 }
 
-async function board(box: Sandbox, cfg: Record<string, unknown>, agyRoot: string) {
+async function board(box: Sandbox, cfg: Record<string, unknown>, agyRoot: string, codexHome?: string) {
   const categories = [
     { id: 'work', title: 'Work', color: 'blue', paths: [join(box.dir, 'Work')] },
     { id: 'other', title: 'Other', color: 'gray' },
@@ -134,7 +140,12 @@ async function board(box: Sandbox, cfg: Record<string, unknown>, agyRoot: string
   const { url, proc } = await serveBoard(
     box,
     { language: 'en', categories, ...cfg },
-    { ...boardOnPath(box), ANTIGRAVITY_APP_DATA_DIR: agyRoot, BOARD_TEST_PACE: '0.02' },
+    {
+      ...boardOnPath(box),
+      ANTIGRAVITY_APP_DATA_DIR: agyRoot,
+      BOARD_TEST_PACE: '0.02',
+      ...(codexHome && { CODEX_HOME: codexHome }),
+    },
   )
   const refreshed = (): number => proc.messages.filter(m => (m as { refreshed?: boolean }).refreshed).length
   const card = async (fits: (i: Shown) => boolean = () => true): Promise<Shown> => {
@@ -232,76 +243,121 @@ test('pane gone: sleeping agy card stays and Wake opens a new tab in its workspa
   expect(paneCalls(box).filter(c => c[1] === 'run')).toEqual([['pane', 'run', 'w5:p20', LINE]])
 })
 
-test('board wake answering: sleeping agy wakes on message, board sleep works, and board restart runs full sleep -> wake -> note', async () => {
-  const box = await sandbox()
-  const { cwd, agyRoot } = agySession(box)
-  herdrAgy(box, cwd, { own: true, running: true })
+test.each(['agy', 'codex'] as const)(
+  'board sleep and restart route %s through wake and deliver the restart note',
+  async kind => {
+    const box = await sandbox()
+    const { cwd, agyRoot } = agySession(box)
+    const codex = kind === 'codex'
+    const codexHome = join(box.dir, 'Codex home')
+    const logs = join(codexHome, 'sessions', '2026', '11', '23')
+    if (codex) {
+      mkdirSync(logs, { recursive: true })
+      writeFileSync(
+        join(logs, `rollout-2026-11-23T10-00-00-${ID}.jsonl`),
+        `${JSON.stringify({ type: 'session_meta', payload: { id: ID, cwd } })}\n`,
+      )
+    }
+    const env = codex ? { CODEX_HOME: codexHome } : { ANTIGRAVITY_APP_DATA_DIR: agyRoot }
+    herdrAgy(box, cwd, { own: true, running: true, codex })
 
-  let sleptCount = 0
-  let wokeCount = 0
-  const sleeperRow = {
-    name: 'Gemini Dev',
-    pane: 'w5:p9',
-    session: ID,
-    workspace: 'Server',
-    slept_at: new Date(SLEPT).toISOString(),
-    exited: false,
-    agent: 'agy',
-    cwd,
-  }
-  const wake = await fakeWake({
-    sleep: () => {
-      sleptCount++
+    let sleptCount = 0
+    let wokeCount = 0
+    const sleeperRow = {
+      name: 'Gemini Dev',
+      pane: 'w5:p9',
+      session: ID,
+      workspace: 'Server',
+      slept_at: new Date(SLEPT).toISOString(),
+      exited: false,
+      agent: kind,
+      cwd,
+    }
+    const codexFile = join(stateDir(box), 'wake-codex.json')
+    const wake = await fakeWake({
+      sleep: () => {
+        sleptCount++
+        wake.sleeping = [sleeperRow]
+        return { ok: true, pane: 'w5:p9', name: 'Gemini Dev' }
+      },
+      wake: () => {
+        wokeCount++
+        wake.sleeping = []
+        if (codex) {
+          rmSync(codexFile, { force: true })
+          herdrAgy(box, cwd, { own: true, running: true, codex })
+        }
+        return { ok: true, pane: 'w5:p9', name: 'Gemini Dev' }
+      },
+    })
+    wakeRuns(box)
+    const wakeCfg = { wake: { enabled: true, port: wake.port }, scheduleTickSec: 0.2, restartSettleSec: 0 }
+    writeConfig(box, wakeCfg)
+    if (codex) {
       wake.sleeping = [sleeperRow]
-      return { ok: true, pane: 'w5:p9', name: 'Gemini Dev' }
-    },
-    wake: () => {
-      wokeCount++
-      wake.sleeping = []
-      return { ok: true, pane: 'w5:p9', name: 'Gemini Dev' }
-    },
-  })
-  wakeRuns(box)
-  const wakeCfg = { wake: { enabled: true, port: wake.port }, scheduleTickSec: 0.2, restartSettleSec: 0 }
-  writeConfig(box, wakeCfg)
-  const { card, post } = await board(box, wakeCfg, agyRoot)
-  await card(i => !i.sleeping && i.agent === 'agy')
+      writeFileSync(
+        codexFile,
+        JSON.stringify({
+          [ID]: { ...sleeperRow, slept_at: SLEPT, argv: [], workspace: 'w5', workspaceLabel: 'Server' },
+        }),
+      )
+      herdrAgy(box, cwd, { own: true, codex })
+    }
+    const { card, post } = await board(box, wakeCfg, agyRoot, codex ? codexHome : undefined)
+    if (codex) {
+      await card(i => !!i.sleeping && i.agent === kind)
+      const reminder = await cli(box, ['--session', ID, 'remind', 'in 1s', 'Wake for reminder'], env)
+      expect(reminder.code, reminder.out).toBe(0)
+      await until(
+        () => box.calls().some(c => c[0] === 'agent' && c[1] === 'prompt' && c[3]?.includes('Wake for reminder')),
+        15_000,
+      )
+      expect(wokeCount).toBe(1)
+    }
+    await card(i => !i.sleeping && i.agent === kind)
 
-  // 1. `board sleep` puts an idle agy session to sleep through the board's wake.
-  const slp = await cli(box, ['sleep', 'Gemini Dev'], { ANTIGRAVITY_APP_DATA_DIR: agyRoot })
-  expect(slp.code).toBe(0)
-  expect(slp.out).toContain('1 put to sleep')
-  expect(
-    wake
-      .requests()
-      .some(q => q.method === 'POST' && q.path === '/sleep' && (q.body as { target?: unknown })?.target === ID),
-  ).toBe(true)
+    // 1. `board sleep` puts an idle agy session to sleep through the board's wake.
+    const slp = await cli(box, ['sleep', 'Gemini Dev'], env)
+    expect(slp.code).toBe(0)
+    expect(slp.out).toContain('1 put to sleep')
+    expect(
+      wake
+        .requests()
+        .some(
+          q =>
+            q.method === 'POST' &&
+            q.path === '/sleep' &&
+            (q.body as { target?: unknown })?.target === ID &&
+            (!codex || (q.body as { agent?: unknown }).agent === 'codex'),
+        ),
+    ).toBe(true)
 
-  // Reset fake wake state to awake for the restart test.
-  wake.sleeping = []
-  wokeCount = sleptCount
-  const rst = await post('restart')
-  expect(rst.status).toBe(200)
-  expect(rst.body.ok).toBe(true)
+    // Reset fake wake state to awake for the restart test.
+    wake.sleeping = []
+    wokeCount = sleptCount
+    const rst = await post('restart')
+    expect(rst.status).toBe(200)
+    expect(rst.body.ok).toBe(true)
 
-  // Wait until the scheduler completes sleep -> wake -> sends restarted note into w5:p9.
-  await until(() =>
-    box.calls().some(c => c[0] === 'agent' && c[1] === 'prompt' && c[2] === 'w5:p9' && /restarted/i.test(c[3] ?? '')),
-  )
-  expect(sleptCount).toBe(2)
-  expect(wokeCount).toBe(2)
+    // Wait until the scheduler completes sleep -> wake -> sends restarted note into w5:p9.
+    await until(() =>
+      box.calls().some(c => c[0] === 'agent' && c[1] === 'prompt' && c[2] === 'w5:p9' && /restarted/i.test(c[3] ?? '')),
+    )
+    expect(sleptCount).toBe(2)
+    expect(wokeCount).toBe(2)
 
-  // 2. `board restart` CLI from inside an agy session works and mentions Antigravity.
-  const cliRestart = await cli(box, ['restart', 'check tests'], {
-    ANTIGRAVITY_APP_DATA_DIR: agyRoot,
-    HERDR_ENV: '1',
-    HERDR_PANE_ID: 'w5:p9',
-    ANTIGRAVITY_CONVERSATION_ID: ID,
-  })
-  expect(cliRestart.code).toBe(0)
-  expect(cliRestart.out).toContain('Antigravity exits and resumes')
-  expect(cliRestart.out).toContain('check tests')
-})
+    // 2. `board restart` CLI from inside an agy session works and mentions Antigravity.
+    const cliRestart = await cli(box, ['restart', 'check tests'], {
+      ...env,
+      HERDR_ENV: '1',
+      HERDR_PANE_ID: 'w5:p9',
+      ...(codex ? { CODEX_THREAD_ID: ID } : { ANTIGRAVITY_CONVERSATION_ID: ID }),
+    })
+    expect(cliRestart.code).toBe(0)
+    expect(cliRestart.out).toContain(codex ? 'Codex exits and resumes' : 'Antigravity exits and resumes')
+    expect(cliRestart.out).toContain('check tests')
+  },
+)
 
 test('legacy herdr-wake plugin leaves agy alone for sleep and restart', async () => {
   const box = await sandbox()
@@ -360,7 +416,7 @@ test('agy-hook SessionStart reports conversation UUID to herdr when agent.sessio
   expect(report).toContain(ID)
 })
 
-test('web sheet and card menu offer Sleep and Restart for awake agy, Wake for sleeping agy, and keep pi/codex unchanged', () => {
+test('web sheet and card menu offer Sleep and Restart for awake agy, Wake for sleeping agy, and keep pi unchanged', () => {
   const base = {
     key: ID,
     session: ID,
@@ -408,9 +464,9 @@ test('web sheet and card menu offer Sleep and Restart for awake agy, Wake for sl
   expect(agyAsleep.sleepHidden).toBe(true)
   expect(agyAsleep.restartHidden).toBe(true)
 
-  // pi and codex still do not get Restart.
+  // Codex also has Restart; pi does not.
   expect(headButtons({ ...base, agent: 'pi' }, t).restartHidden).toBe(true)
-  expect(headButtons({ ...base, agent: 'codex' }, t).restartHidden).toBe(true)
+  expect(headButtons({ ...base, agent: 'codex' }, t).restartHidden).toBe(false)
 
   const menuCtx = {
     t,

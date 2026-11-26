@@ -188,7 +188,7 @@ describe('session sheet markup parity', () => {
     same({ ...DRAFT, items: [claude], open: 'a', detail: ready(detailOf(claude)), mokupilot: true, connected: false })
     same({ ...DRAFT, items: [claude], open: 'a', detail: ready(detailOf(claude)), mokupilot: true, lang: 'ru' })
     same({ ...DRAFT, items: [claude], open: 'a', detail: ready(detailOf(claude)), mokupilot: false })
-    same({ items: [{ ...claude, agent: 'codex' }], open: 'a', detail: ready(detailOf(claude)), mokupilot: true })
+    same({ items: [{ ...claude, agent: 'pi' }], open: 'a', detail: ready(detailOf(claude)), mokupilot: true })
     same({ items: [], open: 'a', selected: claude, detail: ready(detailOf(claude)), mokupilot: true })
   })
 
@@ -232,7 +232,7 @@ describe('session sheet markup parity', () => {
       open: 'a',
       detail: ready(detailOf(claude)),
     })
-    same({ items: [{ ...claude, agent: 'codex' }], open: 'a', detail: ready(detailOf(claude)) })
+    same({ items: [{ ...claude, agent: 'pi' }], open: 'a', detail: ready(detailOf(claude)) })
     same({ items: [], open: 'a', selected: claude, detail: ready(detailOf(claude)), schedules: at() })
   })
 

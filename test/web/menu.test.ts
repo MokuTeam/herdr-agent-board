@@ -230,7 +230,7 @@ test('Restart sits by Put to sleep for a Claude session: also mid-turn, gray whi
   assert.equal(find(cardMenu(claude, { ...fresh, canMutate: false }), 'restart')?.disabled, true)
   // Asleep, waking it is the restart; another agent, or a pane without a Claude session, has none.
   assert.equal(find(cardMenu({ ...claude, sleeping: true, status: 'sleeping' }, fresh), 'restart'), undefined)
-  assert.equal(find(cardMenu({ ...claude, agent: 'codex' }, fresh), 'restart'), undefined)
+  assert.equal(find(cardMenu({ ...claude, agent: 'pi' }, fresh), 'restart'), undefined)
   assert.equal(find(cardMenu({ ...claude, session: null }, fresh), 'restart'), undefined)
 })
 
@@ -281,7 +281,7 @@ test('a card’s menu is upstream’s cardMenu at #58 (Restart, Archive), case b
           { agent: 'claude', status: 'blocked', column: 'me' },
           { agent: 'claude', sleeping: true, status: 'sleeping' },
           { agent: 'claude', session: null },
-          { agent: 'codex' },
+          { agent: 'pi' },
           {},
         ])
           for (const extra of [

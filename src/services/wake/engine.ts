@@ -43,6 +43,7 @@ import {
 } from '../../adapters/wake-files.ts'
 import type { WakeHerdr } from '../../adapters/wake-herdr.ts'
 import { AGY_AGENT, isAgySession } from '../../core/agy.ts'
+import { CODEX_AGENT, isCodexSession } from '../../core/codex.ts'
 import { isPiSessionFile, parsePiTail, piProvider, piSessionCwd, piSessionId } from '../../core/pi.ts'
 import { absoluteProfileDir, defaultProfileDir, type ProfileSet, profileForDir } from '../../core/profiles.ts'
 import { SESSION_ID } from '../../core/resume.ts'
@@ -69,7 +70,7 @@ import {
   piWoken,
   sleepLabel,
 } from '../../core/wake/pi.ts'
-import { type ReapEntry, type Running, reapPlan } from '../../core/wake/reaper.ts'
+import { matchesAny, type ReapEntry, type Running, reapPlan } from '../../core/wake/reaper.ts'
 import { CANNOT_WAKE, canWake, clearKeyFor, plainProfile, type WakeProfile } from '../../core/wake/rules.ts'
 import {
   type AwakeAnswer,
@@ -88,7 +89,8 @@ import {
   type WakeSessions,
 } from '../../core/wake/sessions.ts'
 import type { TelegramStatus } from '../../core/wake/status.ts'
-import { type AgyOps, defaultAgyOps, putAgyToSleep, wakeAgy } from './agy.ts'
+import { type AgyOps, type CodexOps, defaultAgyOps, putAgyToSleep, wakeAgy } from './agy.ts'
+import { defaultCodexOps } from './codex.ts'
 import { type Follow, followFiles } from './follow.ts'
 import {
   atPrompt,
@@ -139,6 +141,8 @@ export interface WakeEngineDeps {
   piCard?(session: string): { name?: string; account?: string }
   /** Antigravity (`agy`) sleepers (#631); default: `wake-agy.json` beside the session file. */
   agyFile?: string
+  codexFile?: string
+  codex?: CodexOps
   /** What putting `agy` to sleep and waking it need (services/wake/agy.ts); default: the real ones over `herdr`. */
   agy?: AgyOps
   /** An `agy` session's card name; default: the card store. */
@@ -165,7 +169,7 @@ export type TargetAnswer = { ok: true; pane: string; name: string; already?: tru
 export type MoveAnswer = { ok: true; entries: number } | { ok: false; error: string }
 
 /** A sleeper as `GET /sleeping?agents=all` lists it: Claude's as /sleeping does, then pi's (#178) and agy's (#631). */
-export type AnySleepingAnswer = SleepingAnswer | PiSleepingAnswer | AgySleepingAnswer
+export type AnySleepingAnswer = SleepingAnswer | PiSleepingAnswer | AgySleepingAnswer | AgySleepingAnswer<'codex'>
 
 export interface StatusAnswer {
   pid: number
@@ -207,8 +211,8 @@ export interface WakeEngine {
   adoptPi(pane: unknown, session: unknown): Promise<TargetAnswer>
   awake(): Promise<AwakeAnswer[]>
   status(): Promise<StatusAnswer>
-  wake(target: unknown): Promise<TargetAnswer>
-  sleep(target: unknown): Promise<TargetAnswer>
+  wake(target: unknown, agent?: 'codex'): Promise<TargetAnswer>
+  sleep(target: unknown, agent?: 'codex'): Promise<TargetAnswer>
   /**
    * A sleeper moved to another profile (#250, `board move`): its entries asleep name `dir` and that
    * folder's listed id from now on, so its wake line and the profile ListAgents sees are the new
@@ -338,6 +342,15 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
   let agys: AgySleepers = deps.readOnly ? peekAgySleepers(agyFile) : readAgySleepers(agyFile, text => deps.log(text))
   /** agy sessions between their record and their pane's shell: still running, not woken. */
   const agyGoing = new Set<string>()
+  const codexFile = deps.codexFile ?? join(dirname(deps.sessionsFile), 'wake-codex.json')
+  const codexes: AgySleepers = deps.readOnly ? peekAgySleepers(codexFile) : readAgySleepers(codexFile, deps.log)
+  let codexOps = deps.codex
+  const codexGoing = new Set<string>()
+  const codexIdle = new Map<string, { session: string; terminal?: string; since: number }>()
+  const saveCodex = () => {
+    if (!deps.readOnly) saveAgySleepers(codexes, codexFile)
+  }
+  const codexIO = () => (codexOps ??= defaultCodexOps(deps.herdr))
   const tabOps: TabOps = deps.tabs ?? piOps
   const follow: Follow = deps.follow ?? followFiles
   /** Sessions asleep in a pane kept before #204 are given it back once (tidy), then this file says so. */
@@ -474,6 +487,8 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     forgetArchived()
     await rememberPi(seen.snap)
     await rememberAgy(seen.snap)
+    // Keep the wake ordering for setups without Codex sleepers.
+    if (Object.keys(codexes).length) await rememberCodex(seen.snap)
     return seen
   }
 
@@ -870,14 +885,18 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
    * A pane herdr shows running `agy` on a conversation UUID, by its pane id, UUID or name; an `agy`
    * pane whose session herdr does not name by a UUID is none.
    */
-  function agyPane(target: unknown, snap: HerdrSnapshot): HerdrSnapshot['panes'][number] | undefined {
+  function agyPane(
+    target: unknown,
+    snap: HerdrSnapshot,
+    kind: 'agy' | 'codex' = AGY_AGENT,
+  ): HerdrSnapshot['panes'][number] | undefined {
     const raw = String(target ?? '').trim()
     if (!raw) return undefined
     const stripped = raw.replace(/\s*\[[0-9a-f]+\]\s*$/i, '').trim()
     const lower = stripped.toLowerCase()
     return snap.panes.find(p => {
-      const id = p.agent === AGY_AGENT ? p.agent_session?.value : undefined
-      if (!id || !isAgySession(id)) return false
+      const id = p.agent === kind ? p.agent_session?.value : undefined
+      if (!id || !(kind === CODEX_AGENT ? isCodexSession(id) : isAgySession(id))) return false
       const cardName = agyCard(id).name
       return (
         p.pane_id === raw ||
@@ -937,6 +956,105 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     await forgetAgy(s, outcome.pane === s.pane ? null : await snapshotNow().catch(() => null), 'woke')
     deps.log(`woke ${s.name} (agy) in ${outcome.pane} on request`)
     return { ok: true, pane: outcome.pane, name: s.name }
+  }
+
+  async function rememberCodex(snap: HerdrSnapshot): Promise<void> {
+    const ids = Object.keys(codexes).filter(id => !codexGoing.has(id))
+    if (!ids.length) return
+    const gone = archived(ids)
+    const woken = new Set(agyWoken(snap, codexes, CODEX_AGENT))
+    for (const id of ids) {
+      const s = codexes[id]
+      if (s && (gone.has(id) || woken.has(id))) {
+        delete codexes[id]
+        saveCodex()
+        const pane = snap.panes.find(p => p.pane_id === s.pane)
+        if (!gone.has(id) && pane?.label === agySleepLabel(s)) await deps.herdr.rename(s.pane, null).catch(() => {})
+      }
+    }
+  }
+
+  async function sleepCodex(pane: HerdrSnapshot['panes'][number], snap: HerdrSnapshot): Promise<TargetAnswer> {
+    const id = pane.agent_session?.value ?? ''
+    const name = agyName(id, pane)
+    const label = workspaceLabel(snap, pane.workspace_id)
+    if (codexGoing.has(id) || archived([id]).has(id)) return { ok: false, error: `${name} is unavailable` }
+    codexGoing.add(id)
+    try {
+      const result = await putAgyToSleep(
+        codexIO(),
+        { pane: pane.pane_id, session: id, name, ...(label && { workspaceLabel: label }) },
+        {
+          going(s) {
+            codexes[id] = s
+            try {
+              saveCodex()
+            } catch (err) {
+              delete codexes[id]
+              throw err
+            }
+          },
+          stayed() {
+            delete codexes[id]
+            saveCodex()
+          },
+        },
+        { ...timing, boardOnPath: deps.boardOnPath() },
+      )
+      return result.ok ? { ok: true, pane: pane.pane_id, name } : result
+    } finally {
+      codexGoing.delete(id)
+    }
+  }
+
+  async function wakeCodex(s: AgySleeper, snap: HerdrSnapshot): Promise<TargetAnswer> {
+    if (codexGoing.has(s.session)) return { ok: false, error: `${s.name} is already changing state` }
+    codexGoing.add(s.session)
+    try {
+      const outcome = await wakeAgy(codexIO(), s, snap, { ...timing, timeoutMs: deps.settings().wakeTimeoutSec * 1000 })
+      if (!outcome.ok) return { ok: false, error: outcome.error }
+      delete codexes[s.session]
+      saveCodex()
+      if (snap.panes.find(p => p.pane_id === s.pane)?.label === agySleepLabel(s))
+        await deps.herdr.rename(s.pane, null).catch(() => {})
+      return { ok: true, pane: outcome.pane, name: s.name }
+    } finally {
+      codexGoing.delete(s.session)
+    }
+  }
+
+  function wakeCodexTarget(target: unknown, snap: HerdrSnapshot): Promise<TargetAnswer> | TargetAnswer | undefined {
+    const sleeper = findAgySleeper(target, codexes)
+    if (sleeper) return wakeCodex(sleeper, snap)
+    const up = agyPane(target, snap, CODEX_AGENT)
+    if (up) return { ok: true, pane: up.pane_id, name: up.terminal_title_stripped ?? '', already: true }
+  }
+
+  function dueCodex(snap: HerdrSnapshot): HerdrSnapshot['panes'] {
+    const observed = new Set<string>()
+    const due: HerdrSnapshot['panes'] = []
+    const reaper = deps.settings().reaper
+    const at = now()
+    for (const pane of snap.panes) {
+      const id = pane.agent === CODEX_AGENT ? pane.agent_session?.value : undefined
+      if (!id || !isCodexSession(id) || (pane.agent_status !== 'idle' && pane.agent_status !== 'done')) continue
+      observed.add(pane.pane_id)
+      const previous = codexIdle.get(pane.pane_id)
+      const since = previous?.session === id && previous.terminal === pane.terminal_id ? previous.since : at
+      codexIdle.set(pane.pane_id, { session: id, since, ...(pane.terminal_id && { terminal: pane.terminal_id }) })
+      if (at - since < reaper.idleMinutes * 60_000 || tabFocused(snap, pane.pane_id)) continue
+      if (
+        matchesAny(reaper.exclude, [
+          agyName(id, pane),
+          workspaceLabel(snap, pane.workspace_id),
+          pane.terminal_title_stripped,
+        ])
+      )
+        continue
+      due.push(pane)
+    }
+    for (const pane of codexIdle.keys()) if (!observed.has(pane)) codexIdle.delete(pane)
+    return due.sort((a, b) => (codexIdle.get(a.pane_id)?.since ?? at) - (codexIdle.get(b.pane_id)?.since ?? at))
   }
 
   /** Wake's entries whose session is a Claude session id (never a `pane-<id>` key). */
@@ -1197,7 +1315,12 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     async sleepingAll() {
       const snap = await snapshotNow()
       const claude = sleepingOf(snap, sessions).filter(s => SESSION_ID.test(s.session))
-      return [...claude, ...piSleepingOf(snap, pis), ...agySleepingOf(snap, agys)]
+      return [
+        ...claude,
+        ...piSleepingOf(snap, pis),
+        ...agySleepingOf(snap, agys),
+        ...agySleepingOf(snap, codexes, CODEX_AGENT),
+      ]
     },
 
     adoptPi: (target, session) =>
@@ -1269,9 +1392,11 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
       }
     },
 
-    wake: target =>
+    wake: (target, agent) =>
       during(async (): Promise<TargetAnswer> => {
         const seen = await look()
+        if (agent === CODEX_AGENT)
+          return wakeCodexTarget(target, seen.snap) ?? { ok: false, error: `no Codex session named ${String(target)}` }
         const s = find(target, seen.snap)
         if (!s) {
           const p = findPiSleeper(target, pis)
@@ -1283,7 +1408,9 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
           if (up) return { ok: true, pane: up.pane_id, name: up.terminal_title_stripped ?? '', already: true }
           const agyUp = agyPane(target, seen.snap)
           if (agyUp) return { ok: true, pane: agyUp.pane_id, name: agyUp.terminal_title_stripped ?? '', already: true }
-          return { ok: false, error: `no session named ${String(target)} in herdr` }
+          return (
+            wakeCodexTarget(target, seen.snap) ?? { ok: false, error: `no session named ${String(target)} in herdr` }
+          )
         }
         if (s.live) return { ok: true, pane: s.pane, name: s.name, already: true }
         // Its pane closed when it went to sleep (#204): it wakes in a new tab.
@@ -1297,15 +1424,23 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
         return { ok: true, pane, name: s.name }
       }),
 
-    sleep: target =>
+    sleep: (target, agent) =>
       during(async (): Promise<TargetAnswer> => {
         const seen = await look()
+        if (agent === CODEX_AGENT) {
+          const codex = agyPane(target, seen.snap, CODEX_AGENT)
+          return codex
+            ? sleepCodex(codex, seen.snap)
+            : { ok: false, error: `no running Codex session named ${String(target)}` }
+        }
         const s = find(target, seen.snap)
         if (!s) {
           const pi = piPane(target, seen.snap)
           if (pi) return sleepPi(pi, seen.snap)
           const agy = agyPane(target, seen.snap)
           if (agy) return sleepAgy(agy, seen.snap)
+          const codex = agyPane(target, seen.snap, CODEX_AGENT)
+          if (codex) return sleepCodex(codex, seen.snap)
         }
         if (!s?.live) return { ok: false, error: `no running session named ${String(target)}` }
         // Idle in its own profile's registry (#150).
@@ -1321,9 +1456,14 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
       }),
 
     async reapRound() {
-      if (!reaping()) return
+      if (!reaping()) {
+        codexIdle.clear()
+        return
+      }
       const seen = await look()
       const due = (await planOf(seen)).filter(p => p.sleep).slice(0, deps.settings().reaper.maxPerRound)
+      const codexDue = dueCodex(seen.snap)
+      let codexSlots = deps.settings().reaper.maxPerRound - due.length
       // Wake or its reaper turned off meanwhile: the sleep under way finishes, no other starts.
       for (const p of due) {
         if (!reaping()) break
@@ -1333,6 +1473,13 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
         await during(() => putDown(p.pane, s, seen.set)).catch(err =>
           deps.log(`sleeping ${p.name} failed: ${messageOf(err)}`),
         )
+      }
+      for (const pane of codexDue) {
+        if (codexSlots <= 0 || !reaping()) break
+        const slept = await during(() => sleepCodex(pane, seen.snap)).catch(err => {
+          deps.log(`sleeping Codex in ${pane.pane_id} failed: ${messageOf(err)}`)
+        })
+        if (slept?.ok) codexSlots--
       }
     },
 

@@ -49,8 +49,9 @@ export function archiveBlock(
   schedules: readonly ArchiveEntryFacts[] = [],
 ): string {
   if (!it || it.launchOnly || it.launch) return 'archive.why.starting'
-  // Claude and Antigravity sessions come back: Return resumes them by their id.
-  if (!it.session || (it.agent !== 'claude' && it.agent !== 'agy')) return 'archive.why.notClaude'
+  // Claude, Antigravity and Codex sessions come back: Return resumes them by their id.
+  if (!it.session || (it.agent !== 'claude' && it.agent !== 'agy' && it.agent !== 'codex'))
+    return 'archive.why.notClaude'
   // A sleeper whose pane wake closed (#204) has none to close: it goes all the same.
   if (!it.pane && !it.sleeping) return 'archive.why.noPane'
   if (it.status === 'working') return 'archive.why.working'

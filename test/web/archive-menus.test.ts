@@ -38,7 +38,7 @@ test('menus: Archive on a Claude session’s card, gray with the reason; "Idle" 
   expect(gray?.disabled).toBe(true)
   expect(gray?.reason ?? '').toMatch(/working/)
   expect(find(cardMenu(it, { ...ctx, canMutate: false }), 'archive')?.disabled).toBe(true)
-  expect(find(cardMenu({ ...it, agent: 'codex' }, ctx), 'archive')).toBe(undefined)
+  expect(find(cardMenu({ ...it, agent: 'pi' }, ctx), 'archive')).toBe(undefined)
 
   const counts: Record<number, number> = { 0: 5, 1: 4, 3: 2, 7: 0 }
   const idle = columnMenu('idle', { ...ctx, tidyCount: d => counts[d] ?? 0 })

@@ -156,6 +156,8 @@ import {
 } from '../adapters/call-receipts.ts'
 import { allCards, changeTodos, readCard, writeCard } from '../adapters/cards.ts'
 import { createClaudeHome, cwdOf } from '../adapters/claude-home.ts'
+import { noDaemonArgs } from '../adapters/codex-flags.ts'
+import { codexHomeOf } from '../adapters/codex-home.ts'
 import {
   configFile,
   editCategories,
@@ -183,16 +185,17 @@ import {
   removeWatch,
   schedulerRuns as schedulerRunsNow,
 } from '../adapters/schedule-store.ts'
-import { peekAgySleepers, peekPiSleepers } from '../adapters/wake-files.ts'
+import { peekAgySleepers, peekPiSleepers, wakeCodexFile } from '../adapters/wake-files.ts'
 import { AGY_AGENT, isAgyItem } from '../core/agy.ts'
 import { formatListLines } from '../core/board-list.ts'
 import { withBoardPaths } from '../core/board-paths.ts'
 import { categoryFor, categoryInfo } from '../core/categories.ts'
+import { CODEX_AGENT, isCodexItem, isCodexSession } from '../core/codex.ts'
 import { DECISION_FLAGS, type DecisionView, decisionsConfig, masterHeld, orderQueue } from '../core/decisions.ts'
 import { switchedOff } from '../core/feature-switch.ts'
 import { translator } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
-import { agyCommand } from '../core/launch/agents.ts'
+import { agyCommand, codexCommand } from '../core/launch/agents.ts'
 import { withMasterFlags } from '../core/master-flags.ts'
 import { parseMoveAny } from '../core/move-device.ts'
 import { isKeptCall, UPLINK_REFUSED } from '../core/node-uplink.ts'
@@ -244,7 +247,7 @@ import { currentWakeMode } from '../services/wake/mode.ts'
 import { compactCli } from './compact-cli.ts'
 import type { ThreadCmdContext } from './thread-cli.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] | decisions [--done] [--json] | done [text] | clear | favorite [off] | list | agents [--json] | cats | remind <when> "<text>" [--idle] | send <name|key> "<text>" | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | move <id|name|pane>... --device <id|local> [--dry-run] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | owner-admin on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | master [handover --to <device> [--dry-run] [--reverse-link <spec>] [--node-port <port>] [--allow-offline-nodes] [--json] | rollback [--id <id>] [--local-only] [--discard-since-commit] [--json] | status [--json]] | doctor | update | housekeeping [--dry-run | status] [--json] | presence [here | away | call] | journal [--since <when> | --away] [--json] | spend [--day <d>] [--lane <id>] [--json] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | resume --agy <conversation id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp [--agents | --http] | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>] | db rekey --from <old> --to <new> [--dry-run] [--json]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] | decisions [--done] [--json] | done [text] | clear | favorite [off] | list | agents [--json] | cats | remind <when> "<text>" [--idle] | send <name|key> "<text>" | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | move <id|name|pane>... --device <id|local> [--dry-run] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | owner-admin on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | master [handover --to <device> [--dry-run] [--reverse-link <spec>] [--node-port <port>] [--allow-offline-nodes] [--json] | rollback [--id <id>] [--local-only] [--discard-since-commit] [--json] | status [--json]] | doctor | update | housekeeping [--dry-run | status] [--json] | presence [here | away | call] | journal [--since <when> | --away] [--json] | spend [--day <d>] [--lane <id>] [--json] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | resume --agy <conversation id> | resume --codex <conversation id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp [--agents | --http] | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>] | db rekey --from <old> --to <new> [--dry-run] [--json]] [--session <id|name|pane>]`
 /** The commands that print a help of their own for `--help` (#305). */
 const OWN_HELP: ReadonlySet<string> = new Set(['thread', 'time', 'cal', 'spend'])
 
@@ -1431,7 +1434,13 @@ async function main(): Promise<void> {
   if (cmd === 'move') return move()
   if (cmd === 'fork') return fork()
   if (cmd === 'resume')
-    return flagWords.includes('--pi') ? resumePi() : flagWords.includes('--agy') ? resumeAgy() : resume()
+    return flagWords.includes('--pi')
+      ? resumePi()
+      : flagWords.includes('--agy')
+        ? resumeAgy()
+        : flagWords.includes('--codex')
+          ? resumeCodex()
+          : resume()
   if (cmd === 'tg-key') return tgKey()
   if (cmd === 'presence' || cmd === 'away') return presence()
   if (cmd === 'journal') return journalCommand()
@@ -1753,10 +1762,13 @@ async function restart(s: Session): Promise<void> {
   const agyHint = known
     ? isAgyItem(known.find(i => i.key === s.key || i.session === s.key) ?? {})
     : !target && agyCaller()
+  const codexHint = known
+    ? isCodexItem(known.find(i => i.key === s.key || i.session === s.key) ?? {})
+    : !target && codexCaller()
   const up = await wakeAnswers(deps)
   if (!up.ok)
     throw new Error(
-      `a restart needs ${wakeMissing(up)}; nothing was scheduled. Ask the user to restart this session by hand: /exit in it, then ${agyHint ? `agy --conversation ${s.key}` : `claude --resume ${s.key}`} in the same pane`,
+      `a restart needs ${wakeMissing(up)}; nothing was scheduled. Ask the user to restart this session by hand: /exit in it, then ${codexHint ? `codex resume ${s.key}` : agyHint ? `agy --conversation ${s.key}` : `claude --resume ${s.key}`} in the same pane`,
     )
   // The restart ends in a wake: one the board would refuse (another profile than herdr-wake would
   // resume it in, or one not known) is refused now, before anything is scheduled. The session as
@@ -1764,6 +1776,8 @@ async function restart(s: Session): Promise<void> {
   const set = await boardProfiles()
   const shown = await find(s.key)
   const isAgy = shown ? isAgyItem(shown) : !target && agyCaller()
+  const isCodex = shown ? isCodexItem(shown) : codexHint
+  if (isCodex && !wakeSleepsAgy(deps)) throw new Error('a restart of a Codex session needs the board’s own wake')
   if (isAgy && !wakeSleepsAgy(deps))
     throw new Error(
       `a restart of an Antigravity session needs the board’s own wake (Settings → Sleep and wake…); nothing was scheduled. Ask the user to restart this session by hand: /exit in it, then agy --conversation ${s.key} in the same pane`,
@@ -1776,6 +1790,7 @@ async function restart(s: Session): Promise<void> {
       session: s.key,
       cwd: s.cwd,
       ...(isAgy && { agent: AGY_AGENT }),
+      ...(isCodex && { agent: CODEX_AGENT }),
       ...sessionProfile(readCard(s.key), set.list),
     },
     set,
@@ -1789,13 +1804,17 @@ async function restart(s: Session): Promise<void> {
     : `ok · restart ${entry.id}`
   const turn = own ? 'once this turn is over and the session is free' : 'once the session is free'
   const stops = own
-    ? isAgy
-      ? ' · end your turn now. It waits for running subagents to end (10 min at most, then tells you it did not happen)'
-      : ' · end your turn now. It waits for background commands and Monitor to end (10 min at most, then tells you it did not happen); CronCreate and ScheduleWakeup jobs die with it'
+    ? isCodex
+      ? ' · end your turn now'
+      : isAgy
+        ? ' · end your turn now. It waits for running subagents to end (10 min at most, then tells you it did not happen)'
+        : ' · end your turn now. It waits for background commands and Monitor to end (10 min at most, then tells you it did not happen); CronCreate and ScheduleWakeup jobs die with it'
     : ''
-  const resumeLine = isAgy
-    ? 'Antigravity exits and resumes in the same pane (MCP servers, settings, hooks and skills load anew, the conversation stays)'
-    : 'Claude exits and resumes in the same pane (MCP servers, settings, hooks, skills and CLAUDE.md load anew, the conversation stays)'
+  const resumeLine = isCodex
+    ? 'Codex exits and resumes the same conversation'
+    : isAgy
+      ? 'Antigravity exits and resumes in the same pane (MCP servers, settings, hooks and skills load anew, the conversation stays)'
+      : 'Claude exits and resumes in the same pane (MCP servers, settings, hooks, skills and CLAUDE.md load anew, the conversation stays)'
   console.log(
     `${head}: ${turn}, ${resumeLine}, then gets "${prompt}"${stops} · cancel: board unschedule ${entry.id}${await schedulerNote()}`,
   )
@@ -1909,6 +1928,26 @@ async function resumeAgy(): Promise<void> {
   const rawCwd = sleeper?.cwd || deps.agy.sessionCwd(session)
   const cwd = rawCwd && statSync(rawCwd, { throwIfNoEntry: false })?.isDirectory() ? rawCwd : undefined
   const ran = await runHere(program, argv, process.env, cwd)
+  if (ran.error) throw new Error(`${program} did not start: ${messageOf(ran.error)}`)
+  process.exit(ran.code)
+}
+
+/** Resume in the rollout's Codex home, even when launched from a new shell. */
+async function resumeCodex(): Promise<void> {
+  const args = rest.filter(word => word !== '--codex')
+  const id = args[0]
+  if (args.length !== 1 || !id || !isCodexSession(id)) throw new Error('usage: board resume --codex <conversation id>')
+  const transcript = deps.codex.transcriptPath(id)
+  if (!transcript) throw new Error(`no Codex conversation ${id}`)
+  const sleeper = Object.values(peekAgySleepers(wakeCodexFile())).find(
+    s => s.session.toLowerCase() === id.toLowerCase(),
+  )
+  const rawCwd = (await deps.codex.cwdOf(id)) || sleeper?.cwd
+  const cwd = rawCwd && statSync(rawCwd, { throwIfNoEntry: false })?.isDirectory() ? rawCwd : undefined
+  const command = codexCommand(cfg.launch?.codex)
+  const [program = CODEX_AGENT, ...options] = command
+  const argv = [...options, ...(await noDaemonArgs(command)), 'resume', id.toLowerCase()]
+  const ran = await runHere(program, argv, { ...process.env, CODEX_HOME: codexHomeOf(transcript) }, cwd)
   if (ran.error) throw new Error(`${program} did not start: ${messageOf(ran.error)}`)
   process.exit(ran.code)
 }

@@ -164,7 +164,7 @@ describe('the head', () => {
     const a = item({ key: 'a', status: 'working', agent: 'claude' })
     expect(headButtons(a, t)).toMatchObject({ restartHidden: false, restartTitle: t('sheet.restartHint') })
     expect(headButtons({ ...a, sleeping: true }, t).restartHidden).toBe(true)
-    expect(headButtons({ ...a, agent: 'codex' }, t).restartHidden).toBe(true)
+    expect(headButtons({ ...a, agent: 'pi' }, t).restartHidden).toBe(true)
     expect(headButtons({ ...a, session: null }, t).restartHidden).toBe(true)
     const restart = { id: 'r1', key: 'a', kind: 'restart', text: '', next: NOW, why: 'tasks' }
     expect(headButtons(a, t, false, [restart]).restartTitle).toBe(

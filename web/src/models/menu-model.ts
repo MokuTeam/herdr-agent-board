@@ -444,7 +444,7 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
     own &&
       !it.sleeping &&
       claude &&
-      (it.agent === 'claude' || it.agent === 'agy') && {
+      (it.agent === 'claude' || it.agent === 'agy' || it.agent === 'codex') && {
         id: 'restart',
         label: t('sheet.restart'),
         ...herdr(ctx.restarting ? { disabled: true, reason: t('sheet.restartPending') } : {}),
@@ -504,7 +504,7 @@ export function cardMenu(it: MenuSession, ctx: CardMenuContext): MenuEntry[] {
     // Off the board until Return: its tab closes, Claude/Antigravity keeps the conversation.
     own &&
       claude &&
-      (it.agent === 'claude' || it.agent === 'agy') && {
+      (it.agent === 'claude' || it.agent === 'agy' || it.agent === 'codex') && {
         id: 'archive',
         label: t('archive.menu'),
         ...herdr(ctx.archiveWhy ? { disabled: true, reason: t(ctx.archiveWhy) } : {}),

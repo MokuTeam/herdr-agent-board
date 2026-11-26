@@ -7,6 +7,7 @@
 // where the board's own wake runs (#178): herdr-wake puts no other agent to sleep.
 import { askSleep } from '../adapters/schedule-store.ts'
 import { isAgyItem } from '../core/agy.ts'
+import { isCodexItem } from '../core/codex.ts'
 import { isPiItem } from '../core/pi.ts'
 import type { SessionRef } from '../core/schedule-rules.ts'
 import type { Item } from '../core/types.ts'
@@ -120,7 +121,9 @@ async function sleepOne(
   if (item.sleeping) return { result: 'already' }
   // pi and agy too, where the board's own wake puts sessions to sleep (#178, #631); the separate plugin does not.
   const agentOk =
-    item.agent === 'claude' || (isPiItem(item) && wakeSleepsPi(deps)) || (isAgyItem(item) && wakeSleepsAgy(deps))
+    item.agent === 'claude' ||
+    (isPiItem(item) && wakeSleepsPi(deps)) ||
+    ((isAgyItem(item) || isCodexItem(item)) && wakeSleepsAgy(deps))
   if (!item.session || !item.pane || !agentOk) return { result: 'kept', why: 'notClaude' }
   const ready = await readyToSleep(deps, item)
   if (!ready.ok) {

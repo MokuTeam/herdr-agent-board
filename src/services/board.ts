@@ -20,7 +20,7 @@ import { bgTaskFromFooter, bgTaskStuckMin, summarizeBgTasks } from '../core/bg-t
 import { attentionOf, busy, columnOf, isAgentStatus, PINS } from '../core/board.ts'
 import { besideParents, type CallAgent, type CallView } from '../core/call-agent.ts'
 import { categoryFor } from '../core/categories.ts'
-import { isCodexItem } from '../core/codex.ts'
+import { CODEX_AGENT, isCodexItem, isCodexSession } from '../core/codex.ts'
 import { compactView } from '../core/compact.ts'
 import {
   type CardDecision,
@@ -748,10 +748,10 @@ export async function collect(
       })
       continue
     }
-    if (s.agent === AGY_AGENT) {
+    if (s.agent === AGY_AGENT || s.agent === CODEX_AGENT) {
       // An Antigravity (`agy`) session asleep (#631), from wake's answer or its file: shown whether
       // its pane is still its own (then with it) or not (it wakes in a new tab).
-      if (!isAgySession(s.session)) continue
+      if (!(s.agent === CODEX_AGENT ? isCodexSession(s.session) : isAgySession(s.session))) continue
       seen.add(s.session)
       const name = s.name ?? ''
       const cwd = s.cwd ?? ''
@@ -762,8 +762,8 @@ export async function collect(
         session: s.session,
         pane: own || null,
         workspace: (ws === undefined ? undefined : labels.get(ws)) ?? s.workspace ?? '',
-        agent: AGY_AGENT,
-        name: name || deps.agy.sessionTitle(s.session) || s.session.slice(0, 8),
+        agent: s.agent,
+        name: name || (s.agent === AGY_AGENT ? deps.agy.sessionTitle(s.session) : undefined) || s.session.slice(0, 8),
         cwd,
         status: 'sleeping',
         sleeping: true,

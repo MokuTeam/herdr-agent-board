@@ -306,10 +306,15 @@ async function api(req: Request, url: URL): Promise<unknown> {
   if (req.method === 'GET' && path === '/sleeping')
     return url.searchParams.get('agents') === 'all' ? engine.sleepingAll() : engine.sleeping()
   if (req.method === 'GET' && path === '/awake') return engine.awake()
-  if (req.method === 'POST' && path === '/wake') return engine.wake((await bodyOf(req)).target)
+  if (req.method === 'POST' && path === '/wake') {
+    const body = await bodyOf(req)
+    return engine.wake(body.target, body.agent === 'codex' ? 'codex' : undefined)
+  }
   if (req.method === 'POST' && path === '/sleep') {
     const body = await bodyOf(req)
-    return body.piSession === undefined ? engine.sleep(body.target) : engine.adoptPi(body.target, body.piSession)
+    return body.piSession === undefined
+      ? engine.sleep(body.target, body.agent === 'codex' ? 'codex' : undefined)
+      : engine.adoptPi(body.target, body.piSession)
   }
   // A sleeper moved to another profile (#250, `board move`): its entry follows.
   if (req.method === 'POST' && path === '/profile') {

@@ -26,8 +26,9 @@ test('what may go to the archive, and why not', () => {
   assert.equal(archiveBlock({ ...it, helpers: { running: 2 } }), 'archive.why.helpers')
   assert.equal(archiveBlock({ ...it, launch: { state: 'starting' } }), 'archive.why.starting')
   assert.equal(archiveBlock({ ...it, launchOnly: true }), 'archive.why.starting')
-  // Return resumes a Claude session by its id: another agent, or none, cannot come back.
-  assert.equal(archiveBlock({ ...it, agent: 'codex' }), 'archive.why.notClaude')
+  // Return resumes Claude, agy and Codex by their session id.
+  assert.equal(archiveBlock({ ...it, agent: 'codex' }), '')
+  assert.equal(archiveBlock({ ...it, agent: 'pi' }), 'archive.why.notClaude')
   assert.equal(archiveBlock({ ...it, session: null }), 'archive.why.notClaude')
   assert.equal(archiveBlock({ ...it, pane: null }), 'archive.why.noPane')
   // A sleeper whose pane wake closed (#204): nothing to close, it goes.
