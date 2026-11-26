@@ -1,6 +1,6 @@
 // The side-panel shell the session sheet, the categories, the schedule, the archive and the profiles share: an
 // aside with a grip, the head and the panel's content, and the edges that resize it. Where it sits,
-// how it moves and the one-open-at-a-time rule are the shared place's (components/panel/place.ts
+// how it moves and which panels can share the screen are the shared place's (components/panel/place.ts
 // and motion.ts); `open` asks for it, `onClose` hears when it closed itself or gave way to another.
 import { type ReactNode, type Ref, useLayoutEffect } from 'react'
 import { useCardWindow } from '../../hooks/useCardWindow.ts'
@@ -106,7 +106,7 @@ export function Panel({ open, onClose, about, cardWindow, ...shell }: PanelProps
   const t = useT()
   const choice = useCardWindow(cardWindow)
   const modal = choice?.view === 'modal'
-  const panel = usePanel({ open, modal, onClose, about })
+  const panel = usePanel({ open, modal, chat: shell.kind === 'session', onClose, about })
   const { ref, shown } = panel
   const focus = useModalFocus(ref)
   const origin = useLatest(about)

@@ -166,3 +166,45 @@ describe('the viewer’s layout', () => {
     }
   })
 })
+
+describe('a centered card window beside a docked chat', () => {
+  for (const width of [1680, 820]) {
+    test(`keeps the chat in place at ${width}px and closes the dialog first`, async () => {
+      const side = await newSide({ viewport: { w: width, h: 900 }, ids: ['sheet', 'cats-sheet', 'sched-sheet'] })
+      try {
+        // These use the same motion engine as the session and thread shells.
+        const chat = side.panel('sheet')
+        const dialog = side.panel('cats-sheet')
+        dialog.setModal(true)
+
+        await side.open('sheet')
+        await side.world.settle()
+        const room = side.shared.room.right.target
+        const over = side.shared.over.right.target
+        expect(room + over).toBeGreaterThan(0)
+
+        await side.open('cats-sheet')
+        await side.world.settle()
+        expect(chat.isOpen).toBe(true)
+        expect(side.closes).toEqual([])
+        expect(side.shared.room.right.target).toBe(room)
+        expect(side.shared.over.right.target).toBe(over)
+        expect(side.shared.openPanel()).toBe(dialog)
+
+        side.shared.openPanel()?.close()
+        expect(side.shared.openPanel()).toBe(chat)
+        expect(side.closes).toEqual(['cats-sheet'])
+
+        await side.open('cats-sheet')
+        dialog.setModal(false)
+        expect(chat.isOpen).toBe(false)
+        expect(dialog.isOpen).toBe(true)
+        await side.open('sched-sheet')
+        expect(dialog.isOpen).toBe(false)
+      } finally {
+        await side.world.settle()
+        side.dispose()
+      }
+    })
+  }
+})

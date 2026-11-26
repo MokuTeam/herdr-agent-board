@@ -157,12 +157,18 @@ export class PanelMotion implements PlacedPanel {
   setModal(modal: boolean): void {
     if (this.modal === modal) return
     this.modal = modal
-    if (this.isOpen) this.place.syncRoom({ about: this.about })
+    if (this.isOpen) {
+      this.place.activate(this)
+      this.place.syncRoom({ about: this.about })
+    }
   }
   /** What it is about (the session's card): kept in its place on screen while the board makes room. */
   about: About = () => null
 
-  constructor(readonly place: PanelPlace) {
+  constructor(
+    readonly place: PanelPlace,
+    readonly chat = false,
+  ) {
     const spring = (precision: number) =>
       new Spring({
         damping: 1,
@@ -316,7 +322,7 @@ export class PanelMotion implements PlacedPanel {
   open(): boolean {
     if (this.isOpen) return false
     this.isOpen = true
-    for (const p of this.place.panels) if (p !== this) p.close()
+    this.place.activate(this)
     const mode = this.place.modeNow()
     const fresh = !this.shown || this.mode !== mode
     this.setShown(true)

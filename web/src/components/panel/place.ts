@@ -1,6 +1,6 @@
 // The one place the side panels share: the viewer's layout (this browser's: docked right, left or
 // at the bottom, or floating), the room the board makes for a docked panel, the dock preview and
-// the place menu, and the window around them. One panel is open at a time, in this place.
+// the place menu, and the window around them. A docked chat and a centered card can share it.
 //
 // The board's margins (--room-left/right/bottom on <html>) are springs. While they move, the card
 // the panel is about keeps its place on screen, and stays clear of a panel at the bottom. A side
@@ -41,6 +41,7 @@ export const LAYOUT_KEY = 'board.panel'
 export interface PlacedPanel {
   readonly isOpen: boolean
   readonly modal?: boolean
+  readonly chat?: boolean
   /** A gesture is in progress. */
   readonly gesturing: boolean
   close(velocity?: { x?: number; y?: number }): void
@@ -152,7 +153,17 @@ export class PanelPlace {
   }
 
   openPanel(): PlacedPanel | undefined {
-    return this.panels.find(p => p.isOpen)
+    return this.panels.find(p => p.isOpen && p.modal) ?? this.panels.find(p => p.isOpen)
+  }
+
+  /** A centered card can share the desktop with the chat docked beside it. */
+  activate(panel: PlacedPanel): void {
+    const sharesDock = !this.isPhone() && this.layout.dock !== 'float'
+    for (const other of this.panels) {
+      if (other === panel || !other.isOpen) continue
+      const sharesChat = panel.modal ? !other.modal && other.chat : panel.chat && other.modal
+      if (!sharesDock || !sharesChat) other.close()
+    }
   }
 
   /** Settings picked a place: the open panel moves there, and the others open there next. */
@@ -208,10 +219,10 @@ export class PanelPlace {
 
   /** The board's room for the open panel (none on a phone, or for a floating one). */
   syncRoom({ jump = false, velocity = {}, response = 0.4, about = nothing }: RoomOptions = {}): void {
-    const open = this.openPanel()
+    const open = this.panels.find(p => p.isOpen && !p.modal)
     const vp = this.viewport()
     const phone = this.isPhone()
-    const docked = !!open && !open.modal
+    const docked = !!open
     const want = roomWanted(docked, phone, this.layout, vp)
     const wantOver = overWanted(docked, phone, this.layout, vp)
     // Over the board it casts a deeper shadow, a drawer over the cards rather than beside them.

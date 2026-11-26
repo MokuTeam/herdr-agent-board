@@ -1,4 +1,4 @@
-// The side panels, one open at a time in their shared place: the session sheet, the categories,
+// The side panels in their shared place: the session sheet, the categories,
 // the schedule, the archive and, with more than one Claude profile folder found, the profiles; sleep
 // and wake while the payload carries its state line; the phones while the remote mode is on;
 // MokuPilot always; tasks while the board has them on (#202); the calendar while it is on (#328); Team while
