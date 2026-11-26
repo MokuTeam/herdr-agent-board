@@ -58,6 +58,7 @@ import type { LaunchRequest } from './request.ts'
 
 /** A launch as the board keeps it while it runs. */
 export interface Launch extends LaunchRequest {
+  by?: string
   id: string
   /** On a node, its profile's env file (#507, launcher.ts LaunchContext). */
   nodeEnv?: Readonly<Record<string, string>> | null
@@ -214,6 +215,7 @@ export function launchRunner({
         ...(l.model && { modelWant: l.model }),
         ...(l.fork && forkCard(l.fork)),
         ...(l.parent && !l.fork && !l.resume && { parent: l.parent }),
+        ...(l.by && { serviceStartBy: l.by }),
       })
       l.carded = id
     },

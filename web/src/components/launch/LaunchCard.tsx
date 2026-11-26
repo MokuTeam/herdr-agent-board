@@ -53,6 +53,7 @@ export function LaunchCard({ launch: l, look }: { launch: LaunchView; look: Laun
         <span className="name">{l.name}</span>
         <span className="age">{t(l.resume ? 'archive.returnLabel' : l.fork ? 'fork.label' : 'launch.new')}</span>
       </div>
+      {l.by && <div className="card-meter">{t('ownerServices.by', { by: l.by })}</div>}
       <div className="said" title={l.cwd}>
         {launchWhere(l, t)}
       </div>

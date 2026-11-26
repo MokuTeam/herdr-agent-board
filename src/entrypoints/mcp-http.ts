@@ -14,8 +14,12 @@
 // outside a session.
 //
 // The tool list is fixed and short: it is part of every session's cached prefix.
+
 import { join } from 'node:path'
-import { MCP_CALLER } from '../core/launch/spawn-args.ts'
+import { uploadsCheck } from '../adapters/own-files.ts'
+import { audit } from '../adapters/team-store.ts'
+import { LAUNCHER_CHILD, MCP_CALLER, OWNER_START } from '../core/launch/spawn-args.ts'
+import { type OwnerService, ownerServiceBy } from '../core/owner-services.ts'
 import {
   Bad,
   jsonRpcServer,
@@ -32,6 +36,8 @@ import {
 
 /** Who a call is from, as its client said; null: nobody named (the owner). */
 export interface Caller {
+  /** Authenticated by the local MCP route, never taken from the tool arguments. */
+  ownerService?: OwnerService
   /** The herdr pane the session runs in. */
   pane?: string
   /** The session's key. */
@@ -51,6 +57,9 @@ export interface BoardRun {
 }
 
 export type Runner = (run: BoardRun, caller: Caller | null) => Promise<ThreadRun>
+
+// Adding a server tool does not grant it to registered services automatically.
+const OWNER_SERVICE_TOOLS = new Set(['card', 'schedule', 'agents', 'threads', 'thread', 'team', 'spawn', 'cal'])
 
 const CARD_OPS = ['doing', 'ask', 'wait', 'done', 'cat'] as const
 const SCHEDULE_OPS = ['remind', 'every', 'list', 'unschedule'] as const
@@ -396,12 +405,40 @@ export function createHttpMcp(o: { version: string; run: Runner }): HttpMcp {
         async call(name, args): Promise<ToolAnswer> {
           let run: BoardRun
           try {
+            if (caller?.ownerService) {
+              if (typeof name !== 'string' || !OWNER_SERVICE_TOOLS.has(name))
+                throw new Bad('Tool unavailable to owner services')
+              if (name === 'schedule' && (args.op === 'remind' || args.op === 'every'))
+                throw new Bad('Owner services have no pane for scheduled prompts. Use list or unschedule.')
+              if (name === 'card' && args.op === 'wait' && args.probe !== undefined)
+                throw new Bad('Owner services cannot run shell probes')
+              if (name === 'card' && args.op === 'cat' && textOf(args.text))
+                throw new Bad('Owner services can select a lane by id only')
+              if (name === 'spawn' && args.trust === true) throw new Bad('Folder trust requires the owner')
+              if (name === 'thread') {
+                if (args.op === 'post') flagValue(args.summary, 'summary')
+                if (args.op === 'set') flagValue(args.title, 'title')
+                if (Array.isArray(args.files) && args.files.length > 0) {
+                  const uploaded = uploadsCheck()
+                  if (!args.files.every(f => typeof f === 'string' && uploaded(f)))
+                    throw new Bad('Owner services can attach files from board uploads only')
+                }
+              }
+            }
             run = toolRun(name, args)
           } catch (err) {
             if (err instanceof Bad) return { content: [{ type: 'text', text: err.message }], isError: true }
             throw err
           }
-          return toToolAnswer(await o.run(run, caller))
+          const result = await o.run(run, caller)
+          if (caller?.ownerService && run.program === 'spawn-agent')
+            audit('owner-service', null, {
+              op: 'spawn',
+              key: caller.ownerService.key,
+              by: ownerServiceBy(caller.ownerService.name),
+              code: result.code,
+            })
+          return toToolAnswer(result)
         },
       }).handle(text)
     },
@@ -433,6 +470,10 @@ export function callerEnv(
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(base)) if (v !== undefined) env[k] = v
   for (const k of CALLER_ENV) delete env[k]
+  if (caller?.ownerService) {
+    delete env[OWNER_START]
+    delete env[LAUNCHER_CHILD]
+  }
   if (caller?.pane) env.HERDR_PANE_ID = caller.pane
   if (caller?.session) env.CLAUDE_CODE_SESSION_ID = caller.session
   if (caller?.configDir) env.CLAUDE_CONFIG_DIR = caller.configDir
@@ -465,12 +506,17 @@ export function childRunner(o: {
    * needs one); undefined when herdr does not say.
    */
   workspaceOf?: (pane: string) => Promise<string | undefined>
+  serviceWorkspace?: () => Promise<string | undefined>
   runMs?: Partial<Record<BoardRun['program'], number>>
 }): Runner {
   return async (run, given) => {
     let caller = given
     if (run.program === 'spawn-agent' && caller?.pane && !caller.workspace && o.workspaceOf) {
       const workspace = await o.workspaceOf(caller.pane).catch(() => undefined)
+      if (workspace) caller = { ...caller, workspace }
+    }
+    if (run.program === 'spawn-agent' && caller?.ownerService && o.serviceWorkspace) {
+      const workspace = await o.serviceWorkspace().catch(() => undefined)
       if (workspace) caller = { ...caller, workspace }
     }
     const file = join(o.root, 'src', 'entrypoints', PROGRAM_FILE[run.program])

@@ -13,6 +13,7 @@ import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, stat
 import { basename, join, sep } from 'node:path'
 import { archivedFiles, isArchived } from '../adapters/archive-store.ts'
 import { readCard } from '../adapters/cards.ts'
+import { ownerServices } from '../adapters/owner-services.ts'
 import { configDir, stateDir, uploadsDir } from '../adapters/paths.ts'
 import { addEntry, listEntries, updateEntry } from '../adapters/schedule-store.ts'
 import {
@@ -28,6 +29,7 @@ import {
   type SessionRef,
 } from '../adapters/team-store.ts'
 import { categoryInfo } from '../core/categories.ts'
+import { isOwnerServiceKey } from '../core/owner-services.ts'
 import {
   DEFAULT_MAX_FILE_BYTES,
   GENERAL,
@@ -49,6 +51,7 @@ import {
   pausedText,
   safeName,
   secretHit,
+  sharesAnyLane,
   sharesLane,
   splitKey,
   TEAM,
@@ -56,7 +59,7 @@ import {
   threadRef,
   unreachableText,
 } from '../core/team-agents.ts'
-import { assignHandles, directoryFor, type ReachWorld, reach } from '../core/team-directory.ts'
+import { assignHandles, directoryFor, type ReachWorld, reach, sharesHandleLane } from '../core/team-directory.ts'
 import { validEmoji } from '../core/team-reactions.ts'
 import type { DirectoryEntry } from '../core/team-wire.ts'
 import type { Config } from '../core/types.ts'
@@ -262,11 +265,15 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
   const recentReacts = new Map<string, number[]>()
 
   const laneOf = (key: string): string | null => items().find(i => i.key === key)?.category ?? null
+  const shares = (peer: Parameters<typeof sharesLane>[0], key: string): boolean =>
+    isOwnerServiceKey(key) ? sharesAnyLane(peer, cfg.categories) : sharesLane(peer, laneOf(key) ?? '')
+
   /**
    * A service agent (#819) is what the board calls it, never what its call said: its card's name is
    * the one its posts carry ("anna's agent Juno"). Every other session is as the caller gave it.
    */
-  const asCalled = (session: SessionRef): SessionRef => {
+  const asCalled = (session: SessionRef): SessionRef | null => {
+    if (isOwnerServiceKey(session.key)) return ownerServices().find(s => s.key === session.key) ?? null
     const item = items().find(i => i.key === session.key)
     return item?.service && item.name ? { key: session.key, name: item.name } : session
   }
@@ -280,9 +287,14 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
    */
   function world(s: ReturnType<typeof readAgents>, assign = false): ReachWorld {
     const archived = archivedFiles()
-    const sessions = items()
-      .filter(i => !isArchived(archived, i.key))
-      .map(i => ({ key: i.key, name: i.name || i.autoName || '', lane: i.category }))
+    const active = items().filter(i => !isArchived(archived, i.key))
+    const services = active.some(i => isOwnerServiceKey(i.key)) ? ownerServices() : []
+    const sessions = active.flatMap(i => {
+      const session = { key: i.key, name: i.name || i.autoName || '', lane: i.category }
+      if (!isOwnerServiceKey(i.key)) return [session]
+      const service = services.find(s => s.key === i.key)
+      return service ? [{ ...session, name: service.name, ownerServiceLanes: cfg.categories }] : []
+    })
     const reachable = s.mastersOnly ? sessions.filter(i => readCard(i.key)?.teamMaster === true) : sessions
     const state = readDirectoryState()
     let handles = state.handles
@@ -290,7 +302,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       const open = Object.entries(s.peers).filter(([p, sw]) => isPeerId(p) && sw?.on)
       // Every session on the board counts as there: one in a lane shared with nobody now keeps its handle.
       const next = assignHandles(
-        reachable.filter(x => open.some(([, sw]) => sharesLane(sw, x.lane))),
+        reachable.filter(x => open.some(([, sw]) => sharesHandleLane(sw, x))),
         handles,
         new Set(sessions.map(x => x.key)),
       )
@@ -365,6 +377,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
   return {
     async agentPost({ to, thread, text, session: given, claimed, replyTo, file, work }) {
       const session = asCalled(given)
+      if (!session) return { ok: false, error: 'session' }
       const view = team.view()
       if (!view) return { ok: false, error: 'off' }
       if (to !== TEAM && !isPeerId(to)) return { ok: false, error: 'peer' }
@@ -388,8 +401,6 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       const refused = overLimit(to, key, text, session, name ? { name, size: sizeOf(file.path) } : undefined)
       if (refused) return { ok: false, error: refused }
       const listener = s.listener?.key === session.key
-      // A peer with every lane (#386) shares any lane a session is in, and no lane is left to name.
-      const has = (lane: string): boolean => sharesLane(peer, lane)
       let reason: string | null = null
       let detail: string | undefined
       // A new thread's title and link go out as well as the text: they are checked with it, and a
@@ -407,7 +418,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       const words = [text, thread?.title, thread?.link, name, ...fields].filter(w => typeof w === 'string').join('\n')
       let bytes: Uint8Array | undefined
       if (globalOff(s.off) || !peer?.on) reason = 'off'
-      else if (!listener && !has(laneOf(session.key) ?? '')) reason = 'lane'
+      else if ((!listener || isOwnerServiceKey(session.key)) && !shares(peer, session.key)) reason = 'lane'
       else {
         // The file (#415): one of the board's own (its keys, its settings) is held as a secret;
         // any other is read once, here, and these bytes are what the check reads and the post
@@ -425,7 +436,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
         }
         const secret = secretHit(words) ?? fileSecret
         const others = cfg.categories
-          .filter(c => !has(c.id))
+          .filter(c => !sharesLane(peer, c.id))
           .map(c => ({ id: c.id, title: categoryInfo(cfg, c.id).title }))
         const lane = secret ? null : laneHit(words, others)
         if (secret) [reason, detail] = ['secret', secret]
@@ -476,6 +487,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
 
     async agentReact({ thread, message, emoji, op, session: given, claimed }) {
       const session = asCalled(given)
+      if (!session) return { ok: false, error: 'session' }
       const view = team.view()
       if (!view) return { ok: false, error: 'off' }
       const parts = splitKey(thread)
@@ -489,7 +501,8 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       const peer = s.peers[switchesKey(parts.scope, thread)]
       if (globalOff(s.off) || !peer?.on) return { ok: false, error: 'off' }
       const listener = s.listener?.key === session.key
-      if (!listener && !sharesLane(peer, laneOf(session.key) ?? '')) return { ok: false, error: 'lane' }
+      if ((!listener || isOwnerServiceKey(session.key)) && !shares(peer, session.key))
+        return { ok: false, error: 'lane' }
       const t = now()
       const maxReacts = limits().sessionHour * 3
       const kept = (recentReacts.get(session.key) ?? []).filter(at => at >= t - HOUR)
@@ -588,10 +601,13 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       if (!parts || !team.threads().some(t => t.key === key)) return { ok: false, error: 'thread' }
       if (readThreads()[key]?.archived) return { ok: false, error: 'archived' }
       if (session) {
+        if (isOwnerServiceKey(session.key)) {
+          session = asCalled(session)
+          if (!session) return { ok: false, error: 'session' }
+        }
         const s = readAgents()
         const peer = s.peers[switchesKey(parts.scope, key)]
-        if (s.listener?.key !== session.key && !sharesLane(peer, laneOf(session.key) ?? ''))
-          return { ok: false, error: 'lane' }
+        if (s.listener?.key !== session.key && !shares(peer, session.key)) return { ok: false, error: 'lane' }
       }
       team.setThread(key, { handler: session })
       audit(session ? 'assigned' : 'released', parts.scope === TEAM ? null : parts.scope, {
@@ -668,6 +684,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
    * and the next waits out the gap after the last. `text` is given the count.
    */
   function notify(target: SessionRef, thread: string, text: string | ((count: number) => string), t: number): void {
+    if (isOwnerServiceKey(target.key)) return
     const words = (n: number): string => (typeof text === 'string' ? text : text(n))
     try {
       const mine = schedule.list().filter(e => e.key === target.key && typeof e.teamThread === 'string' && !e.claim)

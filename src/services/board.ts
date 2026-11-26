@@ -1,6 +1,7 @@
 // The board's data: every agent pane in herdr plus the sessions wake put to sleep (Claude's, and pi's, #178), each
 // merged with its card and with what Claude recorded about it in its own profile's folder, and
 // sorted into a column. Sessions in the archive are left out (services/archive.ts).
+
 import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
@@ -12,6 +13,7 @@ import { isRecord } from '../adapters/json-store.ts'
 import type { LinksIndex } from '../adapters/links.ts'
 import { callAgentsGate, taskBoard } from '../adapters/mokupilot-call.ts'
 import { dayGate } from '../adapters/mokupilot-day.ts'
+import { ownerServices } from '../adapters/owner-services.ts'
 import { contextDir } from '../adapters/paths.ts'
 import type { LiveHit } from '../adapters/profile-homes.ts'
 import { peekWakeSessions } from '../adapters/wake-files.ts'
@@ -37,6 +39,7 @@ import { relate } from '../core/links.ts'
 import { lostAccessLine } from '../core/lost-access.ts'
 import { modelCheck, modelsConfig } from '../core/model-check.ts'
 import { nodeConfig } from '../core/nodes.ts'
+import { ownerServiceBy } from '../core/owner-services.ts'
 import { isPiItem, isPiSessionFile, PI_AGENT, piSessionId } from '../core/pi.ts'
 import { DEFAULT_PROFILE, sessionProfile } from '../core/profiles.ts'
 import { pendingOf, requestsOf, type SecretView, secretViews } from '../core/secrets.ts'
@@ -351,6 +354,7 @@ type Base = Pick<
   | 'fromFile'
   | 'day'
   | 'service'
+  | 'by'
   | 'bgTasks'
   | 'tgKey'
 >
@@ -540,6 +544,7 @@ export async function collect(
       category,
       categorySet: !!card.category,
       ...(card.teamMaster === true && { teamMaster: true as const }),
+      ...(typeof card.serviceStartBy === 'string' && card.serviceStartBy && { by: card.serviceStartBy }),
       doing,
       // A card written before doingAt (#321): its last change, the latest the doing can be from.
       doingAt: card.doing ? (card.doingAt ?? card.updatedAt ?? null) : doing && call ? call.updated : null,
@@ -687,7 +692,7 @@ export async function collect(
 
   // The owner's service agents (#819, core/team-services.ts): a card each with no pane, only while
   // the team is on. Its status is idle; nothing of herdr's, Claude's or wake's is asked for it.
-  for (const s of services) {
+  for (const s of [...services, ...ownerServices()]) {
     if (seen.has(s.key)) continue
     seen.add(s.key)
     add({
@@ -706,6 +711,7 @@ export async function collect(
       since: null,
       pipe: '',
       service: true,
+      ...(!('lane' in s) && { by: ownerServiceBy(s.name) }),
     })
   }
 

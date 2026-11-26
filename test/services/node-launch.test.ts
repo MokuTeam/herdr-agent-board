@@ -510,3 +510,20 @@ test('a start with trust gives the node’s own pipeline the option; with none o
   assert.deepEqual(calls[0]?.[0], calls[3]?.[0])
   assert.equal('trust' in ((calls[0]?.[0] ?? {}) as object), false)
 })
+
+test('an owner service start carries its attribution into the node launch pipeline', async () => {
+  const root = tmp()
+  const calls: unknown[][] = []
+  const { deps } = nodeWith(root, {
+    start: async (...args: unknown[]): Promise<StartResult> => {
+      calls.push(args)
+      return { ok: true, id: String(args[1]) }
+    },
+  })
+  const launch = createNodeLaunch(deps)
+  const by = 'service Atlas %'
+  const body = repoBody({ source: { kind: 'path', cwd: root, worktree: null }, by })
+  assert.deepEqual(launchRequestOf({ ...body, by: 'owner' }), { field: 'by' })
+  assert.equal((await launch.answer(body)).status, 202)
+  assert.deepEqual(calls[0]?.[2], { by })
+})

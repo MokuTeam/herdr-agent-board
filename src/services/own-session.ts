@@ -3,10 +3,13 @@
 // herdr says its pane runs Codex under that id; a Claude session by CLAUDE_CODE_SESSION_ID; else the
 // agent herdr says runs in this pane, by its session or `pane-<id>`. Null outside any, and for a
 // Codex child that cannot tell its own session.
+
 import type { readCard as readCardFn } from '../adapters/cards.ts'
 import type { HerdrPane } from '../adapters/herdr.ts'
+import { ownerServices } from '../adapters/owner-services.ts'
 import { AGY_AGENT } from '../core/agy.ts'
 import { CODEX_AGENT } from '../core/codex.ts'
+import { isOwnerServiceKey } from '../core/owner-services.ts'
 
 type Env = Readonly<Record<string, string | undefined>>
 
@@ -64,6 +67,11 @@ export async function ownSessionOf(deps: {
 }): Promise<{ key: string; name: string } | null> {
   const { env } = deps
   const own = env.CLAUDE_CODE_SESSION_ID
+  if (isOwnerServiceKey(own)) {
+    const service = ownerServices().find(s => s.key === own)
+    if (!service) throw new Error('Owner service was revoked')
+    return service
+  }
   const pane = env.HERDR_PANE_ID
   let p: HerdrPane | undefined
   try {

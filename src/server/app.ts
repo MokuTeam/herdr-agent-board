@@ -278,6 +278,7 @@ import { masterRelayRoute, nodeCallRoutes, nodeDoorRoutes } from './routes/node.
 import { createNodeProxy, type NodeProxy } from './routes/node-proxy.ts'
 import { computerSetupRoutes, handoverRoutes, nodeSetupRoutes, nodesRoutes, relaySetupRoutes } from './routes/nodes.ts'
 import { nsNodeRoute, nsSessionRoutes } from './routes/ns-sessions.ts'
+import { ownerServicesRoutes } from './routes/owner-services.ts'
 import { pageLogRoute } from './routes/page-log.ts'
 import { pilotCallRoutes } from './routes/pilot-call.ts'
 import { presenceRoutes } from './routes/presence.ts'
@@ -988,11 +989,12 @@ export async function startServer({
   // The confirmation window is on http://localhost:<port>, and a browser may try [::1] for
   // `localhost` before 127.0.0.1. While team is on the board holds [::1]:<port> as well, so no other
   // program can stand there and show a window of its own; if one already does, confirmations are
-  // refused (teamConfirm.safe) until it is gone. Without `team` nothing listens on ::1, as before.
+  // refused (teamConfirm.safe) until it is gone. Opening an owner-service confirmation also holds it.
   let loopback6: ReturnType<typeof Bun.serve> | null = null
   let loopbackTaken = false
+  let ownerConfirmationOpen = false
   function holdLoopback6(): void {
-    const on = teamConfig(cfg.team) !== null
+    const on = teamConfig(cfg.team) !== null || ownerConfirmationOpen
     if (!on) {
       void loopback6?.stop(true)
       loopback6 = null
@@ -1437,6 +1439,17 @@ export async function startServer({
       },
       teamConfirm,
       work,
+      () => ownerConfirmationOpen,
+      refresh,
+    ),
+    ...ownerServicesRoutes(
+      teamConfirm,
+      () => {
+        ownerConfirmationOpen = true
+        holdLoopback6()
+      },
+      refresh,
+      () => !isNodeOnly(cfg),
     ),
     // The owner read a thread, or clicked a team notification on the desktop (#355).
     ...teamNotifyRoutes({
@@ -1621,6 +1634,7 @@ export async function startServer({
     }),
     // The board's MCP for sessions of any agent kind (#813): each call the board command as its caller.
     ...mcpRoutes({
+      ownerServicesEnabled: () => !isNodeOnly(cfg),
       mcp: createHttpMcp({
         version: PLUGIN_VERSION || 'dev',
         run: childRunner({
@@ -1629,6 +1643,10 @@ export async function startServer({
           cwd: ROOT,
           exists: existsSync,
           workspaceOf: async pane => (await snapshot()).panes.find(p => p.pane_id === pane)?.workspace_id ?? undefined,
+          serviceWorkspace: async () => {
+            const workspaces = await workspaceList()
+            return (workspaces.find(w => w.focused) ?? workspaces[0])?.id
+          },
         }),
       }),
       find: ref => {
@@ -2088,6 +2106,7 @@ export async function startServer({
         launches.start(body, board.items(), {
           node: { session, ...(o?.exactSession && { exactSession: true }) },
           ...(o?.trust && { trust: true }),
+          ...(o?.by && { by: o.by }),
         }),
       launch: id => launches.list().find(l => l.id === id),
       profiles: () => deps.profiles(),

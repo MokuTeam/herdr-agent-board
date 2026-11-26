@@ -32,6 +32,7 @@
 // profile's arguments, Claude's and pi's alike, never written to the profile's settings. Its card
 // says so (`modelWant`), so a start with it gets a session id of its own when none was given. A
 // resume without it leaves the card as it was: Claude goes on with the model the session last ran.
+
 import { randomUUID } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -42,6 +43,7 @@ import { noDaemonArgs } from '../../adapters/codex-flags.ts'
 import { cachedCodexModels } from '../../adapters/codex-home.ts'
 import { herdr, herdrText, tabCreateRoot } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
+import { ownerServices } from '../../adapters/owner-services.ts'
 import { pause } from '../../adapters/pacing.ts'
 import {
   forgetProfilePane,
@@ -72,6 +74,7 @@ import {
   stillTyped,
 } from '../../core/launch/spawn-args.ts'
 import { forkCard } from '../../core/links.ts'
+import { isOwnerServiceKey, ownerServiceBy } from '../../core/owner-services.ts'
 import { CLAUDE_NAMING, isPiSessionFile, type Naming, namingOf, PI_AGENT } from '../../core/pi.ts'
 import {
   DEFAULT_PROFILE,
@@ -269,7 +272,17 @@ export interface SpawnResult {
 }
 
 // A card the start wrote before it knew the agent, with nothing on it but what a start writes.
-const START_ONLY = ['key', 'category', 'updatedAt', 'profileWant', 'modelWant', 'forkOf', 'forkAt', 'parent']
+const START_ONLY = [
+  'key',
+  'category',
+  'updatedAt',
+  'profileWant',
+  'modelWant',
+  'forkOf',
+  'forkAt',
+  'parent',
+  'serviceStartBy',
+]
 
 /** The session (or pane-<id>) that ran spawn-agent from its own environment, else ''. */
 function callerParent(env: Env): string {
@@ -298,6 +311,7 @@ function moveStartCard(carded: string, target: string, profile: string | undefin
     ...(profileWant && { profileWant }),
     ...(modelWant && { modelWant }),
     ...(parent && !existing?.parent && { parent }),
+    ...(prior?.serviceStartBy && { serviceStartBy: prior.serviceStartBy }),
   }
   if (Object.keys(patch).length) writeCard(target, patch)
   if (prior && carded !== target && Object.keys(prior).every(k => START_ONLY.includes(k))) removeCard(carded)
@@ -475,6 +489,8 @@ export async function spawnAgent(
   // start that leaves the env as herdr makes it too, as herdr's env may point elsewhere; a resume too.
   const boards = o.keepEnv || o.configDir !== undefined
   const parent = !boards && !o.resume && !o.fork ? callerParent(env) : ''
+  const service = isOwnerServiceKey(parent) ? ownerServices().find(s => s.key === parent) : undefined
+  const by = service && ownerServiceBy(service.name)
   const carded = sessionId ?? o.sessionId ?? o.resume
   // A fork's card says whose fork it is, and since when: its copied lines are older (core/links.ts).
   // The model it starts on, when one was asked for; and the caller that started it, if any.
@@ -484,6 +500,7 @@ export async function spawnAgent(
       ...(o.model && { modelWant: o.model }),
       ...(o.fork && forkCard(o.fork)),
       ...(parent && { parent }),
+      ...(by && { serviceStartBy: by }),
     })
   await herdr(['pane', 'run', pane, command])
 
@@ -554,7 +571,8 @@ export async function spawnAgent(
   }
   if (parent) {
     const finalKey = session || `pane-${pane}`
-    if (finalKey !== carded && !readCard(finalKey)?.parent) writeCard(finalKey, { parent })
+    if (finalKey !== carded && (!readCard(finalKey)?.parent || by))
+      writeCard(finalKey, { parent, ...(by && { serviceStartBy: by }) })
   }
 
   const agent = await nameInHerdr(pane, o.name, ticketNames)

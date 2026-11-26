@@ -78,6 +78,7 @@ export type OwnerAction =
    * A service agent added (#819): a new card in a lane, which agents' posts are checked by, so it
    * widens what agents may post where that lane is shared. Removing one is free.
    */
+  | { kind: 'owner-service-add'; name: string }
   | { kind: 'service-add'; name: string; lane: string }
   /** Delete a channel this board started (#854): removes it locally and archives it for members. */
   | { kind: 'channel-delete'; key: string }

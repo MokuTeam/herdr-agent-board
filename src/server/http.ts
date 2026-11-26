@@ -1,7 +1,9 @@
 // The route table and what every route shares: JSON answers, the request's JSON body, and the
 // guards. Routes are tried in order and the first that answers wins, as main's `if` chain did.
+
 import { isRecord } from '../adapters/json-store.ts'
 import { t } from '../core/lang.ts'
+import { OWNER_SERVICE_HEADER } from '../core/owner-services.ts'
 
 /**
  * board-header: POSTs carry `X-Board: 1`, which a page on another site cannot send without a CORS
@@ -167,6 +169,7 @@ export async function dispatch(
   state: GuardState,
   peer: () => string = () => '',
 ) {
+  if (path !== '/mcp' && req.headers.has(OWNER_SERVICE_HEADER)) return json(403, { error: 'MCP only' })
   let parsed: Promise<unknown> | undefined
   const rawBody = (): Promise<unknown> => {
     parsed ??= readBody(req)

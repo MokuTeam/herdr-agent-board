@@ -30,6 +30,7 @@ import {
   writtenDir,
 } from '../../core/launch/spawn-board.ts'
 import { LOCAL, nodesConfig } from '../../core/nodes.ts'
+import { isOwnerServiceKey } from '../../core/owner-services.ts'
 import { type Profile, spawnEnv } from '../../core/profiles.ts'
 import type { Config, Item } from '../../core/types.ts'
 import { absoluteDir, profileRefusal } from './spawn-agent.ts'
@@ -132,7 +133,10 @@ export async function askBoard(o: SpawnOptions, cfg: Config, d: AskBoardDeps): P
     res = await get(`${base}/api/launch`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-board': '1' },
-      body: JSON.stringify(body),
+      body: JSON.stringify({
+        ...body,
+        ...(isOwnerServiceKey(d.env.CLAUDE_CODE_SESSION_ID) && { ownerService: d.env.CLAUDE_CODE_SESSION_ID }),
+      }),
       signal: AbortSignal.timeout(15_000),
     })
     answer = await res.json().catch(() => null)

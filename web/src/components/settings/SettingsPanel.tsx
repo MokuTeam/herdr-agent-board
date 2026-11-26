@@ -51,6 +51,7 @@ import { storage } from '../../state/storage.ts'
 import { classNames } from '../class-names.ts'
 import { ChevIcon, CpuIcon, LayersIcon, PlugIcon, ShieldIcon, SlidersIcon, WarnIcon } from '../icons.tsx'
 import { Panel } from '../panel/Panel.tsx'
+import { OwnerServices } from './OwnerServices.tsx'
 import { Segmented } from './Segmented.tsx'
 import { VerifySettings } from './VerifySettings.tsx'
 
@@ -159,6 +160,7 @@ export function SettingsPanel({
   const { choose } = useLanguage()
   const { data, ui, canEdit, dispatch, toast, now } = useBoardContext()
   const place = usePanelPlace()
+  const [ownerServicesOpen, showOwnerServices] = useState(false)
   const [section, setSection] = useState<SettingsSection>('display')
   // Preserve list scroll position when opening an inner Settings page and returning (#679).
   const paneRef = useRef<HTMLDivElement>(null)
@@ -793,6 +795,10 @@ export function SettingsPanel({
                     onClick={openChild(onOpenTeam)}
                   />
                 )}
+                {!isRemote && !onNode && (
+                  <LinkRow label={t('ownerServices.title')} onClick={() => showOwnerServices(value => !value)} />
+                )}
+                {open && !isRemote && !onNode && ownerServicesOpen && <OwnerServices />}
                 {offersMokupilot(data) && <LinkRow label={t('set.mokupilot')} onClick={openChild(onOpenMokupilot)} />}
                 {offersDevices(isRemote, ownerAdminPage()) && (
                   <LinkRow

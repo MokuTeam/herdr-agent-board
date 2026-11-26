@@ -270,3 +270,22 @@ describe('the signed body fields', () => {
     expect(r.relay.ok).toBe(true)
   })
 })
+
+test('an owner service is reachable in any shared lane with Agents on', () => {
+  const service = {
+    key: 'service-key',
+    name: 'Inventory',
+    lane: 'other',
+    ownerServiceLanes: [{ id: 'ops' }, { id: 'research' }],
+  }
+  const world: ReachWorld = {
+    handles: { [service.key]: 'inventory', normal: 'normal' },
+    sessions: [service, { key: 'normal', name: 'Normal', lane: 'other' }],
+    off: false,
+    peers: { [P]: { on: true, lanes: ['ops'] }, [Q]: { on: true, lanes: [] } },
+  }
+  expect(directoryFor(P, world)).toEqual([{ code: 'inventory' }])
+  expect(reach('inventory', P, world)).toEqual(service)
+  expect(directoryFor(Q, world)).toEqual([])
+  expect(directoryFor(P, { ...world, off: true })).toEqual([])
+})

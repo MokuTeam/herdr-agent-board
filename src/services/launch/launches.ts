@@ -63,6 +63,7 @@ export type StartResult = { ok: true; id: string; session?: string } | { ok: fal
  * keeps when that card is not on the board (checkRequest).
  */
 export interface StartOptions {
+  by?: string
   codexFork?: true
   resume?: string | null
   fork?: string | null
@@ -150,6 +151,7 @@ const codeOf = (err: unknown): string | undefined =>
 // A card with nothing else on it was only the launch's: the board wrote the lane and the profile
 // it is meant to run in, the hooks the profile it reports.
 const LANE_ONLY = [
+  'serviceStartBy',
   'key',
   'category',
   'updatedAt',
@@ -187,6 +189,7 @@ const view = (l: Launch): LaunchView => ({
   newWorkspace: l.newWorkspace && !l.workspaceId,
   profile: l.profile,
   parent: l.parent,
+  ...(l.by && { by: l.by }),
   agent: l.agent,
   model: l.model,
   ...(l.place && { place: l.place }),
@@ -249,6 +252,7 @@ export function createLaunches({
       codexFork,
       origin = null,
       trust = false,
+      by,
     }: StartOptions = {},
   ): Promise<StartResult> {
     if (frozen()) {
@@ -318,6 +322,7 @@ export function createLaunches({
     // a copy of its source's in the source's folder: no worktree.
     const request = resume ? { ...r.launch, message: '' } : fork ? { ...r.launch, worktree: null } : r.launch
     const l = newLaunch(request, items, resume, fork)
+    if (by) l.by = by
     if (origin) l.originFacts = origin.facts
     if (trust && !resume && !fork) l.trust = true
     if (node) {
@@ -437,6 +442,7 @@ export function createLaunches({
                 : { profileWant: l.profile }),
             ...(l.model && { modelWant: l.model }),
             ...(l.parent && !l.fork && !l.resume && { parent: l.parent }),
+            ...(l.by && { serviceStartBy: l.by }),
           })
           // pi's card is under its file and agy's under its conversation id: the start card goes once moved.
           if ((isPiItem(it) || isAgyItem(it)) && l.carded && laneOnly(l.carded)) removeCard(l.carded)

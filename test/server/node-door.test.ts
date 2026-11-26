@@ -302,6 +302,10 @@ const CLASSIFIED: Record<string, [method: string, raw: string, door: 'door' | 'r
   ],
   'GET /api/team/welcome': [['GET', '/api/team/welcome', 'refused']],
   'POST /api/team/welcome': [['POST', '/api/team/welcome', 'refused']],
+  'ANY /api/owner-services': [
+    ['GET', '/api/owner-services', 'refused'],
+    ['POST', '/api/owner-services', 'refused'],
+  ],
   'GET /api/team/passkeys': [['GET', '/api/team/passkeys', 'refused']],
   'POST /api/team/passkeys': [['POST', '/api/team/passkeys', 'refused']],
   'GET /api/team/confirm': [['GET', '/api/team/confirm', 'refused']],

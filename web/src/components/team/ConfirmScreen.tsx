@@ -114,6 +114,11 @@ export function confirmLines(a: Reply, t: Translator): ConfirmLines {
         items: items.length ? items : [t('team.confirm.unknown')],
       }
     }
+    case 'owner-service-add':
+      return {
+        title: t('ownerServices.confirm', { name: typeof a.name === 'string' ? a.name : '' }),
+        items: [t('ownerServices.scope')],
+      }
     case 'service-add':
       return {
         title: t('team.confirm.serviceAdd', { name: typeof a.name === 'string' ? a.name : '' }),
