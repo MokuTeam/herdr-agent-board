@@ -17,8 +17,13 @@ const pageDeps = (): SaveDeps => ({
   later: (fn, ms) => void setTimeout(fn, ms),
 })
 
-/** Saves `url` as `name`; null when the browser has it, else why not. */
+/** The files on their way: a second tap on one does not fetch it again. */
+const coming = new Set<string>()
+
+/** Saves `url` as `name`; null when the browser has it (or it is already on its way), else why not. */
 export async function saveFile(url: string, name: string, deps: SaveDeps = pageDeps()): Promise<string | null> {
+  if (coming.has(url)) return null
+  coming.add(url)
   let blob: Blob
   try {
     const res = await deps.fetch(url, { credentials: 'same-origin' })
@@ -26,6 +31,8 @@ export async function saveFile(url: string, name: string, deps: SaveDeps = pageD
     blob = await res.blob()
   } catch (err) {
     return err instanceof Error ? err.message : String(err)
+  } finally {
+    coming.delete(url)
   }
   const href = deps.URL.createObjectURL(blob)
   const a = deps.document.createElement('a')

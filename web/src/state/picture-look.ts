@@ -2,6 +2,7 @@
 // components/files/PictureLook.tsx): what is on show, where it grew out of, and whether it is on
 // its way back into it. The Team panel opens it; the page draws it and counts it among its layers
 // (the phone's Back closes it first).
+import type { DialogLayer } from '../models/lifecycle.ts'
 import { Store } from './store.ts'
 
 export interface Picture {
@@ -41,4 +42,12 @@ export function closePicture(): void {
 /** It has folded away. */
 export function pictureGone(): void {
   if (pictureLook.get()?.closing) pictureLook.set(null)
+}
+
+/**
+ * The page's "files" layer (models/lifecycle.ts PAGE_LAYERS): the quick look, or the picture over
+ * it; the phone's Back closes the picture first, then the quick look a step at a time.
+ */
+export function filesLayer(quickLook: { open: boolean; back(): void }, picture: boolean): DialogLayer {
+  return { open: quickLook.open || picture, close: () => (pictureOpen() ? closePicture() : quickLook.back()) }
 }

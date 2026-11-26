@@ -69,7 +69,7 @@ import { proposedCount } from './models/todos.ts'
 import { scheduleBadge } from './models/toolbar.ts'
 import { isWakeView, noteShown } from './models/wake.ts'
 import { useBoardContext } from './state/BoardProvider.tsx'
-import { closePicture, pictureLook, pictureOpen } from './state/picture-look.ts'
+import { filesLayer, pictureLook, pictureOpen } from './state/picture-look.ts'
 import { storage } from './state/storage.ts'
 import { useStore } from './state/store.ts'
 
@@ -405,7 +405,7 @@ export function App() {
       menu: { open: menus.open, close: () => menus.menu.close() },
       launch: { open: launch.shown, close: launch.close },
       // The picture look is a file shown over the board too: Back closes it first.
-      files: { open: quickLook.open || pictureShown, close: () => (pictureOpen() ? closePicture() : quickLook.back()) },
+      files: filesLayer(quickLook, pictureShown),
       terminal: { open: terminal.open, close: terminal.close },
       helpers: { open: helpers.open, close: helpers.back },
       limits: { open: ui.limitsOpen, close: () => closeLimits(dispatch, limitsAnchor, true) },
@@ -720,7 +720,8 @@ export function App() {
       <SetupPop setup={setup} />
       <FileChips chips={chips} />
       <QuickLook engine={quickLook.engine} />
-      <PictureLook />
+      {/* Only the phone's page opens pictures in it (TeamFile): the board here keeps its links. */}
+      {remotePage() && <PictureLook />}
       <Terminal engine={terminal.engine} />
       <HelpersWindow engine={helpers.engine} upgrade={chips.upgrade} />
       <LaunchDialog launch={launch.dialog} refs={launch.refs} />

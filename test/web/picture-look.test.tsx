@@ -11,8 +11,16 @@ import { PictureLookView, pictureFoot } from '../../web/src/components/files/Pic
 import { TeamFile } from '../../web/src/components/team/TeamFile.tsx'
 import { I18nProvider } from '../../web/src/i18n/I18nProvider.tsx'
 import { type SaveDeps, saveFile } from '../../web/src/models/file-save.ts'
+import { type DialogLayer, PAGE_LAYERS, type PageLayer, pageLayers, topLayer } from '../../web/src/models/lifecycle.ts'
 import { BoardContext } from '../../web/src/state/BoardProvider.tsx'
-import { closePicture, pictureGone, pictureLook, pictureOpen, showPicture } from '../../web/src/state/picture-look.ts'
+import {
+  closePicture,
+  filesLayer,
+  pictureGone,
+  pictureLook,
+  pictureOpen,
+  showPicture,
+} from '../../web/src/state/picture-look.ts'
 import { board, renderInBoard } from './support/board.tsx'
 import { findAll, type Node } from './support/markup.ts'
 import { type Host, hostElements } from './support/react-events.ts'
@@ -53,6 +61,36 @@ describe('the picture look as drawn', () => {
     expect(tags(out, 'a')).toEqual([])
     expect(text(tags(out, 'button'))).toContain('Download')
     expect(text(tags(out, 'footer'))).toBe('640 × 480 · 2 KB')
+  })
+
+  test('a picture that did not load says so instead of a broken image', () => {
+    const out = renderInBoard(<PictureLookView picture={{ url: URL_PNG, name: 'shot.png' }} failed />, board())
+    expect(tags(out, 'img')).toEqual([])
+    expect(text(out)).toContain('The picture did not load')
+  })
+
+  test("the phone's Back closes the picture first, then the quick look, then the panel under them", () => {
+    const steps: string[] = []
+    const quickLook = { open: true, back: () => void steps.push('quick look back') }
+    const layers = (picture: boolean) =>
+      pageLayers(
+        Object.fromEntries(
+          PAGE_LAYERS.map(name => [
+            name,
+            name === 'files'
+              ? filesLayer(quickLook, picture)
+              : ({ open: name === 'panels', close: () => void steps.push(name) } satisfies DialogLayer),
+          ]),
+        ) as Record<PageLayer, DialogLayer>,
+      )
+    showPicture({ url: URL_PNG, name: 'shot.png' })
+    topLayer(layers(pictureOpen()))?.close()
+    expect([steps, pictureLook.get()?.closing]).toEqual([[], true])
+    pictureGone()
+    topLayer(layers(pictureOpen()))?.close()
+    quickLook.open = false
+    topLayer(layers(pictureOpen()))?.close()
+    expect(steps).toEqual(['quick look back', 'panels'])
   })
 
   test('the footer says what it knows', () => {
@@ -120,6 +158,26 @@ describe('a file saved by the page itself', () => {
     expect(seen.revoked).toEqual(['blob:board/1'])
   })
 
+  test('a second tap while the file is on its way fetches nothing more', async () => {
+    let release: (r: Response) => void = () => {}
+    const pending = new Promise<Response>(resolve => {
+      release = resolve
+    })
+    const { deps, seen } = fakePage(new Response('x'))
+    const slow = {
+      ...deps,
+      fetch: (url: string, init: RequestInit) => {
+        seen.fetched.push([url, init])
+        return pending
+      },
+    }
+    const first = saveFile(URL_PDF, 'spec.pdf', slow)
+    expect(await saveFile(URL_PDF, 'spec.pdf', slow)).toBeNull()
+    release(new Response('%PDF'))
+    expect(await first).toBeNull()
+    expect([seen.fetched.length, seen.clicked.length]).toEqual([1, 1])
+  })
+
   test('a refusal or no connection says why and starts no download', async () => {
     const refused = fakePage(new Response('{"error":"login"}', { status: 401 }))
     expect(await saveFile(URL_PDF, 'spec.pdf', refused.deps)).toBe('HTTP 401')
@@ -170,11 +228,24 @@ describe("a Team message's file", () => {
     remote = true
     const [picture] = anchors(SHOT)
     let prevented = 0
-    const from = { tag: 'a' }
+    const from = { tag: 'a' } as unknown as Element
     const look = picture?.props.onClick as (e: unknown) => void
-    look({ preventDefault: () => void prevented++, currentTarget: from })
+    look({ button: 0, preventDefault: () => void prevented++, currentTarget: from })
     expect(prevented).toBe(1)
     expect(pictureLook.get()).toEqual({ picture: { url: URL_PNG, name: 'shot.png', size: 2048 }, from, closing: false })
+  })
+
+  test("on the phone's page: a click the browser keeps (another button, a modifier) is left to it", () => {
+    remote = true
+    const [picture, name] = anchors(SHOT)
+    for (const click of [{ button: 1 }, { ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { altKey: true }])
+      for (const a of [picture, name]) {
+        let prevented = 0
+        const handle = a?.props.onClick as (e: unknown) => void
+        handle({ button: 0, ...click, preventDefault: () => void prevented++, currentTarget: null })
+        expect([click, prevented]).toEqual([click, 0])
+      }
+    expect(pictureLook.get()).toBeNull()
   })
 
   test("on the phone's page: Download fetches the file itself instead of following the link", async () => {
@@ -191,7 +262,7 @@ describe("a Team message's file", () => {
     try {
       let prevented = 0
       const save = doc?.props.onClick as (e: unknown) => void
-      save({ preventDefault: () => void prevented++ })
+      save({ button: 0, preventDefault: () => void prevented++ })
       await Bun.sleep(5)
       expect([prevented, calls]).toEqual([1, [URL_PDF]])
     } finally {
@@ -293,6 +364,13 @@ describe('the picture look in the page', () => {
     await act(async () => settle())
     expect(pictureLook.get()).toBeNull()
     expect(look()?.hidden).toBe(true)
+    // Opened again and the page goes (the login ended): nothing stays open for the next page.
+    await act(async () => {
+      thumb.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    expect(pictureOpen()).toBe(true)
     await act(async () => root.unmount())
+    expect(pictureLook.get()).toBeNull()
+    frames = []
   })
 })

@@ -16,6 +16,10 @@ import { showPicture } from '../../state/picture-look.ts'
 
 type LineFile = NonNullable<ThreadLine['file']>
 
+/** A click the browser keeps for itself: another button, or with a modifier (a new tab, a save). */
+const modified = (e: Pick<MouseEvent, 'button' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>): boolean =>
+  e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey
+
 const IMAGE = /\.(png|jpe?g|gif|webp)$/i
 
 /** A size as people read it: bytes, KB or MB. */
@@ -32,10 +36,12 @@ export function TeamFile({ file }: { file: LineFile }) {
   const url = file.url ?? ''
   const inPage = remotePage()
   const look = (e: MouseEvent<HTMLAnchorElement>) => {
+    if (modified(e)) return
     e.preventDefault()
     showPicture({ url, name, size: file.size }, e.currentTarget)
   }
   const save = (e: MouseEvent<HTMLAnchorElement>) => {
+    if (modified(e)) return
     e.preventDefault()
     void saveFile(url, name).then(why => {
       if (why) toast(t('team.file.saveFailed', { name, why }), true)

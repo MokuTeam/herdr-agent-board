@@ -22,6 +22,7 @@ import { closePicture, type Picture, pictureGone, pictureLook } from '../../stat
 import { useStore } from '../../state/store.ts'
 import { fileSize } from '../team/TeamFile.tsx'
 import { FileIcon } from './FileChip.tsx'
+import { LookEmpty } from './Preview.tsx'
 import { type ImageZoom, zoomImage } from './zoom.ts'
 
 export interface PictureRefs {
@@ -39,6 +40,9 @@ export interface PictureLookViewProps {
   onClose?: () => void
   onSave?: () => void
   onImage?: (img: HTMLImageElement) => void
+  /** The picture did not load (gone from the uploads, the login ended). */
+  failed?: boolean
+  onFailed?: () => void
 }
 
 /** The footer: the picture's own size once it loaded, and how big the file is. */
@@ -58,6 +62,8 @@ export function PictureLookView({
   onClose,
   onSave,
   onImage,
+  failed = false,
+  onFailed,
 }: PictureLookViewProps) {
   const t = useT()
   const label = (key: string) => ({ title: t(key), 'aria-label': t(key) })
@@ -75,6 +81,8 @@ export function PictureLookView({
         ref={refs.win}
       >
         <header className="ql-head">
+          {/* No steps to walk back: the phone's head lays out as the quick look's first step does (app.css). */}
+          <span className="ql-back" hidden />
           <span className="ql-icon">
             <FileIcon name="image" />
           </span>
@@ -91,7 +99,8 @@ export function PictureLookView({
           </button>
         </header>
         <div className="ql-body k-image">
-          {picture && (
+          {picture && failed && <LookEmpty icon="missing" text={t('team.file.notLoaded')} />}
+          {picture && !failed && (
             <div className="ql-media ql-stage">
               <img
                 key={picture.url}
@@ -99,6 +108,7 @@ export function PictureLookView({
                 src={picture.url}
                 alt={picture.name}
                 onLoad={e => onImage?.(e.currentTarget)}
+                onError={() => onFailed?.()}
               />
             </div>
           )}
@@ -124,6 +134,8 @@ export function PictureLook() {
   const focus = useModalFocus(refs.layer, refs.win)
   const latest = useLatest({ focus, state, t, toast })
   const [natural, setNatural] = useState<{ url: string; width: number; height: number } | null>(null)
+  /** The address of a picture that did not load. */
+  const [failedUrl, setFailedUrl] = useState<string | null>(null)
   // The picture's zoom, once it loaded: a new picture and the close drop it.
   const [zoom] = useState(() => {
     let control: ImageZoom | null = null
@@ -161,7 +173,14 @@ export function PictureLook() {
         },
       }),
   )
-  useEffect(() => () => void motion.stop(), [motion])
+  // Gone with the page (the login ended, RemoteGate took the board away): nothing stays open for the next one.
+  useEffect(
+    () => () => {
+      motion.stop()
+      pictureLook.set(null)
+    },
+    [motion],
+  )
 
   const picture = state?.picture ?? null
   // Drawn, then it grows out of the thumbnail; asked to close, it folds back into it.
@@ -175,7 +194,8 @@ export function PictureLook() {
       return
     }
     if (grown.current === state.picture) return
-    if (grown.current) zoom.drop()
+    // Turned around midway to the same picture: its zoom stays, as its image does.
+    if (grown.current && grown.current.url !== state.picture.url) zoom.drop()
     grown.current = state.picture
     from.current = measureFrom(win, state.from)
     if (motion.value <= 0.001) paintWindow(win, refs.scrim.current, 0, from.current)
@@ -225,6 +245,8 @@ export function PictureLook() {
       onClose={closePicture}
       onSave={() => void onSave()}
       onImage={onImage}
+      failed={!!picture && failedUrl === picture.url}
+      onFailed={() => setFailedUrl(picture?.url ?? null)}
     />,
     document.body,
   )
