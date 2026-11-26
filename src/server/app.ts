@@ -99,6 +99,8 @@ import {
   masterBulkBody,
   masterNodesBody,
   NODE_CLI_PATH,
+  NODE_REVEAL_PATH,
+  type NodeReveal,
   ownerCliOf,
   type RelayWho,
   relayDevicesPath,
@@ -275,7 +277,7 @@ import { pageLogRoute } from './routes/page-log.ts'
 import { pilotCallRoutes } from './routes/pilot-call.ts'
 import { presenceRoutes } from './routes/presence.ts'
 import { remoteRoutes } from './routes/remote.ts'
-import { revealRoute, revealState } from './routes/reveal.ts'
+import { nodeRevealAnswer, revealRoute, revealState } from './routes/reveal.ts'
 import { scheduleRoute } from './routes/schedule.ts'
 import { secretsRoutes } from './routes/secrets.ts'
 import { selfUpdateRoutes } from './routes/self-update.ts'
@@ -321,6 +323,8 @@ const runningCommit = (): Promise<string> => {
 }
 /** After a node's update the board ends this long after its answer, so the answer reaches the master first. */
 const RESTART_AFTER_MS = 1000
+/** How long a node's reveal waits for its master (#841): web-open.ts gives up on the node at 3 s. */
+const REVEAL_UP_MS = 2500
 /** A Windows node's board that came back on the commit of its update settles it once it has stayed up this long after its start (#699). */
 const UPDATE_STABLE_MS = 10_000
 
@@ -1121,6 +1125,49 @@ export async function startServer({
       return null
     }
   }
+  /**
+   * A reveal sent up to this node's master (#841): only while the node's page goes there (the master
+   * online with its board's URL, #744), so the board's window shows the master's page. Null on any
+   * other board, and when the master did not answer within REVEAL_UP_MS: what waits on it (web-open.ts)
+   * gives up after 3 s.
+   */
+  async function revealUp(what: NodeReveal): Promise<Response | null> {
+    const m = nodeMasterNow()
+    const relay = masterRelay
+    if (!m?.online || !m.url || !relay?.online()) return null
+    // Given up on, the request goes too: the relay drops its wait and tells the master (`close`).
+    const gone = new AbortController()
+    const req = new Request(`http://127.0.0.1${NODE_REVEAL_PATH}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: JSON.stringify(what),
+      signal: gone.signal,
+    })
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<null>(resolve => {
+      timer = setTimeout(
+        () => {
+          gone.abort()
+          resolve(null)
+        },
+        knobMs('BOARD_REVEAL_UP_MS', REVEAL_UP_MS),
+      )
+    })
+    try {
+      const sent = relay
+        .relay(req, { rawPath: NODE_REVEAL_PATH, search: '', remote: false, refuse: () => null })
+        .then(res => res ?? null)
+      const res = await Promise.race([sent, late])
+      if (!res) log(`reveal up: no answer from the master`)
+      else if (!res.ok) log(`reveal up: HTTP ${res.status}`)
+      return res
+    } catch (err) {
+      log(`reveal up: ${messageOf(err)}`)
+      return null
+    } finally {
+      clearTimeout(timer)
+    }
+  }
   /** The name of the machine this node's board is served from, for a node's one-line notes (#777); null when none is paired. */
   function masterNameHere(): string | null {
     const n = nodeConfig(cfg.node)
@@ -1322,7 +1369,7 @@ export async function startServer({
     ...linksRoutes(board),
     ...fsRoutes(),
     ...uploadRoutes(),
-    revealRoute(board, events, reveals, word => threadReveal({ cfg }, events, threadShown, word)),
+    revealRoute(board, events, reveals, word => threadReveal({ cfg }, events, threadShown, word), revealUp),
     settingsRoute(),
     // Settings → Watches, Decisions, Away journal (#596), on this computer only.
     featureSettingsRoute(),
@@ -1666,6 +1713,17 @@ export async function startServer({
       if (!call) return json(400, { ok: false, error: 'call' })
       if (!uplinkRunner) return json(503, { ok: false, error: 'uplink' })
       return json(200, await uplinkRunner.ownerCall(from.device, call))
+    }
+    // A notification clicked or a thread opened on a node whose page is here now (#841): this board's
+    // pages show it, as for one of its own. The owner's only; what it may name: routes/reveal.ts.
+    if (req.method === 'POST' && raw === NODE_REVEAL_PATH && from) {
+      if (from.who.kind !== 'owner') return json(403, { ok: false, error: 'owner' })
+      return nodeRevealAnswer(await req.json().catch(() => null), from.device, {
+        findAny: board.findAny,
+        events,
+        state: reveals,
+        thread: word => threadReveal({ cfg }, events, threadShown, word),
+      })
     }
     // A node's page answers its own sessions' questions here (#781): their keys as this board names them.
     if (raw === DECISIONS_PATH && from) {

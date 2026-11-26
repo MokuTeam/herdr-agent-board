@@ -5075,7 +5075,7 @@ A request that names another machine's session (`/api/session/@<device>:<key>/..
 and the master hands it to its own node proxy. Everything else stays on the node as before. The
 master checks the list again itself and never takes another path from a node.
 
-Two more paths are the master's answers for a node only, never routes of its own:
+Three more paths are the master's answers for a node only, never routes of its own:
 
 - `GET /api/board-slices`: the master's `time`, `calendar`, `journal` and `presence` parts of its
   payload, and since #786 Team's `teamRev` and `teamUnread` and its `devices`. Since #784 also its
@@ -5092,6 +5092,14 @@ Two more paths are the master's answers for a node only, never routes of its own
   the master as the owner's, as they would in a terminal there; `board time` takes the lane the
   terminal's folder maps to on the node. `board time import` and `board cal push` carry a file and
   stay with a session's call.
+- `POST /api/node-reveal` (#841): a notification clicked on the node, or `board thread open`
+  there, while the node's page goes to the master (the master online with its board's URL), so
+  the board's window shows the master's page. The node sends `{ key }`, one of its own sessions by
+  the key it knows it by, which the master shows as `@<node>:<key>` (a node cannot name another
+  machine's session), or `{ thread }`. The master's pages open that session's sheet or that
+  thread, as for a reveal of its own; nothing else happens on the master. The owner's only. When
+  the master does not answer the thread within 2.5 seconds, or answers with anything but ok or
+  "no such thread", the node answers from its own threads as before.
 
 Since #786 a terminal on a node also has `board nodes` (the master's devices; `update <id>` and
 `sync <id>` asked of the master), `board update` (the master ships its commit to this node), and
