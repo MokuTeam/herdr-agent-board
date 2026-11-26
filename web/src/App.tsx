@@ -10,6 +10,7 @@ import { Board } from './components/Board.tsx'
 import type { CalendarFocus } from './components/calendar/CalendarPanel.tsx'
 import { Reminders } from './components/calendar/Reminders.tsx'
 import { FileChips } from './components/files/FileChip.tsx'
+import { PictureLook } from './components/files/PictureLook.tsx'
 import { QuickLook } from './components/files/QuickLook.tsx'
 import { ForkPop } from './components/fork/ForkPop.tsx'
 import { HelpersWindow } from './components/helpers/HelpersWindow.tsx'
@@ -68,7 +69,9 @@ import { proposedCount } from './models/todos.ts'
 import { scheduleBadge } from './models/toolbar.ts'
 import { isWakeView, noteShown } from './models/wake.ts'
 import { useBoardContext } from './state/BoardProvider.tsx'
+import { closePicture, pictureLook, pictureOpen } from './state/picture-look.ts'
 import { storage } from './state/storage.ts'
+import { useStore } from './state/store.ts'
 
 type SettingsChild =
   | 'profiles'
@@ -267,6 +270,9 @@ export function App() {
   // Paths in the chat become chips; a chip, the sheet's Changes and History open the quick look.
   const chips = useFileChips()
   const quickLook = useQuickLook(chips.upgrade)
+  // A picture from a Team message full size over the panel, on the phone's page (#873).
+  const picture = useStore(pictureLook)
+  const pictureShown = !!picture && !picture.closing
   const openUrl = useFileLinks(quickLook.look)
   // A shell in the session's folder, or the session's own terminal, live in a window.
   const terminal = useTerminal(href => void openUrl(href))
@@ -378,7 +384,7 @@ export function App() {
     newSession,
     // They take their keys first; the terminal window too, even while its screen has not the keys.
     layerOpen: () => menus.menu.isOpen() || launch.isOpen() || terminal.isOpen() || helpers.isOpen() || fork.isOpen(),
-    quickLookOpen: quickLook.isOpen,
+    quickLookOpen: () => quickLook.isOpen() || pictureOpen(),
     panelOpen: () => !!panels.place.openPanel(),
     closePanel: () => {
       if (!backToSettings()) panels.closeOpen()
@@ -398,7 +404,8 @@ export function App() {
     pageLayers({
       menu: { open: menus.open, close: () => menus.menu.close() },
       launch: { open: launch.shown, close: launch.close },
-      files: { open: quickLook.open, close: quickLook.back },
+      // The picture look is a file shown over the board too: Back closes it first.
+      files: { open: quickLook.open || pictureShown, close: () => (pictureOpen() ? closePicture() : quickLook.back()) },
       terminal: { open: terminal.open, close: terminal.close },
       helpers: { open: helpers.open, close: helpers.back },
       limits: { open: ui.limitsOpen, close: () => closeLimits(dispatch, limitsAnchor, true) },
@@ -713,6 +720,7 @@ export function App() {
       <SetupPop setup={setup} />
       <FileChips chips={chips} />
       <QuickLook engine={quickLook.engine} />
+      <PictureLook />
       <Terminal engine={terminal.engine} />
       <HelpersWindow engine={helpers.engine} upgrade={chips.upgrade} />
       <LaunchDialog launch={launch.dialog} refs={launch.refs} />

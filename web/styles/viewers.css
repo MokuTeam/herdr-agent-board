@@ -53,3 +53,6 @@
 .ql-grid-tabs { display: flex; flex: none; gap: 4px; padding: 6px 10px; overflow-x: auto; border-top: 0.5px solid var(--separator); background: var(--fill-2); }
 .ql-grid-tabs button { flex: none; padding: 4px 12px; border: 0; border-radius: 7px; background: none; color: var(--label-2); font: 12.5px var(--font); cursor: pointer; }
 .ql-grid-tabs button[aria-selected="true"] { background: var(--surface); box-shadow: var(--shadow-card); color: var(--label); font-weight: 600; }
+/* A picture from a Team message full size (components/files/PictureLook.tsx, #873): the quick
+   look's window, over the side panel it was opened from. */
+.ql.picture-look { z-index: 71; }

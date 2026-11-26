@@ -2,8 +2,17 @@
 // picture inline or a download link. The address is the board's own uploads route, which shows only
 // raster images inline and offers everything else as a download; nothing here opens or runs it.
 // The attach button, drag and drop and previews in the composer come with #370's composer.
+// On the phone's page (the owner's domain, or Tailscale) neither leaves the page (#873): a link
+// opened from there goes without the login cookie, so the picture opens full size over the panel
+// (components/files/PictureLook.tsx) and Download saves what the page fetched itself
+// (models/file-save.ts). The board on the computer opens them as links, as before.
+import type { MouseEvent } from 'react'
 import { useT } from '../../i18n/I18nProvider.tsx'
+import { saveFile } from '../../models/file-save.ts'
+import { remotePage } from '../../models/remote-page.ts'
 import type { ThreadLine } from '../../models/team.ts'
+import { useBoardContext } from '../../state/BoardProvider.tsx'
+import { showPicture } from '../../state/picture-look.ts'
 
 type LineFile = NonNullable<ThreadLine['file']>
 
@@ -18,7 +27,20 @@ export function fileSize(n: number): string {
 
 export function TeamFile({ file }: { file: LineFile }) {
   const t = useT()
+  const { toast } = useBoardContext()
   const name = file.name ?? t('team.file.unnamed')
+  const url = file.url ?? ''
+  const inPage = remotePage()
+  const look = (e: MouseEvent<HTMLAnchorElement>) => {
+    e.preventDefault()
+    showPicture({ url, name, size: file.size }, e.currentTarget)
+  }
+  const save = (e: MouseEvent<HTMLAnchorElement>) => {
+    e.preventDefault()
+    void saveFile(url, name).then(why => {
+      if (why) toast(t('team.file.saveFailed', { name, why }), true)
+    })
+  }
   const shown = file.url && (file.state === 'ready' || file.state === 'up' || file.state === 'uploading')
   const status =
     file.state === 'pending'
@@ -37,13 +59,13 @@ export function TeamFile({ file }: { file: LineFile }) {
   return (
     <div className="team-file" data-file-state={file.state}>
       {shown && IMAGE.test(file.url ?? '') && (
-        <a href={file.url} target="_blank" rel="noreferrer">
+        <a href={file.url} target="_blank" rel="noreferrer" onClick={inPage ? look : undefined}>
           <img src={file.url} alt={name} style={{ maxWidth: '100%', maxHeight: 240, display: 'block' }} />
         </a>
       )}
       <p className="hint">
         {shown ? (
-          <a href={file.url} download={name} title={t('team.file.open')}>
+          <a href={file.url} download={name} title={t('team.file.open')} onClick={inPage ? save : undefined}>
             {name}
           </a>
         ) : (

@@ -3,7 +3,7 @@
 // route, in any spelling; without one only the page, a reduced hello, the login routes and the
 // probe; a login that ends or expires stops at once, its open streams too.
 import { beforeAll, describe, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
 import { join } from 'node:path'
 import type { Passkey } from '../../src/core/access.ts'
@@ -234,6 +234,49 @@ describe('the tunnel listener', () => {
     expect(
       (await caddy.get('/api/board', { 'x-board': '1', origin: ORIGIN, authorization: `Bearer ${SEEDED}` })).status,
     ).toBe(401)
+  })
+
+  test("a Team message's picture or file, fetched by the board's own page with the login, loads; a cross-site write is still refused (#873)", async () => {
+    const day = join(stateFolder(box), 'uploads', '2026-11-11')
+    mkdirSync(day, { recursive: true })
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
+    writeFileSync(join(day, '120000-abcd1234-shot.png'), png)
+    writeFileSync(join(day, '120001-spec.pdf'), '%PDF-1.7')
+    // What the page sends for the picture it draws (PictureLook) and for a file it saves (file-save.ts).
+    const page = { 'sec-fetch-site': 'same-origin' }
+    const img = await as(SEEDED).get('/uploads/2026-11-11/120000-abcd1234-shot.png', {
+      ...page,
+      'sec-fetch-dest': 'image',
+    })
+    expect([img.status, img.headers.get('content-type'), img.headers.get('content-disposition')]).toEqual([
+      200,
+      'image/png',
+      'inline',
+    ])
+    expect(new Uint8Array(await img.arrayBuffer())).toEqual(png)
+    const pdf = await as(SEEDED).get('/uploads/2026-11-11/120001-spec.pdf', { ...page, 'sec-fetch-dest': 'empty' })
+    expect([pdf.status, pdf.headers.get('content-disposition')]).toEqual([
+      200,
+      "attachment; filename*=UTF-8''120001-spec.pdf",
+    ])
+    expect(await pdf.text()).toBe('%PDF-1.7')
+    // A navigation that left the page (a tab of its own, the system's browser view) comes without
+    // the Strict cookie: 401, which is why the page loads these itself.
+    expect(
+      await answer(
+        caddy.get('/uploads/2026-11-11/120000-abcd1234-shot.png', {
+          'sec-fetch-site': 'cross-site',
+          'sec-fetch-mode': 'navigate',
+        }),
+      ),
+    ).toEqual([401, { error: 'login' }])
+    // The login cookie stays SameSite=Strict (LOGIN_SET, the sign-in's test), and a write from another
+    // site is refused even with it.
+    for (const headers of [{ origin: 'https://evil.example', 'sec-fetch-site': 'cross-site' }, { origin: '' }])
+      expect(await answer(as(SEEDED).post('/api/team/send', { to: 'x', text: 'hi' }, headers))).toEqual([
+        403,
+        { error: 'origin' },
+      ])
   })
 
   test('hello before a login says no more than what the login screen needs', async () => {
