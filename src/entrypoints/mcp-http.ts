@@ -408,6 +408,8 @@ export function createHttpMcp(o: { version: string; run: Runner }): HttpMcp {
             if (caller?.ownerService) {
               if (typeof name !== 'string' || !OWNER_SERVICE_TOOLS.has(name))
                 throw new Bad('Tool unavailable to owner services')
+              if (name === 'schedule' && (args.op === 'remind' || args.op === 'every'))
+                throw new Bad('Owner services have no pane for scheduled prompts. Use list or unschedule.')
               if (name === 'card' && args.op === 'wait' && args.probe !== undefined)
                 throw new Bad('Owner services cannot run shell probes')
               if (name === 'card' && args.op === 'cat' && textOf(args.text))

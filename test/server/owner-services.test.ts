@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdirSync, readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { serveBoard } from '../support/board-server.ts'
 import { boardConfig, tool } from '../support/mcp-client.ts'
@@ -127,8 +127,30 @@ test('a passkey issues an isolated MCP identity with attribution, spawn limits a
   expect((await tool(url, 'card', { op: 'cat', lane: 'missing' }, headers)).error).toBe(true)
   expect((await tool(url, 'card', { op: 'cat', lane: 'ops' }, headers)).error).toBe(false)
   expect((await tool(url, 'card', { op: 'doing', text: 'Inventory 100%' }, headers)).error).toBe(false)
-  expect((await tool(url, 'schedule', { op: 'remind', when: 'in 2h', text: 'Inventory' }, headers)).error).toBe(false)
-  expect((await tool(url, 'schedule', { op: 'list' }, headers)).text).toContain('Inventory')
+  const noPane = 'Owner services have no pane for scheduled prompts. Use list or unschedule.'
+  expect(await tool(url, 'schedule', { op: 'remind', when: 'in 2h', text: 'Inventory' }, headers)).toEqual({
+    error: true,
+    text: noPane,
+  })
+  expect(await tool(url, 'schedule', { op: 'every', cron: '0 9 * * *', text: 'Inventory' }, headers)).toEqual({
+    error: true,
+    text: noPane,
+  })
+  expect((await tool(url, 'schedule', { op: 'list' }, headers)).text).toBe('nothing scheduled for this session')
+
+  const schedule = join(storage, 'schedule')
+  mkdirSync(schedule, { recursive: true })
+  const idOfEntry = 'abcdef'
+  writeFileSync(
+    join(schedule, `${idOfEntry}.json`),
+    JSON.stringify({ id: idOfEntry, key: service.key, next: Date.now() + 7200000, text: 'Existing reminder' }),
+  )
+  expect((await tool(url, 'schedule', { op: 'list' }, headers)).text).toContain('Existing reminder')
+  expect(await tool(url, 'schedule', { op: 'unschedule', id: idOfEntry }, headers)).toEqual({
+    error: false,
+    text: expect.stringContaining('ok · removed abcdef'),
+  })
+  expect((await tool(url, 'schedule', { op: 'list' }, headers)).text).toBe('nothing scheduled for this session')
   expect((await tool(url, 'agents', { op: 'list' }, headers)).text).toContain('Existing agent')
 
   const calendar = await tool(url, 'cal', {}, headers)

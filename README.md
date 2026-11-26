@@ -168,8 +168,9 @@ confirm with a passkey. The token is shown once. Configure the service's HTTP MC
 `X-Board-Owner-Service: <token>` to this board's local `/mcp` on every request. Revoke access from
 the same list. Additions, revocations, and spawn attempts are recorded in the Team audit log.
 
-The service has its own card, schedule and thread identity. It can list and message sessions
-across lanes, manage threads, start agents within the usual spawn limits, and read calendars.
+The service has its own card and thread identity. It can list and message sessions across lanes,
+manage threads, start agents within the usual spawn limits, and read calendars. It can list and
+remove existing schedule entries. Scheduled prompts require a pane, so the service cannot add them.
 Team checks each peer's existing Agent switches and shared lanes. The service counts as present in
 each lane. Its card and the sessions it starts show `by: service <name>`.
 
