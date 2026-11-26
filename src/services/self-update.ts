@@ -163,6 +163,8 @@ export function createSelfUpdate(d: SelfUpdateDeps): SelfUpdate {
     }
     const r = await d.installer()
     if (!r.ok) return firstLines(r.detail) || 'the installer failed'
+    for (const line of r.detail.split(/\r?\n/))
+      if (line.includes(': not changed:')) d.log(`self-update: ${line.trim()}`)
     d.log(`self-update: the installer ran; settings.json copied to ${copies.join(', ') || 'nothing (none there)'}`)
     return null
   }

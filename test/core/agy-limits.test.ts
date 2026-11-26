@@ -362,7 +362,7 @@ describe('planAgySettings', () => {
     expect(fresh.settings.permissions).toEqual({ allow: ['command(board)'] })
     expect(fresh.settings.statusLine).toEqual({
       type: 'command',
-      command: `"/usr/bin/bun" "${script}"`,
+      command: `bun "${script}"`,
       stack_with_default: true,
     })
 
@@ -373,7 +373,7 @@ describe('planAgySettings', () => {
       script,
     )
     expect(moved.statusLineSet).toBe(true)
-    expect((moved.settings.statusLine as { command: string }).command).toContain(script)
+    expect((moved.settings.statusLine as { command: string }).command).toBe(`bun "${script}"`)
 
     // Foreign user statusLine (command or non-command object like { enabled: false }) is left untouched.
     const foreign = planAgySettings(
@@ -390,14 +390,31 @@ describe('planAgySettings', () => {
     expect(nonCmd.statusLineSet).toBe(false)
     expect(nonCmd.settings.statusLine).toEqual({ enabled: false })
 
-    // Windows paths, spaces, %, and Cyrillic survive quoting and re-recognition.
+    // Windows paths, spaces, %, and Cyrillic survive quoting and re-recognition (including migrating quoted bun.exe).
     const winScript = 'C:\\Users\\Анна 100%\\herdr-agent-board\\src\\entrypoints\\agy-statusline.ts'
     const winBun = 'C:\\Users\\Анна 100%\\.bun\\bin\\bun.exe'
     const winPlan = planAgySettings({}, winBun, winScript)
     expect(winPlan.statusLineSet).toBe(true)
     expect((winPlan.settings.statusLine as { command: string }).command).toBe(
-      '"C:/Users/Анна 100%/.bun/bin/bun.exe" "C:/Users/Анна 100%/herdr-agent-board/src/entrypoints/agy-statusline.ts"',
+      'bun "C:/Users/Анна 100%/herdr-agent-board/src/entrypoints/agy-statusline.ts"',
     )
     expect(planAgySettings(winPlan.settings, winBun, winScript).statusLineSet).toBe(true)
+
+    const migrated = planAgySettings(
+      {
+        statusLine: {
+          type: 'command',
+          command:
+            '"C:/Users/Анна 100%/.bun/bin/bun.exe" "C:/Users/Анна 100%/herdr-agent-board/src/entrypoints/agy-statusline.ts"',
+          stack_with_default: true,
+        },
+      },
+      winBun,
+      winScript,
+    )
+    expect(migrated.statusLineSet).toBe(true)
+    expect((migrated.settings.statusLine as { command: string }).command).toBe(
+      'bun "C:/Users/Анна 100%/herdr-agent-board/src/entrypoints/agy-statusline.ts"',
+    )
   })
 })

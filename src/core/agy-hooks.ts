@@ -13,7 +13,8 @@ export const AGY_MCP_KEY = 'agent-board'
 
 // An argv marker survives a moved checkout without adding non-schema fields to hooks.json.
 const MARKER = '--herdr-agent-board-hook'
-const installedCommand = /^bun[ \t]+(?:"([^"\r\n]+)"|([^\s"'`$();&|<>]+))(?:[ \t]+(--herdr-agent-board-hook))?[ \t]*$/
+const installedCommand =
+  /^bun(?:\.exe)?[ \t]+(?:"([^"\r\n]+)"|([^\s"'`$();&|<>]+))(?:[ \t]+(--herdr-agent-board-hook))?[ \t]*$/i
 
 function ourCommand(command: string, script: string): boolean {
   const match = installedCommand.exec(command)
@@ -43,6 +44,8 @@ export function planAgyHooks(settings: unknown, script: string): Record<string, 
   next[AGY_HOOK_KEY] = group
 
   const ours = (command: string): boolean => ourCommand(command, script)
+  // Antigravity CLI runs hook commands via `sh -c` on Unix and `cmd /c` on Windows; unquoted `bun`
+  // avoids cmd.exe outer-quote stripping and works in cmd, PowerShell, Git Bash, and POSIX sh.
   const command = `bun ${quote(script)} ${MARKER}`
   const handler = { type: 'command', command, timeout: 10 }
 
@@ -89,7 +92,7 @@ function isOurAgyStatusLine(cmd: string, script: string): boolean {
  */
 export function planAgySettings(
   settings: unknown,
-  bun: string,
+  _bun: string,
   statusline: string,
 ): { settings: Record<string, unknown>; statusLineSet: boolean } {
   if (settings !== undefined && !isRecord(settings))
@@ -101,7 +104,8 @@ export function planAgySettings(
   if (!ours) return { settings: next, statusLineSet: false }
   next.statusLine = {
     type: 'command',
-    command: `${quote(bun)} ${quote(statusline)}`,
+    // Same Windows-safe form as hooks: unquoted `bun` avoids cmd.exe outer-quote stripping.
+    command: `bun ${quote(statusline)}`,
     stack_with_default: true,
   }
   return { settings: next, statusLineSet: true }

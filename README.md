@@ -151,7 +151,8 @@ owner. A session that is running gets the tools when it starts again.
 - Antigravity CLI (`agy`) and pi: neither puts the session's environment into a header, so they
   get a stdio server, `board mcp --http`, a thin client of `/mcp` that sends the pane from its own
   environment: in `~/.gemini/config/mcp_config.json` where the board's agy hooks are
-  (`install.ts --agy`), and in pi's `~/.pi/agent/mcp.json` (`PI_CODING_AGENT_DIR`) where pi is.
+  (installed automatically when `agy` is found, or via `install.ts --agy`), and in pi's
+  `~/.pi/agent/mcp.json` (`PI_CODING_AGENT_DIR`) where pi is.
 
 Only the `agent-board` entry is written; every other server and key stays as it was. The first
 time the board changes such a file it keeps a copy beside it as `<file>.bak-agent-board`. A file
@@ -245,7 +246,9 @@ shows the conversation (with clickable file chips), subagent helpers and slash c
 system metadata wrappers and tool outputs stay out of the thread. A missing or unreadable
 transcript or database leaves the card and live terminal available.
 
-To install the board's Antigravity CLI hooks, skills and commands, run from this checkout:
+To install the board's Antigravity CLI hooks, skills and commands on their own (without touching
+Claude), run from this checkout (the ordinary `install.ts` and updates also install them
+automatically whenever `agy` is found on the machine):
 
 ```sh
 bun src/entrypoints/install.ts --agy
@@ -261,7 +264,7 @@ server with a `mcp_config.json.bak-agent-board` backup. It installs the `herdr-a
 skills (and `agent-board-threads` when threads are on) into `~/.gemini/config/skills`, puts
 `board` and `spawn-agent` into `~/.local/bin`, and asks herdr to install its `antigravity-cli`
 identity hook (`herdr integration install antigravity-cli`). The ordinary install without `--agy`
-keeps managing Claude only.
+leaves `~/.gemini` untouched on machines where `agy` is not installed.
 
 With `agy` on PATH or `launch.agy` set in `config.json`, the "New session" window and
 `spawn-agent --agent agy` offer Antigravity alongside Claude Code (and `"default": "agy"` in

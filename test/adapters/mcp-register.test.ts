@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { detectAgy, detectAgyBinary, hasAgyConfigDir } from '../../src/adapters/agy-hooks.ts'
 import { registerBoardMcp, registeredLine } from '../../src/adapters/mcp-register.ts'
 import { claudeMcpEntry, stdioMcpEntry } from '../../src/core/mcp-register.ts'
 
@@ -117,7 +118,7 @@ describe('Claude profiles', () => {
 })
 
 describe("Codex, agy and pi only where they are the board's", () => {
-  test('nothing is read or written for a harness the board has not set up', () => {
+  test('nothing is read or written for a harness the board has not set up; agy config dir without hooks reports skipped', () => {
     const home = homeDir()
     mkdirSync(join(home, '.codex'))
     writeFileSync(join(home, '.codex', 'config.toml'), 'model = "o3"\n')
@@ -125,13 +126,24 @@ describe("Codex, agy and pi only where they are the board's", () => {
       join(home, '.codex', 'hooks.json'),
       '{"hooks":{"SessionStart":[{"hooks":[{"command":"herdr-hook"}]}]}}',
     )
-    mkdirSync(join(home, '.gemini', 'config'), { recursive: true })
-    writeFileSync(join(home, '.gemini', 'config', 'hooks.json'), '{"herdr":{}}')
-    const out = registerBoardMcp(opts(home, { profiles: [] }))
-    expect(out).toEqual([])
+    expect(registerBoardMcp(opts(home, { profiles: [] }))).toEqual([])
     expect(readFileSync(join(home, '.codex', 'config.toml'), 'utf8')).toBe('model = "o3"\n')
     expect(existsSync(join(home, '.gemini', 'config', 'mcp_config.json'))).toBe(false)
     expect(existsSync(join(home, '.pi'))).toBe(false)
+
+    // Existing ~/.gemini/config without board hooks (even without agy on PATH) emits skipped, not silent skip.
+    mkdirSync(join(home, '.gemini', 'config'), { recursive: true })
+    writeFileSync(join(home, '.gemini', 'config', 'hooks.json'), '{"herdr":{}}')
+    const skipped = registerBoardMcp(opts(home, { profiles: [] }))
+    expect(skipped).toEqual([
+      {
+        harness: 'agy',
+        file: join(home, '.gemini', 'config', 'mcp_config.json'),
+        action: 'skipped',
+        error: `Antigravity CLI board hooks are missing in ${join(home, '.gemini', 'config', 'hooks.json')} (run bun src/entrypoints/install.ts --agy)`,
+      },
+    ])
+    expect(existsSync(join(home, '.gemini', 'config', 'mcp_config.json'))).toBe(false)
   })
 
   test('Codex with the board hooks: the table in config.toml, through the link of a dedicated home', () => {
@@ -191,6 +203,102 @@ describe("Codex, agy and pi only where they are the board's", () => {
       'agent-board': stdioMcpEntry(BUN, CLI),
     })
     expect(json(join(pi, 'mcp.json'))).toEqual({ mcpServers: { 'agent-board': stdioMcpEntry(BUN, CLI) } })
+  })
+
+  test('detectAgy finds agy on Windows PATH (cmd/exe/ps1, quoted Path), ~/.local/bin, %APPDATA%\\npm, or launch.agy', () => {
+    const home = homeDir()
+    expect(detectAgy({ env: { PATH: '' }, home, platform: 'win32', exists: () => false })).toBe(false)
+    expect(
+      detectAgy({
+        launch: { agy: 'C:\\tools\\agy.exe' },
+        env: { PATH: '' },
+        home,
+        platform: 'win32',
+        exists: () => false,
+      }),
+    ).toBe(true)
+    expect(
+      detectAgy({
+        env: { PATH: '', Path: '"C:\\Apps\\Antigravity\\bin"', PATHEXT: '.EXE;.CMD' },
+        home,
+        platform: 'win32',
+        exists: f => f === 'C:\\Apps\\Antigravity\\bin\\agy.cmd',
+      }),
+    ).toBe(true)
+    expect(
+      detectAgy({
+        env: { PATH: 'C:\\Apps\\Antigravity\\bin', PATHEXT: '.EXE;.CMD' },
+        home,
+        platform: 'win32',
+        exists: f => f === 'C:\\Apps\\Antigravity\\bin\\agy.ps1',
+      }),
+    ).toBe(true)
+    const localBin = join(home, '.local', 'bin')
+    mkdirSync(localBin, { recursive: true })
+    writeFileSync(join(localBin, 'agy.exe'), '')
+    expect(detectAgy({ env: { PATH: '' }, home, platform: 'win32' })).toBe(true)
+
+    const homeNpm = homeDir()
+    const appData = join(homeNpm, 'AppData', 'Roaming')
+    mkdirSync(join(appData, 'npm'), { recursive: true })
+    writeFileSync(join(appData, 'npm', 'agy.cmd'), '@echo off\r\n')
+    expect(detectAgy({ env: { PATH: '', APPDATA: appData }, home: homeNpm, platform: 'win32' })).toBe(true)
+
+    // Existing ~/.gemini/config or ANTIGRAVITY_CONFIG_DIR counts for detectAgy, while detectAgyBinary stays false.
+    const dirOnlyHome = homeDir()
+    expect(detectAgy({ env: { PATH: '' }, home: dirOnlyHome, platform: 'win32' })).toBe(false)
+    expect(hasAgyConfigDir({ env: { PATH: '' }, home: dirOnlyHome, platform: 'win32' })).toBe(false)
+    mkdirSync(join(dirOnlyHome, '.gemini', 'config'), { recursive: true })
+    expect(detectAgyBinary({ env: { PATH: '' }, home: dirOnlyHome, platform: 'win32' })).toBe(false)
+    expect(hasAgyConfigDir({ env: { PATH: '' }, home: dirOnlyHome, platform: 'win32' })).toBe(true)
+    expect(detectAgy({ env: { PATH: '' }, home: dirOnlyHome, platform: 'win32' })).toBe(true)
+
+    const customHome = homeDir()
+    const customCfg = join(customHome, 'custom-agy-cfg')
+    mkdirSync(customCfg, { recursive: true })
+    expect(
+      detectAgyBinary({ env: { PATH: '', ANTIGRAVITY_CONFIG_DIR: customCfg }, home: customHome, platform: 'win32' }),
+    ).toBe(false)
+    expect(
+      hasAgyConfigDir({ env: { PATH: '', ANTIGRAVITY_CONFIG_DIR: customCfg }, home: customHome, platform: 'win32' }),
+    ).toBe(true)
+    expect(
+      detectAgy({ env: { PATH: '', ANTIGRAVITY_CONFIG_DIR: customCfg }, home: customHome, platform: 'win32' }),
+    ).toBe(true)
+  })
+
+  test('reports skipped (not changed) when agy is installed on Windows but its board hooks are missing; absent agy stays silent', () => {
+    const home = homeDir()
+    const bin = join(home, 'winbin')
+    const agyCfg = join(home, '.gemini', 'config')
+    mkdirSync(bin, { recursive: true })
+    mkdirSync(agyCfg, { recursive: true })
+    writeFileSync(join(bin, 'agy.cmd'), '@echo off\r\n')
+    writeFileSync(join(agyCfg, 'hooks.json'), JSON.stringify({ herdr: {} }))
+    const out = registerBoardMcp(
+      opts(home, {
+        profiles: [],
+        platform: 'win32',
+        env: { Path: `"${bin}"`, PATHEXT: '.EXE;.CMD' },
+      }),
+    )
+    expect(out).toEqual([
+      {
+        harness: 'agy',
+        file: join(agyCfg, 'mcp_config.json'),
+        action: 'skipped',
+        error: `Antigravity CLI board hooks are missing in ${join(agyCfg, 'hooks.json')} (run bun src/entrypoints/install.ts --agy)`,
+      },
+    ])
+    expect(existsSync(join(agyCfg, 'mcp_config.json'))).toBe(false)
+    expect(registeredLine(out[0] as NonNullable<(typeof out)[0]>)).toContain(
+      'board MCP (agent-board) for Antigravity CLI: not changed: Antigravity CLI board hooks are missing in',
+    )
+
+    // A Windows home without agy and without board hooks gets neither hooks nor MCP and no message.
+    const emptyHome = homeDir()
+    expect(registerBoardMcp(opts(emptyHome, { profiles: [], platform: 'win32', env: { Path: '' } }))).toEqual([])
+    expect(existsSync(join(emptyHome, '.gemini', 'config', 'mcp_config.json'))).toBe(false)
   })
 })
 

@@ -901,6 +901,24 @@ describe('the installer, once for each commit the board starts on (#797)', () =>
     expect(JSON.parse(text(stampFile()))).toMatchObject({ commit: repo.a })
   })
 
+  test('installOnce logs ": not changed:" lines from the installer output without failing', async () => {
+    const { deps } = steps()
+    const back = make({
+      ...deps,
+      commit: async () => repo.b,
+      installer: async () => ({
+        ok: true,
+        detail:
+          'commands: board\nboard MCP (agent-board) for Antigravity CLI: not changed: Antigravity CLI board hooks are missing\n',
+      }),
+    })
+    await back.update.started()
+    expect(back.logs).toContain(
+      'node: board MCP (agent-board) for Antigravity CLI: not changed: Antigravity CLI board hooks are missing',
+    )
+    expect(JSON.parse(text(stampFile()))).toMatchObject({ commit: repo.b })
+  })
+
   test('the board that hands an update over runs nothing before its restart; the one that comes back does', async () => {
     const { calls, deps } = steps()
     const first = make(deps)
