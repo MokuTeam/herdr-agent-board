@@ -64,7 +64,7 @@
 //                            node's half of a revoke (#510): one master forgotten, or the only one.
 //                            Until the install exists, for a node set up by hand; a board without
 //                            `node` in config.json says it is none
-//   board nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]]   this board as a
+//   board nodes [token <id> | key <id> | sync <id> [<profile>] | sync-functions [--dry-run] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]]   this board as a
 //                            master (#499): its devices in order with their link's state, read from
 //                            the running board; token stores a device's token read from stdin (never
 //                            an argument, never echoed); key makes the device's ssh link key when
@@ -252,7 +252,7 @@ import { currentWakeMode } from '../services/wake/mode.ts'
 import { compactCli } from './compact-cli.ts'
 import type { ThreadCmdContext } from './thread-cli.ts'
 
-const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] | decisions [--done] [--json] | done [text] | clear | favorite [off] | list | agents [--json] | cats | remind <when> "<text>" [--idle] | send <name|key> "<text>" | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | move <id|name|pane>... --device <id|local> [--dry-run] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | owner-admin on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | master [handover --to <device> [--dry-run] [--reverse-link <spec>] [--node-port <port>] [--allow-offline-nodes] [--json] | rollback [--id <id>] [--local-only] [--discard-since-commit] [--json] | status [--json]] | doctor | update | housekeeping [--dry-run | status] [--json] | presence [here | away | call] | journal [--since <when> | --away] [--json] | ns-sessions list [--json] | spend [--day <d>] [--lane <id>] [--json] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | team channel delete <ref> | team channel leave <ref> | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | resume --agy <conversation id> | resume --codex <conversation id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp [--agents | --http] | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>] | db rekey --from <old> --to <new> [--dry-run] [--json]] [--session <id|name|pane>]`
+const USAGE = `board [cat <id> ["<Title>"] | doing <text> | wait <text> | ask <question> [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] | decisions [--done] [--json] | done [text] | clear | favorite [off] | list | agents [--json] | cats | remind <when> "<text>" [--idle] | send <name|key> "<text>" | every "<cron>" "<text>" [--idle] | restart ["<note for after>"] | archive --session <id|name|pane> | sleep <id|name|pane>... [--when-free] [--self] | move <id|name|pane>... --profile <id> [--when-free] | move <id|name|pane>... --device <id|local> [--dry-run] | fork [--name "<Name>"] ["<note>"] | schedule [--all | --move <id>] | unschedule <id|all> | call-report --session <id> --file <report.md> [--report-id <stable-id>] | remote [on | off | pwa on|off | owner-admin on|off | approve <id> | deny <id> | revoke <id> | desk <id> [off]] | tunnel [on | off | test] | node [token [--name <master>] | forget <id> | leave [<master id>]] | nodes [token <id> | key <id> | sync <id> [<profile>] | sync-functions [--dry-run] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]] | master [handover --to <device> [--dry-run] [--reverse-link <spec>] [--node-port <port>] [--allow-offline-nodes] [--json] | rollback [--id <id>] [--local-only] [--discard-since-commit] [--json] | status [--json]] | doctor | update | housekeeping [--dry-run | status] [--json] | presence [here | away | call] | journal [--since <when> | --away] [--json] | ns-sessions list [--json] | spend [--day <d>] [--lane <id>] [--json] | team join <invite> --hub <ws://host:7443> --name <name> | team roster | team draft <name|peer-id> "<text>" | team post <name|peer-id|team> [--new "<title>"] [--link <url>] "<text>" | team reply <thread> "<text>" | team thread <thread> | team assign <thread> <session> | team release <thread> | team listen [off] | team loop <name|peer-id|team> [<1-100>|default] | team channel delete <ref> | team channel leave <ref> | todo add [--mine] [--ref <r>] [--why "<w>"] "<text>" | todo done <key> [--why "<w>"] | todo list | compact [--at <300k|60%|never>] [--note "<what to keep>" | --note none] [--clear] | away [on | off] | resume <session id> [--profile <id>] | resume --pi <pi session id> | resume --agy <conversation id> | resume --codex <conversation id> | secret request --title "<what for>" --sink <id> [--field <name>[:shown][:once]]... [--param <name>=<value>]... [--expires 30m] [--no-wait] | secret status <id> [--wait] | secret cancel <id> | secret list | secret sinks | cal list [--day <d> | --from <t> --to <t>] [--json] | cal add|edit|rm|sources|sync|push (board cal --help) | thread new|post|done|ask|set|show|list|changes|watch|unwatch|link|open|import|share (board thread --help) | workdesk workers link|unlink|complete|incomplete | mcp [--agents | --http] | backup now|status|list|passphrase|folder <path>|test <target> | db restore [--target <t>] [--snapshot <name>] [--file <path>] | db rekey --from <old> --to <new> [--dry-run] [--json]] [--session <id|name|pane>]`
 /** The commands that print a help of their own for `--help` (#305). */
 const OWN_HELP: ReadonlySet<string> = new Set(['thread', 'time', 'cal', 'spend'])
 
@@ -1404,6 +1404,14 @@ async function main(): Promise<void> {
     // The secret sinks' config (#273), once config.json has `secrets`.
     const { secretsChecks } = await import('../services/secrets.ts')
     checks.push(...secretsChecks(cfg, t))
+    // The MokuTab functions sync (#864): a master's state file, once it synced; nothing is asked elsewhere.
+    {
+      const { fnSyncCheck } = await import('../core/fn-sync.ts')
+      const { stateDir } = await import('../adapters/paths.ts')
+      const { readJson, isRecord } = await import('../adapters/json-store.ts')
+      const c = fnSyncCheck(readJson(join(stateDir(), 'fn-sync', 'state.json'), isRecord), t)
+      if (c) checks.push(c)
+    }
     // The update of itself from git (#617): its state file, once it is on or did something.
     const { selfUpdateCheck } = await import('../core/self-update.ts')
     const { readSelfUpdate } = await import('../adapters/self-update.ts')
@@ -2852,7 +2860,7 @@ async function masterCmd(): Promise<void> {
 async function nodesCmd(): Promise<void> {
   const [op = 'status', id = ''] = words
   const usage =
-    'usage: board nodes [token <id> | key <id> | sync <id> [<profile>] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]]'
+    'usage: board nodes [token <id> | key <id> | sync <id> [<profile>] | sync-functions [--dry-run] | update <id> | secret <id> <sink> | revoke <id> [--keep-running] [--forget]]'
   const { nodesConfig } = await import('../core/nodes.ts')
   const nodes = nodesConfig(cfg.nodes, (await import('node:os')).hostname())
   // On a node (#786): the master's devices, read through the relay; update and sync asked of it.
@@ -2885,6 +2893,10 @@ async function nodesCmd(): Promise<void> {
       await res.body?.cancel()
     } catch {}
     return console.log(`ok · token for ${dev} stored${told ? '; the board tries the link again now' : ''}`)
+  }
+  if (op === 'sync-functions') {
+    if (words.length > 2 || (id && id !== '--dry-run')) throw new Error(usage)
+    return nodesSyncFunctions(webPort, id === '--dry-run')
   }
   if (op === 'sync') {
     const profile = words[2]
@@ -2998,7 +3010,12 @@ const UPDATE_WHY: Record<string, string> = {
  */
 async function nodesOnNode(op: string, id: string): Promise<void> {
   const webPort = Number(cfg.port) || 12422
-  const usage = 'usage on a node: board nodes [update <id> | sync <id> [<profile>]]; the rest runs on the master'
+  const usage =
+    'usage on a node: board nodes [update <id> | sync <id> [<profile>] | sync-functions [--dry-run]]; the rest runs on the master'
+  if (op === 'sync-functions') {
+    if (words.length > 2 || (id && id !== '--dry-run')) throw new Error(usage)
+    return nodesSyncFunctions(webPort, id === '--dry-run')
+  }
   if (op === 'update') {
     if (!id || words.length > 2) throw new Error(usage)
     return nodesUpdate(webPort, id)
@@ -3243,6 +3260,67 @@ async function nodesSync(webPort: number, id: string, profile: string | undefine
   }
   for (const k of Array.isArray(r.kept) ? r.kept.filter(isRecord) : [])
     lines.push(`kept on the node: ${String(k.path)} (${String(k.why)})`)
+  console.log(lines.join('\n'))
+  if (r.ok !== true) process.exitCode = 1
+}
+
+/**
+ * `board nodes sync-functions [--dry-run]` (#864): the running master syncs the MokuTab functions
+ * registry over its own folder and every owner device online, and says per machine what came in, what
+ * went out, what it skipped or refused and why; then the conflict copies left for the owner. A dry run
+ * says the same and writes nothing. On a node it is asked of the master.
+ */
+async function nodesSyncFunctions(webPort: number, dryRun: boolean): Promise<void> {
+  let res: Response
+  try {
+    res = await fetch(`http://127.0.0.1:${webPort}/api/nodes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: JSON.stringify({ op: 'sync-functions', dryRun }),
+      signal: AbortSignal.timeout(5 * 60_000),
+    })
+  } catch {
+    throw new Error(NO_BOARD)
+  }
+  const r: unknown = await res.json().catch(() => null)
+  if (!res.ok || !isRecord(r) || !Array.isArray(r.rounds))
+    throw new Error(`the board said ${res.status}${isRecord(r) && r.error ? `: ${String(r.error)}` : ''}`)
+  const short = (v: unknown): string => (typeof v === 'string' ? v.slice(0, 8) : '-')
+  const lines = [
+    `${dryRun ? 'dry run · nothing written' : r.ok === true ? 'ok' : 'not all synced'} · functions registry: ${
+      r.head ? `${String(r.branch)} at ${short(r.head)}` : 'nothing yet'
+    }`,
+  ]
+  const did: Record<string, string> = {
+    current: 'current',
+    seed: 'the registry starts from it',
+    take: 'its commits went into the registry',
+    give: 'fast-forwarded to the registry',
+    clone: 'its empty folder got the registry',
+    'new-commits': 'has commits the registry lacks (ahead or diverged)',
+  }
+  const why: Record<string, string> = {
+    'no-folder': 'no MokuTab functions folder there',
+    empty: 'an empty folder, and nothing in the registry yet',
+    older: 'its board is older and has no functions sync: update it',
+    offline: 'did not answer',
+    'not-repo': 'the folder is not a git repository: nothing written',
+    branch: 'another branch is checked out: nothing written',
+    dirty: 'changes not committed there: commit or drop them, nothing written',
+    diverged: 'its commits went another way: nothing written, kept in the hub as refs/conflicts/<machine>',
+    refused: 'its commits bring files the board does not carry',
+    changed: 'it changed while the sync ran: next time',
+    git: 'git failed there',
+  }
+  for (const round of r.rounds.filter(isRecord)) {
+    const dev = String(round.device)
+    const move = round.to && round.to !== round.from ? ` (${short(round.from)} -> ${short(round.to)})` : ''
+    lines.push(
+      `${dev}: ${round.did === 'stop' || round.did === 'skip' ? (why[String(round.why)] ?? String(round.why)) : (did[String(round.did)] ?? String(round.did))}${move}`,
+    )
+    for (const s of Array.isArray(round.refused) ? round.refused.filter(isRecord) : [])
+      lines.push(`  refused ${String(s.path)}: ${String(s.why)}`)
+  }
   console.log(lines.join('\n'))
   if (r.ok !== true) process.exitCode = 1
 }

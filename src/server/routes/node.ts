@@ -9,6 +9,7 @@
 // `POST /api/node/call`, the other end of the uplink, is this computer's own: nodeCallRoutes,
 // which only the web board's own listener serves (server/app.ts).
 import { MAX_BLOB_BYTES } from '../../adapters/bundle-files.ts'
+import { isBranch, isSha } from '../../adapters/fn-git.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { t } from '../../core/lang.ts'
 import { RELAY_ANSWER_MAX, RELAY_CHUNK_MAX } from '../../core/master-relay.ts'
@@ -23,6 +24,7 @@ import type { MoveIn } from '../../services/move-in.ts'
 import type { MoveOut } from '../../services/move-out.ts'
 import type { Answer, NodeBundle } from '../../services/node/bundle.ts'
 import type { NodeDesk } from '../../services/node/desk.ts'
+import type { NodeFunctions } from '../../services/node/fn-sync.ts'
 import type { NodeHandover } from '../../services/node/handover.ts'
 import type { NodeLaunchAnswer } from '../../services/node/launch.ts'
 import type { NodeMasterFlags } from '../../services/node/master-flags.ts'
@@ -86,6 +88,55 @@ export interface NodeDoorSources {
   telegram?: Pick<NodeTelegram, 'route'>
   /** `/api/node/handover/...` (#697): guided master handover target and peer-node routes. */
   handover?: NodeHandover
+  /** `/api/node/functions...` (#864, services/node/fn-sync.ts): the MokuTab functions folder, synced through the master. */
+  functions?: NodeFunctions
+}
+
+/** A bundle of the functions registry over the door: its tree is 16 MB at most, base64 in JSON. */
+export const MAX_FN_BODY_BYTES = 32 * 1024 * 1024
+
+function functionsDoorRoutes(fns: NodeFunctions): Route[] {
+  return [
+    {
+      method: 'GET',
+      path: '/api/node/functions',
+      handle: async () => json(200, { ok: true, look: await fns.look() }),
+    },
+    {
+      method: 'POST',
+      path: '/api/node/functions/bundle',
+      async handle(req) {
+        const body = await jsonUpTo(req, 64 * 1024)
+        const have = isRecord(body) && Array.isArray(body.have) ? body.have.filter(isSha).slice(0, 50) : null
+        if (!have) return json(400, { ok: false, error: 'have' })
+        const bytes = await fns.bundle(have)
+        return bytes
+          ? json(200, { ok: true, b64: Buffer.from(bytes).toString('base64') })
+          : json(404, { ok: false, error: 'bundle' })
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/node/functions/take',
+      async handle(req) {
+        const body = await jsonUpTo(req, MAX_FN_BODY_BYTES)
+        if (body === undefined) return json(413, { ok: false, error: 'too-big' })
+        if (
+          !isRecord(body) ||
+          typeof body.b64 !== 'string' ||
+          !isBranch(body.branch) ||
+          (body.expect !== null && !isSha(body.expect))
+        )
+          return json(400, { ok: false, error: 'body' })
+        const r = await fns.take(
+          Uint8Array.from(Buffer.from(body.b64, 'base64')),
+          body.branch,
+          body.expect as string | null,
+        )
+        return json(200, r)
+      },
+    },
+  ]
 }
 
 /** The secrets of one profile's bundle, at most this many bytes of JSON. */
@@ -260,6 +311,7 @@ export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
         ]
       : []),
     ...(o.handover ? handoverDoorRoutes(o.handover) : []),
+    ...(o.functions ? functionsDoorRoutes(o.functions) : []),
   ]
 }
 

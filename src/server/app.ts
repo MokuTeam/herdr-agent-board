@@ -53,7 +53,7 @@ import { createNsTokens, nsBridgeDirs } from '../adapters/ns-store-tokens.ts'
 import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
 import { knobMs, pace, pause } from '../adapters/pacing.ts'
-import { archiveDir, cardsDir, pluginRoot, ROOT, scheduleDir } from '../adapters/paths.ts'
+import { archiveDir, cardsDir, pluginRoot, ROOT, scheduleDir, stateDir } from '../adapters/paths.ts'
 import { goLater, holdsGit, pluginCommit, startGuard, touchCode } from '../adapters/plugin-update.ts'
 import { fetchProbe, PROBE_TIMEOUT_MS, probeOrigin, probeOriginAt } from '../adapters/probe.ts'
 import { programsOnPath } from '../adapters/process.ts'
@@ -181,6 +181,7 @@ import { createMoveOut, type MoveOut } from '../services/move-out.ts'
 import { createNodeBundle, nodeBundleDeps } from '../services/node/bundle.ts'
 import { createCheckouts } from '../services/node/checkout.ts'
 import { createNodeDesk } from '../services/node/desk.ts'
+import { createNodeFunctions, functionsDir, type NodeFunctions } from '../services/node/fn-sync.ts'
 import { createNodeGit } from '../services/node/git-access.ts'
 import { createLocalRelayOps, createNodeHandover } from '../services/node/handover.ts'
 import { createNodeLaunch } from '../services/node/launch.ts'
@@ -206,6 +207,13 @@ import {
   readRelayHostKey,
 } from '../services/nodes/computer-setup-io.ts'
 import { createDesks } from '../services/nodes/desks.ts'
+import {
+  createFnSync,
+  createFnSyncRunner,
+  fnSyncDevices,
+  linkReplica,
+  localReplica,
+} from '../services/nodes/fn-sync.ts'
 import { createMasterHandover, type MasterHandover } from '../services/nodes/handover.ts'
 import { createNodeLinks, linkTimes, type NodeLinks } from '../services/nodes/links.ts'
 import { masterFlagsFor } from '../services/nodes/master-flags.ts'
@@ -1158,6 +1166,11 @@ export async function startServer({
   // Declared before createBoardState so board.publish() never hits TDZ before doorFollows() runs.
   let door: NodeListener | null = null
   let doorStore: NodeStore | null = null
+  // The MokuTab functions folder on this computer (#864): read by a node's door and status and by a
+  // master's sync only, made the first time one of them asks.
+  let ownFns: NodeFunctions | null = null
+  const ownFunctions = (): NodeFunctions => (ownFns ??= createNodeFunctions({ dir: functionsDir(), log }))
+
   /** A pure node's master as its page shows it (#744); null on any other board. */
   function nodeMasterNow(): NodeMasterPayload | null {
     const n = nodeConfig(cfg.node)
@@ -2002,6 +2015,8 @@ export async function startServer({
     })
     const status = createNodeStatus({
       node: () => nodeConfig(cfg.node),
+      // The MokuTab functions folder's stamp (#864): one look at the folder, nothing without it.
+      functions: () => ownFunctions().stamp(),
       items: board.items,
       launches: () => launches.list(),
       profiles: () => shownProfiles(deps.profiles().list),
@@ -2219,6 +2234,7 @@ export async function startServer({
           return { status: 200, body: { ok: true, rotated: r.rotated } }
         },
         handover: nodeHandover,
+        functions: ownFunctions(),
       }),
       log,
       onChange: () => {
@@ -2260,6 +2276,8 @@ export async function startServer({
   let localTelegramRoutes: Route[] | null = null
   let nodeProxy: NodeProxy | null = null
   let bundleSync: BundleSync | null = null
+  // The MokuTab functions registry synced through this master (#864): made with the links, gone with them.
+  let fnSyncRunner: { kick(): void; close(): void } | null = null
   let uplinkRunner: UplinkRunner | null = null
   let nodeRevoker: Revoker | null = null
   // "Add a server" (#509, services/nodes/setup.ts): the form's two routes on this listener alone,
@@ -2492,6 +2510,28 @@ export async function startServer({
       // The owner's git identity with every bundle, and his GitHub login with the secrets (#609).
       git: masterGit(gitTools()),
     })
+    // The MokuTab functions registry (#864): this computer's folder and each owner device's online.
+    const fnLinks = nodeLinks
+    const masterId = (): string => nodesConfig(cfg.nodes, hostname())?.id ?? 'master'
+    const online = (id: string): boolean => fnLinks.link(id)?.state().state === 'online'
+    const fnSyncNow = createFnSync({
+      dir: join(stateDir(), 'fn-sync'),
+      replicas: () => [
+        localReplica(masterId(), ownFunctions()),
+        ...fnSyncDevices(nodesConfig(cfg.nodes, hostname()), online).flatMap(id => {
+          const link = fnLinks.link(id)
+          return link ? [linkReplica(id, link)] : []
+        }),
+      ],
+      log,
+    })
+    fnSyncRunner = createFnSyncRunner({
+      sync: fnSyncNow,
+      local: ownFunctions(),
+      nodes: () => nodesConfig(cfg.nodes, hostname()),
+      links: fnLinks,
+      log,
+    })
     // Requests for a node's card (#501): first in the route table, which the phones' listener and the
     // tunnel share, so they reach it after their own refusals. Without `nodes` the table is main's.
     const aggregate = nodeAggregate
@@ -2708,6 +2748,7 @@ export async function startServer({
       nodeRevoker,
       nodeUpdater,
       () => heldByDevice(listEntries()),
+      fnSyncNow,
     )
     // Their ssh dies with the board, also on an exit that skips close().
     process.on('exit', nodeLinks.killNow)
@@ -2732,7 +2773,7 @@ export async function startServer({
     const relay = masterRelayRunner
     const uplink = uplinkRunner
     const calls = nodePilotCalls
-    const parts = [nodePlacer, nodeUpdater, nodeRevoker, bundleSync]
+    const parts = [nodePlacer, nodeUpdater, nodeRevoker, bundleSync, fnSyncRunner]
     nodeAggregate = null
     pilotBridgeRunner = null
     masterRelayRunner = null
@@ -2742,6 +2783,7 @@ export async function startServer({
     nodeUpdater = null
     nodeRevoker = null
     bundleSync = null
+    fnSyncRunner = null
     nodeLinks = null
     refreshLocalPilotCallRoutes()
     if (aggregate) {
@@ -3057,6 +3099,7 @@ export async function startServer({
       computerSetup?.close()
       await relayPool.closeAll()
       bundleSync?.close()
+      fnSyncRunner?.close()
       if (nodeLinks) {
         await nodeLinks.close()
         process.off('exit', nodeLinks.killNow)

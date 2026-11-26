@@ -22,6 +22,7 @@ import {
 import { FIELD_NAME, MAX_FIELDS, SINK_ID } from '../../core/secrets.ts'
 import type { BundleSync } from '../../services/nodes/bundle-sync.ts'
 import type { ComputerSetup } from '../../services/nodes/computer-setup.ts'
+import type { FnSync } from '../../services/nodes/fn-sync.ts'
 import type { MasterHandover } from '../../services/nodes/handover.ts'
 import type { NodeLinks } from '../../services/nodes/links.ts'
 import type { RelaySetup } from '../../services/nodes/relay-setup.ts'
@@ -283,6 +284,7 @@ export function nodesRoutes(
   revoker?: Revoker,
   updater?: Pick<NodeUpdater, 'view' | 'ship'>,
   held?: () => Record<string, number>,
+  functions?: Pick<FnSync, 'syncAll'>,
 ): Route[] {
   const off = () => json(404, { error: 'nodes' })
   /** The devices with each one's update (#590) and held entry count (#695) beside its link. */
@@ -369,6 +371,11 @@ export function nodesRoutes(
           if (!r.ok) return json(409, r)
           if (edit.op === 'lanes' && edit.shown) panel.keepSeen(edit.shown)
           return json(200, { ok: true, settings: await settingsOf(after) })
+        }
+        // `{ op: 'sync-functions', dryRun? }` (#864): the MokuTab functions registry synced over every owner device now.
+        if (body.op === 'sync-functions' && functions) {
+          if (body.dryRun !== undefined && typeof body.dryRun !== 'boolean') return json(400, { error: 'dryRun' })
+          return json(200, await functions.syncAll({ dryRun: body.dryRun === true }))
         }
         if (typeof body.id !== 'string') return json(400, { error: 'op' })
         if (body.op === 'sync' && bundles) {
