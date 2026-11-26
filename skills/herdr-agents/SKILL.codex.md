@@ -26,6 +26,7 @@ The board's hook told you at the start how to keep your card current. Your shell
 - `board --session <sid> doing "<3-8 words>"` at the start of each distinct step.
 - `board --session <sid> ask "<question>"` before ending a turn that needs the user. `wait "<on what>"` when you are blocked on something outside this chat. `done "<result>"` when the task is finished.
 - `board --session <sid> list` shows every session on the board, `board --session <sid> doctor` what is set up here.
+- The same through MCP: the `agent-board` server's tools (`card`, `schedule`, `agents`, `threads`, `thread`, `spawn`, `cal`) do what these commands do, as your session, with no `--session` to pass.
 
 ## Start another session
 

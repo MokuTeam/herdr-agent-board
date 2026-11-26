@@ -46,7 +46,8 @@ PowerShell-style names work too (`-Name -Cwd -Label -BriefFile -Brief -Workspace
 
 Use `ListAgents` to see the sessions and `SendMessage` to reach one by name. A reply comes back to you as a message of its own.
 
-- Other agents (`agy`, `pi`, Codex) and other devices: in Claude Code, `ListAgents` and `SendMessage` reach them through the board; in Antigravity (`agy`), use the `agent-board` MCP tools `ListAgents` and `SendMessage` (installed by `install.ts --agy`); from any shell, `board agents` and `board send "<name|key>" "<text>"` do the same.
+- Other agents (`agy`, `pi`, Codex) and other devices: in Claude Code, `ListAgents` and `SendMessage` reach them through the board; in Antigravity (`agy`), pi and Codex, use the `agent-board` MCP server's `agents` tool; from any shell, `board agents` and `board send "<name|key>" "<text>"` do the same.
+- The board's install registers the `agent-board` MCP server in every agent here (Claude Code, Codex, agy, pi): its tools `card`, `schedule`, `agents`, `threads`, `thread`, `spawn` and `cal` do what the `board` commands and `spawn-agent` do, as your own session. In Claude Code the commands stay the main way; the tools are there when a shell is not.
 - A session that sits idle for an hour is put to sleep (herdr-wake, if installed): its pane stays, marked 💤. It is still the same session. `ListAgents` lists the sleeping ones too, and a `SendMessage` to one wakes it first (10 to 30 seconds), then delivers. Do not reroute its work or call it gone.
 - Waking without a message: `curl -s -X POST http://127.0.0.1:12421/wake -d '{"target":"<name>"}'` (herdr-wake's API; `GET /sleeping` lists who sleeps).
 - Putting sessions to sleep that you coordinate: see the next section, one call for all of them.

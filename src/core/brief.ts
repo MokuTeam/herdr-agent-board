@@ -14,7 +14,7 @@ export const BRIEF_VERSION = 6
 // The same for Codex sessions (entrypoints/codex-hook.ts), counted on its own: what a brief says only
 // to Codex raises this and leaves the Claude sessions as they are. It starts above BRIEF_VERSION
 // because Codex cards were stamped with that one, and they must hear the new text once.
-export const CODEX_BRIEF_VERSION = 7
+export const CODEX_BRIEF_VERSION = 8
 
 type Env = Record<string, string | undefined>
 
@@ -113,6 +113,14 @@ export function secretsBrief(sinks: readonly string[]): string {
 /** The owner's calendar for agents (#328), while it is on. */
 export function calendarBrief(): string {
   return `- board cal list [--day <d> | --from <t> --to <t>] [--json]: the owner's schedule across every calendar (each line says whose); read it before planning around the owner's time. board cal add --title "<t>" --start <t> --minutes <n> puts an event of yours on the board's own calendar (edit, rm too). A real meeting in a provider's calendar only when the owner asked for that event: --source <id> --asked "<their words>". board cal --help.`
+}
+
+/**
+ * The board's MCP server (#814), for a Codex or Antigravity session where the install registered it
+ * (adapters/mcp-register.ts): its tools do what the commands do. Claude's brief keeps the commands alone.
+ */
+export function mcpBrief(): string {
+  return "- The same through MCP: the agent-board server's tools (card, schedule, agents, threads, thread, spawn, cal) do what these commands do, as this session."
 }
 
 export function waitReminder(card: Pick<Card, 'wait'>): string {

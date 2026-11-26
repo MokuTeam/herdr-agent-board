@@ -174,6 +174,8 @@ export const INSTALLER_INPUTS = [
   'src/entrypoints/install.ts',
   'src/core/install-plan.ts',
   'src/adapters/hook-settings.ts',
+  'src/core/mcp-register.ts',
+  'src/adapters/mcp-register.ts',
   'src/adapters/agents-skill.ts',
   'src/adapters/launchers.ts',
   'src/core/wake/launchers.ts',

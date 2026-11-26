@@ -44,7 +44,7 @@ test('--agy installs hooks, skills, shims and herdr integration, preserving herd
     expect(mcp.mcpServers.external).toEqual({ url: 'https://example.com/mcp' })
     expect(mcp.mcpServers['agent-board']).toEqual({
       command: process.execPath,
-      args: [join(root, 'src', 'entrypoints', 'cli.ts'), 'mcp', '--agents'],
+      args: [join(root, 'src', 'entrypoints', 'cli.ts'), 'mcp', '--http'],
     })
     expect(readFileSync(`${mcpFile}.bak-agent-board`, 'utf8')).toBe(mcpBefore)
   }
@@ -69,7 +69,7 @@ test('--agy handles an empty mcp_config.json and fails closed on invalid mcp_con
   const mcp = JSON.parse(readFileSync(join(dir, 'mcp_config.json'), 'utf8')) as {
     mcpServers: Record<string, { command: string; args: string[] }>
   }
-  expect(mcp.mcpServers['agent-board']?.args.slice(-2)).toEqual(['mcp', '--agents'])
+  expect(mcp.mcpServers['agent-board']?.args.slice(-2)).toEqual(['mcp', '--http'])
 
   const brokenBox = await sandbox()
   const brokenDir = join(brokenBox.dir, 'agy-bad-mcp')

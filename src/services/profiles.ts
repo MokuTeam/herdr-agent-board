@@ -1,7 +1,8 @@
 // Install from the Profiles panel: the board's hooks and status line (wake's too while wake is on)
 // into one profile's settings.json, the agents' and Team's skills into its skills folder, and herdr's own
 // Claude hook (herdr writes it), as the install action puts them into every shown profile
-// (adapters/hook-settings.ts, adapters/agents-skill.ts, adapters/herdr.ts). Only into a shown
+// (adapters/hook-settings.ts, adapters/agents-skill.ts, adapters/herdr.ts), and the board's MCP
+// server into its user scope (#814, adapters/mcp-register.ts). Only into a shown
 // profile, and only into a folder that is there. The panel's edits go through here too: one that
 // shows a hidden profile installs into it at once.
 import { existsSync, statSync } from 'node:fs'
@@ -12,11 +13,13 @@ import { configFile, type EditResult, editProfiles, loadConfig, readConfigFile }
 import { claudeIntegrationInstall } from '../adapters/herdr.ts'
 import { herdrHookInstalled, hooksInstalled, installInto, wakeHooksIn } from '../adapters/hook-settings.ts'
 import { isRecord } from '../adapters/json-store.ts'
+import { registerBoardMcp } from '../adapters/mcp-register.ts'
 import { ROOT } from '../adapters/paths.ts'
 import { loadProfiles } from '../adapters/profiles.ts'
 import { readText } from '../adapters/setup-facts.ts'
 import type { InstallPaths, WakeHooksState } from '../core/install-plan.ts'
 import { t } from '../core/lang.ts'
+import { boardMcpOff } from '../core/mcp-register.ts'
 import { DEFAULT_PROFILE, type Profile } from '../core/profiles.ts'
 import { boardFiles, SKILL, TEAM_SKILL, THREADS_SKILL } from '../core/setup.ts'
 import { wakeSwitch } from '../core/wake/config.ts'
@@ -75,6 +78,17 @@ async function installShown(profile: Profile): Promise<InstallResult> {
   const wake = wakeSwitch({ exists: existsSync(configFile()), raw: readConfigFile() })
   const out = installInto(profile.dir, paths, { wake })
   if (!out.ok) return { ok: false, error: out.error }
+  // The board's MCP server in the profile's user scope (#814), as the install action puts it; a
+  // .claude.json it cannot change is no reason to refuse the rest, and the next install says why.
+  if (!boardMcpOff(readConfigFile()))
+    registerBoardMcp({
+      on: true,
+      only: ['claude'],
+      port: loadConfig().port,
+      bun: paths.bun,
+      cli: paths.cli,
+      profiles: [profile],
+    })
   try {
     for (const [name, from] of [
       [SKILL, FILES.skill],

@@ -93,6 +93,13 @@ describe('the bundle from a master to its node', () => {
                 url: 'https://docs.example.com/mcp',
                 headers: { Authorization: `Bearer ${CANARY}` },
               },
+              // The master's own board MCP (#814): on its loopback, never sent; the node registers its own.
+              'agent-board': {
+                type: 'http',
+                url: 'http://127.0.0.1:1/mcp',
+                // biome-ignore lint/suspicious/noTemplateCurlyInString: what Claude Code expands
+                headers: { 'X-Board-Pane': '${HERDR_PANE_ID:-}' },
+              },
             },
           }),
         )
@@ -134,6 +141,10 @@ describe('the bundle from a master to its node', () => {
     const servers = JSON.parse(readFileSync(join(node.box.env.HOME as string, '.claude.json'), 'utf8')).mcpServers
     // biome-ignore lint/suspicious/noTemplateCurlyInString: the reference the node is given
     expect(servers.docs.headers).toEqual({ Authorization: '${MCP_DOCS_AUTHORIZATION}' })
+    // The board's MCP on the node points at the node's own board (#814), not the master's.
+    expect(servers['agent-board']?.type).toBe('http')
+    expect(servers['agent-board']?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/)
+    expect(servers['agent-board']?.url).not.toBe('http://127.0.0.1:1/mcp')
 
     // The second sync: one file changed, one gone; only the changed blob travels.
     put(profileDir(pair.master.box), 'skills/a/SKILL.md', 'A2')

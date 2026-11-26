@@ -1,15 +1,16 @@
 // Installed only in Codex's hooks.json. A pane's reported identity gates all card writes;
 // a SessionStart racing herdr's identity hook is briefed on its first UserPromptSubmit instead.
 import { type CardPatch, readCard, writeCard } from '../adapters/cards.ts'
-import { loadConfig } from '../adapters/config-file.ts'
+import { loadConfig, readConfigFile } from '../adapters/config-file.ts'
 import { agentGet } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { nodeMasterFlags } from '../adapters/master-flags-store.ts'
 import { presenceForBrief, presenceNews } from '../adapters/presence-store.ts'
 import { readStdin } from '../adapters/stdin.ts'
-import { brief, CODEX_BRIEF_VERSION, waitReminder } from '../core/brief.ts'
+import { brief, CODEX_BRIEF_VERSION, mcpBrief, waitReminder } from '../core/brief.ts'
 import { CODEX_AGENT, isCodexSession } from '../core/codex.ts'
 import { briefFlags, staleFlagsLine } from '../core/master-flags.ts'
+import { boardMcpOff } from '../core/mcp-register.ts'
 import { isNotice } from '../core/notices.ts'
 import { threadsConfig } from '../core/work-threads.ts'
 
@@ -54,6 +55,8 @@ async function main(): Promise<void> {
         threadsConfig(cfg.threads) ?? threadsConfig(via.threads),
       ),
       `Use \`board --session ${sid} <command>\` for the commands above, so a tool's shell targets this session even when it does not inherit the pane environment.`,
+      // The board's MCP server, registered in this Codex home with its hooks (#814), unless turned off.
+      ...(boardMcpOff(readConfigFile()) ? [] : [mcpBrief()]),
     ].join('\n')
     // The presence a node's master last said, when it has not been heard from for a while: its age.
     const stale = presence && presence === via.presence ? staleFlagsLine(flags, Date.now()) : null

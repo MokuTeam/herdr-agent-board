@@ -34,6 +34,7 @@ import {
 import { configFile, type EditResult, editNodeSlice, readConfigFile } from '../../adapters/config-file.ts'
 import { hooksInstalled, installInto, readSettings } from '../../adapters/hook-settings.ts'
 import { isRecord } from '../../adapters/json-store.ts'
+import { registerBoardMcp, registeredLine } from '../../adapters/mcp-register.ts'
 import { ROOT } from '../../adapters/paths.ts'
 import {
   appliedMcp,
@@ -50,6 +51,7 @@ import {
   withProfileDirFilled,
 } from '../../core/bundle.ts'
 import { type GitIdentity, identityOf } from '../../core/git-access.ts'
+import { boardMcpOff } from '../../core/mcp-register.ts'
 import { claudeStateFile } from '../../core/move.ts'
 import type { Profile } from '../../core/profiles.ts'
 import { boardFiles } from '../../core/setup.ts'
@@ -398,8 +400,22 @@ export function nodeBundleDeps(o: {
     writeSlice: change => editNodeSlice(change),
     install(dir) {
       const paths = { bun: process.execPath, ...files, binDir: join(homedir(), '.local', 'bin') }
-      const wake = wakeSwitch({ exists: existsSync(configFile()), raw: readConfigFile() })
-      return installInto(dir, paths, { wake })
+      const raw = readConfigFile()
+      const wake = wakeSwitch({ exists: existsSync(configFile()), raw })
+      const out = installInto(dir, paths, { wake })
+      // The board's MCP server in the profile's user scope (#814), pointing at this node's own board.
+      const id = o.profiles().find(p => p.dir === dir)?.id ?? dir
+      if (out.ok && !boardMcpOff(raw))
+        for (const r of registerBoardMcp({
+          on: true,
+          only: ['claude'],
+          port: isRecord(raw) ? raw.port : undefined,
+          bun: paths.bun,
+          cli: paths.cli,
+          profiles: [{ id, dir }],
+        }))
+          if (r.action === 'failed') o.log(`node bundle ${id}: ${registeredLine(r)}`)
+      return out
     },
     installed: dir => hooksInstalled(dir, files),
     log: o.log,

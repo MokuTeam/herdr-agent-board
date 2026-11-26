@@ -181,3 +181,17 @@ test('board CLI resolves agy root identity, handles mixed Claude env, and refuse
   expect(claudeChild.code).toBe(0)
   expect(JSON.parse(readFileSync(join(box.cards, 'claude-child.json'), 'utf8')).doing).toBe('Claude child')
 })
+
+test("Antigravity hears of the board's MCP tools (#814), unless config.json turned the registration off", async () => {
+  const box = await sandbox()
+  configure(box)
+  const said = async (): Promise<string> =>
+    ((await hook(box, 'SessionStart')).injectSteps as { systemMessage: { systemMessage: string } }[])[0]?.systemMessage
+      .systemMessage ?? ''
+  expect(await said()).toContain("the agent-board server's tools (card, schedule, agents, threads, thread, spawn, cal)")
+  writeFileSync(
+    join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json'),
+    '{"language":"en","port":9,"boardMcp":false}',
+  )
+  expect(await said()).not.toContain('agent-board server')
+})

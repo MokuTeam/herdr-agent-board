@@ -3,6 +3,7 @@
 // Each top-level hook key is a named hook group (e.g. `"herdr"`, `"agent-board"`), and
 // `SessionStart` / `PreInvocation` are flat arrays of command handler objects.
 import { normPath, quote } from './install-plan.ts'
+import { stdioMcpEntry } from './mcp-register.ts'
 
 const isRecord = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
 
@@ -58,9 +59,10 @@ export function planAgyHooks(settings: unknown, script: string): Record<string, 
 }
 
 /**
- * Plan the next `~/.gemini/config/mcp_config.json` with agent-board's stdio MCP server
- * (`ListAgents` and `SendMessage` via `board mcp --agents`, #628), preserving every other
- * MCP server and top-level key untouched.
+ * Plan the next `~/.gemini/config/mcp_config.json` with agent-board's stdio MCP server, preserving
+ * every other MCP server and top-level key untouched: `board mcp --http` (#814), the thin client of
+ * the board's /mcp with every board tool as this pane's session (agy sends no header of a session's
+ * own over HTTP); it replaces `board mcp --agents` (#628), whose two tools the board's `agents` has.
  */
 export function planAgyMcp(config: unknown, bun: string, cli: string): Record<string, unknown> {
   if (config !== undefined && !isRecord(config)) throw new Error('mcp_config.json is not a JSON object; left as it was')
@@ -69,10 +71,7 @@ export function planAgyMcp(config: unknown, bun: string, cli: string): Record<st
     throw new Error('mcp_config.json mcpServers is not an object; left as it was')
   const servers: Record<string, unknown> = isRecord(next.mcpServers) ? next.mcpServers : {}
   next.mcpServers = servers
-  servers[AGY_MCP_KEY] = {
-    command: bun,
-    args: [cli, 'mcp', '--agents'],
-  }
+  servers[AGY_MCP_KEY] = stdioMcpEntry(bun, cli)
   return next
 }
 

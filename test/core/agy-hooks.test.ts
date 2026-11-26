@@ -75,11 +75,11 @@ describe('Antigravity CLI mcp_config.json planning (core/agy-hooks.ts)', () => {
     expect(next.customFlag).toBe(true)
     const servers = next.mcpServers as Record<string, unknown>
     expect(servers.other).toEqual({ command: 'node', args: ['server.js'] })
-    expect(servers[AGY_MCP_KEY]).toEqual({ command: BUN, args: [CLI, 'mcp', '--agents'] })
+    expect(servers[AGY_MCP_KEY]).toEqual({ command: BUN, args: [CLI, 'mcp', '--http'] })
     expect(planAgyMcp(next, BUN, CLI)).toEqual(next)
     // Undefined config starts fresh cleanly.
     expect(planAgyMcp(undefined, BUN, CLI)).toEqual({
-      mcpServers: { [AGY_MCP_KEY]: { command: BUN, args: [CLI, 'mcp', '--agents'] } },
+      mcpServers: { [AGY_MCP_KEY]: { command: BUN, args: [CLI, 'mcp', '--http'] } },
     })
   })
 

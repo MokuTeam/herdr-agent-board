@@ -131,6 +131,36 @@ would leave them beside its own. First take them out of `~/.claude/settings.json
 plugin's folder and run its install action again, which writes its own `node "…/src/hook.mjs"`
 hooks, status line and commands.
 
+## The board's MCP in every agent
+
+Every install (the install action, `bun src/entrypoints/install.ts`, an update that changes the
+installer, a node's update, Install in the Profiles panel, a node's profile sync) registers the
+board's MCP server, `agent-board`, in each agent harness on the computer it runs on, pointing at
+that computer's own board (`http://127.0.0.1:<port>/mcp`; a node's board relays to its master).
+Its tools (`card`, `schedule`, `agents`, `threads`, `thread`, `spawn`, `cal`) run the same code
+as the `board` commands and `spawn-agent`. Each call says which herdr pane it comes from, so one
+entry serves every session and each session acts as itself; a call from outside herdr acts as the
+owner. A session that is running gets the tools when it starts again.
+
+- Claude Code: an HTTP server in each shown profile's user scope (`~/.claude.json` for the
+  default profile, `<folder>/.claude.json` for one CLAUDE_CONFIG_DIR names), with the header
+  `X-Board-Pane: ${HERDR_PANE_ID:-}`, which Claude Code fills from the session's environment.
+- Codex: `[mcp_servers.agent-board]` in `config.toml` with `url` and
+  `env_http_headers = { "X-Board-Pane" = "HERDR_PANE_ID" }`, in a Codex home that has the board's
+  hooks (`install.ts --codex`).
+- Antigravity CLI (`agy`) and pi: neither puts the session's environment into a header, so they
+  get a stdio server, `board mcp --http`, a thin client of `/mcp` that sends the pane from its own
+  environment: in `~/.gemini/config/mcp_config.json` where the board's agy hooks are
+  (`install.ts --agy`), and in pi's `~/.pi/agent/mcp.json` (`PI_CODING_AGENT_DIR`) where pi is.
+
+Only the `agent-board` entry is written; every other server and key stays as it was. The first
+time the board changes such a file it keeps a copy beside it as `<file>.bak-agent-board`. A file
+that does not parse is left alone and the install says so. Claude sessions keep the `board`
+commands in their brief; Codex and agy sessions are told about the tools as well.
+
+To take the entries out of every harness and keep them out: `bun src/entrypoints/install.ts
+--no-mcp` (it writes `"boardMcp": false` into config.json); `--mcp` puts them back.
+
 ## Codex
 
 For panes herdr reports as `codex`, the board reads the rollout in
@@ -206,10 +236,10 @@ bun src/entrypoints/install.ts --agy
 This adds `SessionStart` and `PreInvocation` handlers under the `"agent-board"` key in
 `~/.gemini/config/hooks.json` (`ANTIGRAVITY_CONFIG_DIR` changes the config folder), preserving
 herdr's `"herdr"` hook group and any other hooks, with the first `hooks.json.bak-agent-board` kept
-beside it. It also registers the `"agent-board"` stdio MCP server (`board mcp --agents`, exposing
-`ListAgents` and `SendMessage` across Claude, Antigravity, pi, Codex and connected nodes, #628) in
-`~/.gemini/config/mcp_config.json`, preserving every other MCP server with a
-`mcp_config.json.bak-agent-board` backup. It installs the `herdr-agents` and `agent-board-team`
+beside it. It also registers the `"agent-board"` stdio MCP server in `~/.gemini/config/mcp_config.json`
+(`board mcp --http`, the thin client of the board's `/mcp`, see
+[The board's MCP in every agent](#the-boards-mcp-in-every-agent)), preserving every other MCP
+server with a `mcp_config.json.bak-agent-board` backup. It installs the `herdr-agents` and `agent-board-team`
 skills (and `agent-board-threads` when threads are on) into `~/.gemini/config/skills`, puts
 `board` and `spawn-agent` into `~/.local/bin`, and asks herdr to install its `antigravity-cli`
 identity hook (`herdr integration install antigravity-cli`). The ordinary install without `--agy`

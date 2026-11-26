@@ -233,6 +233,12 @@ test('Install from the board writes a shown profile’s hooks and refuses a hidd
   expect(existsSync(join(dir('.claude-work'), 'hooks', 'herdr-agent-state.ps1'))).toBe(true)
   expect(JSON.stringify(work.hooks.SessionStart.at(-1))).toContain('herdr-agent-state.ps1')
   expect(box.calls().filter(c => c[0] === 'integration')).toEqual([['integration', 'install', 'claude']])
+  // The board's MCP in that profile's user scope (#814), the default profile's ~/.claude.json untouched.
+  const state = JSON.parse(readFileSync(join(dir('.claude-work'), '.claude.json'), 'utf8'))
+  expect(state.mcpServers['agent-board'].url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/mcp$/)
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: what Claude Code expands
+  expect(state.mcpServers['agent-board'].headers).toEqual({ 'X-Board-Pane': '${HERDR_PANE_ID:-}' })
+  expect(existsSync(join(home, '.claude.json'))).toBe(false)
   // Only that profile's folder.
   expect(readdirSync(dir('.claude'))).toEqual(['settings.json'])
 

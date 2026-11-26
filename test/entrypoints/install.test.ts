@@ -251,6 +251,8 @@ test('install writes into every shown profile and touches no hidden one', async 
   expect(read(home, '.claude-gamedev', 'settings.json')).toBe(before)
   expect(readdirSync(join(home, '.claude-gamedev'))).toEqual(['settings.json'])
   expect(readdirSync(join(home, '.claude-work')).sort()).toEqual([
+    // The profile's user scope with the board's MCP server (#814): a profile CLAUDE_CONFIG_DIR names keeps it here.
+    '.claude.json',
     'settings.json',
     'settings.json.bak-agent-board',
     'skills',
@@ -346,6 +348,7 @@ test('the skill install copies is upstream’s, word for word, but for what `boa
   // #628: cross-agent ListAgents/SendMessage (agy MCP + board agents/board send).
   // #760: --device, in the command line and the PowerShell names, the board placing from a node too,
   // and two lines of their own.
+  // #814: the board's MCP server in every agent, a line of its own.
   const ours = read(root, 'skills', 'herdr-agents', 'SKILL.md')
     .replace(' [--device <id|local>]', '')
     .replace(' -Device`)', '`)')
@@ -357,6 +360,7 @@ test('the skill install copies is upstream’s, word for word, but for what `boa
     .replace(/- Where the board has other devices, [^\n]*\n/, '')
     .replace(/- A line ending in `device=<device> session=<id>` means [^\n]*\n/, '')
     .replace(/- Other agents \(`agy`, `pi`, Codex\) and other devices: [^\n]*\n/, '')
+    .replace(/- The board's install registers the `agent-board` MCP server [^\n]*\n/, '')
     .replace(
       ' Its board reminders wait with it, parked: `board schedule --session <name>` lists them, `board schedule --move <id>` moves one to you, `board unschedule <id>` removes one.',
       '',
@@ -684,3 +688,57 @@ test('install copies the threads skill (#379) only while config.json turns threa
   // Right after Team's.
   assert.match(on.stdout, new RegExp(`^skill: ${literal(teamSkill)}\nskill: ${literal(threadsSkill)}\nhooks: `, 'm'))
 })
+
+test('install registers the board MCP (#814) in every shown profile, once, at the port config.json names; Codex, agy and pi untouched without their setup', async () => {
+  const box = await sandbox()
+  const home = profilesIn(box, { '.claude': '{}', '.claude-work': '{}', '.claude-gamedev': '{}' }, ['gamedev'])
+  const cfgFile = join(box.env.APPDATA as string, 'herdr', 'plugins', 'config', 'agent-board', 'config.json')
+  writeFileSync(cfgFile, JSON.stringify({ ...JSON.parse(readFileSync(cfgFile, 'utf8')), port: 13077 }))
+  const state = { userID: 'u', mcpServers: { telegram: { type: 'http', url: 'https://t.example/mcp' } } }
+  writeFileSync(join(home, '.claude.json'), JSON.stringify(state))
+  const entry = {
+    type: 'http',
+    url: 'http://127.0.0.1:13077/mcp',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: what Claude Code expands
+    headers: { 'X-Board-Pane': '${HERDR_PANE_ID:-}' },
+  }
+  for (let n = 0; n < 2; n++) {
+    const { code, stdout, stderr } = await install(box)
+    expect(code).toBe(0)
+    expect(stderr).toBe('')
+    expect(JSON.parse(read(home, '.claude.json'))).toEqual({
+      ...state,
+      mcpServers: { ...state.mcpServers, 'agent-board': entry },
+    })
+    expect(JSON.parse(read(home, '.claude-work', '.claude.json'))).toEqual({ mcpServers: { 'agent-board': entry } })
+    // Said when written, not when it was there already.
+    expect(stdout.includes(`board MCP (agent-board) for Claude: ${join(home, '.claude.json')}`)).toBe(n === 0)
+  }
+  expect(JSON.parse(read(home, '.claude.json.bak-agent-board'))).toEqual(state)
+  expect(existsSync(join(home, '.claude-gamedev', '.claude.json'))).toBe(false)
+  for (const other of ['.codex', '.gemini', '.pi']) expect(existsSync(join(home, other))).toBe(false)
+}, 30_000)
+
+test('install --no-mcp takes the board MCP out and keeps it out; --mcp puts it back (#814)', async () => {
+  const box = await sandbox()
+  const home = profilesIn(box, { '.claude': '{}' })
+  writeFileSync(join(home, '.claude.json'), JSON.stringify({ a: 1, mcpServers: { other: { command: 'x' } } }))
+  expect((await install(box)).code).toBe(0)
+  expect(JSON.parse(read(home, '.claude.json')).mcpServers['agent-board']).toBeDefined()
+  const off = await install(box, process.execPath, '--no-mcp')
+  expect(off.code).toBe(0)
+  expect(off.stdout).toContain('removed from')
+  expect(JSON.parse(read(home, '.claude.json'))).toEqual({ a: 1, mcpServers: { other: { command: 'x' } } })
+  const config = join(box.env.APPDATA as string, 'herdr', 'plugins', 'config', 'agent-board', 'config.json')
+  expect(JSON.parse(readFileSync(config, 'utf8')).boardMcp).toBe(false)
+  // An install (an update runs it) does not put it back.
+  expect((await install(box)).code).toBe(0)
+  expect(JSON.parse(read(home, '.claude.json')).mcpServers['agent-board']).toBeUndefined()
+  const on = await install(box, process.execPath, '--mcp')
+  expect(on.code).toBe(0)
+  expect(JSON.parse(readFileSync(config, 'utf8')).boardMcp).toBeUndefined()
+  expect(JSON.parse(read(home, '.claude.json')).mcpServers['agent-board']?.type).toBe('http')
+  // Alone or not at all.
+  const both = await install(box, process.execPath, '--mcp', '--toast')
+  expect(both.code).toBe(1)
+}, 30_000)

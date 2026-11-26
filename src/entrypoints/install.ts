@@ -26,6 +26,12 @@
 //                                               the same in a CODEX_HOME of its own for the sessions
 //                                               herdr runs (default ~/.config/herdr/codex), linked to
 //                                               ~/.codex for auth and config; ~/.codex is not written
+//   bun src/entrypoints/install.ts --no-mcp     takes the board's MCP server out of every harness and
+//                                               keeps it out (config.json "boardMcp": false)
+//   bun src/entrypoints/install.ts --mcp        puts it back in (the default; #814)
+//
+// Every install (but --no-mcp) also registers the board's MCP server (#814, adapters/mcp-register.ts)
+// in each shown profile's user scope and in Codex, agy and pi where they are the board's.
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -41,16 +47,19 @@ import {
   installAgySettings,
 } from '../adapters/agy-hooks.ts'
 import { defaultCodexHome, prepareCodexHome } from '../adapters/codex-dedicated.ts'
+import { dedicatedCodexHome } from '../adapters/codex-home.ts'
 import { codexHooksPlan, installCodexHooks, labelHerdrHookIn } from '../adapters/codex-hooks.ts'
 import { configFile, loadConfig, readConfigFile, withConfigFile } from '../adapters/config-file.ts'
 import { agyIntegrationInstall, claudeIntegrationInstall, codexIntegrationInstall } from '../adapters/herdr.ts'
 import { installInto, readSettings } from '../adapters/hook-settings.ts'
 import { installLaunchers } from '../adapters/launchers.ts'
+import { editCodexToml, registerBoardMcp, registeredLine } from '../adapters/mcp-register.ts'
 import { ROOT } from '../adapters/paths.ts'
 import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
 import { gatherFacts, herdrConfigFile, readText } from '../adapters/setup-facts.ts'
 import { type InstallPaths, planSettings, planShims } from '../core/install-plan.ts'
 import { t } from '../core/lang.ts'
+import { boardMcpOff, boardMcpUrl } from '../core/mcp-register.ts'
 import { DEFAULT_PROFILE, shownProfiles } from '../core/profiles.ts'
 import { boardFiles, checkSetup, report, SKILL, TEAM_SKILL, THREADS_SKILL, tomlValue } from '../core/setup.ts'
 import { wakeSwitch } from '../core/wake/config.ts'
@@ -63,9 +72,11 @@ const homeAt = argv.indexOf('--codex-home')
 const homeValue = homeAt >= 0 && argv[homeAt + 1] && !argv[homeAt + 1]?.startsWith('--') ? argv[homeAt + 1] : undefined
 const args = argv.filter((_, i) => i !== homeAt && !(homeValue !== undefined && i === homeAt + 1))
 const master = args.includes('--codex-master')
-for (const a of args.filter(a => !['--toast', '--no-toast', '--codex', '--codex-master', '--agy'].includes(a)))
+for (const a of args.filter(
+  a => !['--toast', '--no-toast', '--codex', '--codex-master', '--agy', '--mcp', '--no-mcp'].includes(a),
+))
   console.log(
-    `ignored ${a}: the options are --toast, --no-toast, --codex, --codex --codex-home [dir] [--codex-master] and --agy`,
+    `ignored ${a}: the options are --toast, --no-toast, --codex, --codex --codex-home [dir] [--codex-master], --agy, --mcp and --no-mcp`,
   )
 let toast = args.includes('--toast') ? true : args.includes('--no-toast') ? false : undefined
 const toasts = process.platform === 'win32' || process.platform === 'darwin'
@@ -93,6 +104,43 @@ const isFolder = (path: string): boolean => {
     return false
   }
 }
+// The board's MCP server (#814): in every harness unless config.json says "boardMcp": false.
+const mcpOn = (): boolean => !boardMcpOff(readConfigFile())
+const mcpLines = (list: ReturnType<typeof registerBoardMcp>): void => {
+  for (const r of list) if (r.action !== 'same') console.log(registeredLine(r))
+}
+// --mcp / --no-mcp: only the board's MCP server, in or out of every harness, and config.json to match.
+if (args.includes('--mcp') || args.includes('--no-mcp')) {
+  try {
+    if (args.includes('--mcp') && args.includes('--no-mcp')) throw new Error('pass --mcp or --no-mcp, not both')
+    if (args.some(a => a !== '--mcp' && a !== '--no-mcp'))
+      throw new Error('--mcp and --no-mcp go alone: run the install without them for the rest')
+    const on = args.includes('--mcp')
+    loadConfig() // writes the defaults when there is no config.json yet
+    withConfigFile((raw, save) => {
+      if (!raw) return
+      if (on && raw.boardMcp === false) {
+        const { boardMcp: _, ...rest } = raw
+        save(rest)
+      } else if (!on && raw.boardMcp !== false) save({ ...raw, boardMcp: false })
+    })
+    const list = registerBoardMcp({
+      on,
+      port: loadConfig().port,
+      bun: paths.bun,
+      cli: paths.cli,
+      profiles: shownProfiles(loadProfiles({ shownDir: inheritedProfileDir() })),
+      codexHome: dedicatedCodexHome(),
+    })
+    mcpLines(list)
+    if (list.every(r => r.action === 'same')) console.log(`board MCP: ${on ? 'in place' : 'not registered'} everywhere`)
+    if (list.some(r => r.action === 'failed')) process.exit(1)
+  } catch (err) {
+    console.error(`agent-board install: ${messageOf(err)}`)
+    process.exit(1)
+  }
+  process.exit(0)
+}
 // Opt-in: the normal Claude install never reads or changes an Antigravity CLI folder.
 if (args.includes('--agy')) {
   try {
@@ -107,7 +155,7 @@ if (args.includes('--agy')) {
     const mcpPlan = agyMcpPlan(dir, paths.bun, paths.cli)
     const settingsPlan = agySettingsPlan(settingsDir, paths.bun, agyStatusline)
     installAgyHooks(plan)
-    installAgyMcp(mcpPlan)
+    if (mcpOn()) installAgyMcp(mcpPlan)
     installAgySettings(settingsPlan)
     installShims()
     const agySkills = [
@@ -125,7 +173,7 @@ if (args.includes('--agy')) {
       )
     }
     console.log(`Antigravity CLI hooks: SessionStart, PreInvocation -> ${script} in ${plan.file}`)
-    console.log(`Antigravity CLI MCP: ListAgents, SendMessage -> ${paths.cli} mcp --agents in ${mcpPlan.file}`)
+    if (mcpOn()) console.log(`Antigravity CLI MCP: the board's tools -> ${paths.cli} mcp --http in ${mcpPlan.file}`)
     console.log(
       settingsPlan.statusLineSet
         ? `Antigravity CLI status line: ${agyStatusline} in ${settingsPlan.file}`
@@ -185,6 +233,10 @@ if (args.includes('--codex')) {
     installCodexHooks(plan)
     installShims()
     console.log(`Codex hooks: SessionStart, UserPromptSubmit -> ${script} in ${plan.file}`)
+    if (mcpOn()) {
+      const mcp = editCodexToml(join(dir, 'config.toml'), boardMcpUrl(loadConfig().port))
+      if (mcp.action !== 'same') console.log(registeredLine(mcp))
+    }
     if (Bun.which('bun') === null)
       console.log('Codex hooks: warning: bun is not on PATH; add Bun to PATH before starting Codex.')
     console.log(
@@ -314,6 +366,18 @@ try {
         "wake hooks: not added: the separate herdr-wake plugin's are there (Settings → Sleep and wake… → Switch over…)",
       )
   }
+  // The board's MCP server (#814): each shown profile's user scope, and Codex, agy and pi where they are the board's.
+  if (mcpOn())
+    mcpLines(
+      registerBoardMcp({
+        on: true,
+        port: loadConfig().port,
+        bun: paths.bun,
+        cli: paths.cli,
+        profiles,
+        codexHome: dedicatedCodexHome(),
+      }),
+    )
   if (toasts) {
     const delivery = tomlValue(readText(herdrConfigFile()), 'ui.toast', 'delivery') ?? 'off'
     if (toastOn && delivery !== 'off')

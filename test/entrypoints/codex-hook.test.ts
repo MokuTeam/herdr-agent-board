@@ -306,3 +306,15 @@ test('a Codex card briefed with the Claude count is briefed again once; one at t
   expect(readCard(box)).toMatchObject({ briefV: CODEX_BRIEF_VERSION })
   expect(await hook(box, 'UserPromptSubmit', 'next task')).toBe('')
 })
+
+test("Codex hears of the board's MCP tools (#814), unless config.json turned the registration off", async () => {
+  const box = await sandbox()
+  configure(box)
+  const text = JSON.parse(await hook(box, 'SessionStart')).hookSpecificOutput.additionalContext
+  expect(text).toContain("the agent-board server's tools (card, schedule, agents, threads, thread, spawn, cal)")
+  const config = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json')
+  writeFileSync(config, '{"language":"en","port":9,"boardMcp":false}')
+  expect(JSON.parse(await hook(box, 'SessionStart')).hookSpecificOutput.additionalContext).not.toContain(
+    'agent-board server',
+  )
+})
