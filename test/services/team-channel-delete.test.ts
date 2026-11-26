@@ -15,6 +15,7 @@ import {
   changePins,
   keepJoinedKey,
   readAgents,
+  readChannelNotices,
   readDrafts,
   readInbox,
   readOutbox,
@@ -99,7 +100,7 @@ async function setupBoards() {
   // Initialize team-reads.json baseline before inbound messages arrive (as the board's payload does).
   notify.unread()
   await Bun.sleep(5)
-  return { A, B, C, b, c, team, router, notify, notices }
+  return { A, B, C, b, c, cfg, team, router, notify, notices }
 }
 
 test('creator deletes a channel: purges local state and sends a signed notice over the hub', async () => {
@@ -406,4 +407,65 @@ test('older boards ignore the channel notice: hub relays it, and a message with 
   b.send({ t: 'send', env: unknown })
   await until(() => readAudits().some(a => a.action === 'drop' && a.why === 'bad_frame'), 'unknown field dropped', 4000)
   expect(readInbox(B.pub)).toEqual([])
+})
+
+test('offline delete and leave queue notices from channel members and flush on connect', async () => {
+  const { A, B, C, b, c, cfg, team } = await setupBoards()
+  // Alice creates a 3-member channel (key1).
+  const created = await team.post({ to: 'team', thread: { title: 'OfflineDel', members: [B.pub, C.pub] } }, 'hi', {
+    by: 'ui',
+  })
+  if (!created.ok) throw new Error(created.error)
+  const key1 = created.thread
+  const id1 = key1.split('/')[1] as string
+  await nextMsg(b)
+  await nextMsg(c)
+
+  // Ben starts a 2-member channel (key2) for Alice to leave offline.
+  const id2 = crypto.randomUUID()
+  const key2 = `team/${id2}`
+  b.send({
+    t: 'send',
+    env: await question(B, A.pub, 'hi from ben', {
+      body: {
+        text: 'hi from ben',
+        thread: { id: id2, title: 'OfflineLeave', group: true, members: [A.pub, B.pub].sort() },
+      },
+    }),
+  })
+  await until(() => !!readThreads()[key2], 'peer channel persisted', 4000)
+
+  // Cara's key changed before going offline; deleteChannel must still skip her by pinned name.
+  changePins(pins => {
+    const pin = pins[C.pub]
+    if (pin) pin.status = 'changed'
+  })
+
+  // Disconnect and recreate TeamService without calling start() so the in-memory roster is empty.
+  team.stop()
+  await h.offline(A.pub)
+  svc = createTeam({ cfg, log: () => {}, onChange: () => {}, onInbound: () => {} })
+  const offlineTeam = svc
+  expect(offlineTeam.view()?.roster).toEqual([])
+
+  expect(await offlineTeam.deleteChannel(key1)).toEqual({ ok: true, copies: 1, skipped: ['cara'] })
+  expect(readThreads()[key1]).toBeUndefined()
+  expect(readChannelNotices().some(n => n.to === B.pub && n.state === 'queued')).toBe(true)
+  expect(readChannelNotices().some(n => n.to === C.pub)).toBe(false)
+
+  expect(await offlineTeam.leaveChannel(key2)).toEqual({ ok: true, copies: 1, skipped: [] })
+  expect(readThreads()[key2]).toBeUndefined()
+  expect(readChannelNotices().filter(n => n.state === 'queued')).toHaveLength(2)
+
+  // Connecting flushes the queued notices over the hub to Ben; Cara receives nothing.
+  offlineTeam.start()
+  await until(() => offlineTeam.view()?.state === 'online', 'reconnected online', 5000)
+  const deliveredToBen = [await nextMsg(b), await nextMsg(b)]
+  expect(deliveredToBen.map(m => m.body)).toEqual(
+    expect.arrayContaining([
+      { text: 'channel notice', channel: { id: id1, op: 'delete' } },
+      { text: 'channel notice', channel: { id: id2, op: 'leave' } },
+    ]),
+  )
+  expect((await c.settle(120)).filter(f => f.t === 'deliver')).toEqual([])
 })

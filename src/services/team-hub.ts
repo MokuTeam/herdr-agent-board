@@ -1789,18 +1789,18 @@ export function createTeam({
   async function buildChannelNotices(
     id: string,
     op: ChannelOp,
-    peers: RosterPeer[],
+    peers: string[],
   ): Promise<{ ok: true; copies: ChannelNoticeOutboxItem[] } | { ok: false; error: ErrorCode }> {
     if (!peers.length) return { ok: true, copies: [] }
     const key = await ensureKey()
     const ts = new Date(clock.now()).toISOString()
     const copies: ChannelNoticeOutboxItem[] = []
-    for (const p of peers) {
+    for (const peer of peers) {
       const msg: Message = {
         v: TEAM_PROTOCOL,
         id: crypto.randomUUID(),
         from: key.pub,
-        to: p.peer,
+        to: peer,
         kind: 'question',
         reply_to: null,
         ts,
@@ -1812,7 +1812,7 @@ export function createTeam({
       if (!wire.ok) return { ok: false, error: wire.code }
       const checked = checkMessage(env.payload, env.from)
       if (!checked.ok) return { ok: false, error: checked.code }
-      copies.push({ env, id: msg.id, to: p.peer, state: 'queued', at: clock.now() })
+      copies.push({ env, id: msg.id, to: peer, state: 'queued', at: clock.now() })
     }
     return { ok: true, copies }
   }
@@ -2193,11 +2193,10 @@ export function createTeam({
       if (rec.by !== 'me') return { ok: false, error: 'not_creator' }
       const self = await ensureKey()
       const pins = readPins()
-      const others = rec.members.filter(m => m !== self.pub)
-      const changedKey = (p: RosterPeer): boolean => pins[p.peer]?.status === 'changed'
-      const eligible = roster.filter(p => others.includes(p.peer) && !changedKey(p))
-      const skipped = roster.filter(p => others.includes(p.peer) && changedKey(p)).map(p => p.name)
-      const built = await buildChannelNotices(rec.id, 'delete', eligible)
+      const others = rec.members.filter(m => m !== self.pub && isPeerId(m))
+      const targets = others.filter(m => pins[m]?.status !== 'changed')
+      const skipped = others.filter(m => pins[m]?.status === 'changed').map(m => nameOf(m))
+      const built = await buildChannelNotices(rec.id, 'delete', targets)
       if (!built.ok) return built
       purgeChannel(key)
       if (built.copies.length) {
@@ -2215,11 +2214,10 @@ export function createTeam({
       if (rec.by === 'me') return { ok: false, error: 'creator' }
       const self = await ensureKey()
       const pins = readPins()
-      const others = rec.archived ? [] : rec.members.filter(m => m !== self.pub)
-      const changedKey = (p: RosterPeer): boolean => pins[p.peer]?.status === 'changed'
-      const eligible = roster.filter(p => others.includes(p.peer) && !changedKey(p))
-      const skipped = roster.filter(p => others.includes(p.peer) && changedKey(p)).map(p => p.name)
-      const built = await buildChannelNotices(rec.id, 'leave', eligible)
+      const others = rec.archived ? [] : rec.members.filter(m => m !== self.pub && isPeerId(m))
+      const targets = others.filter(m => pins[m]?.status !== 'changed')
+      const skipped = others.filter(m => pins[m]?.status === 'changed').map(m => nameOf(m))
+      const built = await buildChannelNotices(rec.id, 'leave', targets)
       if (!built.ok) return built
       purgeChannel(key)
       if (built.copies.length) {
