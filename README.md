@@ -1607,6 +1607,13 @@ an hour to sleep, when it is on). The board's entries are files, and the board k
   a node it asks the master over the uplink (master's and this node's sessions only) and falls back
   to the node's local board when the master is offline or older. `board mcp --agents` exposes
   `ListAgents` and `SendMessage` over stdio JSON-RPC using the same path.
+- `/mcp` on the board's own port (#813) is the board as an MCP server over Streamable HTTP, for
+  any agent harness: tools `card`, `schedule`, `agents`, `threads`, `thread`, `spawn` and `cal`, each
+  call the `board` command (or `spawn-agent`) run as its caller, so a node answers it exactly as the
+  command does there. The caller is read on every call from `X-Board-Pane` (its herdr pane, taken as
+  the session herdr says runs there now) or `X-Board-Session`; with neither it is the owner. Only
+  this computer's loopback clients reach it: not a remote listener, the master door or a relayed
+  request. Stateless: each POST is one message, answered with JSON (202 for a notification).
 - `board send <name|key> "<text>"` (#619) sends a message to any session on the board, this
   computer's or a node's, due now and typed in once it is free, waking it first if it sleeps.
   A name two sessions share takes the ref the error lists (`"Name [1a2b3c4d]"`). The receiver's

@@ -104,16 +104,16 @@ export const TOOLS = [
 ] as const
 
 /** A call's refusal before the command runs: the argument named, and why. */
-class Bad extends Error {}
+export class Bad extends Error {}
 
-const str = (v: unknown, name: string): string | undefined => {
+export const str = (v: unknown, name: string): string | undefined => {
   if (v === undefined || v === null) return undefined
   if (typeof v !== 'string') throw new Bad(`${name} must be a string`)
   return v
 }
 
 /** A key, lane, session or parent: a word, never one that would read as a flag. */
-const word = (v: unknown, name: string): string | undefined => {
+export const word = (v: unknown, name: string): string | undefined => {
   const s = str(v, name)?.trim()
   if (s === undefined || s === '') return undefined
   if (s.startsWith('-') || /\s/.test(s)) throw new Bad(`${name}: "${s}" is not a ${name}`)
@@ -121,7 +121,7 @@ const word = (v: unknown, name: string): string | undefined => {
 }
 
 /** A session reference for `to`: allows spaces (e.g. "anna [1a2b3c4d]"), rejects flags and control characters. */
-const targetWord = (v: unknown, name: string): string | undefined => {
+export const targetWord = (v: unknown, name: string): string | undefined => {
   const s = str(v, name)?.trim()
   if (s === undefined || s === '') return undefined
   // biome-ignore lint/suspicious/noControlCharactersInRegex: reject control chars in session references
@@ -216,14 +216,15 @@ interface Request {
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const PROTOCOL = '2025-06-18'
 
-type ToolAnswer = { content: { type: 'text'; text: string }[]; isError?: true }
+export type ToolAnswer = { content: { type: 'text'; text: string }[]; isError?: true }
 
-function toToolAnswer(r: ThreadRun): ToolAnswer {
+export function toToolAnswer(r: ThreadRun): ToolAnswer {
   const text = [...r.out, ...r.err].join('\n').trim() || (r.code === 0 ? 'ok' : 'failed')
   return { content: [{ type: 'text', text }], ...(r.code !== 0 && { isError: true as const }) }
 }
 
-function jsonRpcServer(o: {
+/** JSON-RPC 2.0 for MCP over one message at a time: the stdio servers here and the board's HTTP one (#813). */
+export function jsonRpcServer(o: {
   version: string
   tools: readonly unknown[]
   call: (name: unknown, args: Record<string, unknown>) => Promise<ToolAnswer>

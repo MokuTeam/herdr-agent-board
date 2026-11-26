@@ -151,6 +151,7 @@ import { watchesConfig } from '../core/watches.ts'
 import { threadsConfig, verifyKeptOff } from '../core/work-threads.ts'
 import { workdeskConfig } from '../core/workdesk.ts'
 import { workdeskEventsConfig } from '../core/workdesk-events.ts'
+import { childRunner, createHttpMcp } from '../entrypoints/mcp-http.ts'
 import { type ReminderDesktop, reminderDesktop } from '../integrations/reminder-toast.ts'
 import { type TeamDesktop, teamDesktop } from '../integrations/team-toast.ts'
 import { createAccess } from '../services/access.ts'
@@ -264,6 +265,7 @@ import { housekeepingRoutes } from './routes/housekeeping.ts'
 import { journalRoutes } from './routes/journal.ts'
 import { launchRoutes } from './routes/launch.ts'
 import { linksRoutes } from './routes/links.ts'
+import { mcpRoutes } from './routes/mcp.ts'
 import { mokupilotRoutes } from './routes/mokupilot.ts'
 import { moveRoute } from './routes/move.ts'
 import { masterRelayRoute, nodeCallRoutes, nodeDoorRoutes } from './routes/node.ts'
@@ -1521,6 +1523,21 @@ export async function startServer({
       gate: messageGate(),
       answering: new Set(),
       nodeAddresses: () => registeredNodeAddresses(),
+    }),
+    // The board's MCP for sessions of any agent kind (#813): each call the board command as its caller.
+    ...mcpRoutes({
+      mcp: createHttpMcp({
+        version: PLUGIN_VERSION || 'dev',
+        run: childRunner({ root: ROOT, env: () => process.env, cwd: ROOT, exists: existsSync }),
+      }),
+      find: ref => {
+        const items = board.items()
+        const it =
+          (ref.session && items.find(i => i.key === ref.session || i.session === ref.session)) ||
+          (ref.pane && items.find(i => i.pane === ref.pane)) ||
+          null
+        return it && { ...(it.pane && { pane: it.pane }), ...(it.cwd && { cwd: it.cwd }) }
+      },
     }),
     // The Omarchy theme's colors for the Terminal style, on a computer with Omarchy.
     {
