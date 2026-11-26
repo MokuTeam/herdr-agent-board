@@ -109,6 +109,8 @@ export const TEAM_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'team.file.draft': 'attached',
     'team.file.unnamed': 'a file',
     'team.file.open': 'Download',
+    'team.file.saveFailed': 'Could not download {name}: {why}',
+    'team.file.notLoaded': 'The picture did not load',
     'team.confirm.file': 'With the file {name}.',
     'team.agents': 'Agents',
     'team.agentsAbout':
@@ -390,6 +392,8 @@ export const TEAM_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'team.file.draft': 'приложен',
     'team.file.unnamed': 'файл',
     'team.file.open': 'Скачать',
+    'team.file.saveFailed': 'Не удалось скачать {name}: {why}',
+    'team.file.notLoaded': 'Картинка не загрузилась',
     'team.confirm.file': 'С файлом {name}.',
     'team.agents': 'Агенты',
     'team.agentsAbout':
