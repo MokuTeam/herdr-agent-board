@@ -131,6 +131,31 @@ test('"Where" is read only while the board places; a folder this computer lacks 
   expect(own.ok && own.launch.remote).toBeUndefined()
 })
 
+test('a Windows node’s folder pinned to that node is the node’s on any master; pinned elsewhere it is refused (#891)', async () => {
+  const dir = tmp()
+  const home = join(dir, 'home')
+  const profiles = profileSet(mergeProfiles([], [], home).list, defaultProfileDir(home))
+  const on = { profiles, pins: true }
+  const body = { name: 'A', workspace: { id: 'w2' } }
+  for (const cwd of ['C:\\Users\\Анна Мария\\Board 100%', 'C:/Users/x/Board-Smoke', '\\\\nas\\share\\proj']) {
+    const r = await checkRequest({ ...body, cwd, pin: { device: 'win-laptop' } }, on)
+    expect([cwd, r.ok && [r.launch.cwd, r.launch.remote]]).toEqual([cwd, [cwd, 'win-laptop']])
+    // Pinned here, to a tag, or not at all, or with nodes off: this computer's folder, which it lacks.
+    for (const [pin, opts] of [
+      [{ device: 'local' }, on],
+      [{ tag: 'windows' }, on],
+      [undefined, on],
+      [{ device: 'win-laptop' }, { profiles }],
+    ] as const) {
+      const here = await checkRequest({ ...body, cwd, pin }, opts)
+      expect([cwd, pin, !here.ok && here.field]).toEqual([cwd, pin, 'cwd'])
+    }
+  }
+  // A relative folder is not a node's absolute one: refused as before.
+  const rel = await checkRequest({ ...body, cwd: 'Projects\\x', pin: { device: 'win-laptop' } }, on)
+  expect(!rel.ok && rel.field).toBe('cwd')
+})
+
 test('the queue keeps 50 starts, each its master’s; another master’s entries are left as they are', () => {
   const dir = tmp()
   const file = join(dir, 'nodes', 'queue.json')

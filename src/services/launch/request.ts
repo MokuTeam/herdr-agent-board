@@ -176,8 +176,16 @@ export async function checkRequest(
     remote = forcedRemote
   } else {
     cwd = resolvePath(b.cwd).path
-    if (!cwd) return fail('cwd', 'launch.err.cwdEmpty')
-    const st = await statOf(cwd, 3000)
+    // A Windows node's folder on a POSIX master (#891) is not absolute here and resolves to nothing:
+    // pinned to that node, it is the node's folder all the same, never stat'd here.
+    const nodeOnly =
+      !cwd &&
+      !!pin &&
+      'device' in pin &&
+      pin.device !== LOCAL &&
+      /^(?:[A-Za-z]:[\\/]|\\\\)/.test(String(b.cwd ?? '').trim())
+    if (!cwd && !nodeOnly) return fail('cwd', 'launch.err.cwdEmpty')
+    const st = nodeOnly ? null : await statOf(cwd, 3000)
     if (st === SLOW) return fail('cwd', 'launch.err.cwdSlow', { path: cwd })
     if (!st && pin && 'device' in pin && pin.device !== LOCAL) {
       // A folder of the pinned node, as that node names it: taken as written, never resolved here.
