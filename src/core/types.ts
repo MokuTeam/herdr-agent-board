@@ -277,6 +277,7 @@ export interface Config {
   /** Trusted local Workdesk watcher settings, read only by the board server. */
   workdesk?: unknown
   workdeskDialog?: unknown
+  workdeskSystemTasks?: unknown
   boardEvents?: unknown
   /** The away journal (#489, `true` or an object), as config.json has it: read through core/journal.ts journalConfig. */
   journal?: unknown

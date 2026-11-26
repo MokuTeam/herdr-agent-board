@@ -18,6 +18,7 @@ import { useBoardContext } from '../state/BoardProvider.tsx'
 import { Card, type LaunchSlots } from './Card.tsx'
 import { DropArchive } from './DropArchive.tsx'
 import { Lane, type NewSessionContext } from './Lane.tsx'
+import { SystemTasks } from './SystemTasks.tsx'
 
 export interface BoardProps {
   /** Opens a session when not in the sheet as by default; `compose`: with the message box ready. */
@@ -58,6 +59,8 @@ export function Board({
   const root = useRef<HTMLElement>(null)
   const dropPlace = useRef<HTMLDivElement>(null)
   const lanes = data ? lanesOf({ ...data, categories }, visible, ui.filter, ui.moves) : []
+  const systemTasks = data?.workdeskSystemTasks
+  const systemTasksShown = systemTasks && lanes.some(lane => lane.id === 'tripio' && lane.shown)
   const itemOf = (key: string): Item | undefined => data?.items.find(i => i.key === key)
   // The card whose sessions are marked; a card no longer on show marks none.
   const [relatedTo, setRelatedTo] = useState<string | null>(null)
@@ -138,7 +141,9 @@ export function Board({
 
   return (
     <main className="board" id="board" ref={root}>
-      {data && !anyShown(lanes) && <p className="empty">{t(data.items.length ? 'empty.none' : 'empty.noSessions')}</p>}
+      {data && !systemTasksShown && !anyShown(lanes) && (
+        <p className="empty">{t(data.items.length ? 'empty.none' : 'empty.noSessions')}</p>
+      )}
       {lanes.map(lane => (
         <Lane
           key={lane.id}
@@ -150,6 +155,7 @@ export function Board({
           time={data?.time?.today[lane.id]}
           timeProblem={data?.time?.problems}
           onTime={() => onLaneTime?.(lane.id)}
+          systemTasks={lane.id === 'tripio' && systemTasks ? <SystemTasks feed={systemTasks} /> : undefined}
           renderCard={renderCard}
         />
       ))}

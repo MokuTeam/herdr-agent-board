@@ -18,6 +18,7 @@ import type { ColumnId, Item, Lang, LaunchView } from './types.ts'
 import type { WakeView } from './wake/view.ts'
 import type { WorkdeskPayload } from './workdesk.ts'
 import type { DialogStatus } from './workdesk-dialog.ts'
+import type { WorkdeskSystemTasksPayload } from './workdesk-system-tasks.ts'
 
 /** A lane as the page shows it: the configured category or one a session picked. */
 export interface BoardCategory {
@@ -189,6 +190,7 @@ export interface BoardPayload {
    */
   decisions?: DecisionsPayload
   /** Workdesk queue and last poll, only while the watcher is configured. */
+  workdeskSystemTasks?: WorkdeskSystemTasksPayload
   workdesk?: WorkdeskPayload
   workdeskDialog?: DialogStatus
   /**

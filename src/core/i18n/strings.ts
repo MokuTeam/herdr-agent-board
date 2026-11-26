@@ -51,6 +51,15 @@ export type Dictionary = Record<string, Entry>
 
 export const STRINGS: Record<Lang, Dictionary> = {
   en: {
+    'systemTasks.title': 'System tasks',
+    'systemTasks.loading': 'Loading system tasks…',
+    'systemTasks.unavailable': 'System tasks unavailable',
+    'systemTasks.empty': 'No system tasks',
+    'systemTasks.doing': 'In progress',
+    'systemTasks.waiting': 'Waiting',
+    'systemTasks.done': 'Completed',
+    'systemTasks.failed': 'Failed',
+    'systemTasks.cancelled': 'Cancelled',
     'workdesk.status': 'Workdesk · {queue} queued · Last poll {time}',
     'workdesk.problem.config': 'Check the local Workdesk configuration',
     'workdesk.problem.tools': 'Waiting for Workdesk coordinator tools',
@@ -801,6 +810,15 @@ export const STRINGS: Record<Lang, Dictionary> = {
   },
 
   ru: {
+    'systemTasks.title': 'Системные задачи',
+    'systemTasks.loading': 'Загружаются системные задачи…',
+    'systemTasks.unavailable': 'Системные задачи недоступны',
+    'systemTasks.empty': 'Системных задач нет',
+    'systemTasks.doing': 'В работе',
+    'systemTasks.waiting': 'Ожидание',
+    'systemTasks.done': 'Завершена',
+    'systemTasks.failed': 'Ошибка',
+    'systemTasks.cancelled': 'Отменена',
     'workdesk.status': 'Workdesk · В очереди {queue} · Последний опрос {time}',
     'workdesk.problem.config': 'Проверьте локальную настройку Workdesk',
     'workdesk.problem.tools': 'Ожидаются инструменты координатора Workdesk',

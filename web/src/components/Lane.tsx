@@ -31,17 +31,29 @@ export interface LaneProps {
   timeProblem?: boolean | undefined
   /** A click on that total: the Time panel on this client. */
   onTime?: () => void
+  systemTasks?: ReactNode
   renderCard(item: Item): ReactNode
 }
 
-export function Lane({ lane, lit, canMutate, onNewSession, onHead, time, timeProblem, onTime, renderCard }: LaneProps) {
+export function Lane({
+  lane,
+  lit,
+  canMutate,
+  onNewSession,
+  onHead,
+  time,
+  timeProblem,
+  onTime,
+  systemTasks,
+  renderCard,
+}: LaneProps) {
   const t = useT()
   const litHere = lit?.lane === lane.id ? lit : null
   return (
     <section
       className={classNames(
         'lane',
-        !lane.items.length && 'empty-lane',
+        !lane.items.length && !systemTasks && 'empty-lane',
         !lane.shown && 'filtered',
         litHere?.column === null && 'drop',
       )}
@@ -75,6 +87,7 @@ export function Lane({ lane, lit, canMutate, onNewSession, onHead, time, timePro
           <PlusIcon />
         </button>
       </div>
+      {systemTasks}
       <div className="lane-grid">
         {lane.columns.map(col => (
           <div

@@ -2974,6 +2974,19 @@ owner-question and reminder guidance in their Board brief. Load a new brief afte
 allowlist by starting or resuming the session. An enabled Workdesk integration or a Workdesk lane
 alone does not opt in other sessions.
 
+### Tripio system tasks
+
+To show system tasks in the Tripio lane, add a local `workdeskSystemTasks` section with
+the absolute `executable`, `args` and optional `caFile` of the Workdesk MCP adapter
+configured for the Board role. This section uses its own connection settings and can run
+without assignment routing. Enable it on the board where authorized users should see
+this metadata. The adapter keeps credentials in its private configuration.
+
+The feed polls `list_tripio_system_tasks` every 120 seconds by default (`intervalSec`).
+Workdesk provides active tasks and terminal tasks from the last 30 days. The Tripio lane shows
+their status, update time and Workdesk link. The feed only reads this list. It does not call
+assignment tools, create threads or add tasks to the assignment count.
+
 ### Workdesk owner dialogue metadata
 
 Set `workdeskDialog` to an object to enable the metadata poller. It uses the existing

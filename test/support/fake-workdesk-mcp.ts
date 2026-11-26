@@ -12,6 +12,7 @@ type State = {
   topology?: boolean
   rejectHeartbeat?: boolean
   invalidList?: boolean
+  systemPages?: Record<string, { tasks: unknown[]; next_cursor: string | null }>
   dialog?: {
     events: OwnerEvent[]
     pageSize?: number
@@ -37,7 +38,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     send(id, {
       tools: (state.missing
         ? ['start_codex_review', 'get_codex_review']
-        : [...tools, ...(state.dialog ? dialogTools : [])]
+        : [...tools, ...(state.dialog ? dialogTools : []), ...(state.systemPages ? ['list_tripio_system_tasks'] : [])]
       ).map(name => ({
         name,
         ...(state.topology &&
@@ -49,6 +50,10 @@ for await (const line of createInterface({ input: process.stdin })) {
   }
   if (method !== 'tools/call') continue
 
+  if (params.name === 'list_tripio_system_tasks') {
+    const page = state.systemPages?.[params.arguments.cursor ?? 'first']
+    send(id, page ? response(page) : response({ code: 'invalid_cursor', status: 400 }, true))
+  }
   if (params.name === 'board_heartbeat') {
     const snapshot = params.arguments.topology
     const ack = snapshot

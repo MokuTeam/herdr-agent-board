@@ -59,6 +59,7 @@ import type { WakeView } from '../core/wake/view.ts'
 import { watchesConfig } from '../core/watches.ts'
 import type { WorkdeskPayload } from '../core/workdesk.ts'
 import type { DialogStatus } from '../core/workdesk-dialog.ts'
+import type { WorkdeskSystemTasksPayload } from '../core/workdesk-system-tasks.ts'
 import type { BoardObservation } from '../core/workdesk-topology.ts'
 import { collect } from '../services/board.ts'
 import type { Deps } from '../services/deps.ts'
@@ -148,6 +149,7 @@ interface Options {
   nodeDecisions?: (items: readonly Item[]) => Item[]
   workdesk?: () => WorkdeskPayload | null
   workdeskDialog?: () => DialogStatus | null
+  workdeskSystemTasks?: () => WorkdeskSystemTasksPayload | null
   observeSessions?: NonNullable<Parameters<typeof collect>[1]>['observed']
   /** The away journal (#489, services/journal.ts): fed each refresh's items; its part of the payload, null while off. */
   journal?: { observe(items: readonly Item[]): void; view(): JournalPayload | null }
@@ -335,6 +337,7 @@ export function createBoardState({
   nodeDecisions: decideNodes,
   workdesk,
   workdeskDialog,
+  workdeskSystemTasks,
   observeSessions,
   observeFailure,
   nodes,
@@ -380,7 +383,10 @@ export function createBoardState({
       ? (nodesConfig(cfg.nodes, hostname())?.id ?? others.devices.find(d => d.id === LOCAL)?.status?.id ?? '')
       : ''
     const shown = others ? dropMovedCards([...items, ...others.items], masterId) : items
-    const ids = [...new Set([...cfg.categories.map(c => c.id), ...shown.map(i => i.category)])]
+    const systemTasks = workdeskSystemTasks?.()
+    const ids = [
+      ...new Set([...cfg.categories.map(c => c.id), ...shown.map(i => i.category), ...(systemTasks ? ['tripio'] : [])]),
+    ]
     const workdeskLine = workdesk?.()
     const dialogLine = workdeskDialog?.()
     const categories = ids
@@ -570,6 +576,7 @@ export function createBoardState({
         : decisionsOf(decisions, others?.items.length ? [...items, ...others.items] : items)),
       ...(workdeskLine && { workdesk: workdeskLine }),
       ...(dialogLine && { workdeskDialog: dialogLine }),
+      ...(systemTasks && { workdeskSystemTasks: systemTasks }),
       // accessRev: the panel's cue to fetch the Remote access view again (never the view itself).
       accessRev: accessRev?.() ?? 0,
       // teamRev: only while config.json turns the peer network on (#231).

@@ -292,6 +292,12 @@ h1 {
 }
 .lane-tag::before { content: ""; width: 10px; height: 10px; border-radius: 3px; background: var(--lane); }
 .lane-count { font-size: 13px; color: var(--label-3); font-variant-numeric: tabular-nums; }
+.system-tasks { margin-bottom: 12px; padding: 10px 12px; border: 1px solid var(--separator); border-radius: var(--radius); }
+.system-tasks h3 { margin: 0 0 6px; font-size: 13px; }
+.system-tasks p, .system-tasks ul { margin: 0; font-size: 13px; }
+.system-tasks ul { padding: 0; list-style: none; }
+.system-tasks li { display: flex; flex-wrap: wrap; gap: 2px 12px; padding: 4px 0; color: var(--label-2); }
+.system-tasks a { color: var(--accent); overflow-wrap: anywhere; }
 .lane-grid {
   display: grid;
   grid-template-columns: var(--cols);

@@ -281,6 +281,7 @@ import { keepThreadsDb, threadsPayload, withThreadsDb } from '../services/work-t
 import { createVerifier } from '../services/work-verify.ts'
 import { createWorkdeskDialog } from '../services/workdesk-dialog.ts'
 import { runWorkdeskEvents, workdeskEventHandlers } from '../services/workdesk-events.ts'
+import { createWorkdeskSystemTasks } from '../services/workdesk-system-tasks.ts'
 import { createWorkdeskWatcher } from '../services/workdesk-watcher.ts'
 import { createBoardState } from './board-state.ts'
 import { dispatch, json, peerOf, type Route } from './http.ts'
@@ -1169,6 +1170,7 @@ export async function startServer({
     onChange: () => board.publish(),
     log,
   })
+  const systemTasks = createWorkdeskSystemTasks(cfg, () => board.publish())
   const workdeskDialog = createWorkdeskDialog({
     cfg,
     items: () => board.observation()?.items ?? null,
@@ -1290,6 +1292,7 @@ export async function startServer({
     calendar: calendarLine,
     workdesk: workdesk.view,
     workdeskDialog: workdeskDialog.view,
+    workdeskSystemTasks: systemTasks.view,
     observeSessions: (snapshot, items) => boardEvents.observe(snapshot, items, Date.now()),
     observeFailure: () => boardEvents.health('herdr', false),
     nodes: () => nodeAggregate,
@@ -3070,6 +3073,7 @@ export async function startServer({
   if (handoverFrozen) scheduler.pause()
   workdesk.configChanged()
   workdeskDialog.configChanged()
+  systemTasks.configChanged()
   void configureWorkdeskStream()
   // Auto-compact (#378) beside it, for the same reason: one board types /compact.
   const compactor = startCompactor({ deps, onChange: refresh })
@@ -3159,6 +3163,7 @@ export async function startServer({
     reminders.configChanged()
     workdesk.configChanged()
     workdeskDialog.configChanged()
+    systemTasks.configChanged()
     await configureWorkdeskStream()
     if (!handoverFrozen) team.refresh()
     holdLoopback6()
@@ -3203,7 +3208,7 @@ export async function startServer({
       scheduler.stop()
       workdeskStreamConfig = ''
       workdeskStream?.controller.abort()
-      await Promise.all([workdesk.stop(), workdeskDialog.stop(), workdeskStream?.task])
+      await Promise.all([workdesk.stop(), workdeskDialog.stop(), systemTasks.stop(), workdeskStream?.task])
       await boardEvents.stop()
       nsNotify.stop()
       journal.stop()
