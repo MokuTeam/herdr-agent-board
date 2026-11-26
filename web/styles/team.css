@@ -234,6 +234,14 @@ button.team-quote:hover { background: color-mix(in srgb, var(--accent) 15%, tran
 .team-mention:hover { background: var(--fill-2); }
 .team-mention-word { flex: none; font-weight: 600; }
 .team-mention-about { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--label-2); }
+/* A teammate (#842): picked, their agents come; the chevron says so. */
+.team-mention-more { margin-left: auto; color: var(--label-2); }
+/* A teammate with no agents to address (#842): the name, the reason in a quiet line under it; nothing to pick. */
+.team-mention.none { flex-direction: column; align-items: stretch; gap: 2px; cursor: default; }
+.team-mention.none .team-mention-word { color: var(--label-2); }
+.team-mention.none .team-mention-about { white-space: normal; line-height: 1.35; }
+.team-mention.none:hover { background: none; }
+.team-mention.none[aria-selected="true"] { background: var(--fill-2); }
 /* What teammates can address (#832), shown, not set. */
 .team-exposed { display: flex; flex-direction: column; gap: 8px; }
 .team-exposed summary { list-style: none; cursor: pointer; }

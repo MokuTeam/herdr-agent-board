@@ -243,36 +243,99 @@ export const isDirectoryList = (v: unknown): v is { peers: PeerDirectory[] } =>
       ),
   )
 
-/** One agent the composer offers after `@` (#832): how it is written, and whose it is. */
-export interface MentionChoice {
-  /** `Name.code`, what goes after the `@`. */
-  word: string
+/**
+ * Why a teammate has no agents to address (#842): `key` their key changed and waits for trust;
+ * `lane` their board sent a directory once and lists nobody now; `unknown` it never sent one, which
+ * a current board with nothing shared never does either, so it may or may not be an older board.
+ */
+export type MentionNone = 'key' | 'lane' | 'unknown'
+
+/** A teammate the composer offers after `@` (#842), with the agents their directory lists (#832). */
+export interface MentionPerson {
+  peer: string
   name: string
-  code: string
-  about?: string
+  /** The name as written after `@`: without spaces, dots and `@`. */
+  word: string
+  agents: { code: string; about?: string }[]
+  /** No agents to address: why. Absent with agents, and for a peer whose list the page could not fetch. */
+  none?: MentionNone
 }
 
-/** The composer's choices from the peers' directories (#832), by name then code name. */
-export function mentionChoices(directory: readonly PeerDirectory[]): MentionChoice[] {
-  return directory
-    .flatMap(p =>
-      p.agents.map(a => ({
-        word: `${mentionWord(p.name)}.${a.code}`,
-        name: p.name,
-        code: a.code,
-        ...(a.about && { about: a.about }),
-      })),
-    )
-    .sort((a, b) => a.word.localeCompare(b.word))
-}
-
-/** The choices that fit what is written after `@` (the name, then a dot and the start of a code). */
-export function fitMentions(choices: readonly MentionChoice[], who: string, code: string | null): MentionChoice[] {
-  const w = who.toLowerCase()
-  return choices.filter(c => {
-    const [name = '', own = ''] = c.word.toLowerCase().split('.')
-    return code === null ? name.startsWith(w) : name === w && own.startsWith(code)
+/**
+ * The teammates the composer offers (#842): every one in the roster, by name, with the agents of
+ * their directory (#832, by code name). A peer that has agents the page could not fetch has none
+ * and no reason either: nothing claims there are none. A directory of a peer not in the roster is
+ * offered too.
+ */
+export function mentionPeople(
+  directory: readonly PeerDirectory[],
+  roster: readonly TeamRosterPeer[] = [],
+): MentionPerson[] {
+  const listed = new Map(directory.filter(p => p.agents.length).map(p => [p.peer, p]))
+  const byCode = (a: { code: string }, b: { code: string }): number => a.code.localeCompare(b.code)
+  const person = (peer: string, name: string): MentionPerson => ({
+    peer,
+    name,
+    word: mentionWord(name),
+    agents: [...(listed.get(peer)?.agents ?? [])].sort(byCode),
   })
+  const people = roster.map((p): MentionPerson => {
+    const one = person(p.peer, p.name)
+    if (one.agents.length || p.agents) return one
+    return { ...one, none: p.pin === 'changed' ? 'key' : p.directory ? 'lane' : 'unknown' }
+  })
+  for (const d of listed.values()) if (!roster.some(p => p.peer === d.peer)) people.push(person(d.peer, d.name))
+  return people.filter(p => p.word).sort((a, b) => a.word.localeCompare(b.word))
+}
+
+/**
+ * One line of the list after `@` (#842). `person`: a teammate, picked it puts `@Name.` in, which
+ * opens their agents; `agent`: one of theirs, picked it puts `@Name.code ` in; `none`: why a
+ * teammate has no agents to address, which puts nothing in.
+ */
+export interface MentionRow {
+  kind: 'person' | 'agent' | 'none'
+  key: string
+  /** What the line shows after `@`. */
+  word: string
+  /** What picking it puts in place of the mention; none: nothing. */
+  insert?: string
+  about?: string
+  none?: MentionNone
+}
+
+/**
+ * The lines for what is written after `@`: while a name is written (`code` null), the teammates
+ * whose name starts so; once a dot follows a whole name, that teammate's agents whose code name
+ * starts with what is after the dot, or the line that says why there are none.
+ */
+export function mentionRows(people: readonly MentionPerson[], who: string, code: string | null): MentionRow[] {
+  const w = who.toLowerCase()
+  if (code === null)
+    return people
+      .filter(p => p.word.toLowerCase().startsWith(w))
+      .map(p => ({ kind: 'person', key: p.peer, word: p.word, insert: `@${p.word}.` }))
+  return people
+    .filter(p => p.word.toLowerCase() === w)
+    .flatMap((p): MentionRow[] => {
+      if (p.none) return [{ kind: 'none', key: `${p.peer}:`, word: p.word, none: p.none }]
+      return p.agents
+        .filter(a => a.code.startsWith(code))
+        .map(a => ({
+          kind: 'agent',
+          key: `${p.peer}:${a.code}`,
+          word: `${p.word}.${a.code}`,
+          insert: `@${p.word}.${a.code} `,
+          ...(a.about && { about: a.about }),
+        }))
+    })
+}
+
+/** The words of a teammate's line without agents (#842). */
+export const MENTION_NONE_KEY: Record<MentionNone, string> = {
+  key: 'team.mentionNoneKey',
+  lane: 'team.mentionNoneLane',
+  unknown: 'team.mentionNone',
 }
 
 export interface ServiceAgentView {

@@ -325,6 +325,25 @@ describe("the peers' directories", () => {
     expect(w.s.svc.directories()).toEqual([])
   })
 
+  test('an empty directory marks a board that reads them (#842): directory, not agents; none sent: neither; a changed key: neither', async () => {
+    const w = await world()
+    const of = (peer: string) => w.s.svc.view()?.roster.find(p => p.peer === peer)
+    expect(of(w.P.pub)).not.toHaveProperty('directory')
+    await deliver(w, w.P, { text: 'agent directory', agents: [] }, '2026-11-26T10:00:00.000Z')
+    expect(of(w.P.pub)).toMatchObject({ directory: true })
+    expect(of(w.P.pub)).not.toHaveProperty('agents')
+    expect(of(w.Q.pub)).not.toHaveProperty('directory')
+    expect(w.s.svc.directories()).toEqual([])
+    await deliver(w, w.P, { text: 'agent directory', agents: [{ code: 'helper' }] }, '2026-11-26T11:00:00.000Z')
+    expect(of(w.P.pub)).toMatchObject({ directory: true, agents: true })
+    changePins(p => {
+      const pin = p[w.P.pub]
+      if (pin) pin.status = 'changed'
+    })
+    expect(of(w.P.pub)).not.toHaveProperty('directory')
+    expect(of(w.P.pub)).not.toHaveProperty('agents')
+  })
+
   test('a post to her that starts with @Name.handle names the agent; a team post names none; one not listed is refused', async () => {
     const w = await world()
     await deliver(w, w.P, { text: 'agent directory', agents: [{ code: 'helper' }] })

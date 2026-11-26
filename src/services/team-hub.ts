@@ -161,6 +161,12 @@ export interface TeamRosterPeer {
   reshare?: boolean
   /** The peer sent a directory with an agent in it (#832): the page asks for the directories only then. */
   agents?: boolean
+  /**
+   * The peer's board sent a directory, an empty one too (#842): it reads them, so none to address
+   * now means no lane shared with Agents on. Absent: it never sent one (an older board, or a current
+   * one that never had an agent to list: the first directory goes only with one in it).
+   */
+  directory?: boolean
 }
 
 export interface TeamView {
@@ -983,22 +989,22 @@ export function createTeam({
       return true
     })
     if (!kept) return
-    if (list.length) withAgents().add(msg.from)
-    else withAgents().delete(msg.from)
+    sentDirectory().set(msg.from, list.length)
     audit('directory', msg.from, { id: msg.id, agents: list.length })
     changed()
   }
 
-  /** The peers whose directory, as kept, lists an agent (#832): read once, then kept up with here. */
-  let agentPeers: Set<string> | null = null
-  function withAgents(): Set<string> {
-    agentPeers ??= new Set(
-      Object.entries(readDirectoryState().got)
-        .filter(([, g]) => g.list.length > 0)
-        .map(([peer]) => peer),
-    )
-    return agentPeers
+  /**
+   * The peers that sent a directory, by how many agents it lists as kept (#832, #842): read once,
+   * then kept up with here.
+   */
+  let directoryPeers: Map<string, number> | null = null
+  function sentDirectory(): Map<string, number> {
+    directoryPeers ??= new Map(Object.entries(readDirectoryState().got).map(([peer, g]) => [peer, g.list.length]))
+    return directoryPeers
   }
+  /** Whether a peer's directory, as kept, lists an agent (#832). */
+  const withAgents = (peer: string): boolean => (sentDirectory().get(peer) ?? 0) > 0
 
   /** The peers whose directory went in this connection with no word from the hub yet: not sent twice in one. */
   const directoryTries = new Set<string>()
@@ -1874,7 +1880,8 @@ export function createTeam({
           ...(hasAssistant(p) && { assistant: true }),
           ...(workOn() && hasWork(p) && { work: true }),
           ...(workOn() && hasWorkReshare(p) && { reshare: true }),
-          ...(withAgents().has(p.peer) && pins[p.peer]?.status !== 'changed' && { agents: true }),
+          ...(withAgents(p.peer) && pins[p.peer]?.status !== 'changed' && { agents: true }),
+          ...(sentDirectory().has(p.peer) && pins[p.peer]?.status !== 'changed' && { directory: true }),
         })),
         ...(hubFiles && { files: { max: hubFiles.max - NONCE_BYTES - TAG_BYTES } }),
       }
