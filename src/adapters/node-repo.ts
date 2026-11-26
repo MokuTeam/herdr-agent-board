@@ -181,24 +181,20 @@ export async function moveTo(dir: string, state: RepoState): Promise<RepoDone> {
 }
 
 /**
- * The main checkout the folder `dir` belongs to (through a linked worktree too) and the addresses
- * of its remotes as core/portable.ts repoAddress gives them, or null when it is in no checkout
- * with a work tree (#816). The remotes' URLs as the checkout's git config has them, before any `insteadOf`.
+ * The main checkout the folder `dir` belongs to (through a linked worktree too) and the address of
+ * its `origin` as core/portable.ts repoAddress gives it (null: no origin, or one it does not read),
+ * or null when it is in no checkout with a work tree (#816). Only `origin`: every later step fetches
+ * and branches from it, so another remote with the address asked for does not make the checkout
+ * that repository's. The URL as the checkout's git config has it, before any `insteadOf`.
  */
-export async function checkoutRemotes(dir: string): Promise<{ root: string; addresses: string[] } | null> {
+export async function checkoutOrigin(dir: string): Promise<{ root: string; origin: string | null } | null> {
   const common = await git(dir, ['rev-parse', '--path-format=absolute', '--git-common-dir'])
   if (!common.ok || !common.out) return null
   const at = resolve(common.out)
   if (!/(^|[\\/])\.git$/.test(at)) return null
   const root = dirname(at)
-  const urls = await git(root, ['config', '--get-regexp', '^remote\\..*\\.url$'])
-  const addresses = new Set<string>()
-  for (const line of urls.ok ? urls.out.split(/\r?\n/) : []) {
-    const url = line.slice(line.indexOf(' ') + 1)
-    const address = line.includes(' ') ? repoAddress(url) : null
-    if (address) addresses.add(address)
-  }
-  return { root, addresses: [...addresses] }
+  const url = await git(root, ['config', '--get', 'remote.origin.url'])
+  return { root, origin: url.ok && url.out ? repoAddress(url.out) : null }
 }
 
 /**

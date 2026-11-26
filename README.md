@@ -4913,8 +4913,9 @@ in the checkout of that repository the node's computer already has, not in a sec
 looks, in this order, at `node.repos` (`{ "github.com/acme/atlas": "~/Projects/atlas" }`, optional),
 the folders its own sessions ran in (live, then archived), and the folders its Claude profiles were
 used in (`projects` of their `.claude.json`); a folder in a linked worktree counts as its main
-checkout, and a remote matches by its address in any case. Only when none has the repository is it
-cloned under `node.workRoot` as before. The owner's checkout is fetched, and used as it is only when
+checkout, and it matches when its `origin` has the address, in any case (a fork with the repository as
+`upstream` does not). Only when none has the repository is it cloned under `node.workRoot` as before,
+and also when the owner's checkout cannot be fetched or has no such branch. The owner's checkout is fetched, and used as it is only when
 no worktree is asked for and it is clean on the branch asked for (fast-forwarded when merely behind);
 it is never switched, reset or cleaned, and the master's git author is not written into it.
 Anything else gets a worktree of its own from the remote branch, at

@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { claudeProjects, knownFolders } from '../../src/adapters/known-folders.ts'
-import { checkoutRemotes } from '../../src/adapters/node-repo.ts'
+import { checkoutOrigin } from '../../src/adapters/node-repo.ts'
 import { type NodeConfig, nodeConfig, nodeProblems } from '../../src/core/nodes.ts'
 import { profileSet } from '../../src/core/profiles.ts'
 import type { StartResult } from '../../src/services/launch/launches.ts'
@@ -297,19 +297,76 @@ test('the board’s own clone found among the known folders is still the clone: 
   assert.deepEqual(await again.launch.answer(body(ids(2))), { status: 409, body: { error: 'repo', detail: 'changes' } })
 }, 30_000)
 
-test('checkoutRemotes reads the remotes as configured, before insteadOf; a folder in no checkout is null', async () => {
+test('checkoutOrigin reads origin only, as configured, before insteadOf; no origin is null; a folder in no checkout is null', async () => {
   const root = tmp()
   remote(root)
   const own = ownersCheckout(root)
   git(own, 'remote', 'add', 'fork', 'git@github.com:someone/atlas.git')
-  assert.deepEqual(await checkoutRemotes(join(own, 'src')), {
-    root: git(own, 'rev-parse', '--show-toplevel'),
-    addresses: ['example.test/acme/atlas', 'github.com/someone/atlas'],
-  })
+  const top = git(own, 'rev-parse', '--show-toplevel')
+  assert.deepEqual(await checkoutOrigin(join(own, 'src')), { root: top, origin: 'example.test/acme/atlas' })
+  git(own, 'remote', 'remove', 'origin')
+  assert.deepEqual(await checkoutOrigin(own), { root: top, origin: null })
   const plain = join(root, 'plain')
   mkdirSync(plain)
-  assert.equal(await checkoutRemotes(plain), null)
+  assert.equal(await checkoutOrigin(plain), null)
 })
+
+const FORK = 'https://example.test/someone/atlas.git'
+
+/** A fork of the remote with a commit of its own (fork.txt), its https address pointed at it too. */
+function fork(root: string, seed: string): void {
+  const work = join(root, 'fork-work')
+  git(root, 'clone', '--quiet', seed, work)
+  writeFileSync(join(work, 'fork.txt'), 'fork only\n')
+  git(work, 'add', '.')
+  git(work, 'commit', '--quiet', '-m', 'fork')
+  const bare = join(root, 'fork.git')
+  git(root, 'clone', '--quiet', '--bare', work, bare)
+  setEnv({
+    GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_1: `url.${bare.replace(/\\/g, '/')}.insteadOf`,
+    GIT_CONFIG_VALUE_1: FORK,
+  })
+}
+
+test('a checkout whose origin is a fork and whose upstream is the repository asked for is not used: the start clones under workRoot, no fork code', async () => {
+  const root = tmp()
+  const { seed } = remote(root)
+  fork(root, seed)
+  const own = join(root, 'Projects', 'atlas')
+  mkdirSync(join(root, 'Projects'), { recursive: true })
+  git(root, 'clone', '--quiet', FORK, own)
+  git(own, 'remote', 'add', 'upstream', URL)
+  const n = nodeWith(root, {}, { known: () => [own] })
+  const r = await n.launch.answer(body(ID))
+  assert.equal(r.status, 202, JSON.stringify(r))
+  assert.equal(n.starts[0]?.body.cwd, n.clone)
+  assert.equal(existsSync(join(n.clone, 'fork.txt')), false, 'none of the fork’s code')
+  assert.equal(existsSync(join(n.node.workRoot, 'worktree')), false, 'no worktree of the fork')
+}, 30_000)
+
+test('a checkout with the address only as upstream, or whose fetch fails, falls back to the clone under workRoot and is left as it was', async () => {
+  const root = tmp()
+  remote(root)
+  // No origin at all, the address as upstream: not the repository's checkout.
+  const upstreamOnly = ownersCheckout(root, 'atlas-up')
+  git(upstreamOnly, 'remote', 'rename', 'origin', 'upstream')
+  const u = nodeWith(root, {}, { known: () => [upstreamOnly] })
+  const r = await u.launch.answer(body(ID))
+  assert.equal(r.status, 202, JSON.stringify(r))
+  assert.equal(u.starts[0]?.body.cwd, u.clone)
+
+  // Origin is the repository, but its fetch fails (a refspec git refuses): the clone, not 409.
+  const broken = ownersCheckout(root, 'atlas-broken')
+  git(broken, 'config', 'remote.origin.fetch', 'not a refspec::')
+  const before = git(broken, 'rev-parse', 'HEAD')
+  const b = nodeWith(tmp(), {}, { known: () => [broken] })
+  const again = await b.launch.answer(body(ids(2)))
+  assert.equal(again.status, 202, JSON.stringify(again))
+  assert.equal(b.starts[0]?.body.cwd, b.clone)
+  assert.equal(git(broken, 'rev-parse', 'HEAD'), before)
+  assert.equal(existsSync(join(b.node.workRoot, 'worktree')), false)
+}, 30_000)
 
 test('node.repos and node.worktreeRoot check out or are named; a node config without them is as before', () => {
   const base = { id: 'mac', workRoot: '~' }

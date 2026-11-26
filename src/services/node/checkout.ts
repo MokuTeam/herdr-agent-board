@@ -12,7 +12,7 @@ import { homedir } from 'node:os'
 import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 import {
   addWorktreeFrom,
-  checkoutRemotes,
+  checkoutOrigin,
   cloneRepo,
   fetchRepo,
   isAncestor,
@@ -37,7 +37,7 @@ export interface RepoOps {
   identity(dir: string): Promise<GitIdentity | null>
   setIdentity(dir: string, id: GitIdentity): Promise<RepoDone>
   /** The rest is for an owner's own checkout (#816); absent: the real git. */
-  remotes?: typeof checkoutRemotes
+  origin?: typeof checkoutOrigin
   isAncestor?: typeof isAncestor
   worktreeWith?: typeof worktreeWith
   addWorktree?: typeof addWorktreeFrom
@@ -107,8 +107,8 @@ export interface Checkouts {
 
 /** At most this many folders are asked which repository they are in, per start. */
 export const MAX_KNOWN = 200
-/** How long what a folder said about its remotes is believed. */
-const REMOTES_MS = 60_000
+/** How long what a folder said about its origin is believed. */
+const ORIGIN_MS = 60_000
 
 /** Two paths name one folder (real paths where they exist). */
 function sameFolder(a: string, b: string): boolean {
@@ -151,8 +151,8 @@ export function createCheckouts(
   } = {},
 ): Checkouts {
   const repo = d.repo ?? realRepoOps
-  const remotesOf = repo.remotes ?? checkoutRemotes
-  const remotesSeen = new Map<string, { at: number; got: Awaited<ReturnType<typeof checkoutRemotes>> }>()
+  const originOf = repo.origin ?? checkoutOrigin
+  const originSeen = new Map<string, { at: number; got: Awaited<ReturnType<typeof checkoutOrigin>> }>()
   /** One start at a time in a checkout: two clones into one folder would fail each other. */
   const checkouts = new Map<string, Promise<unknown>>()
 
@@ -169,11 +169,11 @@ export function createCheckouts(
 
   const home = (): string => d.home ?? homedir()
 
-  async function remotes(dir: string): Promise<Awaited<ReturnType<typeof checkoutRemotes>>> {
-    const seen = remotesSeen.get(dir)
-    if (seen && Date.now() - seen.at < REMOTES_MS) return seen.got
-    const got = await remotesOf(dir).catch(() => null)
-    remotesSeen.set(dir, { at: Date.now(), got })
+  async function origin(dir: string): Promise<Awaited<ReturnType<typeof checkoutOrigin>>> {
+    const seen = originSeen.get(dir)
+    if (seen && Date.now() - seen.at < ORIGIN_MS) return seen.got
+    const got = await originOf(dir).catch(() => null)
+    originSeen.set(dir, { at: Date.now(), got })
     return got
   }
 
@@ -196,9 +196,9 @@ export function createCheckouts(
       if (!folder || !isAbsolute(folder) || asked.has(folder)) continue
       asked.add(folder)
       if (!existsDir(folder)) continue
-      const got = await remotes(folder)
+      const got = await origin(folder)
       if (!got || sameFolder(got.root, managed) || !existsDir(got.root)) continue
-      if (got.addresses.some(a => a.toLowerCase() === want)) return got.root
+      if (got.origin?.toLowerCase() === want) return got.root
     }
     return null
   }
@@ -208,17 +208,16 @@ export function createCheckouts(
    * is asked for and it is clean on the branch asked for (fast-forwarded when it is behind and has
    * no commits of its own); otherwise a worktree of the start's own, from the remote branch, below
    * the worktree folder and never inside the checkout. The master's git author is not written
-   * into the owner's checkout: its own config stands.
+   * into the owner's checkout: its own config stands. null: it failed before anything was moved or
+   * made (the fetch, the branch asked for), and the start goes to the clone under workRoot instead.
    */
-  async function inOwn(own: string, workRoot: string, source: RepoSource, place: Place): Promise<Folder> {
+  async function inOwn(own: string, workRoot: string, source: RepoSource, place: Place): Promise<Folder | null> {
     const label = basename(own)
     const subdirOf = (at: string): string => (source.subdir ? join(at, ...source.subdir.split('/')) : at)
-    const fetched = await repo.fetch(own)
-    if (!fetched.ok) return { ok: false, why: fetched.why }
+    if (!(await repo.fetch(own)).ok) return null
     const st = await repo.state(own, source.ref)
-    if (!st.ok) return { ok: false, why: st.why }
+    if (!st.ok || !st.state.target) return null
     const s = st.state
-    if (!s.target) return { ok: false, why: `no branch ${s.ref}` }
     if (!source.worktree && s.clean && s.branch === s.ref) {
       let there = s.head === s.target
       if (!there && s.head && (await (repo.isAncestor ?? isAncestor)(own, s.head, s.target)))
@@ -270,7 +269,8 @@ export function createCheckouts(
     const below = relative(root, checkout)
     if (!below || below.startsWith('..') || isAbsolute(below)) return { ok: false, why: 'address' }
     const own = await ownCheckout(address, checkout, place)
-    if (own) return oneAtATime(own, () => inOwn(own, workRoot, source, place))
+    const inIt = own ? await oneAtATime(own, () => inOwn(own, workRoot, source, place)) : null
+    if (inIt) return inIt
     return oneAtATime(checkout, async (): Promise<Folder> => {
       let st = await repo.state(checkout, source.ref)
       if (!st.ok && !existsDir(checkout)) {
