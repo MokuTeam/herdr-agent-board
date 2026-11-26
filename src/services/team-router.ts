@@ -484,7 +484,11 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
         }
         const secret = secretHit(words) ?? fileSecret
         const others = cfg.categories
-          .filter(c => !sharesLane(peer, c.id) || (!!asker && !!key && !everyoneShares(key, asker, sw => sharesLane(sw, c.id), s)))
+          .filter(
+            c =>
+              !sharesLane(peer, c.id) ||
+              (!!asker && !!key && !everyoneShares(key, asker, sw => sharesLane(sw, c.id), s)),
+          )
           .map(c => ({ id: c.id, title: categoryInfo(cfg, c.id).title }))
         const lane = secret ? null : laneHit(words, others)
         if (secret) [reason, detail] = ['secret', secret]
