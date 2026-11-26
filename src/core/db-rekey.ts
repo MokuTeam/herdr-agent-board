@@ -230,6 +230,14 @@ export const DB_SCHEMA_COLUMNS: Readonly<Record<string, TableSchemaSpec>> = {
       released: 'none',
     },
   },
+  workdesk_workflow_grants: {
+    optional: true,
+    columns: {
+      task_id: 'none',
+      assignment_id: 'none',
+      revision: 'none',
+    },
+  },
   workdesk_workers: {
     optional: true,
     columns: {

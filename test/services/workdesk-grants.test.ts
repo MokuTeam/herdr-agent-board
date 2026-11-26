@@ -248,18 +248,27 @@ test('an answer lost after Workdesk registered the digest is recovered by the sa
   expect(bearerDigest(r.delivered[0]?.bearer ?? '')).toBe(calls[0]?.token_hash as string)
 })
 
-test('a restart that lost the bearer delivers nothing for the round Workdesk already granted', async () => {
-  const fake = mcp(isolatedHome())
-  fake.write({ tasks: [card()], grant: {} })
-  const first = recipient()
-  const before = start(fake, () => [master(SID)], first.channel)
-  await until(() => first.delivered.length === 1)
-  await before.watcher.stop()
-  const second = recipient()
-  const after = start(fake, () => [master(SID)], second.channel)
-  // The thread is already there, so the new process only grants: a fresh digest Workdesk refuses.
-  await until(() => after.logs.includes('Workdesk grant 7: conflict'))
-  expect(grantCalls(fake)).toHaveLength(2)
-  expect(grantCalls(fake)[1]?.token_hash).not.toBe(grantCalls(fake)[0]?.token_hash as string)
-  expect(second.delivered).toEqual([])
+test('a restart never makes a second digest for a round it started, after delivery or after a lost answer', async () => {
+  for (const lose of [false, true]) {
+    const fake = mcp(isolatedHome())
+    fake.write({ tasks: [card()], grant: lose ? { lose: 1 } : {} })
+    const first = recipient()
+    const before = start(fake, () => [master(SID)], first.channel)
+    await until(() => grantCalls(fake).length === 1)
+    if (!lose) await until(() => first.delivered.length === 1)
+    await before.watcher.stop()
+    const second = recipient()
+    const after = start(fake, () => [master(SID)], second.channel)
+    await until(() => after.logs.includes('Workdesk grant 7: lost'))
+    await after.poll().catch(() => {})
+    expect(grantCalls(fake)).toHaveLength(1)
+    expect(second.delivered).toEqual([])
+    // The next round is a new start with a fresh digest.
+    fake.write({ tasks: [card(2, { status: 'doing', executor: 'Board-codex-master' })], grant: {} })
+    setBindingRevision(2)
+    await after.poll()
+    expect(second.delivered.map(d => d.round.revision)).toEqual([2])
+    expect(grantCalls(fake)).toHaveLength(2)
+    expect(grantCalls(fake)[1]?.token_hash).not.toBe(grantCalls(fake)[0]?.token_hash as string)
+  }
 })

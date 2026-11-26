@@ -264,13 +264,13 @@ export function createWorkdeskWatcher({
               // WORKDESK-95: the claimed round's workflow grant, only with a recipient channel and a
               // Workdesk that grants; a partial list never revokes.
               if (grants?.enabled(tools) && complete) {
-                await grants.reconcile([...byId.values()])
+                await grants.reconcile(db, [...byId.values()], active.onlyTaskId)
                 for (const task of byId.values()) {
                   if (targetId !== undefined && task.id !== targetId) continue
                   const saved = store.find(task.id)
                   if (!saved?.thread_id || task.executor !== saved.executor) continue
                   signal.throwIfAborted()
-                  const failed = await grants.issue(mcp, verifiedRound(db, task, items()))
+                  const failed = await grants.issue(mcp, db, verifiedRound(db, task, items()))
                   const mark = `${task.id}:${task.assignment?.revision}:${failed}`
                   if (failed && !grantLogged.has(mark)) log(`Workdesk grant ${task.id}: ${failed}`)
                   if (failed) grantLogged.add(mark)

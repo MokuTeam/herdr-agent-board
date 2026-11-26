@@ -5,7 +5,10 @@
 // caller says, and the protected Codex recipient (#444) is not here. So nothing is granted until a
 // recipient channel is given that attests the exact session: without one this module makes no
 // call at all, and the watcher goes down the path it went before. The bearer lives in this process
-// only, never in a thread, prompt, log, file, environment or argument.
+// only, never in a thread, prompt, log, file, environment or argument. What survives a restart is
+// that a round was started (its task, assignment and revision, committed before the grant is
+// sent): a process that finds a started round without its bearer never makes a second digest for
+// it ('lost'); the next round gets a fresh one.
 import { createHash, randomBytes } from 'node:crypto'
 import type { BoardDb } from '../adapters/db.ts'
 import { getThread } from '../adapters/work-thread-store.ts'
@@ -36,7 +39,7 @@ export type RecipientChannel = {
   revoke(round: GrantRound): void | Promise<void>
 }
 
-export type GrantProblem = 'unverified' | 'unattested' | 'grant' | 'conflict' | 'closed' | 'delivery'
+export type GrantProblem = 'unverified' | 'unattested' | 'lost' | 'grant' | 'conflict' | 'closed' | 'delivery'
 
 type Mcp = { call(name: string, args: Record<string, unknown>): Promise<unknown> }
 type Held = { round: GrantRound; bearer: string; digest: string; granted: boolean; delivered: boolean }
@@ -55,6 +58,39 @@ const sameRound = (a: GrantRound, b: GrantRound): boolean =>
   a.executor === b.executor &&
   a.sessionKey === b.sessionKey &&
   a.sid === b.sid
+
+type Started = { assignment_id: string; revision: number }
+
+/** The rounds this board started a grant for, created on first use like the handoffs. */
+function startedRounds(db: BoardDb) {
+  db.write('workdesk', ({ db: sql }) =>
+    sql.exec(`CREATE TABLE IF NOT EXISTS workdesk_workflow_grants (
+      task_id INTEGER PRIMARY KEY,
+      assignment_id TEXT NOT NULL,
+      revision INTEGER NOT NULL
+    ) STRICT`),
+  )
+  return {
+    get: (taskId: number): Started | null =>
+      db.db
+        .query<Started, [number]>('SELECT assignment_id, revision FROM workdesk_workflow_grants WHERE task_id = ?')
+        .get(taskId),
+    all: (): (Started & { task_id: number })[] =>
+      db.db.query<Started & { task_id: number }, []>('SELECT * FROM workdesk_workflow_grants').all(),
+    begin(round: GrantRound): void {
+      db.write('workdesk', ({ db: sql }) => {
+        sql
+          .query('INSERT OR REPLACE INTO workdesk_workflow_grants (task_id, assignment_id, revision) VALUES (?, ?, ?)')
+          .run(round.taskId, round.assignmentId, round.revision)
+      })
+    },
+    end(taskId: number): void {
+      db.write('workdesk', ({ db: sql }) => {
+        sql.query('DELETE FROM workdesk_workflow_grants WHERE task_id = ?').run(taskId)
+      })
+    },
+  }
+}
 
 const errorCode = (err: unknown): unknown => (err instanceof WorkdeskToolError ? err.body?.code : undefined)
 
@@ -138,18 +174,24 @@ export function createWorkflowGrants(channel: RecipientChannel | null) {
      * (accepted, closed, cancelled), a new assignment or revision, another executor. Workdesk
      * expires its side itself on rework, cancellation and acceptance.
      */
-    async reconcile(tasks: readonly WorkdeskTask[]): Promise<void> {
+    async reconcile(db: BoardDb, tasks: readonly WorkdeskTask[], onlyTaskId?: number): Promise<void> {
       const current = new Map(tasks.map(task => [task.id, task]))
-      for (const [taskId, entry] of [...held]) {
+      const over = (taskId: number, assignmentId: string, revision: number, executor?: string): boolean => {
         const task = current.get(taskId)
-        if (
+        return (
           !task?.assignment ||
           task.status === 'queued' ||
-          task.executor !== entry.round.executor ||
-          task.assignment.id !== entry.round.assignmentId ||
-          task.assignment.revision !== entry.round.revision
+          (executor !== undefined && task.executor !== executor) ||
+          task.assignment.id !== assignmentId ||
+          task.assignment.revision !== revision
         )
-          await drop(taskId)
+      }
+      for (const [taskId, entry] of [...held])
+        if (over(taskId, entry.round.assignmentId, entry.round.revision, entry.round.executor)) await drop(taskId)
+      const rounds = startedRounds(db)
+      for (const row of rounds.all()) {
+        if (onlyTaskId !== undefined && row.task_id !== onlyTaskId) continue
+        if (over(row.task_id, row.assignment_id, row.revision)) rounds.end(row.task_id)
       }
     },
 
@@ -158,7 +200,7 @@ export function createWorkflowGrants(channel: RecipientChannel | null) {
      * same round; a different round first drops the old one. Nothing reaches Workdesk before the
      * channel attests the session.
      */
-    async issue(mcp: Mcp, round: GrantRound | null): Promise<GrantProblem | null> {
+    async issue(mcp: Mcp, db: BoardDb, round: GrantRound | null): Promise<GrantProblem | null> {
       if (!channel) return null
       if (!round) return 'unverified'
       const prior = held.get(round.taskId)
@@ -170,6 +212,12 @@ export function createWorkflowGrants(channel: RecipientChannel | null) {
         attested = (await channel.attest(round)) === true
       } catch {}
       if (!attested) return 'unattested'
+      const rounds = startedRounds(db)
+      if (!entry) {
+        const started = rounds.get(round.taskId)
+        if (started?.assignment_id === round.assignmentId && started.revision === round.revision) return 'lost'
+        rounds.begin(round)
+      }
       const next =
         entry ??
         (() => {

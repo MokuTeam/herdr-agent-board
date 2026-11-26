@@ -2981,7 +2981,13 @@ for one claimed round; the bearer must reach the assigned native master and no o
 watcher can issue it right after a claim: the exact task, assignment, revision and executor from
 Workdesk's answer, checked against the board's handoff, dialogue binding, thread assignee and the
 one local session that holds the bound SID. The bearer stays in the server's memory; a retry
-reuses its digest, and a round that changes, closes or leaves the list is dropped.
+after a lost answer reuses its digest, and a round that changes, closes or leaves the list is
+dropped. That a round was started (task, assignment, revision, never the bearer or digest) is
+committed in `board.db` before the grant is sent: a restart that finds a started round without
+its bearer makes no second digest for it (`Workdesk grant <id>: lost` in the log); the next round
+starts afresh. Workdesk ends the grant on its side: a handover deletes it, a new revision makes
+it invalid, a cancelled card is closed, and a done card only replays a verified close with its
+receipt.
 
 The board has no private channel to one session yet: its own caller identity (`/mcp`, the `board`
 command) is what the caller says, and the protected Codex recipient (#444) is not here. So the
