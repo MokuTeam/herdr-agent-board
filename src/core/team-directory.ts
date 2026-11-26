@@ -53,13 +53,56 @@ export interface HandleSession {
   lane: string
 }
 
+/** Cyrillic letters in Latin (Russian and Ukrainian), so a handle stays typable on any keyboard. */
+const CYRILLIC: Record<string, string> = {
+  а: 'a',
+  б: 'b',
+  в: 'v',
+  г: 'g',
+  ґ: 'g',
+  д: 'd',
+  е: 'e',
+  ё: 'e',
+  є: 'ye',
+  ж: 'zh',
+  з: 'z',
+  и: 'i',
+  і: 'i',
+  ї: 'yi',
+  й: 'y',
+  к: 'k',
+  л: 'l',
+  м: 'm',
+  н: 'n',
+  о: 'o',
+  п: 'p',
+  р: 'r',
+  с: 's',
+  т: 't',
+  у: 'u',
+  ф: 'f',
+  х: 'kh',
+  ц: 'ts',
+  ч: 'ch',
+  ш: 'sh',
+  щ: 'shch',
+  ъ: '',
+  ы: 'y',
+  ь: '',
+  э: 'e',
+  ю: 'yu',
+  я: 'ya',
+}
+
 /**
- * A session's handle from its name (#832): lowercase, spaces to dashes, ASCII letters, digits and
- * dashes only (accents dropped), at most MAX_CODE long; null when nothing is left of it (a name in
- * another alphabet), and the caller gives it `agent`.
+ * A session's handle from its name (#832): lowercase, spaces to dashes, Cyrillic in Latin, ASCII
+ * letters, digits and dashes only (accents dropped), at most MAX_CODE long; null when nothing is
+ * left of it (a name in another script), and the caller gives it `agent`.
  */
 export function handleOf(name: string): string | null {
-  const s = name
+  const s = [...name.toLowerCase()]
+    .map(c => CYRILLIC[c] ?? c)
+    .join('')
     .normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
@@ -151,8 +194,8 @@ export function directoryFor(peer: string, w: ReachWorld): DirectoryEntry[] {
     .map(code => ({ code }))
 }
 
-/** A peer's name as written after `@`: without its spaces. */
-export const mentionWord = (name: string): string => name.replace(/\s+/g, '')
+/** A peer's name as written after `@`: without its spaces, dots and `@`, which a mention cannot hold. */
+export const mentionWord = (name: string): string => name.replace(/[\s.@]+/g, '')
 
 const MENTION = new RegExp(`^\\s*@([^\\s.@]{1,43})\\.([a-z0-9][a-z0-9-]{0,${MAX_CODE - 1}})(?=$|[\\s,:;!?])`, 'u')
 

@@ -12,6 +12,7 @@ import {
   leadingMention,
   mentionAt,
   mentionTitle,
+  mentionWord,
   peerOfWord,
   type ReachWorld,
   reach,
@@ -62,7 +63,10 @@ describe('handles', () => {
     expect(handleOf('Café Ops 2')).toBe('cafe-ops-2')
     expect(handleOf('a/b.c_d')).toBe('abcd')
     expect(handleOf('x'.repeat(60))).toBe('x'.repeat(40))
-    expect(handleOf('Работа')).toBeNull()
+    expect(handleOf('Блюбениан монитор v2')).toBe('blyubenian-monitor-v2')
+    expect(handleOf('Щука Ёж і Їжак')).toBe('shchuka-ezh-i-yizhak')
+    expect(handleOf('Acme отчёт Q3')).toBe('acme-otchet-q3')
+    expect(handleOf('日本')).toBeNull()
     expect(handleOf('---')).toBeNull()
   })
 
@@ -75,7 +79,7 @@ describe('handles', () => {
       [
         { key: 'k1', name: 'Acme Work' },
         { key: 'k2', name: 'acme work' },
-        { key: 'k3', name: 'Работа' },
+        { key: 'k3', name: '日本' },
       ],
       one,
     )
@@ -142,6 +146,16 @@ describe('the mention', () => {
     '@Dima.rev.iew',
     '@.rev x',
   ])('%p is none', t => expect(leadingMention(t)).toBeNull())
+  test('a name as written after @: no spaces, dots or @; a dotted name is found by it', () => {
+    expect(mentionWord('Dima K.')).toBe('DimaK')
+    expect(mentionWord('anna.k')).toBe('annak')
+    expect(mentionWord('bob@work')).toBe('bobwork')
+    const roster = [{ peer: P, name: 'Dima K.' }]
+    const m = leadingMention(`@${mentionWord('Dima K.')}.helper hi`)
+    expect(m).toEqual({ who: 'DimaK', code: 'helper', rest: 'hi' })
+    expect(peerOfWord(m?.who ?? '', roster)?.peer).toBe(P)
+  })
+
   test('a name by its words without spaces, any case, or the id; never a guess between two', () => {
     const roster = [
       { peer: P, name: 'Anna Lee' },

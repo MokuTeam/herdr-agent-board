@@ -76,6 +76,9 @@ describe("the box's list after @", () => {
     expect(fitMentions(choices, 'an', null).map(c => c.code)).toEqual(['helper', 'ops'])
     expect(fitMentions(choices, 'annalee', 'o').map(c => c.code)).toEqual(['ops'])
     expect(fitMentions(choices, 'bo', 'r')).toEqual([])
+    expect(mentionChoices([{ peer: ANA, name: 'Dima K.', agents: [{ code: 'helper' }], ts: '' }])[0]?.word).toBe(
+      'DimaK.helper',
+    )
   })
 
   test('@an lists her agents; Enter puts the first in, and sends nothing', () => {
