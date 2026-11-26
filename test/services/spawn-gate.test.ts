@@ -6,6 +6,7 @@ import type { HerdrPane } from '../../src/adapters/herdr.ts'
 import { readSpawns } from '../../src/adapters/spawn-ledger.ts'
 import { parseArgs, type SpawnOptions } from '../../src/core/launch/spawn-args.ts'
 import type { Config } from '../../src/core/types.ts'
+import { callerEnv } from '../../src/entrypoints/mcp-http.ts'
 import { callerParty, type GateDeps, gated, gateSpawn } from '../../src/services/launch/spawn-gate.ts'
 
 // spawn-agent's gate (#815): the limits checked against the ledger, the start written there.
@@ -221,4 +222,15 @@ test('the ledger on disk is JSON with the entries only', async () => {
   } finally {
     b.done()
   }
+})
+
+test("the board's MCP: a caller it names is a session to the gate; no caller is the owner, whatever the board's own env", () => {
+  const noCard = () => null
+  // The board runs in a pane of its own, maybe started from a session: none of that is the caller.
+  const board = { PATH: '/bin', HERDR_PANE_ID: 'w0:p0', CLAUDE_CODE_SESSION_ID: 'board-own', CODEX_THREAD_ID: 'cx-own' }
+  expect(callerParty(callerEnv(board, null), noCard)).toBeNull()
+  expect(callerParty(callerEnv(board, { session: SID, pane: 'w1:p1' }), noCard)).toEqual({
+    session: SID,
+    pane: 'w1:p1',
+  })
 })
