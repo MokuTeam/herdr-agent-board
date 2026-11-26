@@ -470,6 +470,7 @@ export function createBoardState({
           return n > 0 ? { ...d, held: n } : d
         })
       : undefined
+    const { items: relayedItems, ...relayedSlices } = masterSlices?.() ?? {}
     return {
       // archive: what became of the latest sessions put in it (the page's toasts).
       archive: { log: readArchiveLog(8) },
@@ -481,7 +482,7 @@ export function createBoardState({
       stale,
       limits: own?.limits ?? null,
       ...(agyLimits !== undefined && { agyLimits }),
-      items: combined,
+      items: relayedItems?.length ? [...combined, ...relayedItems] : combined,
       launches: others ? [...launches.list(), ...others.launches] : launches.list(),
       categories,
       swatches: SWATCHES,
@@ -564,7 +565,7 @@ export function createBoardState({
         return f ? { masterFlags: f } : {}
       })(),
       // The master's time, calendar, journal and presence: only on a node whose master gave them (#780).
-      ...(masterSlices?.() ?? {}),
+      ...relayedSlices,
     }
   }
 

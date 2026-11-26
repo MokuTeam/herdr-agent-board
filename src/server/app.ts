@@ -87,7 +87,7 @@ import {
 } from '../adapters/ssh.ts'
 import { rekeySession } from '../adapters/work-thread-store.ts'
 import { connectWorkdeskEvents } from '../adapters/workdesk-events.ts'
-import { nodeSlicesView, nodesAnswerForNode, withNodeDecisions } from '../core/board-slices.ts'
+import { cardsForNode, nodeSlicesView, nodesAnswerForNode, withNodeDecisions } from '../core/board-slices.ts'
 import { NODE_PROGRAMS } from '../core/bundle.ts'
 import { answerText, decisionsConfig } from '../core/decisions.ts'
 import { journalConfig } from '../core/journal.ts'
@@ -1627,7 +1627,8 @@ export async function startServer({
       // The node's own page asks as the owner; a node session reads its panels by their own paths.
       if (from?.who.kind !== 'owner') return json(403, { ok: false, error: 'owner' })
       // Since #784 with the master's decisions for that node's sessions.
-      return json(200, { ok: true, slices: withNodeDecisions(board.slices(), board.decisions(), from.device) })
+      const slices = cardsForNode(board.slices(), from.device)
+      return json(200, { ok: true, slices: withNodeDecisions(slices, board.decisions(), from.device) })
     }
     if (req.method === 'POST' && raw === NODE_CLI_PATH) {
       if (from?.who.kind !== 'owner') return json(403, { ok: false, error: 'owner' })

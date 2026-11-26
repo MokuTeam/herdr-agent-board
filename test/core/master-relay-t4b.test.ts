@@ -2,7 +2,14 @@
 // Team, Devices, starts, body-gated moves; how a node names its own sessions in a bulk body and how
 // the master reads its own; the devices as a node's page shows them.
 import { expect, test } from 'bun:test'
-import { devicesForNode, nodeSlicesView, nodesAnswerForNode, slicesOf } from '../../src/core/board-slices.ts'
+import {
+  boardSlicesOf,
+  cardsForNode,
+  devicesForNode,
+  nodeSlicesView,
+  nodesAnswerForNode,
+  slicesOf,
+} from '../../src/core/board-slices.ts'
 import {
   masterBulkBody,
   masterNodesBody,
@@ -227,4 +234,23 @@ test("Devices from a node's page: its ids read the master's way, the answer in t
   })
   expect(nodesAnswerForNode({ ok: true }, 'ben', 'atlas')).toEqual({ ok: true, master: 'atlas' })
   expect(nodesAnswerForNode('odd', 'ben', 'atlas')).toBe('odd')
+})
+
+test('a node shows the master and peer cards once, beside its own live cards', () => {
+  const slices = slicesOf({
+    devices: [dev('local', { selfId: 'atlas' }), dev('ben'), dev('cleo')],
+    items: [
+      { key: 'pane-w1:p3', name: 'Master session' },
+      { key: '@ben:local-key', device: 'ben', name: 'Local session' },
+      { key: '@cleo:peer-key', device: 'cleo', name: 'Peer session' },
+    ],
+  } as never)
+  const received = boardSlicesOf({ ok: true, slices: cardsForNode(slices, 'ben') })
+  const node = { self: 'ben', ownTeam: false, ownDevices: false, online: true }
+  expect(nodeSlicesView(received ?? {}, node).items?.map(({ key, device, name }) => ({ key, device, name }))).toEqual([
+    { key: '@atlas:pane-w1:p3', device: 'atlas', name: 'Master session' },
+    { key: '@cleo:peer-key', device: 'cleo', name: 'Peer session' },
+  ])
+  expect(nodeSlicesView(received ?? {}, { ...node, ownDevices: true }).items).toBeUndefined()
+  expect(nodeSlicesView({}, node).items).toBeUndefined()
 })

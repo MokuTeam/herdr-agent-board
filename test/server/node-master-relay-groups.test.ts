@@ -50,12 +50,15 @@ const MASTER_CFG = {
 }
 
 const S = '7a1f3c2e-5b6d-4e8f-9a0b-1c2d3e4f5a6b'
+const MASTER_SESSION = '1a1f3c2e-5b6d-4e8f-9a0b-1c2d3e4f5a6b'
 
 test("a node's page and its sessionless terminal reach the master's time, calendar, journal, presence and settings", async () => {
   const pair = await nodePair({
     count: 1,
     masterCfg: MASTER_CFG,
-    masterPanes: () => [],
+    masterPanes: box => [
+      { pane_id: 'p1', agent: 'claude', agent_session: { value: MASTER_SESSION }, agent_status: 'idle', cwd: box.dir },
+    ],
     panes: (_id, box) => [
       { pane_id: 'p1', agent: 'claude', agent_session: { value: S }, agent_status: 'idle', cwd: box.dir },
     ],
@@ -137,6 +140,16 @@ test("a node's page and its sessionless terminal reach the master's time, calend
       : null
   })
   expect((payload.time as { date: string }).date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  const cards = await until('the node has both cards with the local pane kept', async () => {
+    const b = (await getJson(`${node.url}/api/board`)).body
+    const items = b.items as { key: string; device?: string }[]
+    return items.length === 2 ? items : null
+  })
+  expect(cards.map(({ key, device }) => [key, device])).toEqual([
+    [S, undefined],
+    [`@laptop:${MASTER_SESSION}`, 'laptop'],
+  ])
+  expect((await getJson(`${node.url}/api/session/${encodeURIComponent(`@laptop:${MASTER_SESSION}`)}`)).status).toBe(200)
 
   // A terminal with no session on the node: the owner's, run on the master.
   const port = Number(new URL(node.url).port)

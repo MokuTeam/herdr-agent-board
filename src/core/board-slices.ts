@@ -7,6 +7,8 @@ import type { DecisionsPayload } from './decisions.ts'
 import { deviceMarkerOf } from './device-marker.ts'
 import { BOARD_SLICE_KEYS } from './master-relay.ts'
 import { decisionsForNode, decisionsSliceOf } from './node-decisions.ts'
+import { isDevice, parseNodeKey } from './node-key.ts'
+import { nodeKey } from './nodes.ts'
 import type { BoardDevice, BoardPayload } from './payload.ts'
 
 /** What devicesForNode reads of a device row: the payload's and GET /api/nodes' rows both have it. */
@@ -21,6 +23,7 @@ export type BoardSlices = Partial<
     (typeof BOARD_SLICE_KEYS)[number] | (typeof BOARD_SLICE_TEAM_KEYS)[number] | 'devices' | 'deviceMarker'
   >
 > & {
+  cards?: BoardPayload['items']
   /**
    * The master's queue and what went by default for the asking node's sessions only, their keys as
    * the node names them (#784, core/node-decisions.ts): only in the answer to a node (withNodeDecisions).
@@ -39,6 +42,7 @@ export function slicesOf(payload: Partial<BoardPayload> | null): BoardSlices {
     if (typeof payload[key] === 'number' && Number.isFinite(payload[key])) out[key] = payload[key]
   if (Array.isArray(payload.devices) && payload.devices.every(d => isObject(d) && typeof d.id === 'string'))
     out.devices = payload.devices
+  if (out.devices && Array.isArray(payload.items)) out.cards = payload.items
   // How cards show their machine (#789): a node's page draws its master's, so they look alike.
   const marker = payload.deviceMarker === undefined ? null : deviceMarkerOf(payload.deviceMarker)
   if (marker) out.deviceMarker = marker
@@ -49,9 +53,42 @@ export function slicesOf(payload: Partial<BoardPayload> | null): BoardSlices {
 export function boardSlicesOf(raw: unknown): BoardSlices | null {
   if (!isObject(raw) || raw.ok !== true || !isObject(raw.slices)) return null
   const out = slicesOf(raw.slices as Partial<BoardPayload>)
+  if (Array.isArray(raw.slices.cards))
+    out.cards = raw.slices.cards.filter(
+      card =>
+        isObject(card) &&
+        isDevice(card.device) &&
+        typeof card.key === 'string' &&
+        parseNodeKey(card.key)?.device === card.device,
+    )
   // A master since #784 gives the node's part of its decisions; an older one none (the node's own stay).
   const decisions = raw.slices.decisions === undefined ? null : decisionsSliceOf(raw.slices.decisions)
   return decisions ? { ...out, decisions } : out
+}
+
+/** Send only foreign cards, with keys that this node can route back through the master. */
+export function cardsForNode(slices: BoardSlices, self: string): BoardSlices {
+  const { cards, ...rest } = slices
+  const local = slices.devices?.find(device => device.id === 'local')
+  const master = local?.selfId || local?.status?.id
+  if (!cards || !isDevice(master) || master === self) return rest
+  const parentKey = (key: string) => (parseNodeKey(key) ? key : nodeKey(master, key))
+  return {
+    ...rest,
+    cards: cards
+      .filter(card => card.device !== self)
+      .map(card => {
+        const parent = card.call?.parent
+        const at = parent ? parseNodeKey(parent) : null
+        const call =
+          parent && card.call ? { ...card.call, parent: at?.device === self ? at.key : parentKey(parent) } : card.call
+        return {
+          ...card,
+          ...(card.device ? {} : { device: master, key: nodeKey(master, card.key) }),
+          ...(call && { call }),
+        }
+      }),
+  }
 }
 
 /**
@@ -111,7 +148,7 @@ export function nodeSlicesView(
   o: { self: string; ownTeam: boolean; ownDevices: boolean; online: boolean },
 ): Partial<BoardPayload> {
   // Decisions (#784) go with the node's own queue and cards (core/node-decisions.ts withMasterDecisions).
-  const { devices, deviceMarker, teamRev, teamUnread, decisions: _decisions, ...rest } = slices
+  const { devices, deviceMarker, teamRev, teamUnread, cards, decisions: _decisions, ...rest } = slices
   const out: Partial<BoardPayload> = { ...rest }
   if (!o.ownTeam) {
     if (teamRev !== undefined) out.teamRev = teamRev
@@ -123,6 +160,7 @@ export function nodeSlicesView(
     if (mine && master) {
       out.devices = mine
       out.relayedDevices = { master: master.selfId || master.status?.id || '' }
+      if (cards) out.items = cards.filter(card => card.device !== o.self)
       if (deviceMarker) out.deviceMarker = deviceMarker
     }
   }
