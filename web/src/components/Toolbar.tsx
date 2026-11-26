@@ -83,8 +83,8 @@ export function Toolbar({
 }: ToolbarProps) {
   const t = useT()
   const { data, ui, dispatch, canMutate, canEdit, now } = useBoardContext()
-  const { visible, categoryOf, anyProfile, anyDevice } = useBoardView()
-  const lanes = data && laneOptions(data.categories, visible, ui.filter, categoryOf, t)
+  const { visible, categoryOf, anyProfile, anyDevice, lanes: categories } = useBoardView()
+  const lanes = data && laneOptions(categories, visible, ui.filter, categoryOf, t)
   const profiles = data && profileOptions(data.profiles, anyProfile, t)
   const profile = pickedProfile(ui.profile, data?.profiles)
   const devices = data && deviceOptions(data.devices, anyDevice, t)

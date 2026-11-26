@@ -1,7 +1,7 @@
 // What the board shows of the payload: the items on show, the lane and column each card is in
 // (with the user's drops the server has not confirmed yet), the lanes in category order, and the
 // pure parts of dragging a card and of cards appearing.
-import type { BoardCategory } from '../../../src/core/payload.ts'
+import type { BoardCategory, BoardDevice } from '../../../src/core/payload.ts'
 import type { ColumnId, Item } from '../../../src/core/types.ts'
 import { type LanePicks, laneShown } from './lane-picks.ts'
 import { profileShown } from './profiles.ts'
@@ -11,6 +11,31 @@ export type CategoryLook = { id: string; title: string; color: string }
 /** A lane's title and color; one the payload does not list shows its id in gray. */
 export function categoryInfo(categories: BoardCategory[], id: string): CategoryLook {
   return categories.find(c => c.id === id) ?? { id, title: id, color: 'var(--gray)' }
+}
+
+/**
+ * The lanes the board draws (#923): with the device switch on one device (`device`, not 'all') whose
+ * row names its lanes, that device's, in its order with its titles and colours, then the payload's
+ * lane of each card on show it does not have, so no card is left without one. Else the payload's.
+ */
+export function deviceLanes(
+  categories: BoardCategory[],
+  devices: readonly Pick<BoardDevice, 'id' | 'lanes'>[] | undefined,
+  device: string,
+  visible: readonly Item[],
+  categoryOf: (item: Item) => string,
+): BoardCategory[] {
+  const lanes = device === 'all' ? undefined : devices?.find(d => d.id === device)?.lanes
+  if (!lanes?.length) return categories
+  const ids = new Set(lanes.map(l => l.id))
+  const own = lanes.map(({ id, title, color }): BoardCategory => {
+    const c = categories.find(x => x.id === id)
+    return c
+      ? { ...c, title, color }
+      : { id, title, color, colorName: '', paths: [], configured: false, fallback: id === 'other' }
+  })
+  const used = new Set(visible.map(categoryOf))
+  return [...own, ...categories.filter(c => !ids.has(c.id) && used.has(c.id))]
 }
 
 export interface ViewOptions {

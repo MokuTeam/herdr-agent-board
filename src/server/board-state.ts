@@ -15,7 +15,7 @@ import { forgetProfilePanes } from '../adapters/profile-panes.ts'
 import { listEntries, listWatches, readLog, watchesDir } from '../adapters/schedule-store.ts'
 import { type BoardAgyLimits, pickAgyLimits } from '../core/agy-limits.ts'
 import { COLUMNS } from '../core/board.ts'
-import { type BoardSlices, slicesOf } from '../core/board-slices.ts'
+import { type BoardSlices, lanesWithMaster, slicesOf } from '../core/board-slices.ts'
 import { besideParents } from '../core/call-agent.ts'
 import { categoryInfo, colorHex, laneRank, PALETTE } from '../core/categories.ts'
 import { isCodexItem } from '../core/codex.ts'
@@ -34,6 +34,7 @@ import { dropMovedCards } from '../core/node-items.ts'
 import { LOCAL, nodeConfig, nodesConfig, parseNodeKey } from '../core/nodes.ts'
 import type {
   BackupPayload,
+  BoardCategory,
   BoardLimits,
   BoardPayload,
   BoardProfile,
@@ -78,6 +79,8 @@ export interface BoardState {
   decisions(): DecisionsPayload | null
   /** The latest payload's sessions: this computer's and, on a master, its nodes' (#904, for a node's page). */
   shownItems(): readonly Item[]
+  /** The latest payload's lanes (#923, for a node's page). */
+  shownCategories(): readonly BoardCategory[]
   items(): Item[]
   observation(): BoardObservation | null
   find(key: string): Item | undefined
@@ -477,10 +480,19 @@ export function createBoardState({
     const remoteAgy = others?.devices.filter(d => d.id !== LOCAL && !d.revoked).map(d => d.status?.agyLimits) ?? []
     const agyLimits = pickAgyLimits([localAgy, ...remoteAgy])
     const held = others ? heldByDevice(schedules) : null
-    const { items: relayedItems, ...fromSlices } = masterSlices?.() ?? {}
+    const { items: relayedItems, categories: relayedLanes, ...fromSlices } = masterSlices?.() ?? {}
+    // This board's own lanes (#923): its config's and its own cards', not those only another device's
+    // cards bring; its row in `devices` carries them, and a node's payload for its master.
+    const ownLanes =
+      others || relayedLanes?.length
+        ? categories
+            .filter(c => c.configured || items.some(i => i.category === c.id))
+            .map(({ id, title, color }) => ({ id, title, color }))
+        : []
     const devices = others
       ? others.devices.map(d => {
-          const n = d.id !== LOCAL ? (held?.[d.id] ?? 0) : 0
+          if (d.id === LOCAL) return { ...d, lanes: ownLanes }
+          const n = held?.[d.id] ?? 0
           return n > 0 ? { ...d, held: n } : d
         })
       : undefined
@@ -497,7 +509,9 @@ export function createBoardState({
       ...(agyLimits !== undefined && { agyLimits }),
       items: combined,
       launches: others ? [...launches.list(), ...others.launches] : launches.list(),
-      categories,
+      // A node's page draws its master's lanes, then its own the master does not have (#923).
+      categories: relayedLanes?.length ? lanesWithMaster(relayedLanes, categories) : categories,
+      ...(relayedLanes?.length && { ownLanes }),
       swatches: SWATCHES,
       columns: COLUMNS.map(({ id, title }) => ({ id, title })),
       schedules: others ? [...schedules, ...others.schedules] : schedules,
@@ -591,6 +605,7 @@ export function createBoardState({
   let sent = ''
   let lastSlices: BoardSlices = {}
   let lastItems: readonly Item[] = []
+  let lastCategories: readonly BoardCategory[] = []
   let lastDecisions: DecisionsPayload | null = null
   function publish(): void {
     // Turned off in config.json: no pane stays on show.
@@ -598,6 +613,7 @@ export function createBoardState({
     const next = board()
     lastSlices = slicesOf(next)
     lastItems = next.items
+    lastCategories = next.categories
     lastDecisions = next.decisions ?? null
     const key = JSON.stringify(next)
     payload = JSON.stringify({ ...next, lastSuccessfulRefreshAt })
@@ -747,6 +763,7 @@ export function createBoardState({
     payload: () => payload,
     slices: () => lastSlices,
     shownItems: () => lastItems,
+    shownCategories: () => lastCategories,
     decisions: () => lastDecisions,
     items: () => items,
     observation: () => (lastSuccessfulRefreshAt && !isStale() ? { items, observedAt: lastSuccessfulRefreshAt } : null),

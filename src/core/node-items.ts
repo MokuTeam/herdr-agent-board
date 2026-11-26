@@ -17,6 +17,7 @@ import { checklistActive, MAX_CHECKLIST_ITEMS, MAX_CHECKLIST_TEXT } from './chec
 import { decisionAnswerOf } from './decisions.ts'
 import { linkDecisionOf } from './node-uplink.ts'
 import { nodeKey, parseNodeKey } from './nodes.ts'
+import type { DeviceLane } from './payload.ts'
 import { MAX_REPORT, type ScheduleEntry } from './schedule-rules.ts'
 import type { Item, LaunchView } from './types.ts'
 
@@ -27,6 +28,8 @@ export interface NodePart {
   schedules: ScheduleEntry[]
   /** The node's machine name (COMPUTERNAME / hostname) for matching Telegram pane hints (#701). */
   machine?: string
+  /** Its own lanes (#923): from `ownLanes` of a node that draws its master's, else its `categories`. */
+  lanes?: DeviceLane[]
 }
 
 /** The longest strings kept, as long as the board's own items carry. */
@@ -122,6 +125,8 @@ const words =
     return out
   }
 
+/** A lane: its id, title and colour, nothing of its folders. */
+const LANE = shape({ id: nonEmpty(LEN.id), title: str(LEN.id), color: str(LEN.id) }, ['id', 'title', 'color'])
 const COLUMN = oneOf('work', 'me', 'ext', 'done', 'idle')
 const STATUS = oneOf('idle', 'working', 'blocked', 'done', 'unknown', 'sleeping')
 const ATTENTION = oneOf('', 'decision', 'ask', 'question', 'later', 'access')
@@ -585,5 +590,7 @@ export function nodePart(
     if (e && (e as ScheduleEntry).kind !== 'watch') schedules.push(tag(e as ScheduleEntry))
   }
   const machine = nonEmpty(LEN.id)(raw.machine, k) as string | undefined
-  return { items, launches, schedules, ...(machine && { machine }) }
+  // The offline copy keeps them as `lanes`.
+  const lanes = list(LANE)(raw.ownLanes ?? raw.lanes ?? raw.categories, k) as DeviceLane[] | undefined
+  return { items, launches, schedules, ...(machine && { machine }), ...(lanes && lanes.length > 0 && { lanes }) }
 }
