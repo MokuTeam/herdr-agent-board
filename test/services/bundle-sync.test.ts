@@ -22,6 +22,8 @@ function setup(
     programs?: string[]
     device?: Record<string, unknown>
     git?: MasterGit
+    /** The node's status says it keeps its own profiles (#802). */
+    own?: boolean
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), 'bundle-sync-'))
@@ -60,6 +62,7 @@ function setup(
         platform: 'linux',
         profiles: [{ id: 'default', loggedIn: true, bundle: null }],
         ...(more.programs && { programs: more.programs }),
+        ...(more.own && { ownProfiles: true }),
       },
     }),
     status: async () => null,
@@ -697,5 +700,40 @@ describe('bundle sync', () => {
       expect((s.record() as { profiles: { default: { seq: number } } }).profiles.default.seq).toBe(seq + 1)
       expect(s.asked.length).toBe(asked)
     })
+  })
+})
+
+describe('a device with its own profiles (#802)', () => {
+  const taking = (path: string): Response =>
+    path.endsWith('/commit')
+      ? Response.json({ ok: true, applied: [], kept: [], backup: null })
+      : path.includes('/blob/')
+        ? Response.json({ ok: true })
+        : Response.json({ seq: 0, hash: '', files: {} })
+
+  test('marked in config.json: a sync sends nothing, not even the secrets, and says own; the tick builds nothing', async () => {
+    const s = setup('online', taking, { device: { ownProfiles: true } })
+    const r = await s.sync.syncIfBehind('server-1')
+    expect([r.ok, r.why]).toEqual([false, 'own'])
+    expect(s.asked).toEqual([])
+    s.timers[0]?.fn()
+    expect(s.saved).toEqual([])
+  })
+
+  test('said by its status: the same', async () => {
+    const s = setup('online', taking, { own: true })
+    const r = await s.sync.syncIfBehind('server-1')
+    expect([r.ok, r.why]).toEqual([false, 'own'])
+    expect(s.asked).toEqual([])
+    s.timers[0]?.fn()
+    expect(s.saved).toEqual([])
+  })
+
+  test('a helper without the mark syncs as before', async () => {
+    const s = setup('online', taking)
+    const r = await s.sync.syncIfBehind('server-1')
+    expect(r.ok).toBe(true)
+    expect(s.asked[0]).toBe('/api/node/bundle/default')
+    expect(s.asked.at(-1)).toBe('/api/node/bundle/default/commit')
   })
 })

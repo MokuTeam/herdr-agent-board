@@ -268,6 +268,8 @@ export interface BoardDevice extends DeviceView {
   giveSecrets?: false
   /** MokuPilot node bridge is off for this device (`nodes.devices.<id>.pilotBridge: false`); absent, it is on. */
   pilotBridge?: false
+  /** It keeps its own profiles and gets no bundle (#802, `nodes.devices.<id>.ownProfiles`); absent, it gets them. */
+  ownProfiles?: true
   /** The thresholds placement holds it to; null until the board writes them from its first status. */
   maxSessions: number | null
   minFreeMemMb: number | null

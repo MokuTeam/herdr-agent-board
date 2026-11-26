@@ -153,6 +153,8 @@ export function createNodeStatus(src: StatusSources): { answer(): Promise<NodeSt
         ...(agyLimits !== undefined && { agyLimits }),
         ...(src.addresses && { addresses: [...src.addresses()].slice(0, 32) }),
         ...(src.updates && { updates: src.updates() }),
+        // Its own profiles (#802): the master starts here without a bundle. Absent: as before.
+        ...(node.ownProfiles && { ownProfiles: true as const }),
         at: (src.now ?? Date.now)(),
       }
     },

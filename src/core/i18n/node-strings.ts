@@ -123,6 +123,7 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     // a start placed on a device, on its launch card
     'node.place.choosing': 'Choosing a device…',
     'node.place.syncing': 'Syncing the profile to {name}…',
+    'node.place.syncGaveUp': 'The profile could not be synced to {name} ({why}): the start stopped after {n} tries.',
     'node.place.cloning': 'Cloning on {name}…',
     'node.queued': 'Waiting for room: {name} has {n} of {max} sessions',
     'node.queuedNoRoom': 'Waiting for room',
@@ -280,6 +281,9 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.dev.pauseWhy': 'No new session starts here',
     'node.dev.drain': 'Drain',
     'node.dev.drainWhy': 'No new session; the ones here finish',
+    'node.dev.ownProfiles': 'Own profiles',
+    'node.dev.ownProfilesWhy':
+      'Its profiles are the originals: the board never sends it a profile and starts there only with a profile it already has.',
     'node.dev.secrets': 'Give it the secrets',
     'node.dev.secretsWhy':
       "Each sync also puts the keys of this computer's MCP servers, the secret variables of its settings and the secret files its hooks read on this device. Off: you give each one by hand, and those given before stay there.",
@@ -635,6 +639,7 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.pick': 'Устройство: {title}',
     'node.place.choosing': 'Выбираю устройство…',
     'node.place.syncing': 'Переношу профиль на {name}…',
+    'node.place.syncGaveUp': 'Не удалось перенести профиль на {name} ({why}): запуск остановлен после {n} попыток.',
     'node.place.cloning': 'Клонирую репозиторий на {name}…',
     'node.queued': 'Ждёт места: на {name} занято {n} из {max}',
     'node.queuedNoRoom': 'Ждёт места',
@@ -800,6 +805,9 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.dev.pauseWhy': 'Новые сессии сюда не идут',
     'node.dev.drain': 'Разгрузить',
     'node.dev.drainWhy': 'Новых сессий нет, текущие доработают',
+    'node.dev.ownProfiles': 'Свои профили',
+    'node.dev.ownProfilesWhy':
+      'Профили на нём оригинальные: доска никогда не переносит туда профиль и запускает там только с профилем, который уже есть.',
     'node.dev.secrets': 'Передавать секреты',
     'node.dev.secretsWhy':
       'Каждая синхронизация кладёт на это устройство ключи MCP-серверов этого компьютера, секретные переменные его настроек и секретные файлы, которые читают его хуки. Если выключить, каждый секрет вы даёте вручную, а уже переданные остаются там.',

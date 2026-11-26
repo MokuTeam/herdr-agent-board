@@ -553,3 +553,78 @@ describe("acknowledgments into the profile's .claude.json (#602)", () => {
     expect(res.status).toBe(200)
   })
 })
+
+describe('a node with its own profiles (#802)', () => {
+  /** Every bundle route of the door, with `ownProfiles` as given. */
+  function door(r: ReturnType<typeof rig>, ownProfiles?: () => boolean) {
+    const given: unknown[] = []
+    const routes = nodeDoorRoutes({
+      status: async () => null,
+      launch: async () => ({ status: 404, body: {} }) as never,
+      bundle: r.bundle,
+      secrets: {
+        give: async (_p: string, body: unknown) => {
+          given.push(body)
+          return { status: 200, body: { ok: true } }
+        },
+      } as never,
+      uplink: {
+        stream: () => new Response(''),
+        file: () => new Response('', { status: 404 }),
+        answer: () => ({ status: 404, body: {} }),
+      },
+      sink: async () => ({ status: 404, body: { ok: false } }),
+      ...(ownProfiles && { ownProfiles }),
+    })
+    const send = (method: string, path: string, body?: string | Uint8Array) => {
+      const url = new URL(`http://127.0.0.1${path}`)
+      const req = new Request(url, { method, ...(body !== undefined && { body: body as BodyInit }) })
+      return dispatch(routes, req, url, url.pathname, { port: 0, token: '', stale: () => false })
+    }
+    return { send, given }
+  }
+  const manifestBody = () =>
+    JSON.stringify({
+      seq: 1,
+      hash: sha('h'),
+      manifest: {
+        format: BUNDLE_FORMAT,
+        files: [{ path: 'CLAUDE.md', sha256: sha('x'), mode: 420 }],
+        settings: {},
+        hooks: {},
+        mcp: {},
+        board: { sinks: {} },
+      },
+    })
+
+  test('every bundle route answers 409 own-profiles, and nothing is written', async () => {
+    const r = rig()
+    writeFileSync(join(r.profile, 'CLAUDE.md'), 'the owner’s own')
+    const d = door(r, () => true)
+    const answers = [
+      await d.send('GET', '/api/node/bundle/default'),
+      await d.send('PUT', `/api/node/bundle/default/blob/${sha('x')}`, new TextEncoder().encode('x')),
+      await d.send('POST', '/api/node/bundle/default/commit', manifestBody()),
+      await d.send('POST', '/api/node/bundle/default/secrets', JSON.stringify({ env: { A: 'b' }, files: [] })),
+    ]
+    expect(answers.map(a => a.status)).toEqual([409, 409, 409, 409])
+    for (const a of answers) expect(await a.json()).toEqual({ error: 'own-profiles' })
+    expect(d.given).toEqual([])
+    expect(r.bundle.version('default')).toBeNull()
+    expect(read(r, 'CLAUDE.md')).toBe('the owner’s own')
+  })
+
+  test('without the mark, or with it off, the routes answer as before', async () => {
+    for (const own of [undefined, () => false]) {
+      const r = rig()
+      const d = door(r, own)
+      const have = await d.send('GET', '/api/node/bundle/default')
+      expect(have.status).toBe(200)
+      const put = await d.send('PUT', `/api/node/bundle/default/blob/${sha('x')}`, new TextEncoder().encode('x'))
+      expect(put.status).toBe(200)
+      expect((await d.send('POST', '/api/node/bundle/default/commit', manifestBody())).status).toBe(200)
+      expect(read(r, 'CLAUDE.md')).toBe('x')
+      expect((await d.send('POST', '/api/node/bundle/default/secrets', JSON.stringify({ env: {} }))).status).toBe(200)
+    }
+  })
+})

@@ -675,6 +675,18 @@ function DeviceRowView({
             />
           </div>
         )}
+        {!row.here && (
+          <div className="devices-switch-row" title={t('node.dev.ownProfilesWhy')}>
+            <span>{t('node.dev.ownProfiles')}</span>
+            <Switch
+              name="ownProfiles"
+              label={t('node.dev.ownProfiles')}
+              on={row.ownProfiles}
+              disabled={disabled}
+              onFlip={on => void send({ op: 'set', id: row.id, ownProfiles: on })}
+            />
+          </div>
+        )}
       </div>
       <div className="devices-limits" title={t('node.dev.thresholdsWhy')}>
         {THRESHOLDS.map(key => (

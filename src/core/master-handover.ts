@@ -568,7 +568,8 @@ const pickDeviceLimits = (raw: Record<string, unknown> | undefined): Record<stri
  * - `nodes.id` becomes `targetId`
  * - `nodes.order` maps `targetId` -> `'local'` and `'local'` -> `oldMasterId`
  * - `nodes.devices.local` takes `targetId`'s thresholds/tags/title/drain/pilotBridge (without `link`)
- * - `nodes.devices[oldMasterId]` takes old `local` thresholds/tags/title/drain/pilotBridge + `link: reverseLink`
+ * - `nodes.devices[oldMasterId]` takes old `local` thresholds/tags/title/drain/pilotBridge + `link: reverseLink`,
+ *   and `ownProfiles: true` (#802): its profiles are the originals, so no bundle goes back to it
  * - non-revoked third-party devices are preserved as-is; `targetId` is removed from `devices`
  */
 export function flipNodesConfig(
@@ -605,6 +606,8 @@ export function flipNodesConfig(
   for (const key of ['profiles', 'sinks', 'mcp', 'accept', 'paused', 'giveSecrets'] as const) {
     if (oldLocalRaw[key] !== undefined) oldMasterEntry[key] = structuredClone(oldLocalRaw[key])
   }
+  // The old master's profiles are the owner's originals (#802): the new master never sends it a bundle.
+  oldMasterEntry.ownProfiles = true
   nextDevices[oldMasterId] = oldMasterEntry
 
   for (const [id, entry] of Object.entries(oldDevices)) {
@@ -761,6 +764,8 @@ export function buildOldMasterNodeConfig(
     ...(opts.nodeConfig.tls && { tls: true }),
     ...(opts.nodeConfig.relay && { relay: structuredClone(opts.nodeConfig.relay) }),
     ...(bridgeOff && { pilotBridge: false }),
+    // Its profiles are the originals (#802): as a node it refuses every bundle a master sends.
+    ownProfiles: true,
   }
   next.node = node
   if (!opts.keepNodesFrozen) {

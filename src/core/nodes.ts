@@ -71,6 +71,12 @@ export interface DeviceConfig {
    * on, as the machines are one mesh of the owner's (design 10, Trust). Only here when off.
    */
   owner?: false
+  /**
+   * The device keeps its own profiles (#802): they are the originals (the old master after a
+   * handover), so no bundle is ever sent there. A start checks only that the profile is there and
+   * starts without a sync. Only here when on.
+   */
+  ownProfiles?: true
 }
 
 /**
@@ -116,6 +122,11 @@ export interface NodeConfig {
   relay: { host: string; sshPort: number; user: string; socket: string } | null
   /** Whether MokuPilot on this node may call sessions via its remote master (#730, #738). `false` turns it off; absent, on. */
   pilotBridge?: false
+  /**
+   * This node keeps its own profiles (#802): it refuses every bundle a master sends and says so in
+   * its status. Set by the handover on the old master; absent, it takes bundles as before.
+   */
+  ownProfiles?: true
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -154,6 +165,7 @@ const DEVICE_KEYS = [
   'giveSecrets',
   'pilotBridge',
   'owner',
+  'ownProfiles',
 ]
 const LINK_KEYS: Record<LinkConfig['kind'], string[]> = {
   ssh: ['kind', 'host', 'sshPort', 'user', 'port'],
@@ -162,7 +174,7 @@ const LINK_KEYS: Record<LinkConfig['kind'], string[]> = {
   direct: ['kind', 'url'],
 }
 const RELAY_KEYS = ['host', 'sshPort', 'user']
-const NODE_KEYS = ['id', 'port', 'workRoot', 'listen', 'tls', 'relay', 'pilotBridge']
+const NODE_KEYS = ['id', 'port', 'workRoot', 'listen', 'tls', 'relay', 'pilotBridge', 'ownProfiles']
 
 type Flag = (key: string, why: string) => void
 
@@ -371,6 +383,8 @@ function deviceOf(
   if (o.pilotBridge !== undefined && typeof o.pilotBridge !== 'boolean') flag('pilotBridge', 'type')
   if (o.owner !== undefined && typeof o.owner !== 'boolean') flag('owner', 'type')
   if (id === LOCAL && o.owner !== undefined) flag('owner', 'local')
+  if (o.ownProfiles !== undefined && typeof o.ownProfiles !== 'boolean') flag('ownProfiles', 'type')
+  if (id === LOCAL && o.ownProfiles !== undefined) flag('ownProfiles', 'local')
   const device: DeviceConfig = {
     id,
     title,
@@ -390,6 +404,7 @@ function deviceOf(
     ...(o.giveSecrets === false && { giveSecrets: false as const }),
     ...(o.pilotBridge === false && { pilotBridge: false as const }),
     ...(o.owner === false && { owner: false as const }),
+    ...(o.ownProfiles === true && { ownProfiles: true as const }),
   }
   return ok ? device : null
 }
@@ -512,6 +527,7 @@ function readNode(raw: unknown): { config: NodeConfig | null; problems: NodesPro
   if (given(raw.listen) && raw.listen !== 'loopback' && raw.listen !== 'tailnet') flag('listen', 'type')
   if (given(raw.tls) && typeof raw.tls !== 'boolean') flag('tls', 'type')
   if (given(raw.pilotBridge) && typeof raw.pilotBridge !== 'boolean') flag('pilotBridge', 'type')
+  if (given(raw.ownProfiles) && typeof raw.ownProfiles !== 'boolean') flag('ownProfiles', 'type')
   const relay = given(raw.relay)
     ? (relayOf(raw.relay, [...RELAY_KEYS, 'socket'], problems) as NodeConfig['relay'])
     : null
@@ -526,6 +542,7 @@ function readNode(raw: unknown): { config: NodeConfig | null; problems: NodesPro
       tls: raw.tls === true,
       relay,
       ...(raw.pilotBridge === false && { pilotBridge: false as const }),
+      ...(raw.ownProfiles === true && { ownProfiles: true as const }),
     },
     problems,
   }
@@ -611,6 +628,8 @@ export function statusShown(s: NodeStatus | null): string {
       : []),
     // Only from a node that says it (#793): a status without it keys as before.
     ...(s.updates ? [s.updates] : []),
+    // Only from a node with its own profiles (#802): a status without it keys as before.
+    ...(s.ownProfiles ? ['own-profiles'] : []),
   ])
 }
 
@@ -649,6 +668,8 @@ export interface NodeStatus {
    * the plugin; absent from a node of an older board.
    */
   updates?: 'git' | 'archive'
+  /** The node keeps its own profiles and takes no bundle (#802, `node.ownProfiles`); absent: it takes them. */
+  ownProfiles?: true
   at: number
 }
 
@@ -739,6 +760,7 @@ export function nodeStatusOf(raw: unknown): NodeStatus | null {
         addresses: [...(s.addresses as string[])],
       }),
     ...((s.updates === 'git' || s.updates === 'archive') && { updates: s.updates }),
+    ...(s.ownProfiles === true && { ownProfiles: true as const }),
     at: s.at as number,
   }
 }
@@ -854,6 +876,7 @@ const DEVICE_SETTINGS = [
   'giveSecrets',
   'pilotBridge',
   'owner',
+  'ownProfiles',
   'maxSessions',
   'minFreeMemMb',
   'maxLoad',
@@ -936,7 +959,12 @@ export function nodesEditOf(body: Record<string, unknown>): NodesEdit | { error:
     const fits =
       key === 'title' || key === 'color'
         ? v === null || typeof v === 'string'
-        : key === 'paused' || key === 'drain' || key === 'giveSecrets' || key === 'pilotBridge' || key === 'owner'
+        : key === 'paused' ||
+            key === 'drain' ||
+            key === 'giveSecrets' ||
+            key === 'pilotBridge' ||
+            key === 'owner' ||
+            key === 'ownProfiles'
           ? typeof v === 'boolean'
           : v === null || typeof v === 'number'
     if (!fits) return { error: key }
@@ -949,6 +977,8 @@ export function nodesEditOf(body: Record<string, unknown>): NodesEdit | { error:
   if (body.id === LOCAL && 'giveSecrets' in values) return { error: 'giveSecrets' }
   // Nor its relay switched: this computer relays nothing to itself.
   if (body.id === LOCAL && 'owner' in values) return { error: 'owner' }
+  // Nor its profiles marked its own: they are, and no bundle goes to this computer.
+  if (body.id === LOCAL && 'ownProfiles' in values) return { error: 'ownProfiles' }
   return { op: 'set', id: body.id, values }
 }
 
@@ -1011,6 +1041,8 @@ export function applyNodesEdit(
       } else if (key === 'giveSecrets' && v === true) delete entry[key]
       else if (key === 'pilotBridge' && v === true) delete entry[key]
       else if (key === 'owner' && v === true) delete entry[key]
+      // Off is the default: written as the key gone.
+      else if (key === 'ownProfiles' && v === false) delete entry[key]
       else entry[key] = v
     if (edit.id === LOCAL && Object.keys(entry).length === 0) {
       delete devices[LOCAL]

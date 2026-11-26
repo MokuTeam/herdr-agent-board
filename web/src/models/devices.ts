@@ -279,6 +279,8 @@ export interface DeviceRow {
   drain: boolean
   /** A sync gives it the secrets its profile needs (#604); this computer's row has no such switch. */
   giveSecrets: boolean
+  /** It keeps its own profiles and gets no bundle (#802); this computer's row has no such switch. */
+  ownProfiles: boolean
   /** The secrets its last syncs gave, and those to give by hand, in words (#604). */
   secrets: string[]
   /** What an agent there cannot do for want of git, an identity, a GitHub login or gh, in words (#609). */
@@ -494,6 +496,7 @@ export function deviceRows(
       paused: d.paused,
       drain: d.drain,
       giveSecrets: d.giveSecrets !== false,
+      ownProfiles: d.ownProfiles === true,
       secrets: secretLines(settings?.secrets?.[d.id], t),
       git: d.kind === null ? [] : gitLacks(d.status).map(k => t(GIT_LACK[k], { device: title })),
       held: heldForDevice(d, schedules, items, t),

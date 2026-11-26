@@ -1992,6 +1992,8 @@ export async function startServer({
         launch: body => nodeLaunch.answer(body),
         bundle: nodeBundle,
         secrets: nodeSecrets,
+        // Its own profiles (#802): the live config's `node.ownProfiles`, as the status reads it.
+        ownProfiles: () => nodeConfig(cfg.node)?.ownProfiles === true,
         uplink,
         // A secret the owner gives one of this node's sinks (#507): config.json as it is now, as a
         // form's answer reads it, so the sink checked is the one the bundle last wrote.

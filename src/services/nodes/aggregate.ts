@@ -102,6 +102,7 @@ function boardDevice(
     drain: device?.drain ?? false,
     ...(device?.giveSecrets === false && { giveSecrets: false as const }),
     ...(device?.pilotBridge === false && { pilotBridge: false as const }),
+    ...(device?.ownProfiles && { ownProfiles: true as const }),
     maxSessions: device?.maxSessions ?? null,
     minFreeMemMb: device?.minFreeMemMb ?? null,
     maxLoad: device?.maxLoad ?? null,

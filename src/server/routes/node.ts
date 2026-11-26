@@ -45,6 +45,11 @@ export interface NodeDoorSources {
   bundle: NodeBundle
   /** `POST /api/node/bundle/<profile>/secrets` (#604, services/node/secrets.ts). */
   secrets?: NodeSecrets
+  /**
+   * Whether this node keeps its own profiles (#802, `node.ownProfiles`): every `/api/node/bundle/...`
+   * is refused (409 `own-profiles`), so no master's bundle or secrets are written here. Absent: false.
+   */
+  ownProfiles?: () => boolean
   /** The uplink's stream, files and results (services/node/uplink.ts). */
   uplink: Pick<NodeUplink, 'stream' | 'file' | 'answer'>
   /** `POST /api/node/sink/<id>`: `{ values, fingerprint }` written to that sink (services/secrets.ts giveSecret). */
@@ -90,6 +95,8 @@ export const MAX_SECRETS_BYTES = 4 * 1024 * 1024
 export const MAX_MANIFEST_BYTES = 8 * 1024 * 1024
 
 const answer = (a: Answer): Response => json(a.status, a.body)
+/** A node with its own profiles refuses a master's bundle and its secrets (#802). */
+const ownProfiles = (): Response => json(409, { error: 'own-profiles' })
 
 /** A body of at most `max` bytes, or null when it is longer: counted as it comes, never read whole first. */
 async function bytesUpTo(req: Request, max: number): Promise<Uint8Array | null> {
@@ -117,6 +124,8 @@ const MAX_RESULT_BYTES = 8 * 1024 * 1024
 
 export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
   const bundle = o.bundle
+  // A node with its own profiles takes no bundle (#802): refused before anything is read or written.
+  const own = (): boolean => o.ownProfiles?.() === true
   const secrets = o.secrets
   const leave = o.leave
   const update = o.update
@@ -144,12 +153,13 @@ export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
     {
       method: 'GET',
       path: /^\/api\/node\/bundle\/([^/]+)$/,
-      handle: (_req, ctx) => answer(bundle.have(ctx.params[0] ?? '')),
+      handle: (_req, ctx) => (own() ? ownProfiles() : answer(bundle.have(ctx.params[0] ?? ''))),
     },
     {
       method: 'PUT',
       path: /^\/api\/node\/bundle\/([^/]+)\/blob\/([0-9a-f]{64})$/,
       async handle(req, ctx) {
+        if (own()) return ownProfiles()
         const bytes = await bytesUpTo(req, MAX_BLOB_BYTES)
         if (!bytes) return json(413, { error: 'too-big' })
         return answer(bundle.putBlob(ctx.params[0] ?? '', ctx.params[1] ?? '', bytes))
@@ -159,6 +169,7 @@ export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
       method: 'POST',
       path: /^\/api\/node\/bundle\/([^/]+)\/commit$/,
       async handle(req, ctx) {
+        if (own()) return ownProfiles()
         // A manifest of a few thousand files is more than the board's usual 192 KB of JSON.
         const bytes = await bytesUpTo(req, MAX_MANIFEST_BYTES)
         if (!bytes) return json(413, { error: 'bundle' })
@@ -214,7 +225,7 @@ export function nodeDoorRoutes(o: NodeDoorSources): Route[] {
         return json(r.status, r.body)
       },
     },
-    ...(secrets ? [secretsRoute(secrets)] : []),
+    ...(secrets ? [secretsRoute(secrets, own)] : []),
     ...(leave ? [leaveRoute(leave)] : []),
     ...(update ? updateRoutes(update) : []),
     ...(o.pilotCall ? pilotCallDoorRoutes(o.pilotCall) : []),
@@ -582,11 +593,12 @@ function updateRoutes(update: NonNullable<NodeDoorSources['update']>): Route[] {
  * node's env file and files. No answer holds one, nothing logs the body, and a parse error's text,
  * which may quote it, is not passed on.
  */
-function secretsRoute(secrets: NodeSecrets): Route {
+function secretsRoute(secrets: NodeSecrets, own: () => boolean): Route {
   return {
     method: 'POST',
     path: /^\/api\/node\/bundle\/([^/]+)\/secrets$/,
     async handle(req, ctx) {
+      if (own()) return ownProfiles()
       const bytes = await bytesUpTo(req, MAX_SECRETS_BYTES)
       if (!bytes) return json(413, { error: 'too-big' })
       let body: unknown

@@ -254,3 +254,12 @@ describe('how the node takes an update (#793)', () => {
     expect(nodeStatusOf(without)).toEqual(without as never)
   })
 })
+
+describe('own profiles (#802)', () => {
+  test('a node with node.ownProfiles says so in its status; one without says nothing of it', async () => {
+    const own = await createNodeStatus(sources({ node: () => ({ ...NODE, ownProfiles: true }) })).answer()
+    expect(own?.ownProfiles).toBe(true)
+    const plain = await createNodeStatus(sources()).answer()
+    expect(plain && 'ownProfiles' in plain).toBe(false)
+  })
+})

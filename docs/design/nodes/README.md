@@ -318,6 +318,10 @@ Facts only. The node holds no thresholds and takes no placement decision; it ref
       "accept": ["hook:notify-toast"],         // differences the owner has seen and accepts
       "giveSecrets": false                     // the secrets its profile needs are not sent with the sync; absent: they are (10)
     },
+    "laptop": {
+      "link": { "kind": "relay", "socket": "laptop" },
+      "ownProfiles": true                      // its profiles are the originals: never sent a bundle (9.2, #802)
+    },
     "local": { "maxSessions": 20, "minFreeMemMb": 4800 }
   }
 }
@@ -449,6 +453,8 @@ Per profile, the master builds a bundle from the profile's folder and classifies
 ### 9.2 Version and when it moves
 
 The bundle's `hash` is the SHA-256 of its sorted manifest; `seq` counts hashes the master has seen for that profile, so a node "behind by 2" means two changes. The master computes the hash right before a placement on a node and every 5 minutes while a node is online, never on a prompt. A node that is behind is synced first and the start waits for it. A sync has 20 s for each request and 15 minutes in all: only changed files travel, a few at a time, but a profile's first bundle is hundreds of them. How long a start itself waits for a sync is the placer's decision (#584). That replaces the spec's filter "nodes with a current bundle": a node is made current instead of being skipped.
+
+**A device with its own profiles** (#802) is never sent a bundle: `nodes.devices.<id>.ownProfiles: true` on the master (the device's row: "Own profiles"), or `node.ownProfiles: true` on the node, which its status then says. The handover sets both on the old master, whose profiles are the owner's originals. A start placed there checks only that the profile is there and logged in (8.1 step 3) and starts without a sync; a profile missing there is a refusal. The sync itself refuses such a device (`own`), and the node answers every `/api/node/bundle/...` with 409 `own-profiles`, so nothing a master asks writes over its profiles. A sync that fails with the link up three times for one start stops that start, its card saying why.
 
 ### 9.3 Applying on the node
 

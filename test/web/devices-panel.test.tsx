@@ -166,7 +166,7 @@ describe('Settings, Devices (#510)', () => {
       expect(here).toContain('master')
       expect(here).not.toContain('This computer')
       expect(here).toContain('3 of 20 sessions')
-      // Pause and Give it the secrets on every device but this computer; Drain on all four.
+      // Pause, Give it the secrets and Own profiles on every device but this computer; Drain on all four.
       const switches = (row: (typeof rows)[number]) =>
         findAll([row], el => el.attrs.has('data-switch')).map(el => [
           el.attrs.get('data-switch'),
@@ -177,16 +177,19 @@ describe('Settings, Devices (#510)', () => {
           ['paused', 'false'],
           ['drain', 'false'],
           ['giveSecrets', 'true'],
+          ['ownProfiles', 'false'],
         ],
         [
           ['paused', 'true'],
           ['drain', 'false'],
           ['giveSecrets', 'true'],
+          ['ownProfiles', 'false'],
         ],
         [
           ['paused', 'false'],
           ['drain', 'false'],
           ['giveSecrets', 'true'],
+          ['ownProfiles', 'false'],
         ],
         [['drain', 'false']],
       ])
@@ -358,6 +361,14 @@ describe('the panel’s pure parts (#510)', () => {
       ['local', true, null],
     ])
     expect(rows[3]?.link).toBeNull()
+    // Own profiles (#802): on where the payload marks it, off everywhere else.
+    expect(rows.map(r => r.ownProfiles)).toEqual([false, false, false, false])
+    const marked = deviceRows(
+      DEVICES.map(d => (d.id === 'server-2' ? { ...d, ownProfiles: true as const } : d)),
+      NOW,
+      t,
+    )
+    expect(marked.map(r => r.ownProfiles)).toEqual([false, true, false, false])
     // How long it has been offline, also when it was never heard; under a minute, no figure.
     expect(linkWords({ id: 'server-2', link: { state: 'offline', since: NOW - 6 * MIN, heardAt: null } }, NOW, t)).toBe(
       'Not reachable for 6 min',

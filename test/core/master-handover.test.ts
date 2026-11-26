@@ -217,6 +217,7 @@ describe('core/master-handover (#697)', () => {
       minFreeMemMb: 2048,
       tags: ['mac'],
       link: { kind: 'relay', socket: 'laptop' },
+      ownProfiles: true,
     })
 
     // #752: when old local had no title or had "local", handover uses oldMasterTitle (hostname) and never writes "local"
@@ -241,6 +242,7 @@ describe('core/master-handover (#697)', () => {
       title: 'Anna-MacBook',
       maxSessions: 4,
       link: { kind: 'relay', socket: 'laptop' },
+      ownProfiles: true,
     })
 
     const literalLocalFallback = flipNodesConfig(
@@ -262,6 +264,7 @@ describe('core/master-handover (#697)', () => {
     expect((literalLocalFallback.devices as Record<string, Record<string, unknown>>).local).toEqual({})
     expect((literalLocalFallback.devices as Record<string, Record<string, unknown>>).laptop).toEqual({
       link: { kind: 'relay', socket: 'laptop' },
+      ownProfiles: true,
     })
 
     const oldCfg = {
@@ -343,6 +346,7 @@ describe('core/master-handover (#697)', () => {
       port: 12430,
       tls: true,
       relay: { host: 'relay.example.com', sshPort: 22, user: 'agent-board-relay-n', socket: 'laptop' },
+      ownProfiles: true,
     })
 
     const committedOptOut = buildOldMasterNodeConfig(
@@ -743,5 +747,40 @@ describe('core/master-handover (#697)', () => {
       { flippedNodes: flipped, keepTargetNode: true },
     )
     expect(bothOff.wake).toBeUndefined()
+  })
+})
+
+describe('the old master keeps its own profiles (#802)', () => {
+  test('the flip marks the old master ownProfiles; the new local and the helpers get no mark', () => {
+    const flipped = flipNodesConfig(
+      {
+        id: 'laptop',
+        order: ['local', 'server-1', 'server-2'],
+        devices: {
+          local: { title: 'Anna Laptop' },
+          'server-1': { link: { kind: 'direct', url: 'http://127.0.0.1:12430' } },
+          'server-2': { link: { kind: 'direct', url: 'http://127.0.0.1:12431' }, maxSessions: 2 },
+        },
+      },
+      { oldMasterId: 'laptop', targetId: 'server-1', reverseLink: { kind: 'direct', url: 'http://127.0.0.1:12440' } },
+    )
+    const devices = flipped.devices as Record<string, Record<string, unknown>>
+    expect(devices.laptop?.ownProfiles).toBe(true)
+    expect(devices.local?.ownProfiles).toBeUndefined()
+    expect(devices['server-2']).toEqual({ link: { kind: 'direct', url: 'http://127.0.0.1:12431' }, maxSessions: 2 })
+    // The section the new master reads keeps the mark (no problem drops the device).
+    const read = nodesConfig(flipped, 'server-1')
+    expect(read?.devices.laptop?.ownProfiles).toBe(true)
+    expect(read?.problems).toEqual([])
+  })
+
+  test('the old master as a node refuses bundles: node.ownProfiles, frozen or committed', () => {
+    for (const keepNodesFrozen of [true, false]) {
+      const cfg = buildOldMasterNodeConfig(
+        { nodes: { id: 'laptop', devices: {} } },
+        { nodeConfig: { id: 'laptop', port: 12430 }, keepNodesFrozen },
+      )
+      expect((cfg.node as Record<string, unknown>).ownProfiles).toBe(true)
+    }
   })
 })

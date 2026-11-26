@@ -2,7 +2,16 @@
 // from a body (nodesEditOf), then held to the rules nodesConfig reads with (applyNodesEdit). A bad
 // value is refused with its field and leaves the section as it was.
 import { describe, expect, test } from 'bun:test'
-import { applyNodesEdit, type NodesEdit, nodesConfig, nodesEditOf } from '../../src/core/nodes.ts'
+import {
+  applyNodesEdit,
+  type NodesEdit,
+  nodeConfig,
+  nodeProblems,
+  nodeStatusOf,
+  nodesConfig,
+  nodesEditOf,
+  statusShown,
+} from '../../src/core/nodes.ts'
 
 const section = (): Record<string, unknown> => ({
   id: 'laptop',
@@ -356,5 +365,75 @@ describe('the machine marker on cards (#789)', () => {
     expect(applyNodesEdit(nodes, read({ op: 'whenFull', whenFull: 'wait' }))).toEqual({ changed: true })
     expect(applyNodesEdit(nodes, read({ op: 'marker', marker: { style: 'off' } }))).toEqual({ changed: true })
     expect(nodes.marker).toEqual({ style: 'off' })
+  })
+})
+
+describe('ownProfiles (#802)', () => {
+  test('read: true on a device, absent otherwise; a bad value or one on this computer is a problem', () => {
+    const cfg = nodesConfig(
+      {
+        id: 'server-2',
+        devices: {
+          laptop: { link: { kind: 'direct', url: 'http://127.0.0.1:12430' }, ownProfiles: true },
+          'server-1': { link: { kind: 'direct', url: 'http://127.0.0.1:12431' }, ownProfiles: false },
+          'server-3': { link: { kind: 'direct', url: 'http://127.0.0.1:12432' } },
+          'server-4': { link: { kind: 'direct', url: 'http://127.0.0.1:12433' }, ownProfiles: 'yes' },
+          local: { ownProfiles: true },
+        },
+      },
+      'server-2',
+    )
+    expect(cfg?.devices.laptop?.ownProfiles).toBe(true)
+    expect('ownProfiles' in (cfg?.devices['server-1'] ?? {})).toBe(false)
+    expect('ownProfiles' in (cfg?.devices['server-3'] ?? {})).toBe(false)
+    expect(cfg?.devices['server-4']).toBeUndefined()
+    expect(cfg?.problems).toContainEqual({ device: 'server-4', key: 'ownProfiles', why: 'type' })
+    expect(cfg?.problems).toContainEqual({ device: 'local', key: 'ownProfiles', why: 'local' })
+  })
+
+  test('the node side: node.ownProfiles true is kept, absent is absent, a bad value is a problem', () => {
+    expect(nodeConfig({ id: 'laptop', ownProfiles: true })?.ownProfiles).toBe(true)
+    expect('ownProfiles' in (nodeConfig({ id: 'laptop' }) ?? {})).toBe(false)
+    expect(nodeConfig({ id: 'laptop', ownProfiles: 'yes' })).toBeNull()
+    expect(nodeProblems({ id: 'laptop', ownProfiles: 'yes' })).toEqual([{ key: 'ownProfiles', why: 'type' }])
+  })
+
+  test('the status: kept only when true, and it moves what the page shows', () => {
+    const base = {
+      api: 1,
+      id: 'laptop',
+      version: 'v',
+      commit: 'c',
+      platform: 'linux',
+      arch: 'x64',
+      cpus: 4,
+      memTotalMb: 1,
+      memAvailableMb: 1,
+      load: null,
+      sessions: { awake: 0, working: 0, asleep: 0 },
+      launches: 0,
+      workRootFreeMb: null,
+      profiles: [],
+      agents: [],
+      at: 1,
+    }
+    const plain = nodeStatusOf(base)
+    expect(plain && 'ownProfiles' in plain).toBe(false)
+    expect(nodeStatusOf({ ...base, ownProfiles: true })?.ownProfiles).toBe(true)
+    expect(nodeStatusOf({ ...base, ownProfiles: 'yes' })?.ownProfiles).toBeUndefined()
+    expect(statusShown(nodeStatusOf({ ...base, ownProfiles: true }))).not.toBe(statusShown(plain))
+  })
+
+  test('the panel: on writes the key, off removes it; this computer is refused', () => {
+    const on = applied({ op: 'set', id: 'server-1', ownProfiles: true })
+    expect(on.r).toEqual({ changed: true })
+    expect((on.nodes.devices as Record<string, Record<string, unknown>>)['server-1']?.ownProfiles).toBe(true)
+    const off = applied({ op: 'set', id: 'server-1', ownProfiles: false }, on.nodes)
+    expect(off.r).toEqual({ changed: true })
+    expect('ownProfiles' in ((off.nodes.devices as Record<string, Record<string, unknown>>)['server-1'] ?? {})).toBe(
+      false,
+    )
+    expect(nodesEditOf({ op: 'set', id: 'server-1', ownProfiles: 'yes' })).toEqual({ error: 'ownProfiles' })
+    expect(nodesEditOf({ op: 'set', id: 'local', ownProfiles: true })).toEqual({ error: 'ownProfiles' })
   })
 })

@@ -82,6 +82,8 @@ const RESEND_MS = 1000
 /** A node that clones a repository answers when it is done: a big one takes minutes. */
 const LAUNCH_ANSWER_MS = 11 * 60_000
 const TURNS: readonly NodeTurn[] = ['full', 'profile', 'repo', 'bundle']
+/** A start whose profile sync failed this many times, the link up each time, stops with the reason (#802). */
+export const SYNC_TRIES = 3
 
 export interface PlacerOptions {
   /** The live config. */
@@ -168,6 +170,8 @@ interface Held {
   syncing: string | null
   /** A node's repository this computer could not check out (#760), why: it is not cloned again. */
   noCheckout?: string
+  /** Profile syncs of this start that failed with the link up (#802): at SYNC_TRIES it stops. */
+  syncFails?: number
   /**
    * Last `sent` / `syncing` written to queue.json for this entry, so toQueue avoids redundant
    * writes yet never leaves stale markers on disk.
@@ -571,6 +575,14 @@ export function createPlacer(o: PlacerOptions): Placer {
     r.why === 'offline' ||
     (r.why === 'node' && (r.detail === 'error' || r.detail === 'node-offline'))
 
+  /**
+   * Whether a device keeps its own profiles (#802): config.json marks it, or its status says so. Such a
+   * device gets no bundle; placement has checked already that the start's profile is there.
+   */
+  function ownProfiles(device: string): boolean {
+    return !!nodes()?.devices[device]?.ownProfiles || !!o.links.link(device)?.view().status?.ownProfiles
+  }
+
   /** The start on a node: acknowledged, turned away (try the next device), or lost (back to the queue). */
   async function send(
     h: Held,
@@ -582,7 +594,7 @@ export function createPlacer(o: PlacerOptions): Placer {
     p.device = device
     delete p.wait
     h.l.state = 'starting'
-    if (o.bundle && !skipSync) {
+    if (o.bundle && !skipSync && !ownProfiles(device)) {
       if (h.gone || closed) {
         if (closed) release(session)
         return 'done'
@@ -616,6 +628,21 @@ export function createPlacer(o: PlacerOptions): Placer {
         o.log(
           `placer: ${h.l.name}: the profile ${h.l.profile} not synced to ${device}: ${r.why}${r.detail ? ` (${r.detail})` : ''}`,
         )
+        // Failing with the link up: tried again only SYNC_TRIES times in all, then the card says why (#802).
+        if (o.links.link(device)?.state().state === 'online' && r.why !== 'offline') {
+          h.syncFails = (h.syncFails ?? 0) + 1
+          if (h.syncFails >= SYNC_TRIES) {
+            release(session)
+            h.l.state = 'failed'
+            h.l.error = t('node.place.syncGaveUp', {
+              name: nodes()?.devices[device]?.title ?? device,
+              why: `${r.why}${r.detail ? `: ${r.detail}` : ''}`,
+              n: String(SYNC_TRIES),
+            })
+            letGo(h)
+            return 'done'
+          }
+        }
         if (!syncLost(r, device)) return turn(h, device, turnOf(r))
         release(session)
         toQueue(h, { device, kind: 'offline' })

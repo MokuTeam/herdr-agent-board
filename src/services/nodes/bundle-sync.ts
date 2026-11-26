@@ -50,9 +50,10 @@ export interface SyncReport {
    * Why not: `device` (no such device with a link), `profile` (no such profile here), `offline`,
    * `build` (the profile folder could not be read), `changed` (a file changed while it was sent),
    * `node` (the node refused; `detail` is its code), `timeout` (a request not answered within 20 s,
-   * or the whole sync not done within 15 minutes).
+   * or the whole sync not done within 15 minutes), `own` (the device keeps its own profiles, #802:
+   * nothing is sent to it).
    */
-  why?: 'device' | 'profile' | 'offline' | 'build' | 'changed' | 'node' | 'timeout'
+  why?: 'device' | 'profile' | 'offline' | 'build' | 'changed' | 'node' | 'timeout' | 'own'
   detail?: string
   /** Blobs sent this time. */
   sent: number
@@ -290,8 +291,11 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
     if (!device?.link || deviceId === LOCAL) return not('device')
     const profile = o.profiles().find(p => p.id === profileId)
     if (!profile) return not('profile')
+    // A device with its own profiles (#802) gets no bundle, whoever asks: config.json or its own status says so.
+    if (device.ownProfiles) return not('own')
     const link = o.links.link(deviceId)
     if (link?.state().state !== 'online') return not('offline')
+    if (link.view().status?.ownProfiles) return not('own')
     const left = (): AbortSignal => {
       const ms = deadline - clock.now()
       if (ms <= 0) throw new Late()
@@ -563,7 +567,7 @@ export function createBundleSync(o: BundleSyncOptions): BundleSync {
       if (!device.link) continue
       const link = o.links.link(device.id)
       const status = link?.state().state === 'online' ? link.view().status : null
-      if (!status) continue
+      if (!status || device.ownProfiles || status.ownProfiles) continue
       const theirs = new Set(status.profiles.map(p => p.id))
       for (const profile of o.profiles()) {
         const key = `${device.id}\n${profile.id}`

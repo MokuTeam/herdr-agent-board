@@ -18,7 +18,7 @@ import type { Config } from '../../src/core/types.ts'
 import type { LaunchRequest } from '../../src/services/launch/request.ts'
 import { type Launch, newLaunch } from '../../src/services/launch/run.ts'
 import { createBundleSync, type SyncReport } from '../../src/services/nodes/bundle-sync.ts'
-import { createPlacer, SENT_TTL_MS } from '../../src/services/nodes/placer.ts'
+import { createPlacer, SENT_TTL_MS, SYNC_TRIES } from '../../src/services/nodes/placer.ts'
 import { isolatedHome } from '../support/env.ts'
 
 const NOW = 1_800_000_000_000
@@ -106,6 +106,8 @@ function door(
     down: false,
     /** Override the link state reported to the placer (`connecting` / `offline` / `online`). */
     linkState: null as 'online' | 'connecting' | 'offline' | null,
+    /** Its status says it keeps its own profiles (#802, `node.ownProfiles`). */
+    ownStatus: false,
     requests,
     starts,
     hold() {
@@ -229,10 +231,14 @@ function master(o: {
   const link = (id: string) => {
     const n = byId.get(id)
     if (!n) return null
+    const said = (): NodeStatus => ({
+      ...status(id, 0, clock.now(), o.nodeProfiles),
+      ...(n.ownStatus && { ownProfiles: true as const }),
+    })
     return {
-      view: () => ({ status: n.linkState === 'connecting' ? null : status(id, 0, clock.now(), o.nodeProfiles) }),
+      view: () => ({ status: n.linkState === 'connecting' ? null : said() }),
       state: () => ({ state: n.linkState ?? (n.down ? 'offline' : 'online') }),
-      status: async () => (n.down || n.linkState ? null : status(id, 0, clock.now(), o.nodeProfiles)),
+      status: async () => (n.down || n.linkState ? null : said()),
       fetch: (path: string, init?: RequestInit) => n.fetch(path, init),
     }
   }
@@ -314,7 +320,7 @@ function master(o: {
     } as never,
     exists: () => false,
   })
-  const start = (name: string, byHand = true): Launch => {
+  const start = (name: string, byHand = true, pin?: Launch['pin']): Launch => {
     const request = {
       name,
       label: '',
@@ -335,6 +341,7 @@ function master(o: {
       model: null,
     } as LaunchRequest
     const l = newLaunch(request, [])
+    if (pin) l.pin = pin
     placer.take(l, byHand)
     return l
   }
@@ -1071,6 +1078,109 @@ describe('a start on its way to a node survives a master restart (#588)', () => 
     expect(l.place?.home).toEqual({ kind: 'lane' })
     expect(m.queuePuts).toEqual([])
     expect(m.queued.size).toBe(0)
+    m.close()
+  }, 15_000)
+})
+
+describe('a device with its own profiles gets no bundle (#802)', () => {
+  test('marked in config.json: the start goes there with no sync and no bundle request', async () => {
+    const own = door('laptop-old')
+    const m = master({ nodes: [own], deviceCfg: { 'laptop-old': { ownProfiles: true } } })
+    const l = m.start('atlas 1')
+    await until(settledOf(l))
+    expect([l.state, l.place?.device]).toEqual(['done', 'laptop-old'])
+    expect(m.syncs).toEqual([])
+    expect(bundleCalls(own)).toEqual([])
+    expect(own.requests).toEqual(['POST /api/node/launch'])
+    m.close()
+  }, 15_000)
+
+  test('said by its status alone (a master whose config has no mark yet): no sync either', async () => {
+    const own = door('laptop-old')
+    own.ownStatus = true
+    const m = master({ nodes: [own] })
+    const l = m.start('atlas 1', false, { device: 'laptop-old' })
+    await until(settledOf(l))
+    expect([l.state, l.place?.device]).toEqual(['done', 'laptop-old'])
+    expect(bundleCalls(own)).toEqual([])
+    expect(own.starts.length).toBe(1)
+    m.close()
+  }, 15_000)
+
+  test('a profile it does not have: a plain refusal at once, nothing sent, no hang', async () => {
+    const own = door('laptop-old', { profiles: ['work'] })
+    const m = master({
+      nodes: [own],
+      nodeProfiles: ['work'],
+      deviceCfg: { 'laptop-old': { ownProfiles: true } },
+      localAwake: 1,
+      whenFull: 'wait',
+    })
+    const l = m.start('atlas 1', false, { device: 'laptop-old' })
+    await until(settledOf(l))
+    expect(l.state).toBe('failed')
+    expect(l.place?.refuse).toEqual({
+      kind: 'unfit',
+      devices: [{ device: 'laptop-old', kind: 'no-profile', profile: 'default' }],
+    })
+    expect(own.requests).toEqual([])
+    expect(m.queued.size).toBe(0)
+    m.close()
+  }, 15_000)
+
+  test('a helper node without the mark is still made current first, as before', async () => {
+    const helper = door('server-1')
+    const m = master({ nodes: [helper] })
+    const l = m.start('atlas 1')
+    await until(settledOf(l))
+    expect(l.state).toBe('done')
+    expect(m.syncs).toEqual(['server-1/default'])
+    expect(helper.requests[0]).toBe('GET /api/node/bundle/default')
+    expect(helper.requests.at(-1)).toBe('POST /api/node/launch')
+    m.close()
+  }, 15_000)
+})
+
+describe('a sync that keeps failing gives up with the reason (#802)', () => {
+  test(`after ${SYNC_TRIES} failed syncs the start stops and the card says why; nothing is tried after`, async () => {
+    const one = door('server-1', { commit: () => json(409, { error: 'path', path: 'skills/brandkit/SKILL.md' }) })
+    const m = master({ nodes: [one], localAwake: 1, whenFull: 'wait' })
+    const l = m.start('atlas 1', false, { device: 'server-1' })
+    const commits = () => one.requests.filter(r => r.endsWith('/commit')).length
+    await until(() => commits() === 1 && settledOf(l)())
+    // Before the last try it waits as it did: queued, the device asked again once its status moves.
+    expect(l.state).toBe('queued')
+    for (let n = 2; n <= SYNC_TRIES; n++) {
+      for (let i = 0; i < 6 && commits() < n; i++) {
+        m.clock.advance(15_000)
+        await Bun.sleep(20)
+      }
+      await until(() => commits() === n && settledOf(l)())
+    }
+    expect(l.state).toBe('failed')
+    expect(l.error).toContain(`stopped after ${SYNC_TRIES} tries`)
+    expect(l.error).toContain('skills/brandkit/SKILL.md')
+    expect(one.starts).toEqual([])
+    expect(m.queued.has(l.id)).toBe(false)
+    for (let i = 0; i < 4; i++) {
+      m.clock.advance(15_000)
+      await Bun.sleep(10)
+    }
+    expect(commits()).toBe(SYNC_TRIES)
+    m.close()
+  }, 15_000)
+
+  test('a link that is down does not count: the start waits for the node as before', async () => {
+    const one = door('server-1')
+    one.down = true
+    const m = master({ nodes: [one], localAwake: 1, whenFull: 'wait' })
+    const l = m.start('atlas 1', false, { device: 'server-1' })
+    await until(settledOf(l))
+    for (let i = 0; i < SYNC_TRIES + 2; i++) {
+      m.clock.advance(15_000)
+      await Bun.sleep(10)
+    }
+    expect(l.state).toBe('queued')
     m.close()
   }, 15_000)
 })
