@@ -43,6 +43,7 @@ import {
   isThreadStatus,
   MINE,
   OWNER,
+  oneLine,
   type Party,
   sharedOf,
   sharingOf,
@@ -54,6 +55,7 @@ import {
   type ThreadStatus,
   type ThreadView,
   threadsConfig,
+  WAITING_MAX,
 } from '../../core/work-threads.ts'
 import type { TeamConfirm } from '../../services/team-confirm.ts'
 import type { SendOut, WorkHub } from '../../services/work-hub.ts'
@@ -129,6 +131,8 @@ export interface ThreadsApp {
   tell(session: string, text: string): Promise<{ ok: true } | { ok: false; error: string }>
   /** Clears the question on the session's card, as its next prompt would, while it is still `question`. */
   clearAsk(session: string, question: string, answer?: string): void | Promise<void>
+  /** Settles open thread asks when the thread closes or moves off `owner` without an answer (#844). */
+  settleThread?(threadId: string, prevAsk?: { asker: string; question: string }): void | Promise<void>
   /** The tests' schedule, state folder and clock. */
   schedule?: EventSchedule
   state?: string
@@ -452,23 +456,36 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
         }
       }
       const head = findThread(db, word, null, true)
+      const settleOf = (
+        written: { head: ThreadHead },
+        prevAsk: ReturnType<typeof openAsk>,
+      ): { thread: string; prev?: { asker: string; question: string } } | undefined => {
+        if (isOpen(written.head.status) && !(head.status === 'owner' && written.head.status !== 'owner'))
+          return undefined
+        return {
+          thread: written.head.id,
+          ...(prevAsk?.author.kind === 'session' && {
+            prev: { asker: prevAsk.author.key, question: oneLine(prevAsk.text, WAITING_MAX) },
+          }),
+        }
+      }
       switch (body.op) {
         case 'post': {
           const status = body.status
           if (status !== undefined && !isThreadStatus(status)) throw new ThreadError('status', t('thread.err.bad'))
-          return {
-            written: postEntry(ctx, head, {
-              ...(typeof body.text === 'string' && { text: body.text }),
-              ...(status !== undefined && { status }),
-              ...(typeof body.summary === 'string' && { summary: body.summary }),
-              ...(typeof body.waitingOn === 'string' && { waitingOn: body.waitingOn }),
-              ...(typeof body.replyTo === 'string' && { replyTo: body.replyTo }),
-              ...(body.private === true && { private: true }),
-              links: strings(body.links, 5),
-              files,
-              directOwner: true,
-            }),
-          }
+          const prevAsk = head.status === 'owner' ? openAsk(head, entriesOf(db, head.id)) : null
+          const written = postEntry(ctx, head, {
+            ...(typeof body.text === 'string' && { text: body.text }),
+            ...(status !== undefined && { status }),
+            ...(typeof body.summary === 'string' && { summary: body.summary }),
+            ...(typeof body.waitingOn === 'string' && { waitingOn: body.waitingOn }),
+            ...(typeof body.replyTo === 'string' && { replyTo: body.replyTo }),
+            ...(body.private === true && { private: true }),
+            links: strings(body.links, 5),
+            files,
+            directOwner: true,
+          })
+          return { written, settle: settleOf(written, prevAsk) }
         }
         case 'set': {
           const assignee = body.assignee !== undefined ? assigneeOf(body.assignee, head) : undefined
@@ -493,8 +510,11 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
           const a = answerAsk(ctx, head, String(body.text ?? ''))
           return { written: a, answered: a }
         }
-        case 'confirm':
-          return { written: confirmClose(ctx, head) }
+        case 'confirm': {
+          const prevAsk = head.status === 'owner' ? openAsk(head, entriesOf(db, head.id)) : null
+          const written = confirmClose(ctx, head)
+          return { written, settle: settleOf(written, prevAsk) }
+        }
         case 'keep':
           return { written: keepOpen(ctx, head) }
         case 'watch':
@@ -503,6 +523,7 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
           throw new ThreadError('bad', t('thread.err.bad'))
       }
     })
+    if ('settle' in done && done.settle) await app.settleThread?.(done.settle.thread, done.settle.prev)
     app.changed()
     const { written } = done
     let out: Record<string, unknown> = { ok: true, key: written.head.key, head: written.head, entry: written.entry }

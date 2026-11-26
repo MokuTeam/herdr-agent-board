@@ -3,37 +3,69 @@
 // written, so at the session's cap nothing is written and the open question keeps its buttons; on a
 // node the flags go to the master, which holds the question (#781).
 import { expect, test } from 'bun:test'
-import { readCard } from '../../src/adapters/cards.ts'
+import { readCard, writeCard } from '../../src/adapters/cards.ts'
 import { getDecision } from '../../src/adapters/decision-store.ts'
 import { addEntry, listEntries } from '../../src/adapters/schedule-store.ts'
 import { entriesOf, threadByKey } from '../../src/adapters/work-thread-store.ts'
-import { decisionsConfig } from '../../src/core/decisions.ts'
+import { cardDecisionOf, decisionsConfig } from '../../src/core/decisions.ts'
 import { MAX_PER_SESSION } from '../../src/core/schedule-rules.ts'
+import type { Card, Item } from '../../src/core/types.ts'
 import type { Party } from '../../src/core/work-threads.ts'
-import { askThreadDecision, releaseDecision, reserveThreadDecision } from '../../src/entrypoints/decisions-cli.ts'
+import {
+  askThreadDecision,
+  releaseDecision,
+  reserveThreadDecision,
+  settleThreadAsk,
+} from '../../src/entrypoints/decisions-cli.ts'
 import { type NodeCall, type ThreadCmdContext, threadCmd } from '../../src/entrypoints/thread-cli.ts'
-import { withDecisionsDb } from '../../src/services/decisions.ts'
+import { closeOnPrompt, decisionsFromCards, decisionsPayload, withDecisionsDb } from '../../src/services/decisions.ts'
 import { isolatedHome } from '../support/env.ts'
 
 const ANNA = 'aaaaaaaa-0000-4000-8000-00000000000a'
+const BEN = 'bbbbbbbb-0000-4000-8000-00000000000b'
 const me: Party = { kind: 'session', key: ANNA, name: 'anna' }
 
-/** `board thread <args>` as anna, with decisions on, the way the board command wires it. */
+/** `board thread <args>` as anna (or `over.actor`), with decisions on by default, the way the board command wires it. */
 async function run(args: string[], over: Partial<ThreadCmdContext> = {}) {
+  const actor = over.actor ?? me
+  const actorKey = actor.kind === 'session' ? actor.key : ''
+  const actorName = actor.kind === 'session' ? actor.name : ''
   const out: string[] = []
   const err: string[] = []
   const calls: NodeCall[] = []
   const code = await threadCmd(args, {
     cfg: { threads: true, port: 9 },
-    actor: me,
+    actor,
     lane: 'atlas',
     findSession: async () => null,
     decisions: decisionsConfig(true),
-    setAsk: async (question, decision) =>
-      decision
-        ? askThreadDecision({ key: ANNA, name: 'anna', lane: 'atlas' }, question, decision, Date.now())
-        : undefined,
-    reserveAsk: async spec => reserveThreadDecision({ key: ANNA, name: 'anna' }, spec, Date.now()),
+    setAsk: async (question, decision) => {
+      if (!actorKey) return undefined
+      if (!decision || over.decisions === null) {
+        writeCard(actorKey, { ask: question, askSince: Date.now(), by: 'agent', decision: '' })
+        return undefined
+      }
+      return askThreadDecision({ key: actorKey, name: actorName, lane: 'atlas' }, question, decision, Date.now())
+    },
+    settleAsk: async info => {
+      const clearPlain = (who: string | undefined): void => {
+        if (!who || !info.question) return
+        const card = readCard(who)
+        if (card && card.decision === undefined && card.ask === info.question) writeCard(who, { ask: '', askSince: '' })
+      }
+      if (over.decisions === null) {
+        clearPlain(info.session ?? info.asker)
+        return
+      }
+      const settled = settleThreadAsk(info.thread, Date.now(), {
+        ...(info.session && { session: info.session }),
+        by: actorKey ? 'agent' : 'owner',
+      })
+      const plainKey = info.session ?? info.asker
+      if (plainKey && !settled.includes(plainKey)) clearPlain(plainKey)
+    },
+    reserveAsk: async spec =>
+      actorKey ? reserveThreadDecision({ key: actorKey, name: actorName }, spec, Date.now()) : undefined,
     releaseAsk: r => releaseDecision(r),
     own: async () => true,
     out: l => out.push(l),
@@ -218,4 +250,174 @@ test('on a node the flags go to the master with the question, and its decision g
   const text = await run(['ask', 'atlas-1', '--', 'Ship it with --option x?'], { cfg: node })
   expect(text.code).toBe(0)
   expect(text.calls.map(c => c.argv)).toEqual([['ask', 'atlas-1', '--', 'Ship it with --option x?']])
+})
+
+test('thread done / --status done by the asking session settles its decision, default and card (#844)', async () => {
+  for (const args of [
+    ['post', 'atlas-1', '--status', 'done', '--summary', 'sent by itself'],
+    ['done', 'atlas-1', 'sent by itself'],
+  ]) {
+    isolatedHome()
+    await run(['new', '--lane', 'atlas', 'Draft'])
+    const asked = await run([
+      'ask',
+      'atlas-1',
+      'Press Send?',
+      '--option',
+      'Send',
+      '--option',
+      'Cancel',
+      '--recommend',
+      '1',
+      '--default-after',
+      '2h',
+    ])
+    expect(asked.code).toBe(0)
+    const id = /decision ([0-9a-f]{8})/.exec(asked.out.join('\n'))?.[1] as string
+    expect(id).toBeTruthy()
+    const done = await run(args)
+    expect(done.code).toBe(0)
+    expect(done.out[0]).toBe('ok · atlas-1 · owner · proposed done, the owner confirms')
+    expect(withDecisionsDb(db => getDecision(db, id))).toMatchObject({
+      answeredBy: 'withdrawn',
+      via: 'cleared',
+      answer: null,
+    })
+    expect(listEntries()).toEqual([])
+    expect(readCard(ANNA)?.ask).toBeUndefined()
+    expect(readCard(ANNA)?.decision).toBeUndefined()
+    const cards = new Map<string, Card>([[ANNA, readCard(ANNA) ?? ({ key: ANNA } as Card)]])
+    const items = [{ key: ANNA, session: ANNA, name: 'anna', attention: '' }] as Item[]
+    expect(decisionsPayload(items, cards, { now: Date.now(), defaults: true, seen: 0 }).items).toEqual([])
+    expect(decisionsFromCards(cards)).toEqual([])
+    // A subsequent owner chat message never gets recorded as the answer to the settled ask.
+    closeOnPrompt(readCard(ANNA), 'next task please', Date.now())
+    expect(withDecisionsDb(db => getDecision(db, id))?.answeredBy).toBe('withdrawn')
+  }
+})
+
+test('dropped or --status doing settles the ask; plain notes and another session proposing done do not (#844)', async () => {
+  isolatedHome()
+  await run(['new', '--lane', 'atlas', 'Draft'])
+  const asked = await run(['ask', 'atlas-1', 'Press Send?', '--option', 'Send', '--option', 'Cancel'])
+  const id = /decision ([0-9a-f]{8})/.exec(asked.out.join('\n'))?.[1] as string
+  expect(id).toBeTruthy()
+  // Plain note while waiting on the owner leaves the decision open.
+  expect((await run(['post', 'atlas-1', 'still waiting'])).code).toBe(0)
+  expect(withDecisionsDb(db => getDecision(db, id))?.answeredAt).toBeNull()
+  expect(cardDecisionOf(readCard(ANNA)?.decision)?.id).toBe(id)
+  // Another session proposing done does not settle anna's ask.
+  const ben: Party = { kind: 'session', key: BEN, name: 'ben' }
+  expect((await run(['done', 'atlas-1', 'ben thinks done'], { actor: ben })).code).toBe(0)
+  expect(withDecisionsDb(db => getDecision(db, id))?.answeredAt).toBeNull()
+  expect(cardDecisionOf(readCard(ANNA)?.decision)?.id).toBe(id)
+  // Owner dropping (or setting status doing) settles it.
+  expect((await run(['post', 'atlas-1', '--status', 'dropped'], { actor: { kind: 'owner' } })).code).toBe(0)
+  expect(withDecisionsDb(db => getDecision(db, id))).toMatchObject({ answeredBy: 'withdrawn', via: 'cleared' })
+  expect(readCard(ANNA)?.decision).toBeUndefined()
+  expect(readCard(ANNA)?.ask).toBeUndefined()
+
+  // --status doing also settles.
+  await run(['new', '--lane', 'atlas', 'Another'])
+  const a2 = await run(['ask', 'atlas-2', 'Wait?', '--option', 'Yes', '--option', 'No'])
+  const id2 = /decision ([0-9a-f]{8})/.exec(a2.out.join('\n'))?.[1] as string
+  expect((await run(['post', 'atlas-2', '--status', 'doing', 'resumed'])).code).toBe(0)
+  expect(withDecisionsDb(db => getDecision(db, id2))).toMatchObject({ answeredBy: 'withdrawn', via: 'cleared' })
+  expect(readCard(ANNA)?.decision).toBeUndefined()
+})
+
+test('board thread post --settle settles an open ask and restores prior status; guards misuse (#844)', async () => {
+  isolatedHome()
+  await run(['new', '--lane', 'atlas', 'Draft'])
+  await run(['post', 'atlas-1', '--status', 'waiting', '--waiting', 'hub sync'])
+  const asked = await run([
+    'ask',
+    'atlas-1',
+    'Press Send?',
+    '--option',
+    'Send',
+    '--option',
+    'Cancel',
+    '--recommend',
+    '1',
+    '--default-after',
+    '2h',
+  ])
+  const id = /decision ([0-9a-f]{8})/.exec(asked.out.join('\n'))?.[1] as string
+  // Another session cannot settle anna's ask.
+  const ben: Party = { kind: 'session', key: BEN, name: 'ben' }
+  const notAsker = await run(['post', 'atlas-1', '--settle', 'moot'], { actor: ben })
+  expect(notAsker.code).toBe(1)
+  expect(notAsker.err.join('\n')).toContain('not yours')
+  // Owner cannot use --settle.
+  const ownerSettle = await run(['post', 'atlas-1', '--settle', 'moot'], { actor: { kind: 'owner' } })
+  expect(ownerSettle.code).toBe(1)
+  expect(ownerSettle.err.join('\n')).toContain('--settle is for the session that asked')
+  // --settle cannot go with --status owner.
+  const withOwnerStatus = await run(['post', 'atlas-1', '--settle', '--status', 'owner', 'x'])
+  expect(withOwnerStatus.code).toBe(1)
+  expect(withOwnerStatus.err.join('\n')).toContain('--settle cannot go with --status owner')
+
+  // --settle without --status restores waiting + waitingOn and settles the decision.
+  const settled = await run(['post', 'atlas-1', '--settle', 'draft went out by itself'])
+  expect(settled.code).toBe(0)
+  expect(settled.out[0]).toBe('ok · atlas-1 · waiting')
+  expect(thread('atlas-1')?.waitingOn).toBe('hub sync')
+  expect(withDecisionsDb(db => getDecision(db, id))).toMatchObject({ answeredBy: 'withdrawn', via: 'cleared' })
+  expect(listEntries()).toEqual([])
+  expect(readCard(ANNA)?.ask).toBeUndefined()
+  expect(readCard(ANNA)?.decision).toBeUndefined()
+
+  // --settle alone (no text) also works when restoring status from an open ask.
+  await run(['new', '--lane', 'atlas', 'Draft 2'])
+  await run(['ask', 'atlas-2', 'Still needed?', '--option', 'Yes', '--option', 'No'])
+  const bare = await run(['post', 'atlas-2', '--settle'])
+  expect(bare.code).toBe(0)
+  expect(bare.out[0]).toBe('ok · atlas-2 · next')
+  expect(readCard(ANNA)?.decision).toBeUndefined()
+})
+
+test('unrelated card ask and decisions-off setups behave cleanly (#844)', async () => {
+  isolatedHome()
+  await run(['new', '--lane', 'atlas', 'Thread A'])
+  const a1 = await run(['ask', 'atlas-1', 'Question A?', '--option', '1', '--option', '2'])
+  const id1 = /decision ([0-9a-f]{8})/.exec(a1.out.join('\n'))?.[1] as string
+  // Session replaced its card ask with an unrelated plain card ask.
+  writeCard(ANNA, { ask: 'Unrelated card question', askSince: Date.now(), decision: '' })
+  expect((await run(['done', 'atlas-1', 'done A'])).code).toBe(0)
+  expect(withDecisionsDb(db => getDecision(db, id1))).toMatchObject({ answeredBy: 'withdrawn', via: 'cleared' })
+  // Unrelated ask on card stays intact.
+  expect(readCard(ANNA)?.ask).toBe('Unrelated card question')
+
+  // Decisions off: plain thread ask cleared when closed or --settle, unrelated card ask left untouched.
+  await run(['new', '--lane', 'atlas', 'Thread B'], { decisions: null })
+  expect((await run(['ask', 'atlas-2', 'Plain thread q?'], { decisions: null })).code).toBe(0)
+  expect(readCard(ANNA)?.ask).toBe('Plain thread q?')
+  expect((await run(['post', 'atlas-2', '--settle', 'moot'], { decisions: null })).code).toBe(0)
+  expect(readCard(ANNA)?.ask).toBeUndefined()
+
+  await run(['new', '--lane', 'atlas', 'Thread C'], { decisions: null })
+  expect((await run(['ask', 'atlas-3', 'Plain C?'], { decisions: null })).code).toBe(0)
+  writeCard(ANNA, { ask: 'Other plain ask' })
+  expect((await run(['done', 'atlas-3', 'done C'], { decisions: null })).code).toBe(0)
+  expect(readCard(ANNA)?.ask).toBe('Other plain ask')
+})
+
+test('on a node, settled notice from master clears local card via clearNodeAsk (#844)', async () => {
+  isolatedHome()
+  const node = { node: { id: 'server-1', port: 12430, workRoot: '/srv/work' }, port: 12422 }
+  const cleared: unknown[] = []
+  const r = await run(['post', 'atlas-1', '--settle', 'moot'], {
+    cfg: node,
+    clearNodeAsk: s => cleared.push(s),
+    call: async () => ({
+      state: 'answered',
+      code: 0,
+      out: ['ok · atlas-1 · doing'],
+      err: [],
+      settled: { thread: 'tid-1', question: 'Press Send?' },
+    }),
+  })
+  expect(r.code).toBe(0)
+  expect(cleared).toEqual([{ thread: 'tid-1', question: 'Press Send?' }])
 })

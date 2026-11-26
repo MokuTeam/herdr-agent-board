@@ -1549,6 +1549,21 @@ export async function startServer({
           }
           writeCard(key, { ask: '', askSince: '' })
         },
+        async settleThread(threadId, prev) {
+          let settled: string[] = []
+          if (decisionsConfig(cfg.decisions)) {
+            const { settleThreadDecisions, withDecisionsDb } = await import('../services/decisions.ts')
+            try {
+              settled = withDecisionsDb(db => settleThreadDecisions(db, threadId, Date.now(), { by: 'owner' }))
+            } catch {}
+          }
+          if (prev && !settled.includes(prev.asker)) {
+            const { readCard: readCardNow, writeCard } = await import('../adapters/cards.ts')
+            const card = readCardNow(prev.asker)
+            if (card && card.decision === undefined && card.ask === prev.question)
+              writeCard(prev.asker, { ask: '', askSince: '' })
+          }
+        },
         work,
         confirm: teamConfirm,
         // Case files (#488): a case's sessions as the board sees them now (its items, the nodes' items

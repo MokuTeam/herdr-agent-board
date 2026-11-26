@@ -18,6 +18,7 @@ import {
   decisionsFromCards,
   releaseDecision,
   reserveDecision,
+  settleThreadDecisions,
   withDecisionsDb,
 } from '../services/decisions.ts'
 
@@ -81,6 +82,15 @@ export function withdrawDecision(key: string, now: number): void {
       closeCardDecision(db, key, { answer: null, answeredBy: 'withdrawn', via: 'cleared', at: now }, { by: 'agent' }),
     )
   } catch {}
+}
+
+/** `board thread post / done`: settles open thread decisions and returns the settled session keys. */
+export function settleThreadAsk(threadId: string, now: number, o: { session?: string; by?: string } = {}): string[] {
+  try {
+    return withDecisionsDb(db => settleThreadDecisions(db, threadId, now, o))
+  } catch {
+    return []
+  }
 }
 
 const age = (ms: number): string => (ms < 60_000 ? 'just now' : `${durationWords(ms)} ago`)

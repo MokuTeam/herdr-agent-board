@@ -202,6 +202,12 @@ export interface UplinkCall {
   claimed?: boolean
 }
 
+/** A thread ask settled on the master (#844): the node clears the matching ask/decision on its own card. */
+export interface UplinkSettled {
+  thread: string
+  question?: string
+}
+
 export interface UplinkResult {
   code: number
   out: string[]
@@ -211,6 +217,8 @@ export interface UplinkResult {
    * ask`): the node puts it on its own card, which shows the master it is still open.
    */
   decision?: CardDecision
+  /** A thread ask settled on the master (#844): the node clears its own card copy when matching. */
+  settled?: UplinkSettled
 }
 
 /** The most options, and characters in one, a decision from the master carries. */
@@ -278,6 +286,18 @@ export function uplinkCallOf(raw: unknown): UplinkCall | null {
   }
 }
 
+/** A settled-thread notice from the master (#844), or null. */
+export function linkSettledOf(raw: unknown): UplinkSettled | null {
+  if (!isObject(raw)) return null
+  const { thread, question } = raw
+  if (typeof thread !== 'string' || !thread || thread.length > 256 || hasUnprintable(thread)) return null
+  if (question !== undefined) {
+    if (typeof question !== 'string' || question.length > 500 || hasUnprintable(question)) return null
+    return { thread, ...(question && { question }) }
+  }
+  return { thread }
+}
+
 /** A result as the master posted it, or null. */
 export function uplinkResultOf(raw: unknown): UplinkResult | null {
   if (!isObject(raw)) return null
@@ -288,7 +308,8 @@ export function uplinkResultOf(raw: unknown): UplinkResult | null {
   if (!lines(out) || !lines(err)) return null
   // A decision that does not read as one is left out: the result itself still holds (#781).
   const decision = raw.decision === undefined ? null : linkDecisionOf(raw.decision)
-  return { code: code as number, out, err, ...(decision && { decision }) }
+  const settled = raw.settled === undefined ? null : linkSettledOf(raw.settled)
+  return { code: code as number, out, err, ...(decision && { decision }), ...(settled && { settled }) }
 }
 
 /** A file too large for an uplink call, in the words a local command uses. */

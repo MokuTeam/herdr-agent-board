@@ -58,6 +58,7 @@ import {
   type UplinkCall,
   type UplinkFile,
   type UplinkResult,
+  type UplinkSettled,
   uplinkCallOf,
 } from '../../core/node-uplink.ts'
 import { nodeKey, nodesConfig, parseNodeKey } from '../../core/nodes.ts'
@@ -147,6 +148,8 @@ export interface UplinkRunnerOptions {
     args: readonly string[],
     ctx: { cfg: Config; out: (l: string) => void; err: (l: string) => void },
   ) => number
+  /** Tests: settles open thread decisions when a node thread post/done settles an ask. */
+  settleThreadDecisions?: (threadId: string, now: number, o: { session?: string; by?: string }) => void
 }
 
 /** A stream that ended is asked for again after this long (paced), while the link is online. */
@@ -199,13 +202,15 @@ function fit(r: UplinkResult): UplinkResult {
   const out = cut(r.out)
   const err = cut(r.err)
   const decision = r.decision ? { decision: r.decision } : {}
-  if (!out.dropped && !err.dropped) return { code: r.code, out: out.kept, err: err.kept, ...decision }
+  const settled = r.settled ? { settled: r.settled } : {}
+  if (!out.dropped && !err.dropped) return { code: r.code, out: out.kept, err: err.kept, ...decision, ...settled }
   const more = out.dropped + err.dropped
   return {
     code: r.code,
     out: out.kept,
     err: [...err.kept, `${more} more lines left out: too long to send to the node`],
     ...decision,
+    ...settled,
   }
 }
 
@@ -554,12 +559,34 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
           : undefined
       // Decisions (#781): a node session's own question with options is held here, for its prefixed key.
       const decided = sub === 'ask' ? await threadDecisions(key, name, lane) : null
+      let settledCard = null as UplinkSettled | null
+      const settleCtx: Partial<ThreadCmdContext> =
+        sub === 'post' || sub === 'done'
+          ? {
+              settleAsk: async info => {
+                if (decisionsConfig(o.cfg.decisions)) {
+                  try {
+                    const opts = { ...(info.session && { session: info.session }), by: 'agent' }
+                    if (o.settleThreadDecisions) {
+                      o.settleThreadDecisions(info.thread, Date.now(), opts)
+                    } else {
+                      const svc = await import('../decisions.ts')
+                      svc.withDecisionsDb(db => svc.settleThreadDecisions(db, info.thread, Date.now(), opts))
+                    }
+                  } catch {}
+                }
+                if (!info.session || info.session === key)
+                  settledCard = { thread: info.thread, ...(info.question && { question: info.question }) }
+              },
+            }
+          : {}
       const code = await (o.run ?? threadCmd)(argv, {
         cfg: { threads: o.cfg.threads, port: o.cfg.port },
         actor,
         lane,
         idle: false,
         ...(decided?.ctx ?? {}),
+        ...settleCtx,
         findSession: async word => findSession(word),
         sessionLane: async k => {
           const item = o.find(k) ?? o.items().find(i => i.key === k)
@@ -574,7 +601,13 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
         ...(cases && { cases }),
       })
       const decision = code === 0 ? decided?.asked() : null
-      return { code, out, err, ...(decision && { decision }) }
+      return {
+        code,
+        out,
+        err,
+        ...(decision && { decision }),
+        ...(code === 0 && settledCard ? { settled: settledCard } : {}),
+      }
     } catch (err) {
       return failed(messageOf(err))
     } finally {

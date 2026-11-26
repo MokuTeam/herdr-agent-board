@@ -449,3 +449,40 @@ test('HTTP threads new/set follow assignee lane via app.sessionLane (#903)', asy
   assert.equal(stayed.status, 200)
   assert.equal((stayed.body as { head: ThreadView['head'] }).head.lane, 'personal')
 })
+
+test('HTTP confirm and closing/moving post invoke settleThread; plain note and answer do not (#844)', async () => {
+  const { app, call, cli } = setUp()
+  const settled: { threadId: string; prev?: { asker: string; question: string } }[] = []
+  app.settleThread = (threadId, prev) => void settled.push({ threadId, ...(prev && { prev }) })
+
+  await cli(master, ['new', '--to', 'atlas-mapper', 'Ask 1'])
+  await cli(mapper, ['ask', 'atlas-1', 'Ship it?'])
+  // Plain note while status stays owner does not settle.
+  await call('POST', '/api/threads/atlas-1', { op: 'post', text: 'owner note' })
+  assert.equal(settled.length, 0)
+
+  // Answering does not call settleThread (uses clearAsk).
+  await call('POST', '/api/threads/atlas-1', { op: 'answer', text: 'yes' })
+  assert.equal(settled.length, 0)
+
+  // Ask again, propose done, then confirm -> settles with prev ask info.
+  await cli(mapper, ['ask', 'atlas-1', 'Confirm now?'])
+  await cli(mapper, ['done', 'atlas-1', 'ready'])
+  const confirmed = await call('POST', '/api/threads/atlas-1', { op: 'confirm' })
+  assert.equal(confirmed.status, 200)
+  assert.equal(settled.length, 1)
+  assert.deepEqual(settled[0]?.prev, { asker: mapper.kind === 'session' ? mapper.key : '', question: 'Confirm now?' })
+
+  // Owner moving an asking thread to doing or dropped via post settles too.
+  await cli(master, ['new', '--to', 'atlas-mapper', 'Ask 2'])
+  await cli(mapper, ['ask', 'atlas-2', 'Wait?'])
+  await call('POST', '/api/threads/atlas-2', { op: 'post', status: 'doing', text: 'go on' })
+  assert.equal(settled.length, 2)
+  assert.deepEqual(settled[1]?.prev, { asker: mapper.kind === 'session' ? mapper.key : '', question: 'Wait?' })
+
+  await cli(master, ['new', '--to', 'atlas-mapper', 'Ask 3'])
+  await cli(mapper, ['ask', 'atlas-3', 'Drop?'])
+  await call('POST', '/api/threads/atlas-3', { op: 'post', status: 'dropped', text: 'nevermind' })
+  assert.equal(settled.length, 3)
+  assert.deepEqual(settled[2]?.prev, { asker: mapper.kind === 'session' ? mapper.key : '', question: 'Drop?' })
+})

@@ -6,7 +6,7 @@
 //
 //   board thread new [--lane <id>] [--parent <key>] [--to <session>] [--doing] "<title>"
 //   board thread post <key> [--status <s>] [--summary "<line>"] [--waiting "<on what>"]
-//                           [--file <path>]... [--link <url>]... [--reply <entry>] [--private] ["<text>"]
+//                           [--file <path>]... [--link <url>]... [--reply <entry>] [--private] [--settle] ["<text>"]
 //   board thread done <key> ["<summary>"]
 //   board thread ask <key> "<question for the owner>" [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] (the flags: decisions on)
 //   board thread set <key> [--title "<t>"] [--assignee <session|none>] [--lane <id>] [--parent <key|none>]
@@ -48,7 +48,7 @@ import {
   type ReservedDecision,
 } from '../core/decisions.ts'
 import { OWNER_THREAD_SUBS } from '../core/master-relay.ts'
-import { hasDecisionFlags, KEPT_SUBS } from '../core/node-uplink.ts'
+import { hasDecisionFlags, KEPT_SUBS, type UplinkSettled } from '../core/node-uplink.ts'
 import { nodeConfig, parseNodeKey } from '../core/nodes.ts'
 import { OWNER } from '../core/owner-watch.ts'
 import { parseTaskFile, TaskFileError } from '../core/thread-import.ts'
@@ -56,6 +56,7 @@ import type { Config } from '../core/types.ts'
 import { caseBriefText, caseHeadLines, caseSessionViews, isCase, sameRef, sameRefNote } from '../core/work-cases.ts'
 import {
   isOpen,
+  isSession,
   isThreadStatus,
   isWatchWhat,
   LANE,
@@ -63,6 +64,7 @@ import {
   laneTarget,
   listLine,
   MINE,
+  oneLine,
   type Party,
   partyName,
   SHOW_LAST,
@@ -73,6 +75,7 @@ import {
   type ThreadsConfig,
   threadLink,
   threadsConfig,
+  WAITING_MAX,
   type Watch,
   writeLine,
 } from '../core/work-threads.ts'
@@ -81,10 +84,12 @@ import { type CaseResolvers, readCase } from '../services/work-cases.ts'
 import { requestShare } from '../services/work-share.ts'
 import {
   askOwner,
+  beforeAsk,
   changesFor,
   type EventSchedule,
   filePath,
   newThread,
+  openAsk,
   postEntry,
   setFields,
   type ThreadsCtx,
@@ -100,7 +105,7 @@ export { callBoard }
 
 export const THREAD_USAGE = `board thread new [--lane <id>] [--parent <key>] [--to <session>] [--doing] "<title>"
 board thread post <key> [--status next|doing|waiting|owner|done|dropped] [--summary "<line>"] [--waiting "<on what>"]
-                        [--file <path>]... [--link <url>]... [--reply <entry>] [--private] ["<text>"]
+                        [--file <path>]... [--link <url>]... [--reply <entry>] [--private] [--settle] ["<text>"]
 board thread done <key> ["<summary>"] [--file <path>]... [--link <url>]...
 board thread ask <key> "<question for the owner>" [--option "<label>"]... [--recommend <n>] [--default-after <30m|2h>] (the flags: decisions on)
 board thread set <key> [--title "<t>"] [--assignee <session|none>] [--lane <id>] [--parent <key|none>]
@@ -149,7 +154,10 @@ const usageText = (cfg: ThreadsConfig | null): string =>
 /** The flags each command takes: with a value, and bare. `--json` and `--help` go with every one. */
 const FLAGS: Record<string, { values: readonly string[]; bare: readonly string[] }> = {
   new: { values: ['--lane', '--parent', '--to'], bare: ['--doing'] },
-  post: { values: ['--status', '--summary', '--waiting', '--file', '--link', '--reply'], bare: ['--private'] },
+  post: {
+    values: ['--status', '--summary', '--waiting', '--file', '--link', '--reply'],
+    bare: ['--private', '--settle'],
+  },
   done: { values: ['--summary', '--file', '--link', '--reply'], bare: ['--private'] },
   // --option, --recommend, --default-after: decisions (#487), only while they are on (parseArgs).
   ask: { values: ['--option', '--recommend', '--default-after'], bare: [] },
@@ -264,6 +272,13 @@ export function parseArgs(
   return { words, one: f => values.get(f)?.at(-1), all: f => values.get(f) ?? [], has: f => bare.has(f) }
 }
 
+export interface ThreadAskSettled {
+  thread: string
+  session?: string
+  question?: string
+  asker?: string
+}
+
 export interface ThreadCmdContext {
   /** `node`: this board is a node, and every command goes to its master (#508). */
   cfg: Pick<Config, 'threads' | 'port' | 'node'>
@@ -303,6 +318,10 @@ export interface ThreadCmdContext {
    * it, so the master's board and this one show its options; `setAsk` without it.
    */
   setNodeAsk?: (question: string, decision: CardDecision) => void
+  /** Settles an open thread ask (decision, scheduled default, and card ask) when the thread closes or `--settle` runs (#844). */
+  settleAsk?: (info: ThreadAskSettled) => void | Promise<void>
+  /** On a node (#844): clears the matching ask/decision on this session's card when the master settled it. */
+  clearNodeAsk?: (settled: UplinkSettled) => void
   /** Whether the session it writes as is the one running the command (`--session` names another). */
   own?: () => Promise<boolean>
   /** config.json's `decisions` (#487), read: null while off. */
@@ -544,7 +563,10 @@ async function forward(
   if (answer.state === 'answered') {
     for (const line of answer.out) out(line)
     for (const line of answer.err) err(line)
-    if (answer.code === 0) asked()
+    if (answer.code === 0) {
+      asked()
+      if (answer.settled && ctx.clearNodeAsk) ctx.clearNodeAsk(answer.settled)
+    }
     return answer.code
   }
   // A question with options (#784) needs the master now: never kept to go later without its options.
@@ -690,6 +712,12 @@ class Run {
         const status = sub === 'done' ? 'done' : a.one('--status')
         if (status !== undefined && !isThreadStatus(status))
           throw new Usage(`--status is next, doing, waiting, owner, done or dropped, not "${status}"`)
+        const actorKey = this.ctx.actor.kind === 'session' ? this.ctx.actor.key : null
+        const settle = sub === 'post' && a.has('--settle')
+        if (settle) {
+          if (!actorKey) throw new ThreadError('no_session', '--settle is for the session that asked')
+          if (status === 'owner') throw new Usage('--settle cannot go with --status owner')
+        }
         const reply = a.one('--reply')
         const files = a.all('--file')
         // done's words are its summary, unless --summary gives one: then they are a note.
@@ -697,12 +725,31 @@ class Run {
         const note = sub === 'done' && a.one('--summary') === undefined ? '' : text
         const waiting = a.one('--waiting')
         const state = a.one('--state')
+        const needPrev = settle || head.status === 'owner' || status === 'done' || status === 'dropped'
+        const prevEntries = needPrev ? entriesOf(this.db, head.id) : []
+        const prevAsk = needPrev ? openAsk(head, prevEntries) : null
+        if (settle && actorKey && prevAsk && !isSession(prevAsk.author, actorKey))
+          throw new ThreadError('not_asker', `${head.key}'s open question is ${partyName(prevAsk.author)}'s, not yours`)
+        let effectiveStatus = status
+        let effectiveWaiting = waiting
+        if (
+          settle &&
+          prevAsk &&
+          actorKey &&
+          isSession(prevAsk.author, actorKey) &&
+          status === undefined &&
+          waiting === undefined
+        ) {
+          const before = beforeAsk(head, prevEntries, prevAsk)
+          effectiveStatus = before.status
+          if (before.status === 'waiting' && before.waitingOn) effectiveWaiting = before.waitingOn
+        }
         const w = postEntry(this.write, head, {
           ...(state !== undefined && { state }),
           text: note,
-          ...(status && { status }),
+          ...(effectiveStatus && { status: effectiveStatus }),
           ...(summary !== undefined && { summary }),
-          ...(waiting !== undefined && { waitingOn: waiting }),
+          ...(effectiveWaiting !== undefined && { waitingOn: effectiveWaiting }),
           files,
           links: a.all('--link'),
           ...(reply && { replyTo: findEntry(this.db, head.id, reply).id }),
@@ -710,6 +757,34 @@ class Run {
           ...(a.all('--accept').length && { accept: a.all('--accept') }),
           ...(sub === 'post' && this.write.actor.kind === 'owner' && { directOwner: true }),
         })
+        const askInfo =
+          prevAsk?.author.kind === 'session'
+            ? { question: oneLine(prevAsk.text, WAITING_MAX), asker: prevAsk.author.key }
+            : {}
+        if (settle && actorKey) {
+          await this.ctx.settleAsk?.({
+            thread: head.id,
+            session: actorKey,
+            ...(prevAsk && isSession(prevAsk.author, actorKey)
+              ? { question: oneLine(prevAsk.text, WAITING_MAX), asker: actorKey }
+              : {}),
+          })
+        } else if (!isOpen(w.head.status) || (head.status === 'owner' && w.head.status !== 'owner')) {
+          await this.ctx.settleAsk?.({ thread: head.id, ...askInfo })
+        } else if (
+          actorKey &&
+          w.head.proposed &&
+          (!head.proposed || w.head.proposed.at !== head.proposed.at) &&
+          isSession(w.head.proposed.by, actorKey)
+        ) {
+          await this.ctx.settleAsk?.({
+            thread: head.id,
+            session: actorKey,
+            ...(prevAsk && isSession(prevAsk.author, actorKey)
+              ? { question: oneLine(prevAsk.text, WAITING_MAX), asker: actorKey }
+              : {}),
+          })
+        }
         const n = w.entry.files?.length ?? 0
         return this.wrote(w, n ? [`${n} ${n === 1 ? 'file' : 'files'}`] : [])
       }
