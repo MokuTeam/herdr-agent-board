@@ -103,13 +103,25 @@ interface Options {
   changed: () => void
   schedule?: EventSchedule
   now?: () => number
+  /** Resolves a session key to the full board key (`@<node>:<key>` for node sessions) when scheduling. */
+  resolveKey?: (key: string) => string
 }
 
 const RATE = /^rate_|^echo$/
 /** How long a history file is waited for before its entry stops waiting. */
 const HISTORY_WAIT_MS = 2 * 86_400_000
 
-export function createWorkHub({ cfg, team, router, gated, log, changed, schedule, now = Date.now }: Options): WorkHub {
+export function createWorkHub({
+  cfg,
+  team,
+  router,
+  gated,
+  log,
+  changed,
+  schedule,
+  now = Date.now,
+  resolveKey,
+}: Options): WorkHub {
   let outRev = 0
   let flushing = false
   const tcfg = (): ThreadsConfig | null => threadsConfig(cfg.threads)
@@ -127,6 +139,7 @@ export function createWorkHub({ cfg, team, router, gated, log, changed, schedule
       me: me(),
       nameOf: p => team.nameOf(p),
       ...(schedule && { schedule }),
+      ...(resolveKey && { resolveKey }),
     }
   }
 

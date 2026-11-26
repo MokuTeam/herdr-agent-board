@@ -89,6 +89,8 @@ export interface OwnerWatchCtx {
   schedule?: EventSchedule
   file?: string
   log?: (line: string) => void
+  /** Resolves a session key to the full board key (`@<node>:<key>` for node sessions) when scheduling. */
+  resolveKey?: (key: string) => string
 }
 
 /** The pending line of a session: one not claimed yet. */
@@ -118,7 +120,9 @@ export function tellOwnerWatchers(ctx: OwnerWatchCtx): string[] {
   for (const session of Object.keys(before)) {
     if (owners.some(w => w.session === session)) continue
     try {
-      const pending = pendingOf(schedule, session)
+      const targetKey = ctx.resolveKey ? ctx.resolveKey(session) : session
+      const pending =
+        pendingOf(schedule, targetKey) ?? (targetKey !== session ? pendingOf(schedule, session) : undefined)
       if (pending) schedule.takeBack(pending.id)
     } catch (err) {
       log(`owner watch: ${err instanceof Error ? err.message : String(err)}`)
@@ -142,7 +146,9 @@ export function tellOwnerWatchers(ctx: OwnerWatchCtx): string[] {
           state[w.session] = had
           continue
         }
-        const pending = pendingOf(schedule, w.session)
+        const targetKey = ctx.resolveKey ? ctx.resolveKey(w.session) : w.session
+        const pending =
+          pendingOf(schedule, targetKey) ?? (targetKey !== w.session ? pendingOf(schedule, w.session) : undefined)
         // Replaced, not changed in place; one claimed meanwhile goes as it is, and this one follows it.
         const replaced = pending ? schedule.takeBack(pending.id) : false
         const base = replaced && had.base ? had.base : had.told
@@ -157,7 +163,7 @@ export function tellOwnerWatchers(ctx: OwnerWatchCtx): string[] {
         state[w.session] = { told: base, at: prevAt }
         const next = replaced && pending ? pending.next : Math.max(ctx.now, prevAt + ctx.cfg.gapSec * 1000)
         schedule.add({
-          key: w.session,
+          key: targetKey,
           ...(w.name && { name: w.name }),
           text,
           at: next,

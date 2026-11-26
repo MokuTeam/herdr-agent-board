@@ -12,6 +12,7 @@ import { addEntry } from '../adapters/schedule-store.ts'
 import { t } from '../core/lang.ts'
 import { inPane } from '../core/links.ts'
 import { lostAccessLine, lostAccessSignature } from '../core/lost-access.ts'
+import { parseNodeKey } from '../core/nodes.ts'
 import type { Card, Item } from '../core/types.ts'
 
 export const lostAccessFile = (): string => join(stateDir(), 'lost-access.json')
@@ -60,11 +61,12 @@ export function createLostAccessMonitor(opts: LostAccessOptions): LostAccessMoni
   const deliverToSession =
     opts.deliverToSession ??
     ((target, text, now, from, o) => {
+      const local = !parseNodeKey(target.key)
       addEntry({
         key: target.key,
         name: target.name || target.autoName || target.key.slice(0, 8),
-        ...(target.pane && { pane: target.pane }),
-        ...(target.cwd && { cwd: target.cwd }),
+        ...(local && target.pane && { pane: target.pane }),
+        ...(local && target.cwd && { cwd: target.cwd }),
         text,
         at: now,
         next: now,

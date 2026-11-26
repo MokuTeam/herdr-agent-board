@@ -30,6 +30,7 @@ import {
   type SessionRef,
 } from '../adapters/team-store.ts'
 import { categoryInfo } from '../core/categories.ts'
+import { parseNodeKey, resolveBoardKey } from '../core/nodes.ts'
 import { isOwnerServiceKey } from '../core/owner-services.ts'
 import {
   DEFAULT_MAX_FILE_BYTES,
@@ -217,6 +218,8 @@ export interface TeamRouter {
   /** What the board calls a session (its card's name), never what a caller said; null when it has none. */
   sessionName(key: string): string | null
   hasSession(key: string): boolean
+  /** Resolves a session reference to the full board key (`@<node>:<key>` for node sessions). */
+  resolveSession(session: SessionRef): SessionRef
   /** The directory a peer would get now (#832): every session a message from them could reach. */
   directoryFor(peer: string): DirectoryEntry[]
   /**
@@ -285,14 +288,37 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
   const shares = (peer: Parameters<typeof sharesLane>[0], key: string): boolean =>
     isOwnerServiceKey(key) ? sharesAnyLane(peer, cfg.categories) : sharesLane(peer, laneOf(key) ?? '')
 
+  const resolveKey = (key: string, known = items()): string =>
+    isOwnerServiceKey(key) ? key : resolveBoardKey(key, known)
+
+  const resolveRef = (ref: SessionRef, known = items()): SessionRef => {
+    const key = resolveKey(ref.key, known)
+    return key === ref.key ? ref : { ...ref, key }
+  }
+
+  const resolveListener = (s: ReturnType<typeof readAgents>, known = items()): SessionRef | null => {
+    if (!s.listener) return null
+    const next = resolveRef(s.listener, known)
+    if (next.key !== s.listener.key) {
+      const prev = s.listener.key
+      changeAgents(x => {
+        if (x.listener?.key === prev) x.listener = { ...x.listener, key: next.key }
+      })
+      audit('listener', null, { session: next.key, upgraded: prev })
+    }
+    return next
+  }
+
   /**
    * A service agent (#819) is what the board calls it, never what its call said: its card's name is
-   * the one its posts carry ("anna's agent Juno"). Every other session is as the caller gave it.
+   * the one its posts carry ("anna's agent Juno"). Every other session is resolved to its full board
+   * key (`@<node>:<key>` when on a node).
    */
   const asCalled = (session: SessionRef): SessionRef | null => {
     if (isOwnerServiceKey(session.key)) return ownerServices().find(s => s.key === session.key) ?? null
-    const item = items().find(i => i.key === session.key)
-    return item?.service && item.name ? { key: session.key, name: item.name } : session
+    const resolved = resolveRef(session)
+    const item = items().find(i => i.key === resolved.key)
+    return item?.service && item.name ? { key: resolved.key, name: item.name } : resolved
   }
 
   /**
@@ -367,7 +393,8 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
   }
 
   function nameOf(key: string): string | null {
-    const item = items().find(i => i.key === key)
+    const k = resolveKey(key)
+    const item = items().find(i => i.key === k)
     return item?.name || item?.autoName || null
   }
 
@@ -454,7 +481,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       const name = file && basename(file.path)
       const refused = overLimit(to, key, text, session, name ? { name, size: sizeOf(file.path) } : undefined)
       if (refused) return { ok: false, error: refused }
-      const listener = s.listener?.key === session.key
+      const listener = resolveListener(s)?.key === session.key
       let reason: string | null = null
       let detail: string | undefined
       // A new thread's title and link go out as well as the text: they are checked with it, and a
@@ -567,7 +594,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       const s = readAgents()
       const peer = s.peers[switchesKey(parts.scope, thread)]
       if (globalOff(s.off) || !peer?.on) return { ok: false, error: 'off' }
-      const listener = s.listener?.key === session.key
+      const listener = resolveListener(s)?.key === session.key
       if ((!listener || isOwnerServiceKey(session.key)) && !shares(peer, session.key))
         return { ok: false, error: 'lane' }
       const t = now()
@@ -612,6 +639,8 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       const t = now()
       if ((s.paused[e.from] ?? 0) > t) return
       const who = safeName(team.nameOf(e.from), e.from)
+      const known = items()
+      const listener = resolveListener(s, known)
       // Every message counts, marked or not: the mark is the sender's own word.
       const recent = (readAllInbox()[e.from] ?? []).filter(i => i.receivedAt >= t - HOUR)
       if (recent.length > limits().inboundHour) {
@@ -620,17 +649,23 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
         })
         audit('routing_paused', e.from, { minutes: 60 })
         log(`team: routing paused for an hour, too many messages from ${who}`)
-        if (s.listener) notify(s.listener, `paused:${e.from}`, pausedText(who, 60), t)
+        if (listener) notify(listener, `paused:${e.from}`, pausedText(who, 60), t)
         return
       }
       // A handler that left the board gives the thread back to the listener. An empty board (the
       // first look has not happened yet) proves nothing.
       let handler = rec?.handler ?? null
-      const known = items()
-      if (handler && known.length && !known.some(i => i.key === handler?.key)) {
-        team.setThread(e.thread, { handler: null })
-        audit('released', isTeam ? null : e.from, { thread: e.thread, why: 'gone' })
-        handler = null
+      if (handler && known.length) {
+        const resolved = resolveRef(handler, known)
+        if (resolved.key !== handler.key) {
+          team.setThread(e.thread, { handler: resolved })
+          handler = resolved
+        }
+        if (!known.some(i => i.key === handler?.key)) {
+          team.setThread(e.thread, { handler: null })
+          audit('released', isTeam ? null : e.from, { thread: e.thread, why: 'gone' })
+          handler = null
+        }
       }
       const ref = threadRef(parts.scope, parts.id)
       // Addressed (#832): the board's mapping, while the session's lane is shared with the sender;
@@ -646,7 +681,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
           // handles stays with it, and a general thread stays the listener's (what an older board
           // sends lands there). A team thread or a channel stays as it was (#875): it is everyone's,
           // and the session only hears of this message.
-          const takes = !isTeam && parts.id !== GENERAL && (!handler || handler.key === s.listener?.key)
+          const takes = !isTeam && parts.id !== GENERAL && (!handler || handler.key === listener?.key)
           if (takes && handler?.key !== session.key) {
             team.setThread(e.thread, { handler: session })
             audit('assigned', isTeam ? null : e.from, { thread: e.thread, session: session.key, why: 'addressed' })
@@ -657,10 +692,10 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
           return
         }
         audit('unreachable', isTeam ? null : e.from, { thread: e.thread, code: e.at })
-        if (s.listener) notify(s.listener, e.thread, (count: number) => unreachableText({ ...addr, count }), t, true)
+        if (listener) notify(listener, e.thread, (count: number) => unreachableText({ ...addr, count }), t, true)
         return
       }
-      const target = handler ?? s.listener
+      const target = handler ?? listener
       if (!target) return
       // A service agent (#819) has no pane to type a notice into: it asks for its threads through
       // the MCP (`team` wait), which finds them by their unread count. Nothing goes in the schedule.
@@ -677,10 +712,12 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
         if (isOwnerServiceKey(session.key)) {
           session = asCalled(session)
           if (!session) return { ok: false, error: 'session' }
+        } else {
+          session = resolveRef(session)
         }
         const s = readAgents()
         const peer = s.peers[switchesKey(parts.scope, key)]
-        if (s.listener?.key !== session.key && !shares(peer, session.key)) return { ok: false, error: 'lane' }
+        if (resolveListener(s)?.key !== session.key && !shares(peer, session.key)) return { ok: false, error: 'lane' }
       }
       team.setThread(key, { handler: session })
       audit(session ? 'assigned' : 'released', parts.scope === TEAM ? null : parts.scope, {
@@ -691,14 +728,17 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
     },
 
     listen(session, caller) {
+      const known = items()
+      const nextSession = session ? resolveRef(session, known) : null
+      const nextCaller = caller ? resolveRef(caller, known) : undefined
       const r = changeAgents((x): { ok: true } | { ok: false; error: string } => {
-        const now = x.listener
-        if (session && now && now.key !== session.key) return { ok: false, error: 'taken' }
-        if (!session && now && caller && now.key !== caller.key) return { ok: false, error: 'not_listener' }
-        x.listener = session
+        const now = x.listener ? resolveRef(x.listener, known) : null
+        if (nextSession && now && now.key !== nextSession.key) return { ok: false, error: 'taken' }
+        if (!nextSession && now && nextCaller && now.key !== nextCaller.key) return { ok: false, error: 'not_listener' }
+        x.listener = nextSession
         return { ok: true }
       })
-      if (r.ok) audit('listener', null, session ? { session: session.key } : {})
+      if (r.ok) audit('listener', null, nextSession ? { session: nextSession.key } : {})
       return r
     },
 
@@ -707,6 +747,8 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
     hasSession(key) {
       return items().some(i => i.key === key) && !isArchived(archivedFiles(), key)
     },
+
+    resolveSession: ref => resolveRef(ref),
 
     directoryFor(peer) {
       return directoryFor(peer, world(readAgents()))
@@ -807,12 +849,17 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
     t: number,
     named = false,
   ): void {
+    target = resolveRef(target)
     const mark = `${target.key}\n${thread}`
     if (named && typeof text === 'function') namedNotice.set(mark, text)
     if (isOwnerServiceKey(target.key)) return
     try {
-      const mine = schedule.list().filter(e => e.key === target.key && typeof e.teamThread === 'string' && !e.claim)
-      const pending = mine.find(e => e.teamThread === thread)
+      const bareKey = parseNodeKey(target.key)?.key
+      const sameSession = (key: string): boolean =>
+        key === target.key || (!!bareKey && !bareKey.startsWith('pane-') && key === bareKey)
+      const mine = schedule.list().filter(e => sameSession(e.key) && typeof e.teamThread === 'string' && !e.claim)
+      const pending =
+        mine.find(e => e.teamThread === thread && e.key === target.key) ?? mine.find(e => e.teamThread === thread)
       const said = named ? undefined : namedNotice.get(mark)
       const words = (n: number): string => (said ? said(n) : typeof text === 'string' ? text : text(n))
       if (pending) {

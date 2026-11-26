@@ -99,6 +99,8 @@ export interface VerifyHost {
   now?(): number
   /** The state folder, where entries' files are kept (tests). */
   state?: string
+  /** Resolves a session key to the full board key (`@<node>:<key>` for node sessions) when scheduling. */
+  resolveKey?: (key: string) => string
 }
 
 export interface Verifier {
@@ -130,6 +132,7 @@ export function createVerifier(host: VerifyHost): Verifier {
     actor,
     now: now(),
     ...(host.state && { state: host.state }),
+    ...(host.resolveKey && { resolveKey: host.resolveKey }),
     me: readKey()?.pub ?? '',
   })
 

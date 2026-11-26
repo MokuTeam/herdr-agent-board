@@ -15,6 +15,7 @@ import {
   readThreads,
 } from '../../src/adapters/team-store.ts'
 import { type Envelope, GENERAL, generateKey, type KeyPair, type Message } from '../../src/core/team.ts'
+import { teamRoutes } from '../../src/server/routes/team.ts'
 import { type InboundEvent, MAX_THREADS_PER_SCOPE } from '../../src/services/team-hub.ts'
 import {
   createTeamRouter,
@@ -731,5 +732,138 @@ describe("an agent's file (#371)", () => {
     })
     expect(none).toEqual({ ok: false, error: 'file' })
     expect(readDrafts()).toHaveLength(1)
+  })
+})
+
+describe('node listener and handler key resolution (#869)', () => {
+  const BARE = '22222222-3333-4444-8555-666666666666'
+  const FULL = `@laptop:${BARE}`
+  const HANDLER_BARE = '33333333-4444-4555-8666-777777777777'
+  const HANDLER_FULL = `@laptop:${HANDLER_BARE}`
+
+  test('upgrades a bare node listener in team-agents.json and schedules inbound notices under @<node>:<key>', async () => {
+    const w = await world()
+    w.items.push({ key: FULL, name: 'node-day', category: 'personal' })
+    changeAgents(x => {
+      x.peers[w.P.pub] = { on: true, lanes: ['acme'] }
+      x.listener = { key: BARE, name: 'node-day' }
+    })
+
+    const id = crypto.randomUUID()
+    await deliver(w, w.P, 'hello node listener', { via: 'agent', thread: { id, title: 'Node listener' } })
+    expect(w.schedule.entries).toHaveLength(1)
+    expect(w.schedule.entries[0]).toMatchObject({ key: FULL, teamThread: `${w.P.pub}/${id}` })
+    expect(readAgents().listener).toEqual({ key: FULL, name: 'node-day' })
+
+    // Upgrades a bare node handler on inbound instead of releasing it as gone.
+    const t2 = crypto.randomUUID()
+    await deliver(w, w.P, 'open t2', { thread: { id: t2, title: 'Node handler' } })
+    w.items.push({ key: HANDLER_FULL, name: 'node-acme', category: 'acme' })
+    w.s.svc.setThread(`${w.P.pub}/${t2}`, { handler: { key: HANDLER_BARE, name: 'node-acme' } })
+    w.schedule.entries.length = 0
+    await deliver(w, w.P, 'follow-up', { thread: { id: t2, title: 'Node handler' } })
+    expect(w.schedule.entries).toHaveLength(1)
+    expect(w.schedule.entries[0]).toMatchObject({ key: HANDLER_FULL, teamThread: `${w.P.pub}/${t2}` })
+    expect(readThreads()[`${w.P.pub}/${t2}`]?.handler).toEqual({ key: HANDLER_FULL, name: 'node-acme' })
+  })
+
+  test('listen, assign, agentPost, agentReact, and teamRoutes store and match the full @<node>:<key>', async () => {
+    const w = await world()
+    w.items.push({ key: FULL, name: 'node-day', category: 'personal' })
+    changeAgents(x => {
+      x.peers[w.P.pub] = { on: true, lanes: ['acme'] }
+    })
+
+    expect(w.router.listen({ key: BARE, name: 'node-day' })).toEqual({ ok: true })
+    expect(readAgents().listener).toEqual({ key: FULL, name: 'node-day' })
+
+    const postRes = await w.router.agentPost({
+      to: w.P.pub,
+      text: 'from node listener',
+      session: { key: FULL, name: 'node-day' },
+    })
+    expect(postRes).toMatchObject({ ok: true, sent: true })
+
+    // assign with bare key normalizes to full key and recognizes node listener outside shared lanes.
+    const id = crypto.randomUUID()
+    await deliver(w, w.P, 'assign me', { thread: { id, title: 'Assign node' } })
+    const tKey = `${w.P.pub}/${id}`
+    expect(w.router.assign(tKey, { key: BARE, name: 'node-day' })).toEqual({ ok: true })
+    expect(readThreads()[tKey]?.handler).toEqual({ key: FULL, name: 'node-day' })
+
+    // teamRoutes resolves listener on GET /api/team/agents, POST /api/team/agents, and POST /api/team/listen.
+    const routes = teamRoutes(w.s.svc, w.router, w.cfg as never)
+    const server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      async fetch(req) {
+        const url = new URL(req.url)
+        for (const r of routes) {
+          if (r.method !== req.method) continue
+          const hit = typeof r.path === 'string' ? (r.path === url.pathname ? [] : null) : r.path.exec(url.pathname)
+          if (!hit) continue
+          const res = await r.handle(req, {
+            params: hit.slice(1),
+            rawBody: () => req.json(),
+            refuse: () => null,
+          } as never)
+          if (res) return res
+        }
+        return Response.json({ ok: false }, { status: 404 })
+      },
+    })
+    try {
+      const base = `http://127.0.0.1:${server.port}`
+      const view = (await (await fetch(`${base}/api/team/agents`)).json()) as { listener: { key: string } }
+      expect(view.listener.key).toBe(FULL)
+
+      // Stepping down via bare caller key works because caller resolves to FULL.
+      const offRes = await (
+        await fetch(`${base}/api/team/listen`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-board': '1' },
+          body: JSON.stringify({ session: null, caller: { key: BARE } }),
+        })
+      ).json()
+      expect(offRes).toEqual({ ok: true })
+      expect(readAgents().listener).toBeNull()
+
+      const setRes = await (
+        await fetch(`${base}/api/team/agents`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-board': '1' },
+          body: JSON.stringify({ listener: { key: BARE, name: 'node-day' } }),
+        })
+      ).json()
+      expect(setRes).toEqual({ ok: true })
+      expect(readAgents().listener).toEqual({ key: FULL, name: 'node-day' })
+    } finally {
+      server.stop(true)
+    }
+  })
+
+  test('local session parity: bare local key stays unprefixed when no node prefix applies', async () => {
+    const w = await world()
+    agentsOn(w.P.pub)
+    const id = crypto.randomUUID()
+    await deliver(w, w.P, 'hello local', { thread: { id, title: 'Local' } })
+    expect(w.schedule.entries[0]?.key).toBe('sess-listener')
+    expect(readAgents().listener?.key).toBe('sess-listener')
+  })
+
+  test('notify() dedupes a pre-upgrade bare-key notice for the same thread instead of adding a duplicate (#869)', async () => {
+    const w = await world()
+    w.items.push({ key: FULL, name: 'node-day', category: 'personal' })
+    changeAgents(x => {
+      x.peers[w.P.pub] = { on: true, lanes: ['acme'] }
+      x.listener = { key: FULL, name: 'node-day' }
+    })
+    const id = crypto.randomUUID()
+    const threadKey = `${w.P.pub}/${id}`
+    w.schedule.entries.push({ id: 'pre1', key: BARE, text: 'pre-upgrade', teamThread: threadKey, teamCount: 1 })
+
+    await deliver(w, w.P, 'second message on same thread', { via: 'agent', thread: { id, title: 'Same thread' } })
+    expect(w.schedule.entries).toHaveLength(1)
+    expect(w.schedule.entries[0]).toMatchObject({ id: 'pre1', key: BARE, teamThread: threadKey, teamCount: 2 })
   })
 })

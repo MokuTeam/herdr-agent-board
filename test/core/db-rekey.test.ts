@@ -8,6 +8,8 @@ import {
   rekeyOwnerWatchState,
   rekeyParty,
   rekeyScheduleEntry,
+  rekeyTeamAgents,
+  rekeyTeamThreads,
   SYNTHETIC_FROM_KEYS,
   validateRekeyDevices,
 } from '../../src/core/db-rekey.ts'
@@ -255,4 +257,43 @@ test('formatRekeyReport formats dry-run, real run and idempotent output without 
       ownerWatch: { exists: false, sessions: 0, cards: 0 },
     }),
   ).toEqual(['ok · already rekeyed from laptop to server-1 (0 changes)'])
+})
+
+test('rekeyTeamAgents and rekeyTeamThreads rewrite listener and handler keys across master handover (#869)', () => {
+  const svcKey = `owner-service-${UUID}`
+  const localAgents = { v: 1, off: false, listener: { key: UUID, name: 'day' }, peers: {}, paused: {} }
+  const r1 = rekeyTeamAgents(localAgents, 'laptop', 'server-1')
+  expect(r1.changed).toBe(true)
+  expect((r1.state.listener as { key: string }).key).toBe(`@laptop:${UUID}`)
+
+  const targetAgents = { v: 1, off: false, listener: { key: `@server-1:${UUID}`, name: 'day' }, peers: {}, paused: {} }
+  const r2 = rekeyTeamAgents(targetAgents, 'laptop', 'server-1')
+  expect(r2.changed).toBe(true)
+  expect((r2.state.listener as { key: string }).key).toBe(UUID)
+
+  const otherAgents = { v: 1, off: false, listener: { key: `@atlas-2:${UUID}` }, peers: {}, paused: {} }
+  expect(rekeyTeamAgents(otherAgents, 'laptop', 'server-1').changed).toBe(false)
+
+  const svcAgents = { v: 1, off: false, listener: { key: svcKey }, peers: {}, paused: {} }
+  expect(rekeyTeamAgents(svcAgents, 'laptop', 'server-1').changed).toBe(false)
+
+  const threadsRaw = {
+    v: 1,
+    threads: {
+      t1: { handler: { key: UUID, name: 'local' } },
+      t2: { handler: { key: `@server-1:${UUID}`, name: 'node' } },
+      t3: { handler: { key: `@atlas-2:${UUID}`, name: 'other' } },
+      t4: { handler: { key: svcKey, name: 'svc' } },
+      t5: { handler: null },
+    },
+  }
+  const rt = rekeyTeamThreads(threadsRaw, 'laptop', 'server-1')
+  expect(rt.changed).toBe(true)
+  expect(rt.handlers).toBe(2)
+  const out = rt.state.threads as Record<string, { handler: { key: string } | null }>
+  expect(out.t1?.handler?.key).toBe(`@laptop:${UUID}`)
+  expect(out.t2?.handler?.key).toBe(UUID)
+  expect(out.t3?.handler?.key).toBe(`@atlas-2:${UUID}`)
+  expect(out.t4?.handler?.key).toBe(svcKey)
+  expect(out.t5?.handler).toBeNull()
 })

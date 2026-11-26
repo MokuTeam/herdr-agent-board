@@ -6,6 +6,7 @@
 // Zero I/O and no `node:` imports so tests and callers can inspect schema coverage directly.
 import { DECISIONS_FROM } from './decisions.ts'
 import { isDevice, LOCAL, parseNodeKey } from './node-key.ts'
+import { isOwnerServiceKey } from './owner-services.ts'
 import { ASKS_FROM } from './owner-watch.ts'
 import type { ScheduleEntry } from './schedule-rules.ts'
 import { TEAM } from './team-agents.ts'
@@ -512,6 +513,43 @@ export function rekeyOwnerWatchState(
     out[nextSession] = nextEntry
   }
   return { state: out, changed, sessions, cards }
+}
+
+/** Rewrite the Team listener's session key in `team-agents.json` across a master handover. */
+export function rekeyTeamAgents(
+  raw: Record<string, unknown>,
+  from: string,
+  to: string,
+): { state: Record<string, unknown>; changed: boolean } {
+  if (!isObj(raw.listener) || typeof raw.listener.key !== 'string' || !raw.listener.key) {
+    return { state: raw, changed: false }
+  }
+  if (isOwnerServiceKey(raw.listener.key)) return { state: raw, changed: false }
+  const nextKey = rekeyKey(raw.listener.key, from, to)
+  if (nextKey === raw.listener.key) return { state: raw, changed: false }
+  return { state: { ...raw, listener: { ...raw.listener, key: nextKey } }, changed: true }
+}
+
+/** Rewrite Team thread handler session keys in `team-threads.json` across a master handover. */
+export function rekeyTeamThreads(
+  raw: Record<string, unknown>,
+  from: string,
+  to: string,
+): { state: Record<string, unknown>; changed: boolean; handlers: number } {
+  if (!isObj(raw.threads)) return { state: raw, changed: false, handlers: 0 }
+  const threads: Record<string, unknown> = { ...raw.threads }
+  let changed = false
+  let handlers = 0
+  for (const [k, rec] of Object.entries(raw.threads)) {
+    if (!isObj(rec) || !isObj(rec.handler) || typeof rec.handler.key !== 'string' || !rec.handler.key) continue
+    if (isOwnerServiceKey(rec.handler.key)) continue
+    const nextKey = rekeyKey(rec.handler.key, from, to)
+    if (nextKey === rec.handler.key) continue
+    threads[k] = { ...rec, handler: { ...rec.handler, key: nextKey } }
+    changed = true
+    handlers++
+  }
+  return changed ? { state: { ...raw, threads }, changed: true, handlers } : { state: raw, changed: false, handlers: 0 }
 }
 
 export interface TableRekeyCount {

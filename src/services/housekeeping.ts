@@ -27,7 +27,7 @@ import {
   planMemoryGuard,
   planTabSweep,
 } from '../core/housekeeping.ts'
-import { nodesConfig } from '../core/nodes.ts'
+import { nodesConfig, parseNodeKey } from '../core/nodes.ts'
 import type { Config, Item } from '../core/types.ts'
 import { wakeConfig } from '../core/wake/config.ts'
 import type { Deps } from './deps.ts'
@@ -121,11 +121,12 @@ export function createHousekeeping(o: HousekeepingOptions): Housekeeping {
   const deliverToSession =
     o.deliverToSession ??
     ((item, text, now) => {
+      const local = !parseNodeKey(item.key)
       addEntry({
         key: item.key,
         name: item.name || item.autoName || item.key.slice(0, 8),
-        ...(item.pane && { pane: item.pane }),
-        ...(item.cwd && { cwd: item.cwd }),
+        ...(local && item.pane && { pane: item.pane }),
+        ...(local && item.cwd && { cwd: item.cwd }),
         text,
         at: now,
         next: now,

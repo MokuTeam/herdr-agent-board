@@ -143,6 +143,7 @@ import {
   nodesConfig,
   parseNodeKey,
   pickNodeMaster,
+  resolveBoardKey,
 } from '../core/nodes.ts'
 import { createNsStore } from '../core/ns-sessions.ts'
 import { setAccountNotify } from '../core/ns-sessions-notify.ts'
@@ -166,7 +167,7 @@ import {
   tunnelConfig,
   tunnelProblems,
 } from '../core/tunnel.ts'
-import type { Config } from '../core/types.ts'
+import type { Config, Item } from '../core/types.ts'
 import { watchesConfig } from '../core/watches.ts'
 import { threadsConfig, verifyKeptOff } from '../core/work-threads.ts'
 import { workdeskConfig } from '../core/workdesk.ts'
@@ -943,10 +944,13 @@ export async function startServer({
   // The master's devices in the payload (#500): made with the links below, the first time
   // config.json has `nodes`; until then the board's payload is what it was without them.
   let nodeAggregate: NodeAggregate | null = null
+  const allItems = (): Item[] =>
+    nodeAggregate ? [...board.items(), ...(nodeAggregate.part()?.items ?? [])] : board.items()
+  const resolveSessionKey = (key: string): string => (nodeAggregate ? resolveBoardKey(key, allItems()) : key)
   const teamRouter = createTeamRouter({
     team,
     cfg,
-    items: () => (nodeAggregate ? [...board.items(), ...(nodeAggregate.part()?.items ?? [])] : board.items()),
+    items: allItems,
     schedule: noticeSchedule,
     log,
   })
@@ -972,6 +976,7 @@ export async function startServer({
     gated: () => teamConfirm.required(),
     log,
     changed: () => board.publish(),
+    resolveKey: resolveSessionKey,
   })
   const work = workHub
   // The head's count: read again whenever the team changed (a message, a trim, a trust).
@@ -1410,7 +1415,7 @@ export async function startServer({
       withThreadsDb(false, db => {
         if (!db) return
         dayWatches({ db, cfg: c, items, now: Date.now(), log })
-        tellOwnerWatchers({ db, cfg: c, items, now: Date.now(), log })
+        tellOwnerWatchers({ db, cfg: c, items, now: Date.now(), log, resolveKey: resolveSessionKey })
       })
     } catch (err) {
       log(`owner watch: ${err instanceof Error ? err.message : String(err)}`)
@@ -1517,6 +1522,7 @@ export async function startServer({
         cfg,
         changed: () => board.publish(),
         async tell(key, text) {
+          key = resolveSessionKey(key)
           if (parseNodeKey(key) && nodeProxy) {
             const r = await nodeProxy.send(key, text, { requestId: randomUUID(), idle: false, noWake: false })
             return r.ok ? { ok: true } : { ok: false, error: r.error }
@@ -1579,6 +1585,7 @@ export async function startServer({
         },
         // Settings turned them on (#410): the skill where the install action puts it.
         skill: () => installThreadsSkill(deps.profiles().list),
+        resolveSessionKey,
       },
       threadRevs,
     ),
@@ -3011,6 +3018,7 @@ export async function startServer({
       const at = parseNodeKey(key)
       return launches.cancelQueued?.(launchId ?? '', at?.key ?? key) ?? false
     },
+    resolveKey: resolveSessionKey,
   })
   // A reminder for a node's card goes through its node (#501): asked only for a key with a device's
   // prefix, which exists only with `nodes`.

@@ -47,7 +47,10 @@ function setUp() {
     })
     return { code, out: out.join('\n') }
   }
-  const tick = (now = NOW, over: { stale?: boolean; schedule?: EventSchedule } = {}) => {
+  const tick = (
+    now = NOW,
+    over: { stale?: boolean; schedule?: EventSchedule; resolveKey?: (k: string) => string } = {},
+  ) => {
     const db = openDb({ create: true })
     assert.ok(db)
     try {
@@ -58,6 +61,7 @@ function setUp() {
         cards: () => cards,
         now,
         ...(over.schedule && { schedule: over.schedule }),
+        ...(over.resolveKey && { resolveKey: over.resolveKey }),
       })
     } finally {
       db.close()
@@ -294,4 +298,24 @@ test('watch --owner takes no thread, lane, --mine or --what beside it', async ()
     assert.notEqual(r.code, 0, extra.join(' '))
     assert.match(r.out, /usage: board thread watch --owner/)
   }
+})
+
+test('resolveKey schedules owner-watch asks under @<node>:<key> and takes them back on unwatch (#869)', async () => {
+  const { run, tick, ask } = setUp()
+  const dayKey = (day as { key: string }).key
+  const nodeDayKey = `@laptop:${dayKey}`
+  const resolveKey = (k: string) => (k === dayKey ? nodeDayKey : k)
+  await run(day, ['watch', '--owner'])
+  tick(NOW, { resolveKey })
+  ask(anna, 'Ship node fix?')
+  assert.deepEqual(tick(NOW + 1000, { resolveKey }), [dayKey])
+  expect(lines(dayKey)).toEqual([])
+  const pending = lines(nodeDayKey)
+  assert.equal(pending.length, 1)
+  assert.equal(pending[0]?.text, 'anna asks the owner: Ship node fix?')
+
+  // Unwatch takes back the entry scheduled under the prefixed key.
+  await run(day, ['unwatch', '--owner'])
+  tick(NOW + 2000, { resolveKey })
+  assert.deepEqual(lines(nodeDayKey), [])
 })

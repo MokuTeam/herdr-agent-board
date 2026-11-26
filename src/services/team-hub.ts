@@ -70,6 +70,7 @@ import {
   type ThreadRecord,
   takeDraft,
 } from '../adapters/team-store.ts'
+import { parseNodeKey } from '../core/nodes.ts'
 import {
   ackBytes,
   authBytes,
@@ -2315,8 +2316,12 @@ export function createTeam({
         audit('draft_sent', d.to === TEAM ? null : d.to, { id })
         // The session that wrote it hears the answers, as it would have had it gone at once (#216).
         const t = readThreads()[r.thread]
-        if (d.session && t && t.id !== GENERAL && !t.handler && readAgents().listener?.key !== d.session.key)
-          setHandler(r.thread, d.session)
+        const listenerKey = readAgents().listener?.key
+        const isListener =
+          !!listenerKey &&
+          !!d.session &&
+          (listenerKey === d.session.key || parseNodeKey(d.session.key)?.key === listenerKey)
+        if (d.session && t && t.id !== GENERAL && !t.handler && !isListener) setHandler(r.thread, d.session)
       }
       changed()
       return r.ok ? { ok: true, id: r.id } : r
