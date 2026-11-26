@@ -33,10 +33,46 @@ MOKUBOT_HTTP_PORT=${MOKUBOT_HTTP_PORT:-12440}
 MOKUBOT_ALLOW_PROD_WRITES=${MOKUBOT_ALLOW_PROD_WRITES:-1}
 # 1: the node user may sudo without a password (agents cannot type one); 0: no sudoers drop-in.
 SUDO_NOPASSWD=${SUDO_NOPASSWD:-1}
+# The mokutab bridge's default profile, where a call that names none goes. Empty: the first one in PROFILES.
+DEFAULT_PROFILE=${DEFAULT_PROFILE:-}
+
+say() { printf '== %s\n' "$*"; }
+
+# host_wrapper <profile>: on stdout, the wrapper Chrome starts the profile's native host (the mokutab bridge)
+# through, with a state folder per profile (B, PKG). It also hands the bridge the vault for the functions
+# that read it (netsuite.login): BW_SESSION from the unlock unit's file when the vault is unlocked (BWDIR),
+# and bw's own data folder (BW_APPDATA), which the per-profile XDG_CONFIG_HOME would hide from bw
+# ("You are not logged in").
+host_wrapper() {
+  cat <<EOF
+#!/bin/sh
+export XDG_STATE_HOME="$B/state/$1/state" XDG_DATA_HOME="$B/state/$1/data" XDG_CONFIG_HOME="$B/state/$1/config"
+[ -r "$BWDIR/session.env" ] && { set -a; . "$BWDIR/session.env"; set +a; }
+export BITWARDENCLI_APPDATA_DIR="$BW_APPDATA"
+mkdir -p "\$XDG_STATE_HOME" "\$XDG_DATA_HOME" "\$XDG_CONFIG_HOME"
+exec "$PKG/dist/run_host.sh" "\$@"
+EOF
+}
+
+# default_profile_json <file> <profile>: on stdout, the bridge's default-profile.json naming <profile>;
+# nothing when the file already names it, so a second run keeps its set_at and makes no backup.
+default_profile_json() {
+  node -e '
+    const fs = require("fs"), [file, profile] = process.argv.slice(-2)
+    let was
+    try { was = JSON.parse(fs.readFileSync(file, "utf8")).profile } catch {}
+    if (was !== profile) console.log(JSON.stringify({ profile, set_at: new Date().toISOString() }))
+  ' "$1" "$2"
+}
+
+# Sourced with INSTALL_SH_FUNCTIONS_ONLY=1 (the repository's tests), the script stops after its functions.
+if [ "${INSTALL_SH_FUNCTIONS_ONLY:-}" = 1 ]; then return 0 2>/dev/null || exit 0; fi
 
 [ "$(id -u)" = 0 ] || { echo "run as root (sudo)"; exit 1; }
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:$PATH"
-say() { printf '== %s\n' "$*"; }
+NAMES=$(for s in $PROFILES; do echo "${s%%:*}"; done)
+[ -n "$DEFAULT_PROFILE" ] || DEFAULT_PROFILE=$(printf '%s\n' "$NAMES" | head -n 1)
+printf '%s\n' "$NAMES" | grep -qxF -- "$DEFAULT_PROFILE" || { echo "DEFAULT_PROFILE $DEFAULT_PROFILE is not in PROFILES"; exit 1; }
 
 id "$NODE_USER" >/dev/null 2>&1 || useradd -m -s /bin/bash "$NODE_USER"
 NODE_UID=$(id -u "$NODE_USER")
@@ -151,6 +187,10 @@ fi
 say "bitwarden cli"
 [ -x "$NODE_HOME/.local/bin/bw" ] || as_user npm install -g --prefix "$NODE_HOME/.local" --no-fund --no-audit @bitwarden/cli >/dev/null
 
+BWDIR="$NODE_HOME/.config/agent-board-bw"
+# Where bw keeps its login and vault: its default for the node user, which the unlock and sync units use too.
+BW_APPDATA="$NODE_HOME/.config/Bitwarden CLI"
+
 say "profiles"
 NODE_BIN=$(command -v node)
 # The mokutab bridge, one install: whichever profile starts first runs it, the others join it.
@@ -180,13 +220,12 @@ for spec in $PROFILES; do
   if [ -f "$STAGE/mokutab-fn-state.json" ] && [ ! -f "$FNS/fn-state.json" ]; then
     install -D -o "$NODE_USER" -g "$NODE_USER" -m 0644 "$STAGE/mokutab-fn-state.json" "$FNS/fn-state.json"
   fi
-  # Chrome starts the native host through this wrapper, with a state folder per profile.
-  put "$B/bin/mokutab-host-$P" 0755 <<EOF
-#!/bin/sh
-export XDG_STATE_HOME="$B/state/$P/state" XDG_DATA_HOME="$B/state/$P/data" XDG_CONFIG_HOME="$B/state/$P/config"
-mkdir -p "\$XDG_STATE_HOME" "\$XDG_DATA_HOME" "\$XDG_CONFIG_HOME"
-exec "$PKG/dist/run_host.sh" "\$@"
-EOF
+  host_wrapper "$P" | put "$B/bin/mokutab-host-$P" 0755
+  # Whichever profile starts first runs the bridge with its own state folder, so each one names the default.
+  # A stale name there (an old "default") makes the first profile to reconnect the default.
+  DP="$B/state/$P/state/mcp-chrome-bridge/default-profile.json"
+  DPJ=$(default_profile_json "$DP" "$DEFAULT_PROFILE")
+  [ -z "$DPJ" ] || printf '%s\n' "$DPJ" | put "$DP" 0644
   # On Linux Chrome reads native messaging hosts from <user-data-dir>/NativeMessagingHosts.
   put "$B/profiles/$P/NativeMessagingHosts/com.chromemcp.nativehost.json" 0644 <<EOF
 {
@@ -276,7 +315,11 @@ put "$B/bin/open-in-chrome" 0755 <<EOF
 AGENT_BROWSER_CDP="\${AGENT_BROWSER_CDP:-$FIRST}" exec "$NODE_BIN" "$B/bin/open-in-chrome.mjs" "\$@"
 EOF
 
-BWDIR="$NODE_HOME/.config/agent-board-bw"
+# netsuite-login.mjs, put beside these by hand on server-2, logged in through system.netsuite.com, which opens a
+# session in the user's default account and ends that account's session everywhere else. The mokutab function
+# netsuite.login logs in by the account's own URL; the old script goes to the backups.
+if [ -f "$B/bin/netsuite-login.mjs" ]; then mkdir -p "$BACKUP"; mv "$B/bin/netsuite-login.mjs" "$BACKUP/"; fi
+
 install -d -o "$NODE_USER" -g "$NODE_USER" -m 0700 "$BWDIR"
 put "$B/bin/bw-unlock" 0755 <<EOF
 #!/bin/sh

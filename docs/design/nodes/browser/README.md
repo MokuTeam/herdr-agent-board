@@ -51,6 +51,10 @@ that lets Chrome's sandbox use user namespaces (Ubuntu 23.10 and later forbid th
   (`~/browser/mokutab/bridge`) on `MOKUTAB_PORT` (12306), and the others join it over its WebSocket under
   their profile name. `ExecStartPost` sets each extension's port and profile name over CDP. Where another
   browser on the host holds 12306 (server-1), give `MOKUTAB_PORT=12307`.
+- The bridge's default profile, where a call that names none goes, is `DEFAULT_PROFILE` (the first one in
+  `PROFILES` unless set). The bridge reads it from `~/browser/state/<profile>/state/mcp-chrome-bridge/default-profile.json`
+  of whichever profile started it, so the script writes it into each profile's file that names another one.
+  A stale name there (server-2 had an old `"default"`) made the first profile to reconnect the default.
 - mokubot: one MCP server (`agent-board-mokubot-mcp`, HTTP 127.0.0.1:12440, WebSocket bridge from
   8765); the extensions of both profiles connect to it, and the tools pick the NetSuite account by
   `account_id` (`netsuite_list_accounts`).
@@ -83,7 +87,7 @@ The board's bundle does not send the master's loopback MCP servers (its report s
 `bound (local-url)`), so the script writes these into the node user's `~/.claude.json` and the bundle
 leaves them alone:
 
-- `mokutab`: `http://127.0.0.1:12306/mcp`; a call names the profile (`bsd`, `bb`, `pf`) or goes to the first.
+- `mokutab`: `http://127.0.0.1:12306/mcp`; a call names the profile (`bsd`, `bb`, `pf`) or goes to the default one.
 - `mokubot-netsuite`: `http://127.0.0.1:12440/mcp`.
 
 Both Claude profiles of the node (`~/.claude.json`, `~/.claude-work/.claude.json`) get them, and their
@@ -102,6 +106,16 @@ Avid stays on the laptop (it needs the VPN): no profile for it here.
 - `herdr.service.d/bitwarden.conf` gives `herdr` that file as its `EnvironmentFile` and orders it after the
   unlock, so sessions started by the node have `BW_SESSION`. `herdr` reads it on its next restart.
 - `agent-board-bw-sync.timer` runs `bw sync` hourly.
+- The mokutab bridge gets the vault from its native host wrapper (`~/browser/bin/mokutab-host-<profile>`):
+  Chrome starts the bridge, not `herdr`, so the wrapper reads `session.env` itself when it is there and sets
+  `BITWARDENCLI_APPDATA_DIR=~/.config/Bitwarden CLI`, since the wrapper's per-profile `XDG_CONFIG_HOME` would
+  otherwise send bw to an empty folder ("You are not logged in"). The vault functions (`netsuite.login`) need
+  both. A bridge reads a new session when Chrome starts it again (the Chrome unit's restart).
+
+NetSuite logins go through the mokutab function `netsuite.login`, which opens the account's own URL
+(`https://<account>.app.netsuite.com/`). A `~/browser/bin/netsuite-login.mjs` put there by hand (server-2) is
+moved to the backups: it logged in through `system.netsuite.com`, which opens a session in the user's default
+account and ends that account's session everywhere else.
 
 The master password sits in a file on the server. That is accepted only because the owner is the
 only person on it.
