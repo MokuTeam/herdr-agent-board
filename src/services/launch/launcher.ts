@@ -291,7 +291,12 @@ export function herdrLauncher(spec: LaunchSpec, codexFork = false): Launcher {
       if (l.exactSession && (kind !== 'claude' || chooses)) throw new LaunchError(t('verify.err.launcher'), 'launcher')
       // A session is resumed (or forked) by its id: not by another agent, nor by arguments that
       // pick one (launches.ts refuses it before the launch; said here too before a tab is opened).
-      if ((l.resume || l.fork) && !codexFork && kind !== CODEX_AGENT && herdrCannotResume(spec, l.profileArgs))
+      if (
+        (l.resume || l.fork) &&
+        !codexFork &&
+        !(kind === CODEX_AGENT && l.resume && !l.fork) &&
+        herdrCannotResume(spec, l.profileArgs)
+      )
         throw new LaunchError(t('archive.err.cannotResume'), 'launcher')
       on.step('tab')
       let pane: string
