@@ -92,8 +92,10 @@ function fileSleepers(sessionsFile: string): SleepingSession[] {
         fromFile: true,
       })
   }
-  if (present.has('wake-agy.json')) {
-    for (const s of Object.values(peekAgySleepers(join(dir, 'wake-agy.json'))))
+  for (const agent of ['agy', 'codex'] as const) {
+    const file = `wake-${agent}.json`
+    if (!present.has(file)) continue
+    for (const s of Object.values(peekAgySleepers(join(dir, file))))
       list.push({
         name: s.name,
         pane: s.pane,
@@ -101,7 +103,7 @@ function fileSleepers(sessionsFile: string): SleepingSession[] {
         workspace: s.workspaceLabel ?? '',
         slept_at: new Date(s.slept_at).toISOString(),
         exited: false,
-        agent: 'agy',
+        agent,
         cwd: s.cwd,
         fromFile: true,
       })

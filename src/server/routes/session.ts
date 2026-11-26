@@ -311,9 +311,10 @@ function card(item: Item, body: Body): Result {
  * anything is scheduled.
  */
 async function restart(deps: SessionApp['deps'], item: Item): Promise<Result> {
+  if (isCodexItem(item) && !wakeSleepsAgy(deps)) return { ok: false, error: t('err.restart.noWake') }
   if (isAgyItem(item) && !wakeSleepsAgy(deps))
     return { ok: false, error: t('err.restart.agyNeedsBoardWake', { name: item.name }) }
-  if (!item.session || !item.pane || (item.agent !== 'claude' && !isAgyItem(item)))
+  if (!item.session || !item.pane || (item.agent !== 'claude' && !isAgyItem(item) && !isCodexItem(item)))
     return { ok: false, error: t('err.restart.notClaude', { name: item.name }) }
   if (item.sleeping) return { ok: false, error: t('err.restart.asleep', { name: item.name }) }
   const up = await wakeAnswers(deps)

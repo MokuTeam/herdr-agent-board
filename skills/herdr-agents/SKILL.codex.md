@@ -87,9 +87,12 @@ board --session <sid> unschedule <id>
 
 At that time the board types `[board reminder] <text>` into this session as a prompt. Write the text as an instruction to yourself. By default it arrives on time, queued behind a running turn; `--idle` waits until the session is free.
 
-## What is not there yet for Codex sessions
+## Sleep and restart
 
-- A Codex session is not put to sleep: it stays up while its pane is open, so `board sleep`, `board restart` and `--wake` do nothing for it. A thread watch line or a reminder reaches a running Codex session only.
+- With the board’s own wake enabled, `board sleep` can put an idle Codex session to sleep. A message or reminder wakes the same conversation. If its pane is gone, wake opens a tab in its workspace.
+- `board restart [note]` restarts the session when it is free and delivers the note after it resumes.
+
+## Codex controls
 - Codex's own sandbox: `board`, `spawn-agent` (and, for masters, `herdr agent prompt|read|list|get`) run outside it through the rule file of this Codex home. A `herdr` command not in that file fails with "Operation not permitted": ask the user to approve it when Codex asks.
 - You cannot see another Codex session's permission dialog; the user answers it on its card.
 

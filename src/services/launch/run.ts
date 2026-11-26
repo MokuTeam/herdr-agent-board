@@ -318,7 +318,7 @@ export function launchRunner({
   async function openLaunchTab(l: Launch, ws: HerdrWorktree, spareRootTab: boolean): Promise<void> {
     l.rootTab = ws.alreadyOpen ? null : ws.tab
     const vars = !!l.nodeEnv && Object.keys(l.nodeEnv).length > 0
-    if (l.configDir === null && !vars && !ws.alreadyOpen) {
+    if (l.configDir === null && !vars && !ws.alreadyOpen && !(l.agent === CODEX_AGENT && l.resume)) {
       l.rootPane = ws.pane
       l.rootTerminal = ws.terminal
       if (ws.pane) notePane(l, ws.pane, ws.terminal)

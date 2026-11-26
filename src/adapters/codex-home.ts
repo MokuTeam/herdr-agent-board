@@ -2,7 +2,7 @@
 // transcript reads are bounded and cached by size and mtime, as for pi.
 import { readdirSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { isCodexSession, parseCodexConversation, parseCodexTail } from '../core/codex.ts'
 import { modelProblem } from '../core/launch/model.ts'
 import type { TranscriptInfo } from '../core/types.ts'
@@ -22,6 +22,9 @@ export interface CodexHome {
 const DISCOVERY_MS = 1000
 const CARD_WINDOWS = [256 << 10, 2 << 20]
 const THREAD_WINDOWS = [2 << 20, 8 << 20]
+
+/** Root of a rollout located under sessions/YYYY/MM/DD. */
+export const codexHomeOf = (rollout: string): string => dirname(dirname(dirname(dirname(dirname(rollout)))))
 
 const codexRoot = (): string => process.env.CODEX_HOME || join(homedir(), '.codex')
 

@@ -6,10 +6,10 @@
 // Return resumes it in that profile or not at all.
 import { expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { tidyList } from '../../src/core/archive.ts'
 import { translator } from '../../src/core/i18n/translator.ts'
 import { projectFolderName } from '../../src/core/resume.ts'
@@ -84,6 +84,7 @@ function project(box: Sandbox, card: Record<string, unknown> = {}, claudeDir = '
 
 type HerdrOptions = {
   status?: string
+  agent?: 'claude' | 'codex'
   typed?: string
   shared?: boolean
   gone?: boolean
@@ -100,12 +101,12 @@ type HerdrOptions = {
 const NOT_FOUND = { code: 'pane_not_found', error: 'pane_not_found: no such pane' }
 function herdrState(dir: string, opts: HerdrOptions = {}): Record<string, unknown> {
   const { status = 'idle', typed = '', shared = false, gone = false, asleep = false, running = false } = opts
-  const { label = asleep ? '💤 Probe' : '', extra = [] } = opts
+  const { agent = 'claude', label = asleep ? '💤 Probe' : '', extra = [] } = opts
   const pane = {
     pane_id: 'wP:p1',
     tab_id: 'wP:t1',
     workspace_id: 'wP',
-    agent: asleep ? null : 'claude',
+    agent: asleep ? null : agent,
     agent_session: asleep ? null : { value: S },
     agent_status: asleep ? null : status,
     cwd: dir,
@@ -140,10 +141,10 @@ function herdrState(dir: string, opts: HerdrOptions = {}): Record<string, unknow
     'pane list': { result: { panes } },
     'agent get': {
       result: {
-        agent: asleep || gone ? null : { agent: 'claude', agent_status: status, agent_session: { value: S } },
+        agent: asleep || gone ? null : { agent, agent_status: status, agent_session: { value: S } },
       },
     },
-    'agent read': { text: screen(typed) },
+    'agent read': { text: agent === 'codex' ? `› ${typed}` : screen(typed) },
     'tab close': { result: null },
     'pane close': { result: null },
     'workspace list': { result: { workspaces: [{ workspace_id: 'wP', label: 'Personal' }] } },
@@ -186,7 +187,7 @@ const CATEGORIES = [
 
 type Answer = { status: number; body: Record<string, unknown> & { done?: Record<string, unknown>[] } }
 
-async function board(box: Sandbox, cfg: Record<string, unknown> = {}) {
+async function board(box: Sandbox, cfg: Record<string, unknown> = {}, env: Record<string, string> = {}) {
   const port = await unusedPort()
   const proc: Child = box.run(
     'server',
@@ -202,7 +203,7 @@ async function board(box: Sandbox, cfg: Record<string, unknown> = {}) {
     },
     // Return starts the board's own spawn-agent against the fake herdr, which answers at once: its
     // polls and pauses run at a fiftieth (adapters/pacing.ts).
-    { BOARD_TEST_PACE: '0.02' },
+    { BOARD_TEST_PACE: '0.02', ...env },
   )
   await until(() => proc.messages.some(m => (m as { ready?: boolean }).ready), 10_000)
   const url = `http://127.0.0.1:${port}`
@@ -335,6 +336,64 @@ test('Return before the tab closed puts everything back as it was: the card, the
   assert.equal(again.status, 409)
   assert.match(String(again.body.error), /not in the archive/)
 }, 30_000)
+
+test('Codex enters the archive and Return starts the original UUID in its rollout home', async () => {
+  const box = await sandbox()
+  const dir = project(box, {}, '')
+  const codexHome = join(box.dir, 'Codex home 50%')
+  const rolls = join(codexHome, 'sessions', '2026', '11', '26')
+  mkdirSync(rolls, { recursive: true })
+  writeFileSync(
+    join(rolls, `rollout-2026-11-26T12-00-00-${S}.jsonl`),
+    `${JSON.stringify({ type: 'session_meta', payload: { id: S, cwd: dir } })}\n`,
+  )
+  const bin = join(box.dir, 'bin')
+  mkdirSync(bin)
+  const file = join(bin, process.platform === 'win32' ? 'codex.cmd' : 'codex')
+  writeFileSync(file, process.platform === 'win32' ? '@echo off\r\n' : '#!/bin/sh\n')
+  chmodSync(file, 0o755)
+  herdrWith(box, dir, { agent: 'codex', typed: 'unsent draft' })
+  const b = await board(
+    box,
+    { archiveUndoSec: 0.2 },
+    {
+      CODEX_HOME: codexHome,
+      PATH: `${bin}${delimiter}${box.env.PATH}`,
+    },
+  )
+  assert.equal((await b.archive()).body.ok, false)
+  herdrWith(box, dir, { agent: 'codex' })
+  assert.equal((await b.archive()).body.ok, true)
+  await until(() => record(box)?.state === 'archived', 10_000)
+  assert.equal(record(box)?.agent, 'codex')
+  resumable(box, dir)
+  const state = JSON.parse(readFileSync(box.env.FAKE_HERDR_STATE as string, 'utf8'))
+  box.state({ ...state, 'agent start': { result: {} } })
+  await b.refresh()
+  const r = await b.post('/api/archive', { op: 'return', keys: [S] })
+  assert.equal(r.body.done?.[0]?.resume, true, JSON.stringify(r.body))
+  await until(() => box.calls().some(c => c[0] === 'agent' && c[1] === 'start'), 10_000)
+  const command = box.calls().find(c => c[0] === 'agent' && c[1] === 'start') ?? []
+  assert.ok(command.includes('codex'))
+  assert.deepEqual(command.slice(-2), ['resume', S])
+  const tab = box.calls().find(c => c[0] === 'tab' && c[1] === 'create') ?? []
+  assert.ok(tab.includes(`CODEX_HOME=${codexHome}`))
+  box.state({
+    ...state,
+    'api snapshot': {
+      result: {
+        snapshot: {
+          panes: [{ ...FRESH(dir), agent: 'codex' }],
+          tabs: [],
+          workspaces: [{ workspace_id: 'wP', label: 'Personal' }],
+        },
+      },
+    },
+  })
+  await b.refresh()
+  await until(() => record(box) === null, 10_000)
+  assert.ok((await b.items()).includes(S))
+})
 
 test('Return after the tab closed resumes it by its id in a new tab, in its folder and workspace, with its name; then it is settled', async () => {
   const box = await sandbox()

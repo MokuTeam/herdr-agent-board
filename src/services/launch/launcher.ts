@@ -28,7 +28,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { noDaemonArgs } from '../../adapters/codex-flags.ts'
-import { dedicatedCodexHome } from '../../adapters/codex-home.ts'
+import { codexHomeOf, createCodexHome, dedicatedCodexHome } from '../../adapters/codex-home.ts'
 import { herdr, tabCreateRoot } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { launchDir, ROOT } from '../../adapters/paths.ts'
@@ -189,8 +189,16 @@ export function withoutValues(err: unknown, vars: Readonly<Record<string, string
  * (`codexHome`, install.ts --codex-home), when there is one. A fork stays with the home it was
  * started in (`codex fork` looks the session up there); any other agent is not asked.
  */
-const codexEnv = (l: { agent?: string; codexFork?: unknown }): Env | undefined => {
-  const home = l.agent === CODEX_AGENT && !l.codexFork ? dedicatedCodexHome() : null
+type CodexLaunch = { agent?: string; codexFork?: unknown; resume?: string | null }
+
+function codexEnv(l: CodexLaunch): Env | undefined {
+  if (l.agent !== CODEX_AGENT || l.codexFork) return undefined
+  if (l.resume) {
+    const rollout = createCodexHome().transcriptPath(l.resume)
+    if (!rollout) throw new LaunchError(t('archive.err.noTranscript', { name: l.resume }), 'launcher')
+    return { CODEX_HOME: codexHomeOf(rollout) }
+  }
+  const home = dedicatedCodexHome()
   return home ? { CODEX_HOME: home } : undefined
 }
 
@@ -199,7 +207,7 @@ const codexEnv = (l: { agent?: string; codexFork?: unknown }): Env | undefined =
  * not take --env (older than 0.9.5) fails the launch saying so, before any Claude runs.
  */
 export async function openInProfile<T>(
-  l: Pick<LaunchContext, 'configDir' | 'nodeEnv'> & { agent?: string; codexFork?: unknown },
+  l: Pick<LaunchContext, 'configDir' | 'nodeEnv'> & CodexLaunch,
   open: (env: Env | undefined) => Promise<T>,
 ): Promise<T> {
   const codex = codexEnv(l)
@@ -283,7 +291,7 @@ export function herdrLauncher(spec: LaunchSpec, codexFork = false): Launcher {
       if (l.exactSession && (kind !== 'claude' || chooses)) throw new LaunchError(t('verify.err.launcher'), 'launcher')
       // A session is resumed (or forked) by its id: not by another agent, nor by arguments that
       // pick one (launches.ts refuses it before the launch; said here too before a tab is opened).
-      if ((l.resume || l.fork) && !codexFork && herdrCannotResume(spec, l.profileArgs))
+      if ((l.resume || l.fork) && !codexFork && kind !== CODEX_AGENT && herdrCannotResume(spec, l.profileArgs))
         throw new LaunchError(t('archive.err.cannotResume'), 'launcher')
       on.step('tab')
       let pane: string
@@ -309,7 +317,7 @@ export function herdrLauncher(spec: LaunchSpec, codexFork = false): Launcher {
       let sessionId: string | null = null
       if (l.resume) {
         sessionId = l.resume
-        args.push(kind === AGY_AGENT ? '--conversation' : '--resume', l.resume)
+        args.push(kind === AGY_AGENT ? '--conversation' : kind === CODEX_AGENT ? 'resume' : '--resume', l.resume)
       } else if (codexFork && l.fork) {
         // Codex allocates the new id itself. The root hook reports it through herdr.
         // The shell carries only a UUID. The tab already has the rollout's folder.

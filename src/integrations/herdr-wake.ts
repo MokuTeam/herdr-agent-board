@@ -1,6 +1,7 @@
 // herdr-wake: the router that puts idle Claude sessions to sleep and wakes them, spoken to over
 // HTTP. Kept behind SleepProvider so another sleep/wake backend can take its place later.
 import { isAgyItem } from '../core/agy.ts'
+import { isCodexItem } from '../core/codex.ts'
 import { t } from '../core/lang.ts'
 import { isPiItem } from '../core/pi.ts'
 import type { Item } from '../core/types.ts'
@@ -75,12 +76,16 @@ export function createHerdrWake(
   let cache: { at: number; list: SleepingSession[] } = { at: 0, list: [] }
 
   const post = async (path: string, item: Item, timeoutMs: number): Promise<Record<string, unknown>> => {
+    const codex = who === 'wake' && isCodexItem(item)
     const res = await fetchFn(`${url}${path}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       // A pi or agy session by its session key (#178, #631): its pane may be gone, or another session's now. A
       // Claude session without one sleeps where wake closed its pane (#204): by its session id.
-      body: JSON.stringify({ target: isPiItem(item) || isAgyItem(item) ? item.session : item.pane || item.session }),
+      body: JSON.stringify({
+        target: isPiItem(item) || isAgyItem(item) || codex ? item.session : item.pane || item.session,
+        ...(codex && { agent: 'codex' }),
+      }),
       signal: AbortSignal.timeout(timeoutMs),
     })
     const body: unknown = await res.json()
@@ -111,7 +116,9 @@ export function createHerdrWake(
           return { ok: false, error: t('err.wake', { name: item.name, why: String(r.error ?? t('err.noAnswer')) }) }
         // Where it woke: a pi/agy session's pane, or a new tab for one whose pane was gone (#178, #204, #631).
         const pane =
-          typeof r.pane === 'string' && r.pane && (isPiItem(item) || isAgyItem(item) || r.pane !== item.pane)
+          typeof r.pane === 'string' &&
+          r.pane &&
+          (isPiItem(item) || isAgyItem(item) || isCodexItem(item) || r.pane !== item.pane)
             ? r.pane
             : null
         return pane ? { ok: true, pane } : { ok: true }

@@ -277,7 +277,12 @@ export function createLaunches({
         fork || sessionId || node?.exactSession
           ? []
           : resume
-            ? launchAgents(deps.cfg.launch, () => false, agyOnPath)
+            ? launchAgents(
+                deps.cfg.launch,
+                () => false,
+                agyOnPath,
+                isRecord(body) && body.agent === CODEX_AGENT ? codexOnPath : undefined,
+              )
             : launchAgents(deps.cfg.launch, piOnPath, agyOnPath, codexOnPath),
       standard: offered => (resume ? CLAUDE_AGENT : defaultAgent(deps.cfg.launch, offered)),
       pi: deps.cfg.launch?.pi,
@@ -290,7 +295,12 @@ export function createLaunches({
     })
     if (!r.ok) return r
     // launch.agent whose arguments pick the session cannot resume one: refused before anything runs.
-    if (resume && launcher.kind === 'herdr' && herdrCannotResume(deps.cfg.launch ?? {}, r.launch.profileArgs))
+    if (
+      resume &&
+      r.launch.agent !== CODEX_AGENT &&
+      launcher.kind === 'herdr' &&
+      herdrCannotResume(deps.cfg.launch ?? {}, r.launch.profileArgs)
+    )
       return { ok: false, field: 'launcher', error: t('archive.err.cannotResume') }
     if (
       fork &&
@@ -403,11 +413,11 @@ export function createLaunches({
       }
       if (!it) continue
       if (
-        l.codexFork &&
+        (l.codexFork || (l.agent === CODEX_AGENT && l.resume)) &&
         (it.agent !== 'codex' ||
-          !l.sessionId ||
+          !(l.sessionId || l.resume) ||
           !isCodexSession(it.session ?? '') ||
-          it.session?.toLowerCase() !== l.sessionId.toLowerCase())
+          it.session?.toLowerCase() !== (l.sessionId || l.resume)?.toLowerCase())
       )
         continue
       claimed.add(it.key)

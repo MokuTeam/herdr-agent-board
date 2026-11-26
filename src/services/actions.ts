@@ -17,10 +17,10 @@ import { reportToDay, runningDay } from '../adapters/mokupilot-day.ts'
 import { pause } from '../adapters/pacing.ts'
 import { possibleProfilePanes, provenProfilePanes } from '../adapters/profile-panes.ts'
 import { boardOnPath } from '../adapters/resume-report.ts'
-import { peekAgySleepers, peekPiSleepers, peekWakeSessions } from '../adapters/wake-files.ts'
+import { peekAgySleepers, peekPiSleepers, peekWakeSessions, wakeCodexFile } from '../adapters/wake-files.ts'
 import { cliWakeHerdr } from '../adapters/wake-herdr.ts'
 import { AGY_AGENT, isAgyItem } from '../core/agy.ts'
-import { CODEX_AGENT } from '../core/codex.ts'
+import { CODEX_AGENT, isCodexItem, isCodexSession } from '../core/codex.ts'
 import { agyDraft } from '../core/dialogs/agy-dialogs.ts'
 import { codexDraft } from '../core/dialogs/codex-input.ts'
 import { inputDraft } from '../core/dialogs/input-box.ts'
@@ -49,6 +49,7 @@ import { raiseTerminal } from '../integrations/terminal-window.ts'
 import type { BoardWake } from '../integrations/wake.ts'
 import type { Deps } from './deps.ts'
 import { defaultAgyOps, wakeAgy } from './wake/agy.ts'
+import { defaultCodexOps } from './wake/codex.ts'
 import { followFiles } from './wake/follow.ts'
 import { PROFILE_NOT_PLAIN, type WakeOutcome, wakeInPane } from './wake/pane-ops.ts'
 import { defaultPiOps, readPiTail, wakePi } from './wake/pi.ts'
@@ -111,16 +112,22 @@ function canWakeAgy(deps: Deps, item: Pick<Item, 'name'> & Partial<Pick<Item, 's
  * wake does not answer: from `wake-agy.json` (read only), in its own pane or a new tab.
  */
 async function wakeAgyHere(deps: Deps, item: Item): Promise<ActionResult> {
-  const sleeper = item.session ? peekAgySleepers()[item.session] : undefined
+  const codex = isCodexItem(item)
+  const sleeper = item.session ? peekAgySleepers(codex ? wakeCodexFile() : undefined)[item.session] : undefined
   if (!sleeper) return { ok: false, error: t('err.wake', { name: item.name, why: t('err.sleep.unknownToWake') }) }
   const timeoutMs = wakeConfig(deps.cfg.wake).wakeTimeoutSec * 1000
   try {
-    const outcome = await wakeAgy(defaultAgyOps(cliWakeHerdr, deps.agy), sleeper, await snapshot(), {
-      timeoutMs,
-      log: text => deps.log(`wake: ${text}`),
-    })
+    const outcome = await wakeAgy(
+      codex ? defaultCodexOps(cliWakeHerdr, deps.codex) : defaultAgyOps(cliWakeHerdr, deps.agy),
+      sleeper,
+      await snapshot(),
+      {
+        timeoutMs,
+        log: text => deps.log(`wake: ${text}`),
+      },
+    )
     if (!outcome.ok) return { ok: false, error: t('err.wake', { name: item.name, why: outcome.error }) }
-    deps.log(`wake: woke ${item.name} (agy) in ${outcome.pane} from the board`)
+    deps.log(`wake: woke ${item.name} (${codex ? CODEX_AGENT : AGY_AGENT}) in ${outcome.pane} from the board`)
     return { ok: true, pane: outcome.pane }
   } catch (err) {
     return { ok: false, herdrDown: true, error: t('err.wake', { name: item.name, why: messageOf(err) }) }
@@ -321,6 +328,12 @@ export async function checkWake(
   // A sleeping pi session wakes in the account it slept with, which wake kept (#178).
   if (item.sleeping && isPiItem(item)) return canWakePi(item)
   // An Antigravity (`agy`) session needs no Claude profile, only `board` on PATH and its conversation (#631).
+  if (isCodexItem(item)) {
+    if (!boardOnPath()) return { ok: false, refused: true, error: t('err.canWake.board', { name: item.name }) }
+    if (!item.session || !deps.codex.transcriptPath(item.session))
+      return { ok: false, refused: true, error: t('archive.err.noTranscript', { name: item.name }) }
+    return { ok: true }
+  }
   if (isAgyItem(item)) return canWakeAgy(deps, item)
   if (offFileSleeper(deps.cfg, item) || newWake(deps)) return canWakeAgain(deps, item, set)
   // The board's records first, without asking herdr: the board's own profile in a pane no record
@@ -357,7 +370,7 @@ export async function wake(deps: Deps, item: Item): Promise<ActionResult> {
   const check = await checkWake(deps, item)
   if (!check.ok) return { ok: false, error: check.error }
   if (isPiItem(item)) return wakePiItem(deps, item)
-  if (isAgyItem(item)) return wakeAgyItem(deps, item)
+  if (isAgyItem(item) || isCodexItem(item)) return wakeAgyItem(deps, item)
   if (offFileSleeper(deps.cfg, item)) return wakeHere(deps, item)
   const fresh = newWake(deps)
   if (!fresh) return deps.wake.wake(item)
@@ -434,6 +447,7 @@ export async function readyToSleep(
   item: Pick<Item, 'pane' | 'session' | 'profile' | 'profileFolder'> & Partial<Pick<Item, 'agent'>>,
 ): Promise<{ ok: true; status: AgentStatus } | { ok: false; why: string; profile?: true }> {
   if (isPiItem(item)) return readyPiToSleep(item)
+  if (isCodexItem(item)) return readyCodexToSleep(item)
   if (isAgyItem(item)) return readyAgyToSleep(deps, item)
   const set = deps.profiles()
   const dir = itemProfile(item, set.list)?.dir ?? item.profileFolder
@@ -507,6 +521,31 @@ async function readyAgyToSleep(
   }
 }
 
+async function readyCodexToSleep(
+  item: Pick<Item, 'pane' | 'session'>,
+): Promise<{ ok: true; status: AgentStatus } | { ok: false; why: string }> {
+  try {
+    const agent = item.pane ? await agentGet(item.pane) : null
+    if (
+      !agent ||
+      agent.kind !== CODEX_AGENT ||
+      !item.session ||
+      !isCodexSession(item.session) ||
+      agent.session?.toLowerCase() !== item.session.toLowerCase()
+    )
+      return { ok: false, why: 'gone' }
+    if (agent.status === 'blocked') return { ok: false, why: 'dialog' }
+    if (agent.status !== 'idle' && agent.status !== 'done') return { ok: false, why: 'busy' }
+    const draft = codexDraft(
+      await herdrText(['agent', 'read', item.pane ?? '', '--source', 'visible', '--ansi'], 10_000),
+    )
+    if (draft === null) return { ok: false, why: 'dialog' }
+    return draft === '' ? { ok: true, status: agent.status } : { ok: false, why: 'draft' }
+  } catch (err) {
+    return { ok: false, why: t('err.restart.herdr', { why: messageOf(err) }) }
+  }
+}
+
 /**
  * Put a session to sleep through herdr-wake, as its reaper does after an idle hour: Claude exits,
  * the pane stays as "💤 <name>". Only an idle session; herdr-wake refuses one that works, has
@@ -522,6 +561,7 @@ export async function sleepSession(deps: Deps, item: Item): Promise<ActionResult
       error: t(item.status === 'working' ? 'err.sleepWorking' : 'err.sleepBlocked', { name: item.name }),
     }
   }
+  if (isCodexItem(item) && !newWake(deps)) return { ok: false, error: t('err.restart.noWake') }
   if (wakeOffByKey(deps.cfg)) {
     const up = await wakeAnswers(deps)
     if (!up.ok) return { ok: false, error: up.error }

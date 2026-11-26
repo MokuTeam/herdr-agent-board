@@ -54,15 +54,17 @@ describe('Antigravity UI models and brief', () => {
     expect(launcherFor({ kind: 'herdr', agent: 'claude' }, 'agy')).toEqual({ kind: 'herdr', agent: 'agy' })
   })
 
-  test('sheet headButtons, cardMenu, and claudeRename enable archive and /rename for agy without touching codex', () => {
+  test('sheet headButtons, cardMenu, and claudeRename enable lifecycle actions for agy and Codex and keep /rename limited', () => {
     const agy = makeItem({ agent: 'agy' })
     const agyBare = makeItem({ agent: 'agy', session: null, key: 'pane-w1:p1' })
     const codex = makeItem({ agent: 'codex' })
+    const codexBare = makeItem({ agent: 'codex', session: null, key: 'pane-w1:p2' })
     const claude = makeItem({ agent: 'claude' })
 
     expect(headButtons(agy, t).archiveHidden).toBe(false)
     expect(headButtons(agyBare, t).archiveHidden).toBe(true)
-    expect(headButtons(codex, t).archiveHidden).toBe(true)
+    expect(headButtons(codex, t).archiveHidden).toBe(false)
+    expect(headButtons(codexBare, t).archiveHidden).toBe(true)
     expect(headButtons(claude, t).archiveHidden).toBe(false)
     // Restart is enabled for agy (#631); Claude-only actions (MokuPilot, Fork) remain hidden.
     expect(headButtons(agy, t, true, [], true)).toMatchObject({
@@ -72,7 +74,8 @@ describe('Antigravity UI models and brief', () => {
       forkHidden: true,
     })
     expect(headButtons(agyBare, t).restartHidden).toBe(true)
-    expect(headButtons(codex, t).restartHidden).toBe(true)
+    expect(headButtons(codex, t).restartHidden).toBe(false)
+    expect(headButtons(codexBare, t).restartHidden).toBe(true)
 
     const idsOf = (it: Item) =>
       cardMenu(it, { t, canMutate: true, canEdit: true, column: 'idle', category: 'other' })
@@ -82,8 +85,8 @@ describe('Antigravity UI models and brief', () => {
     expect(idsOf(agy)).toContain('restart')
     expect(idsOf(agyBare)).not.toContain('archive')
     expect(idsOf(agyBare)).not.toContain('restart')
-    expect(idsOf(codex)).not.toContain('archive')
-    expect(idsOf(codex)).not.toContain('restart')
+    expect(idsOf(codex)).toContain('archive')
+    expect(idsOf(codex)).toContain('restart')
 
     expect(claudeRename(agy, true, t)).toEqual({ why: '' })
     expect(claudeRename(agyBare, true, t)).toBeNull()

@@ -38,6 +38,8 @@ export const wakeSessionsFile = (): string => join(stateDir(), 'wake-sessions.js
 /** The pi sessions asleep (#178), beside the session file; one writer, the wake process, as it. */
 export const wakePiFile = (): string => join(stateDir(), 'wake-pi.json')
 /** The Antigravity (`agy`) sessions asleep (#631), beside the session file; one writer, the wake process. */
+export const wakeCodexFile = (): string => join(stateDir(), 'wake-codex.json')
+
 export const wakeAgyFile = (): string => join(stateDir(), 'wake-agy.json')
 export const wakeLogFile = (): string => join(stateDir(), 'wake.log')
 export const wakeStatusFile = (): string => join(stateDir(), 'wake-status.json')

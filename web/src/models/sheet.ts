@@ -164,11 +164,12 @@ export function headButtons(
     wakeHidden: !it.sleeping,
     sleepHidden: !!it.sleeping || !it.session || away,
     sleepTitle: t(inTurn(it) ? 'sheet.sleepBusy' : 'sheet.sleepHint'),
-    restartHidden: !!it.sleeping || !it.session || (it.agent !== 'claude' && it.agent !== 'agy') || away,
+    restartHidden:
+      !!it.sleeping || !it.session || (it.agent !== 'claude' && it.agent !== 'agy' && it.agent !== 'codex') || away,
     restartTitle: pending ? `${t('sheet.restartPending')}. ${restartText(pending, t)}` : t('sheet.restartHint'),
     mokupilotHidden: !(mokupilot && it.session && it.agent === 'claude') || away,
     forkHidden: !(it.session && ((fork && it.agent === 'claude') || (codexFork && it.agent === 'codex'))) || away,
-    archiveHidden: !it.session || (it.agent !== 'claude' && it.agent !== 'agy') || away,
+    archiveHidden: !it.session || (it.agent !== 'claude' && it.agent !== 'agy' && it.agent !== 'codex') || away,
     archiveTitle: why ? t(why) : t('archive.sheetHint'),
   }
 }

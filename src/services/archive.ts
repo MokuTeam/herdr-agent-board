@@ -47,6 +47,7 @@ import { AGY_AGENT } from '../core/agy.ts'
 import { type ArchiveRecord, type ArchiveReturning, archiveBlock } from '../core/archive.ts'
 import { noteOf } from '../core/board.ts'
 import { categoryInfo } from '../core/categories.ts'
+import { CODEX_AGENT } from '../core/codex.ts'
 import { parentProfile } from '../core/item-profile.ts'
 import { t } from '../core/lang.ts'
 import { sameDir, sessionWorkspace, UNSAFE_CHARS } from '../core/launch/names.ts'
@@ -203,10 +204,13 @@ export type FreeToClose = { ok: true; pane: PaneFacts | null } | { ok: false; wh
  */
 export async function freeToClose(deps: Deps, item: ArchiveSubject, tr: Translator = t): Promise<FreeToClose> {
   const isAgy = item.agent === AGY_AGENT
-  if (!isAgy) {
+  const isCodex = item.agent === CODEX_AGENT
+  if (!isAgy && !isCodex) {
     const doubt = profileDoubt(item, deps.profiles(), tr)
     if (doubt !== null) return { ok: false, why: 'archive.why.profile', detail: doubt }
   }
+  if (isCodex && (!item.session || !deps.codex.transcriptPath(item.session)))
+    return { ok: false, why: 'archive.err.noTranscript', detail: tr('archive.err.noTranscript', { name: item.name }) }
   // A sleeper whose pane wake closed (#204): nothing to close.
   if (!item.pane) return { ok: true, pane: null }
   const target = item.pane
@@ -219,7 +223,8 @@ export async function freeToClose(deps: Deps, item: ArchiveSubject, tr: Translat
   }
   if (!pane) return { ok: true, pane: null }
   if (!pane.agent) {
-    if (!sleeperLabel(pane.label, item)) return { ok: false, why: 'archive.why.exited' }
+    if (!(isCodex && pane.label === `💤 ${item.name}`) && !sleeperLabel(pane.label, item))
+      return { ok: false, why: 'archive.why.exited' }
     try {
       const answer = await herdr(['pane', 'process-info', '--pane', target])
       const info = isRecord(answer) && isRecord(answer.process_info) ? answer.process_info : null
@@ -243,7 +248,8 @@ export async function freeToClose(deps: Deps, item: ArchiveSubject, tr: Translat
       return { ok: false, why: 'archive.why.herdr', detail: messageOf(err) }
     }
   }
-  if (pane.agent !== 'claude' || pane.session !== (item.session ?? null)) return { ok: false, why: 'archive.why.gone' }
+  if (pane.agent !== (isCodex ? CODEX_AGENT : 'claude') || pane.session !== (item.session ?? null))
+    return { ok: false, why: 'archive.why.gone' }
   const ready = await readyToSleep(deps, item)
   if (ready.ok) return { ok: true, pane }
   if (ready.profile)
@@ -704,6 +710,7 @@ export async function bringBack(deps: Deps, app: ReturnApp, key: string): Promis
   }
   // Its own profile (Claude), or Antigravity's conversation folder (agy needs no Claude profile).
   const isAgy = rec.agent === AGY_AGENT
+  const isCodex = rec.agent === CODEX_AGENT
   let cwd = rec.cwd
   let profileBody: { profile?: string } = {}
   let parentOpt: {
@@ -712,6 +719,9 @@ export async function bringBack(deps: Deps, app: ReturnApp, key: string): Promis
   if (isAgy) {
     if (!deps.agy.transcriptPath(rec.session)) return fail(t('archive.err.noTranscript', { name: rec.name }))
     cwd = deps.agy.sessionCwd(rec.session) || rec.cwd
+  } else if (isCodex) {
+    if (!deps.codex.transcriptPath(rec.session)) return fail(t('archive.err.noTranscript', { name: rec.name }))
+    cwd = (await deps.codex.cwdOf(rec.session)) || rec.cwd
   } else {
     const set = deps.profiles()
     const facts = recordProfile(deps, rec)
@@ -759,7 +769,15 @@ export async function bringBack(deps: Deps, app: ReturnApp, key: string): Promis
       .trim()
       .slice(0, 60) || rec.session.slice(0, 8)
   const started = await app.launches.start(
-    { name, cwd, category, workspace, ...profileBody, ...(isAgy && { agent: AGY_AGENT }) },
+    {
+      name,
+      cwd,
+      category,
+      workspace,
+      ...profileBody,
+      ...(isAgy && { agent: AGY_AGENT }),
+      ...(isCodex && { agent: CODEX_AGENT }),
+    },
     items,
     {
       resume: rec.session,

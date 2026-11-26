@@ -195,7 +195,7 @@ test("the dedicated home gets the Codex herdr-agents skill; Claude's skill file 
   expect(codex).toBe(readFileSync(join(root, 'skills/herdr-agents/SKILL.codex.md'), 'utf8'))
   expect(codex).toContain('agent-board: installed by')
   expect(codex).not.toMatch(/SendMessage|ListAgents|CronCreate|claude --resume/)
-  for (const need of ['herdr agent prompt', 'thread new', 'thread done', '--agent', 'not put to sleep'])
+  for (const need of ['herdr agent prompt', 'thread new', 'thread done', '--agent', 'board restart [note]'])
     expect(codex).toContain(need)
   expect(readFileSync(join(root, 'skills/herdr-agents/SKILL.md'), 'utf8')).toContain('SendMessage')
   // A second run changes nothing; Claude's install writes the Claude one.
