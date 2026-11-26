@@ -46,3 +46,31 @@ test('the brief for Codex: threads where they are on for agents, no wake from sl
   expect(brief(cfg, null, 'C:\\X', env, 'Claude', null, null, [], false, threads)).toContain('waking it if it sleeps')
   expect(CODEX_BRIEF_VERSION).toBeGreaterThan(BRIEF_VERSION)
 })
+
+test('the brief for Codex says to run board bare, so the allow rule lets it out of the sandbox (#916); Claude is not told', () => {
+  const line = 'Run each board command as a shell call of its own that starts with board'
+  for (const e of [{}, env]) {
+    expect(brief(cfg, null, 'C:\\X', e, 'Codex')).toContain(line)
+    expect(brief(cfg, null, 'C:\\X', e, 'Claude')).not.toContain(line)
+    expect(brief(cfg, null, 'C:\\X', e, 'Antigravity')).not.toContain(line)
+  }
+  // Above what Codex cards were stamped with before it (#918's merge), so they hear the new text once.
+  const was = Number(/CODEX_BRIEF_VERSION = (\d+)/.exec(oldSource('src/core/brief.ts', '3bd59765'))?.[1])
+  expect(CODEX_BRIEF_VERSION).toBeGreaterThan(was)
+})
+
+test("Codex with the board's MCP tools: its fallback runs board as a call of its own, never inside a script (#916); Claude's as before", () => {
+  const bare = 'run it as a shell call of its own that starts with board, nothing before or after it'
+  for (const session of [undefined, '019a2b3c-4d5e-7f60-8a9b-0c1d2e3f4a5b']) {
+    const opts = { mcp: true, ...(session && { session }) }
+    const codex = brief(cfg, null, 'C:\\X', env, 'Codex', null, null, [], false, null, false, null, opts)
+    expect(codex).toContain(bare)
+    expect(codex).not.toContain('inside a shell probe/script')
+    if (session) expect(codex).toContain(`\`board --session ${session} <command>\``)
+    for (const agent of ['Claude', 'Antigravity'] as const) {
+      const other = brief(cfg, null, 'C:\\X', env, agent, null, null, [], false, null, false, null, opts)
+      expect(other).toContain('- Fallback: if the MCP server is unavailable or inside a shell probe/script, use ')
+      expect(other).not.toContain(bare)
+    }
+  }
+})
