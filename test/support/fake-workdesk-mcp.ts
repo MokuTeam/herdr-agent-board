@@ -13,7 +13,7 @@ type State = {
   rejectHeartbeat?: boolean
   invalidList?: boolean
   /** WORKDESK-95: offer grant_task_workflow; `grants` holds what it registered, `fail` fails that many calls. */
-  grant?: { grants?: { task_id: number; revision: number; token_hash: string }[]; fail?: number }
+  grant?: { grants?: { task_id: number; revision: number; token_hash: string }[]; fail?: number; lose?: number }
   dialog?: {
     events: OwnerEvent[]
     pageSize?: number
@@ -116,12 +116,15 @@ for await (const line of createInterface({ input: process.stdin })) {
           ...current,
           grant: {
             fail: Math.max(0, fail - 1),
+            lose: Math.max(0, (current.grant.lose ?? 0) - (fail === 0 ? 1 : 0)),
             grants: [...(current.grant.grants ?? []), ...(added ? [{ task_id, revision, token_hash }] : [])],
           },
         }
       },
       isState,
     )
+    // A lost answer: registered, then the adapter dies before it replies.
+    if ((state.grant.lose ?? 0) > 0 && (state.grant.fail ?? 0) === 0) process.exit(1)
     send(id, answer)
   }
   if (params.name !== 'claim_task') continue
