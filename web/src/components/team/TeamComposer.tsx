@@ -3,10 +3,15 @@
 // the box: a new topic's fields (`header`), the message it answers, and `attachments` (#371: the
 // files that go with it); beside Send: `actions` (#371's attach button, New topic). Whether Send
 // is on is the parent's word (`canSend`), so a message of files alone can turn it on.
-import { type ReactNode, type Ref, useImperativeHandle, useLayoutEffect, useRef } from 'react'
+import { type ReactNode, type Ref, useId, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react'
+import { mentionAt } from '../../../../src/core/team-directory.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { sendsOnKey } from '../../models/composer.ts'
+import { fitMentions, type MentionChoice } from '../../models/team.ts'
 import type { Quote } from '../../models/team-chat.ts'
+
+/** The composer's list after `@` shows this many agents at most (#832). */
+const MAX_CHOICES = 8
 
 /** The box grows up to this height (px), then scrolls. */
 const MAX_HEIGHT = 168
@@ -33,6 +38,11 @@ export interface TeamComposerProps {
   actions?: ReactNode
   /** The box itself, for focus (a reply picked). */
   inputRef?: Ref<HTMLTextAreaElement>
+  /**
+   * The peers' agents that may be addressed (#832): after `@` the box lists the ones that fit what
+   * is written, and Enter or Tab puts `@Name.code ` in. None: no list, the box as before.
+   */
+  mentions?: readonly MentionChoice[]
 }
 
 export function TeamComposer({
@@ -50,9 +60,33 @@ export function TeamComposer({
   attachments,
   actions,
   inputRef,
+  mentions = [],
 }: TeamComposerProps) {
   const t = useT()
   const box = useRef<HTMLTextAreaElement>(null)
+  const listId = useId()
+  const caretAfter = useRef<number | null>(null)
+  // Where the caret is, the choice under the keys, and the list let go of with Esc until the text moves.
+  const [caret, setCaret] = useState(value.length)
+  const [active, setActive] = useState(0)
+  const [closed, setClosed] = useState<string | null>(null)
+  const at = mentions.length ? mentionAt(value, caret) : null
+  const fits = at && closed !== value ? fitMentions(mentions, at.who, at.code).slice(0, MAX_CHOICES) : []
+  const pick = (c: MentionChoice): void => {
+    if (!at) return
+    const word = `@${c.word} `
+    const next = value.slice(0, at.start) + word + value.slice(caret)
+    const end = at.start + word.length
+    onChange(next)
+    setCaret(end)
+    setActive(0)
+    // Put after the new text once it is drawn (the effect on `value` below).
+    caretAfter.current = end
+  }
+  // The caret is followed only while there are agents to offer: a box without them does as before.
+  const follow = (el: HTMLTextAreaElement): void => {
+    if (mentions.length) setCaret(el.selectionStart ?? el.value.length)
+  }
   useImperativeHandle(inputRef, () => box.current as HTMLTextAreaElement, [])
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new text is when to measure
   useLayoutEffect(() => {
@@ -60,6 +94,10 @@ export function TeamComposer({
     if (!el) return
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, MAX_HEIGHT)}px`
+    if (caretAfter.current !== null) {
+      el.setSelectionRange(caretAfter.current, caretAfter.current)
+      caretAfter.current = null
+    }
   }, [value])
   const ready = canSend && !disabled
   return (
@@ -85,6 +123,30 @@ export function TeamComposer({
         </div>
       )}
       {attachments && <div className="team-compose-attachments">{attachments}</div>}
+      {fits.length > 0 && (
+        <div className="team-mentions" id={listId} role="listbox" aria-label={t('team.mentions')} data-mentions>
+          {fits.map((c, i) => (
+            <button
+              key={c.word}
+              id={`${listId}-${i}`}
+              type="button"
+              role="option"
+              tabIndex={-1}
+              aria-selected={i === Math.min(active, fits.length - 1)}
+              className="team-mention"
+              data-mention={c.word}
+              // Picked on the press: the box keeps its focus and its caret.
+              onPointerDown={e => {
+                e.preventDefault()
+                pick(c)
+              }}
+            >
+              <span className="team-mention-word">@{c.word}</span>
+              {c.about && <span className="team-mention-about">{c.about}</span>}
+            </button>
+          ))}
+        </div>
+      )}
       <div className="team-compose-row">
         {actions && <div className="team-compose-actions">{actions}</div>}
         <textarea
@@ -93,8 +155,40 @@ export function TeamComposer({
           rows={1}
           placeholder={placeholder}
           aria-label={placeholder}
-          onChange={e => onChange(e.target.value)}
+          {...(mentions.length > 0 && { 'aria-autocomplete': 'list' as const })}
+          {...(fits.length > 0 && {
+            'aria-controls': listId,
+            'aria-expanded': true,
+            'aria-activedescendant': `${listId}-${Math.min(active, fits.length - 1)}`,
+          })}
+          onChange={e => {
+            onChange(e.target.value)
+            follow(e.target)
+            setActive(0)
+          }}
+          onSelect={e => follow(e.currentTarget)}
           onKeyDown={e => {
+            // The list after `@` (#832) takes the arrows, Enter, Tab and Esc while it shows.
+            if (fits.length > 0 && !e.nativeEvent.isComposing) {
+              const i = Math.min(active, fits.length - 1)
+              if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault()
+                setActive((i + (e.key === 'ArrowDown' ? 1 : fits.length - 1)) % fits.length)
+                return
+              }
+              const plain = !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey
+              if ((e.key === 'Enter' && plain) || (e.key === 'Tab' && plain)) {
+                e.preventDefault()
+                const c = fits[i]
+                if (c) pick(c)
+                return
+              }
+              if (e.key === 'Escape') {
+                e.preventDefault()
+                setClosed(value)
+                return
+              }
+            }
             if (e.key === 'Escape' && reply) {
               e.preventDefault()
               onCancelReply?.()

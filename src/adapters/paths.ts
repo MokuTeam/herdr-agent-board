@@ -72,6 +72,8 @@ export const teamAuditFile = (): string => join(stateDir(), 'team-audit.jsonl')
 export const teamDraftsFile = (): string => join(stateDir(), 'team-drafts.json')
 // The threads this board has seen or started (#216): titles, links, who handles each, muted ones.
 export const teamThreadsFile = (): string => join(stateDir(), 'team-threads.json')
+// The agent directories (#832): what this board sent each peer last, and what each peer sent it.
+export const teamDirectoryFile = (): string => join(stateDir(), 'team-directory.json')
 // What agents may do with each peer and the team, the listener session, routing pauses (#216).
 export const teamAgentsFile = (): string => join(stateDir(), 'team-agents.json')
 /** The owner's passkeys for the board on this computer (#224): the RP ID is `localhost`. */

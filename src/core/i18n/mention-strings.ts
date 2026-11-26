@@ -1,0 +1,22 @@
+// The texts of addressing a peer's agent (#832): the composer's list after `@`, and what teammates
+// can address in People and agents. strings.ts merges them into the dictionaries.
+import type { Lang } from '../types.ts'
+
+export const MENTION_STRINGS: Record<Lang, Record<string, string>> = {
+  en: {
+    'team.mentions': 'Agents you can address',
+    'team.exposed': 'Agents teammates can address',
+    'team.exposedAbout':
+      'Every session in a lane you share with a teammate, with Agents on for them, is in their list by its handle. It leaves the list when it leaves the lane, is archived, or the lane is no longer shared.',
+    'team.exposeReaches': 'Reached by {names}',
+    'team.err.agent': 'that agent is not in their list',
+  },
+  ru: {
+    'team.mentions': 'Агенты, к которым можно обратиться',
+    'team.exposed': 'Агенты, к которым могут обратиться коллеги',
+    'team.exposedAbout':
+      'Каждая сессия в полосе, открытой коллеге (с включёнными для него агентами), есть в его списке по своему имени. Она пропадает из списка, когда уходит из полосы, архивируется или полоса закрывается.',
+    'team.exposeReaches': 'Доступен: {names}',
+    'team.err.agent': 'такого агента нет в их списке',
+  },
+}

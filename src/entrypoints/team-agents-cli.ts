@@ -22,10 +22,11 @@ import {
   threadRef,
   validLoop,
 } from '../core/team-agents.ts'
+import { leadingMention, mentionWord, peerOfWord } from '../core/team-directory.ts'
 import { normalizeEmoji } from '../core/team-reactions.ts'
 
 export const AGENT_USAGE =
-  'board team post <name|peer-id|team> [--new "<title>"] [--link <url>] [--file <path>] "<text>" | board team reply <thread> [--to <message>] [--file <path>] "<text>" | board team react <thread> <message> <emoji> [--remove] | board team thread <thread> [--json] [--read] | board team drafts | board team assign <thread> <session> | board team release <thread> | board team listen [off] | board team loop <name|peer-id|team> [<1-100>|default]'
+  'board team post <name|peer-id|team|@name.agent> [--new "<title>"] [--link <url>] [--file <path>] "<text>" | board team reply <thread> [--to <message>] [--file <path>] "<text>" | board team react <thread> <message> <emoji> [--remove] | board team thread <thread> [--json] [--read] | board team drafts | board team assign <thread> <session> | board team release <thread> | board team listen [off] | board team loop <name|peer-id|team> [<1-100>|default] | board team agents [<name|peer-id>]'
 
 export interface SessionWord {
   key: string
@@ -203,6 +204,41 @@ function targetOf(ctx: Ctx, who: string): string {
   return splitKey(r.key)?.scope ?? ''
 }
 
+/** The peer of a `@name.agent` mention (#832): by the name without its spaces, or the peer id. */
+function peerOfMention(ctx: Ctx, word: string): string {
+  const p = peerOfWord(word, peersOf(ctx.roster))
+  if (!p)
+    throw new Error(printable(`nobody on the team is written @${word}: board team agents lists whom you can address`))
+  return p.peer
+}
+
+/**
+ * `board team agents` (#832): each peer's agents as `@name.code`, with the owner's line about it.
+ * The handles and lines are a peer's words: printed as data, each on its own line.
+ */
+export function directoryLines(peers: Record<string, unknown>[], only: string | null): string {
+  const lines: string[] = []
+  for (const p of peers) {
+    if (only && p.peer !== only) continue
+    const name = typeof p.name === 'string' ? p.name : ''
+    const agents = Array.isArray(p.agents) ? p.agents.filter(isRecord) : []
+    for (const a of agents) {
+      if (typeof a.code !== 'string') continue
+      const about = typeof a.about === 'string' ? `  ${a.about}` : ''
+      lines.push(printable(`@${mentionWord(name)}.${a.code}${about}`))
+    }
+  }
+  if (!lines.length)
+    return only
+      ? 'none of their agents can be addressed from this board'
+      : 'no teammate has an agent this board can address yet'
+  return [
+    ...lines,
+    '',
+    'Write to one: board team post @name.agent "<text>" (a topic of its own), or start a reply with @name.agent.',
+  ].join('\n')
+}
+
 /** Who a scope is called here: `the team`, or the pair's peer by name. */
 function whoOf(ctx: Ctx, scope: string): string {
   if (scope === TEAM) return 'the team'
@@ -316,8 +352,13 @@ export async function teamAgents(op: string, args: string[], ctx: Ctx): Promise<
     const link = flag(flags, '--link')
     const file = fileFlag(flags)
     if (link !== undefined && title === undefined) throw new Error(`usage: ${AGENT_USAGE}`)
-    const [who = '', text = ''] = wordsOf([...flags, ...after], 2, file)
-    const to = targetOf(ctx, who)
+    const [who = '', given = ''] = wordsOf([...flags, ...after], 2, file)
+    // `@name.agent` (#832): that peer's agent, by a handle from `board team agents`; the board
+    // opens a topic of its own for it (or the --new one) and names the agent on the peer's copy.
+    const mention = who.startsWith('@') ? leadingMention(who) : null
+    if (who.startsWith('@') && (!mention || mention.rest)) throw new Error(`usage: ${AGENT_USAGE}`)
+    const to = mention ? peerOfMention(ctx, mention.who) : targetOf(ctx, who)
+    const text = mention ? `${who} ${given}` : given
     const self = await ctx.self()
     const thread = title !== undefined ? { title, ...(link !== undefined && { link }) } : undefined
     const { status, reply } = await call(ctx.webPort, '/api/team/post', {
@@ -329,6 +370,17 @@ export async function teamAgents(op: string, args: string[], ctx: Ctx): Promise<
       ...(file && { file }),
     })
     return said(reply, status, whoOf(ctx, to))
+  }
+  if (op === 'agents') {
+    // The peers' agent directories (#832): whom `@name.agent` reaches, read only.
+    const { flags, after } = cutAtDashes(rest)
+    const words = [...flags, ...after]
+    if (words.length > 1) throw new Error(`usage: ${AGENT_USAGE}`)
+    const only = words[0] === undefined ? null : targetOf(ctx, words[0])
+    if (only === TEAM) throw new Error(`usage: ${AGENT_USAGE}`)
+    const { status, reply } = await call(ctx.webPort, '/api/team/directory')
+    if (!isRecord(reply) || !Array.isArray(reply.peers)) throw new Error(`the board answered ${status}`)
+    return directoryLines(reply.peers.filter(isRecord), only)
   }
   if (op === 'loop') {
     // How many agent messages in a row, both ways, before the next one waits for the owner (#360).

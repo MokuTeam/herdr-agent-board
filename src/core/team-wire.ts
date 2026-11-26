@@ -205,6 +205,20 @@ export const ERROR_CODES = [
 ] as const
 export type ErrorCode = (typeof ERROR_CODES)[number]
 
+/**
+ * A peer's agent addressed directly (#832): a session's handle, its name in lowercase letters,
+ * digits and `-`, at most MAX_CODE long (`code` on the wire). The directory (Message.body.agents)
+ * lists at most MAX_DIRECTORY of them.
+ */
+export const MAX_CODE = 40
+export const MAX_DIRECTORY = 64
+
+/** One agent in a board's directory (#832): its handle, and a line about it (read, not sent yet). */
+export interface DirectoryEntry {
+  code: string
+  about?: string
+}
+
 /** Reaction operations carried in `body.react` (#687). */
 export const REACTION_OPS = ['add', 'remove'] as const
 export type ReactionOp = (typeof REACTION_OPS)[number]
@@ -233,6 +247,10 @@ export interface Message {
    * `file` (#371): only to a peer with `files` and a box, and then `text` may be empty.
    * `work` (#394): a shared thread's entry, only to a peer with `work`, in a topic.
    * `react` (#687): a reaction to a message, only to a peer with `reactions`.
+   * `agents` (#832): the sender's directory of the agents it exposes to this peer, standalone; sent
+   * only to a peer the owner exposed an agent to (an older board drops it as an unknown field).
+   * `at` (#832): the code name of the recipient's agent this copy is addressed to; sent only to a
+   * board whose directory this board holds.
    */
   body: {
     text: string
@@ -244,6 +262,8 @@ export interface Message {
     file?: FileRef
     work?: WorkBody
     react?: ReactBody
+    agents?: DirectoryEntry[]
+    at?: string
   }
 }
 

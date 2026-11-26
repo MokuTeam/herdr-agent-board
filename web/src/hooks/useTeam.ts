@@ -24,6 +24,7 @@ import {
   type AgentsView,
   type DraftLine,
   isAgentsView,
+  isDirectoryList,
   isTeamView,
   isThreadLines,
   isThreadList,
@@ -32,6 +33,7 @@ import {
   isWelcomeList,
   keyParts,
   offersTeam,
+  type PeerDirectory,
   type ServicesChange,
   sendError,
   type TeamView,
@@ -64,6 +66,8 @@ export interface TeamNow {
   drafts: DraftLine[]
   /** What the owner's phone asked and waits for the passkey here (#377); none on a remote page. */
   waiting: Waiting[]
+  /** The peers' agent directories (#832): whom the composer offers after `@`. */
+  directory?: PeerDirectory[]
 }
 
 /**
@@ -138,6 +142,7 @@ const EMPTY: TeamNow = {
   pending: [],
   drafts: [],
   waiting: [],
+  directory: [],
 }
 
 /** The panel's data without React: useTeam draws from it. */
@@ -192,8 +197,16 @@ export function teamSource(deps: TeamDeps): TeamSource {
               .then(w => w.waiting)
               .catch(() => [] as Waiting[])
           : []
+      // The peers' agent directories (#832), asked only while a peer in the roster sent one with an
+      // agent in it; a nicety too: a look that fails offers none.
+      const directory = view.roster.some(p => p.agents)
+        ? await api
+            .get('/api/team/directory', isDirectoryList, { cache: 'no-store' })
+            .then(d => d.peers)
+            .catch(() => [] as PeerDirectory[])
+        : []
       if (mine !== asked) return
-      now.set({ ...now.get(), view, threads, thread, lines, agents, unread, pending, drafts, waiting })
+      now.set({ ...now.get(), view, threads, thread, lines, agents, unread, pending, drafts, waiting, directory })
       // The thread on show, in a page in front, is read: its messages leave the count. A read that
       // fails leaves the count as it is; the panel stays drawn. A message that lands meanwhile moves
       // teamRev, and the page that shows it is the page that read it.

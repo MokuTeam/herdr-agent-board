@@ -849,6 +849,7 @@ export async function startServer({
     version: PLUGIN_VERSION || 'dev',
     onChange: () => {
       board.publish()
+      directorySoon()
       // What waits for the hub goes once it is there; drafts and history files are followed up.
       if (workHub?.on()) void workHub.flush()
     },
@@ -896,6 +897,21 @@ export async function startServer({
     schedule: noticeSchedule,
     log,
   })
+  // The peers' agent directories (#832) follow the team's news (a peer came online, the hub took
+  // one) shortly after, and the board's sessions once a minute (one archived reaches nobody now).
+  // A board that never exposed an agent reads two small files and sends nothing.
+  let directoryTimer: ReturnType<typeof setTimeout> | null = null
+  function directorySoon(): void {
+    if (directoryTimer || !team.view()) return
+    directoryTimer = setTimeout(() => {
+      directoryTimer = null
+      void teamRouter
+        .syncDirectory()
+        .catch(err => log(`team: directory: ${err instanceof Error ? err.message : String(err)}`))
+    }, 1500)
+    directoryTimer.unref?.()
+  }
+  const directoryTick = setInterval(directorySoon, 60_000)
   workHub = createWorkHub({
     cfg,
     team,
@@ -2860,6 +2876,8 @@ export async function startServer({
       clearInterval(poll)
       clearTimeout(selfUpdateResume)
       clearInterval(selfUpdateTick)
+      clearInterval(directoryTick)
+      if (directoryTimer) clearTimeout(directoryTimer)
       housekeeping.close()
       for (const watcher of watchers) watcher.close()
       watchesWatcher?.close()

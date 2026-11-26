@@ -27,6 +27,7 @@ describe('team (#819)', () => {
       'reply',
       'react',
       'wait',
+      'agents',
     ])
     expect(toolRun('team', { op: 'roster' }).program).toBe('board')
   })
@@ -45,6 +46,10 @@ describe('team (#819)', () => {
       'general:anna',
     ])
     expect(argv({ op: 'wait' })).toEqual(['team', 'wait'])
+    // #832: the agents other boards let this one address; one person's after the --.
+    expect(argv({ op: 'agents' })).toEqual(['team', 'agents'])
+    expect(argv({ op: 'agents', to: 'anna ☃' })).toEqual(['team', 'agents', '--', 'anna ☃'])
+    expect(() => argv({ op: 'agents', to: '--all' })).toThrow('is not a to')
     expect(argv({ op: 'wait', timeout: 30, json: true })).toEqual(['team', 'wait', '--timeout', '30', '--json'])
   })
 

@@ -12,16 +12,18 @@ import { type NewTopic, type SendFile, useTeam } from '../../hooks/useTeam.ts'
 import { uploadPlace, useThreadFiles } from '../../hooks/useThreadFiles.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import type { Attachment } from '../../models/composer.ts'
-import type {
-  AgentsChange,
-  AgentsView,
-  DraftLine,
-  ServicesChange,
-  TeamView,
-  ThreadLine,
-  ThreadView,
-  Waiting,
-  Welcome,
+import {
+  type AgentsChange,
+  type AgentsView,
+  type DraftLine,
+  mentionChoices,
+  type PeerDirectory,
+  type ServicesChange,
+  type TeamView,
+  type ThreadLine,
+  type ThreadView,
+  type Waiting,
+  type Welcome,
 } from '../../models/team.ts'
 import { firstUnread } from '../../models/team-chat.ts'
 import { topicWork } from '../../models/work-share.ts'
@@ -135,6 +137,7 @@ export function TeamPanel({ open, onClose, back, focus, onFocused }: TeamPanelPr
         onConfirmWaiting={id => void team.confirmWaiting(id)}
         unread={team.unread}
         agents={team.agents}
+        {...(team.directory && { directory: team.directory })}
         draft={drafts.text(key)}
         topic={topic}
         replyTo={drafts.replyTo(key)}
@@ -248,6 +251,8 @@ export interface TeamBodyProps {
   files?: readonly Attachment[]
   onAddFiles?(files: File[]): void
   onRemoveFile?(id: number): void
+  /** The peers' agent directories (#832): the box offers their agents after `@`. */
+  directory?: readonly PeerDirectory[]
 }
 
 /** The list and the thread on show (or People and agents); which of them a narrow panel shows is `data-pane`. */
@@ -305,6 +310,7 @@ export function TeamBody(props: TeamBodyProps) {
             {...(props.files && { files: props.files })}
             {...(props.onAddFiles && { onAddFiles: props.onAddFiles })}
             {...(props.onRemoveFile && { onRemoveFile: props.onRemoveFile })}
+            {...(props.directory?.length && { mentions: mentionChoices(props.directory) })}
             work={topicWork(props.threads.find(x => x.key === selected))}
           />
         ) : people ? (

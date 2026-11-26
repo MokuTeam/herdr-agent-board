@@ -20,6 +20,7 @@ import { FORK_STRINGS } from './fork-strings.ts'
 import { HELPER_STRINGS } from './helper-strings.ts'
 import { JOURNAL_STRINGS } from './journal-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
+import { MENTION_STRINGS } from './mention-strings.ts'
 import { NODE_STRINGS } from './node-strings.ts'
 import { ONESHOT_STRINGS } from './oneshot-strings.ts'
 import { PRESENCE_STRINGS } from './presence-strings.ts'
@@ -1575,6 +1576,8 @@ for (const code of Object.keys(VERIFY_STRINGS) as Lang[]) Object.assign(STRINGS[
 for (const code of Object.keys(SECRET_STRINGS) as Lang[]) Object.assign(STRINGS[code], SECRET_STRINGS[code])
 // And the peer network (#231).
 for (const code of Object.keys(TEAM_STRINGS) as Lang[]) Object.assign(STRINGS[code], TEAM_STRINGS[code])
+// And addressing a peer's agent (#832).
+for (const code of Object.keys(MENTION_STRINGS) as Lang[]) Object.assign(STRINGS[code], MENTION_STRINGS[code])
 // And the board's database and its backup (#233).
 for (const code of Object.keys(BACKUP_STRINGS) as Lang[]) Object.assign(STRINGS[code], BACKUP_STRINGS[code])
 // And time tracking on it (#233).
