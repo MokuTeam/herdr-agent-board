@@ -66,6 +66,15 @@ default_profile_json() {
   ' "$1" "$2"
 }
 
+# fix_bridge_scripts <pkg>: ensures every dist/*.sh in the mokutab-bridge package is executable
+# (npm install --ignore-scripts skips postinstall, and 2.4.0 shipped dist/run_host.sh without +x).
+fix_bridge_scripts() {
+  local f
+  for f in "$1"/dist/*.sh; do
+    if [ -f "$f" ]; then chmod +x "$f"; fi
+  done
+}
+
 # Sourced with INSTALL_SH_FUNCTIONS_ONLY=1 (the repository's tests), the script stops after its functions.
 if [ "${INSTALL_SH_FUNCTIONS_ONLY:-}" = 1 ]; then return 0 2>/dev/null || exit 0; fi
 
@@ -201,7 +210,7 @@ if [ "$(as_user node -p "require('$PKG/package.json').version" 2>/dev/null || tr
   as_user mkdir -p "$MT"
   as_user npm install --prefix "$MT" --ignore-scripts --no-fund --no-audit "@mokuhub/mokutab-bridge@$MOKUTAB_BRIDGE_VERSION" >/dev/null
 fi
-chmod +x "$PKG/dist/run_host.sh"
+fix_bridge_scripts "$PKG"
 printf '%s\n' "$NODE_BIN" | put "$PKG/dist/node_path.txt" 0644
 FIRST=""
 for spec in $PROFILES; do

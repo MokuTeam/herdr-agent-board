@@ -50,7 +50,7 @@ import {
   writeLanesSeen,
 } from '../adapters/node-store.ts'
 import { readNsNotifyPrefs, updateNsNotifyPrefs } from '../adapters/ns-sessions-prefs.ts'
-import { createNsTokens, nsBridgeDirs } from '../adapters/ns-store-tokens.ts'
+import { createNsTokens, NS_TOKEN_RESCAN_MS, nsBridgeDirs } from '../adapters/ns-store-tokens.ts'
 import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
 import { knobMs, pace, pause } from '../adapters/pacing.ts'
@@ -442,6 +442,8 @@ export interface ServerOptions {
   presenceDesktop?: () => boolean
   /** The MokuTab bridge data dirs that get a NetSuite store token (#860, adapters/ns-store-tokens.ts); tests hand in their own. */
   nsBridgeDirs?: () => string[]
+  /** How often the board rescans MokuTab bridge state dirs for ns-store-token (60 s); tests ask sooner. */
+  nsTokenRescanMs?: number
 }
 
 /** The forms that add a device to this board (Settings → Devices), a master's alone. */
@@ -461,13 +463,14 @@ export async function startServer({
   presenceIntervalMs,
   presenceDesktop,
   nsBridgeDirs: nsDirs,
+  nsTokenRescanMs,
 }: ServerOptions): Promise<BoardServer> {
   const { cfg, log } = deps
   // The NetSuite session store (#860): values in this memory only; the master's, a pure node relays.
   const nsStore = createNsStore()
   // Each MokuTab bridge state dir here gets <dir>/ns-store-token (its URL on line 2 when not the
-  // default), written once the board listens (below) and again when a token does not match
-  // (adapters/ns-store-tokens.ts).
+  // default), written once the board listens (below), rescanned periodically, and rescanned when a
+  // token does not match (adapters/ns-store-tokens.ts).
   const nsTokens = createNsTokens({
     dirs: nsDirs ?? (() => nsBridgeDirs(homedir())),
     url: () => `http://127.0.0.1:${server.port ?? port}/api/ns-sessions`,
@@ -2908,6 +2911,7 @@ export async function startServer({
   const selfUpdateSays = (err: unknown): void => log(`self-update: ${err instanceof Error ? err.message : String(err)}`)
   const selfUpdateResume = setTimeout(() => void selfUpdate.resume().catch(selfUpdateSays), 10_000)
   const selfUpdateTick = setInterval(() => void selfUpdate.tick().catch(selfUpdateSays), 60_000)
+  nsTokens.start(nsTokenRescanMs ?? knobMs('BOARD_NS_TOKEN_RESCAN_MS', NS_TOKEN_RESCAN_MS))
   const watchers = [
     watchFolder(cards, 150, refresh, log),
     // Entries added or cancelled by agents (`board remind`), and runs the scheduler made.
@@ -3132,6 +3136,7 @@ export async function startServer({
     // (a new host, say) here, and the listener's port through its onChange.
     refresh: runRefresh,
     async close() {
+      nsTokens.stop()
       nsStore.clear()
       clearInterval(poll)
       clearTimeout(selfUpdateResume)

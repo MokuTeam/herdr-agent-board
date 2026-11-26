@@ -6,7 +6,7 @@
 // in either board's log, payload, journal or list. The link down: 503 store_unavailable. A board
 // without node keeps a store of its own and writes nothing where there is no MokuTab.
 import { expect, test } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { nsFingerprint } from '../../src/core/ns-sessions.ts'
 import { serveBoard } from '../support/board-server.ts'
@@ -263,4 +263,62 @@ test('a board without node keeps its own store, and writes nothing where there i
   expect(existsSync(join(box.env.HOME as string, 'browser'))).toBe(false)
   expect((await call(`${url}/api/ns-sessions`, 'POST', 'entry', { body: entry(SECRET, 'laptop') })).status).toBe(401)
   expect((await call(`${url}/api/ns-sessions`, 'GET', 'list')).json).toEqual({ ok: true, entries: [], notify: {} })
+}, 30_000)
+
+test('a running board rescans bridge dirs periodically, writing new dirs and missing token files', async () => {
+  const box = await sandbox()
+  const home = box.env.HOME as string
+  const alpha = join(home, 'browser', 'state', 'alpha', 'state', 'mcp-chrome-bridge')
+  const beta = join(home, 'browser', 'state', 'beta', 'state', 'mcp-chrome-bridge')
+  mkdirSync(alpha, { recursive: true })
+  writeFileSync(join(alpha, 'default-profile.json'), '{"profile":"alpha"}\n')
+
+  const { url } = await serveBoard(box, { language: 'en' }, { BOARD_NS_TOKEN_RESCAN_MS: '50' })
+  const base = `${url}/api/ns-sessions`
+  const readToken = (dir: string): { token: string; url: string } => {
+    const [token = '', tokUrl = 'http://127.0.0.1:12422/api/ns-sessions'] = readFileSync(
+      join(dir, 'ns-store-token'),
+      'utf8',
+    )
+      .split('\n')
+      .filter(Boolean)
+    return { token, url: tokUrl }
+  }
+
+  expect(existsSync(join(alpha, 'ns-store-token'))).toBe(true)
+  const alphaFirst = readToken(alpha)
+  expect(alphaFirst.token).toMatch(/^[A-Za-z0-9_-]{43}$/)
+  expect(alphaFirst.url).toBe(base)
+  const alphaMtime = statSync(join(alpha, 'ns-store-token')).mtimeMs
+
+  // A new profile dir appearing while the board is running receives its token on the next rescan.
+  mkdirSync(beta, { recursive: true })
+  writeFileSync(join(beta, 'default-profile.json'), '{"profile":"beta"}\n')
+  const betaToken = await until('beta gets ns-store-token', async () =>
+    existsSync(join(beta, 'ns-store-token')) ? readToken(beta) : null,
+  )
+  expect(betaToken.token).toMatch(/^[A-Za-z0-9_-]{43}$/)
+  expect(betaToken.url).toBe(base)
+  const pub = await until('beta token accepted by board', async () => {
+    const r = await call(base, 'POST', 'entry', { body: entry(SECRET, 'server-2'), token: betaToken.token })
+    return r.status === 200 ? r : null
+  })
+  expect(pub.json).toMatchObject({ ok: true, stored: true })
+  // Existing token in alpha is kept untouched.
+  expect(readToken(alpha).token).toBe(alphaFirst.token)
+  expect(statSync(join(alpha, 'ns-store-token')).mtimeMs).toBe(alphaMtime)
+
+  // Deleting alpha's token file causes the next rescan to rewrite it.
+  rmSync(join(alpha, 'ns-store-token'))
+  const alphaRewritten = await until('alpha ns-store-token rewritten', async () =>
+    existsSync(join(alpha, 'ns-store-token')) ? readToken(alpha) : null,
+  )
+  expect(alphaRewritten.token).toMatch(/^[A-Za-z0-9_-]{43}$/)
+  expect(alphaRewritten.token).not.toBe(alphaFirst.token)
+  const listNew = await until('rewritten alpha token accepted', async () => {
+    const r = await call(base, 'GET', 'list', { token: alphaRewritten.token })
+    return r.status === 200 ? r : null
+  })
+  expect(listNew.json).toMatchObject({ ok: true })
+  expect((await call(base, 'GET', 'list', { token: alphaFirst.token })).status).toBe(401)
 }, 30_000)
