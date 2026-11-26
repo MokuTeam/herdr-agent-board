@@ -10,6 +10,7 @@ import { readCard } from '../../src/adapters/cards.ts'
 import { getDecision } from '../../src/adapters/decision-store.ts'
 import { createDeviceStore } from '../../src/adapters/node-store.ts'
 import { getEntry, listEntries } from '../../src/adapters/schedule-store.ts'
+import { entriesOf, threadByKey } from '../../src/adapters/work-thread-store.ts'
 import { type AskSpec, cardDecisionOf, heldByMaster, masterHeld } from '../../src/core/decisions.ts'
 import { useLanguage } from '../../src/core/lang.ts'
 import { relayedDecisions, relayedSessionKey } from '../../src/core/master-relay.ts'
@@ -30,7 +31,7 @@ import {
   withDecisionsDb,
 } from '../../src/services/decisions.ts'
 import type { Link } from '../../src/services/nodes/link.ts'
-import { createUplinkRunner } from '../../src/services/nodes/uplink.ts'
+import { createUplinkRunner, type UplinkRunnerOptions } from '../../src/services/nodes/uplink.ts'
 import { isolatedHome } from '../support/env.ts'
 import { until } from '../support/sandbox.ts'
 
@@ -118,7 +119,12 @@ function streamOf(calls: unknown[], signal?: AbortSignal | null): Response {
 }
 
 /** The master's runner with these node calls on its first stream; the results it posted, by call id. */
-async function master(cfg: Record<string, unknown>, sent: unknown[], want: number) {
+async function master(
+  cfg: Record<string, unknown>,
+  sent: unknown[],
+  want: number,
+  over: Partial<UplinkRunnerOptions> = {},
+) {
   const dir = isolatedHome()
   const posted: { id: string; body: UplinkResult }[] = []
   let streams = 0
@@ -145,6 +151,7 @@ async function master(cfg: Record<string, unknown>, sent: unknown[], want: numbe
     cfg: { port: 1, ...cfg } as never,
     log: () => {},
     store: createDeviceStore({ dir: join(dir, 'nodes') }),
+    ...over,
   })
   link.online()
   await until(() => posted.length >= want, 10_000)
@@ -432,6 +439,44 @@ describe("the wire and the node's page", () => {
     expect(readCard(DEV)?.decision).toBeUndefined()
     expect(readCard(DEV)?.ask).toBeUndefined()
     expect(listEntries()).toEqual([])
+  })
+
+  test('if settling the decisions DB throws after postEntry, the node post still succeeds and returns settled (#844)', async () => {
+    const ask = {
+      id: 'na-throw',
+      cmd: 'thread',
+      argv: ['ask', 'atlas-1', 'Press Send?', '--option', 'Send', '--option', 'Cancel'],
+      session: S1,
+      lane: null,
+      files: [],
+    }
+    const settle = {
+      id: 'ns-throw',
+      cmd: 'thread',
+      argv: ['post', 'atlas-1', '--settle', 'sent by itself'],
+      session: S1,
+      lane: null,
+      files: [],
+    }
+    let calls = 0
+    const results = await master({ decisions: true, threads: true }, [ask, settle], 2, {
+      settleThreadDecisions: () => {
+        calls++
+        throw new Error('database is locked')
+      },
+    })
+    const [settled] = results('ns-throw')
+    expect(calls).toBe(1)
+    expect(settled?.code).toBe(0)
+    expect(settled?.err).toEqual([])
+    expect(settled?.out[0]).toMatch(/^ok · atlas-1\b/)
+    expect(settled?.settled?.question).toBe('Press Send?')
+    expect(settled?.settled?.thread).toBeTruthy()
+    const entries = withDecisionsDb(db => {
+      const head = threadByKey(db, 'atlas-1')
+      return head ? entriesOf(db, head.id) : []
+    })
+    expect(entries.some(e => e.text === 'sent by itself')).toBe(true)
   })
 
   test("the node's page names its own sessions by bare keys: the master reads them as that device's; another machine's key stays", () => {

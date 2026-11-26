@@ -148,6 +148,8 @@ export interface UplinkRunnerOptions {
     args: readonly string[],
     ctx: { cfg: Config; out: (l: string) => void; err: (l: string) => void },
   ) => number
+  /** Tests: settles open thread decisions when a node thread post/done settles an ask. */
+  settleThreadDecisions?: (threadId: string, now: number, o: { session?: string; by?: string }) => void
 }
 
 /** A stream that ended is asked for again after this long (paced), while the link is online. */
@@ -563,13 +565,15 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
           ? {
               settleAsk: async info => {
                 if (decisionsConfig(o.cfg.decisions)) {
-                  const svc = await import('../decisions.ts')
-                  svc.withDecisionsDb(db =>
-                    svc.settleThreadDecisions(db, info.thread, Date.now(), {
-                      ...(info.session && { session: info.session }),
-                      by: 'agent',
-                    }),
-                  )
+                  try {
+                    const opts = { ...(info.session && { session: info.session }), by: 'agent' }
+                    if (o.settleThreadDecisions) {
+                      o.settleThreadDecisions(info.thread, Date.now(), opts)
+                    } else {
+                      const svc = await import('../decisions.ts')
+                      svc.withDecisionsDb(db => svc.settleThreadDecisions(db, info.thread, Date.now(), opts))
+                    }
+                  } catch {}
                 }
                 if (!info.session || info.session === key)
                   settledCard = { thread: info.thread, ...(info.question && { question: info.question }) }
