@@ -39,6 +39,9 @@ import { type Clock, realClock } from '../tunnel.ts'
 import type { Link } from './link.ts'
 import type { NodeLinks } from './links.ts'
 
+/** Why a machine is left for the next time, not stopped: it moved while the round ran, or MokuTab is saving there. */
+export const AGAIN = new Set(['changed', 'busy'])
+
 /** One machine as a round sees it: the master's own folder or a node's through its door. */
 export interface FnReplica {
   id: string
@@ -53,7 +56,7 @@ export interface FnRound {
   device: string
   /** What it did: `current`, `seed`, `take` (its commits went into the registry), `give`, `clone`, `skip`, `stop`. */
   did: string
-  /** Why it stopped, or why it was skipped: `no-folder`, `older`, `offline`, `not-repo`, `branch`, `dirty`, `diverged`, `refused`, `changed`, `git`. */
+  /** Why it stopped, or why it was skipped: `no-folder`, `older`, `offline`, `not-repo`, `branch`, `dirty`, `diverged`, `refused`, `changed`, `busy` (MokuTab saving there), `git`. */
   why?: string
   /** Its commit before and after. */
   from?: string
@@ -204,9 +207,9 @@ export function createFnSync(o: FnSyncOptions): FnSync {
       if (action.do === 'fetch' || action.do === 'seed') {
         await hubInit(hub)
         const bytes = await r.bundle(hubHead ? [hubHead.head] : [])
-        if (!bytes || look.state !== 'repo') return stop('changed')
+        if (!bytes || look.state !== 'repo') return { ...out, why: 'changed' }
         const got = await fetchBundle(hub, bytes, look.branch, `refs/machines/${refId(r.id)}`)
-        if (got !== look.head) return stop('changed')
+        if (got !== look.head) return { ...out, why: 'changed' }
         if (action.do === 'seed') {
           const refused = await refusals(got, null)
           if (refused.length) return stop('refused', { refused })
@@ -235,7 +238,8 @@ export function createFnSync(o: FnSyncOptions): FnSync {
         const bytes = await bundleOf(hub, hubHead.branch, expect ? [expect] : [])
         if (!bytes) return stop('git')
         const got = await r.take(bytes, hubHead.branch, expect)
-        if (!got.ok) return stop(got.why)
+        // MokuTab saving there now (its lock), or the folder moved meanwhile: next time, no stop.
+        if (!got.ok) return AGAIN.has(got.why) ? { ...out, why: got.why } : stop(got.why)
         o.log(`functions sync: ${r.id} now at ${got.head.slice(0, 8)}`)
         return fine(action.do, got.head)
       }
@@ -264,7 +268,7 @@ export function createFnSync(o: FnSyncOptions): FnSync {
       }
     if (!dryRun) save()
     return {
-      ok: rounds.every(r => r.did !== 'stop' && r.why !== 'offline'),
+      ok: rounds.every(r => r.did !== 'stop' && !AGAIN.has(r.why ?? '') && r.why !== 'offline'),
       dryRun,
       branch: s.branch,
       head: s.head,
@@ -376,6 +380,8 @@ export interface FnSyncRunnerOptions {
   tickMs?: number
   /** A change waits this long for the ones after it, so a save of several files is one sync. */
   settleMs?: number
+  /** A machine left for next time (`busy`, `changed`) is asked again after this. */
+  retryMs?: number
 }
 
 /**
@@ -386,10 +392,12 @@ export function createFnSyncRunner(o: FnSyncRunnerOptions): { kick(): void; clos
   const clock = o.clock ?? realClock
   const tickMs = o.tickMs ?? 15_000
   const settleMs = o.settleMs ?? 3000
+  const retryMs = o.retryMs ?? 20_000
   let timer: unknown = null
   let localStamp: string | undefined
   const wasOnline = new Map<string, boolean>()
   let lastFull = clock.now()
+  let again: unknown = null
   const kick = (): void => {
     if (timer) return
     timer = clock.setTimeout(() => {
@@ -404,6 +412,12 @@ export function createFnSyncRunner(o: FnSyncRunnerOptions): { kick(): void; clos
             const st = o.links.link(round.device)?.view().status as { functions?: string } | null | undefined
             if (round.did !== 'stop' && st?.functions) o.sync.setStamp(round.device, st.functions)
           }
+          // A machine left for next time (MokuTab saving there) is asked again soon, not in 30 minutes.
+          if (!again && r.rounds.some(x => AGAIN.has(x.why ?? '')))
+            again = clock.setTimeout(() => {
+              again = null
+              kick()
+            }, retryMs)
         })
         .catch(err => o.log(`functions sync: ${err instanceof Error ? err.message : String(err)}`))
     }, settleMs)
@@ -439,6 +453,7 @@ export function createFnSyncRunner(o: FnSyncRunnerOptions): { kick(): void; clos
       off()
       clock.clearInterval(interval)
       if (timer) clock.clearTimeout(timer)
+      if (again) clock.clearTimeout(again)
     },
   }
 }

@@ -3310,6 +3310,7 @@ async function nodesSyncFunctions(webPort: number, dryRun: boolean): Promise<voi
     diverged: 'its commits went another way: nothing written, kept in the hub as refs/conflicts/<machine>',
     refused: 'its commits bring files the board does not carry',
     changed: 'it changed while the sync ran: next time',
+    busy: 'MokuTab is saving a function there: next time',
     git: 'git failed there',
   }
   for (const round of r.rounds.filter(isRecord)) {

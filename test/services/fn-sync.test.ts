@@ -1,12 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { git, refHead } from '../../src/adapters/fn-git.ts'
 import { decide, fnSyncCheck } from '../../src/core/fn-sync.ts'
 import { nodeStatusOf } from '../../src/core/nodes.ts'
 import { nodeDoorRoutes } from '../../src/server/routes/node.ts'
-import { createNodeFunctions, functionsDir } from '../../src/services/node/fn-sync.ts'
+import { createNodeFunctions, FN_SAVE_LOCK, functionsDir, withFnSaveLock } from '../../src/services/node/fn-sync.ts'
 import {
   createFnSync,
   type FnReplica,
@@ -228,13 +228,13 @@ describe('functions sync through the master', () => {
       ReturnType<typeof machine>,
     ]
     const before = await master.head()
-    laptop.put('centium/leak.yaml', 'token: ghp_abcdefghijklmnopqrstuvwxyz0123456789\n')
+    laptop.put('client-a/leak.yaml', 'token: ghp_abcdefghijklmnopqrstuvwxyz0123456789\n')
     await laptop.commit('leak')
     const r = await m.sync.syncAll()
     expect(r.rounds.find(x => x.device === 'laptop')).toMatchObject({
       did: 'stop',
       why: 'refused',
-      refused: [{ path: 'centium/leak.yaml', why: 'secret: a GitHub token' }],
+      refused: [{ path: 'client-a/leak.yaml', why: 'secret: a GitHub token' }],
     })
     expect(await master.head()).toBe(before)
     expect(await desk.head()).toBe(before)
@@ -362,9 +362,15 @@ describe('the node status', () => {
     expect(nodeStatusOf({ ...status, functions: 'not a stamp' })?.functions).toBeUndefined()
   })
 
-  test('the folder is MOKUTAB_DATA_DIR/functions, else ~/.mokutab/functions', () => {
-    expect(functionsDir({ MOKUTAB_DATA_DIR: '/data/mt' }, '/home/u')).toBe(join('/data/mt', 'functions'))
-    expect(functionsDir({}, '/home/u')).toBe(join('/home/u', '.mokutab', 'functions'))
+  test('the folder as MokuTab finds it: MOKUTAB_FN_DIR, else <MOKUTAB_DATA_DIR or ~/.mokutab>/functions, else 1.x', () => {
+    const none = (): boolean => false
+    expect(functionsDir({ MOKUTAB_FN_DIR: '/fn', MOKUTAB_DATA_DIR: '/data/mt' }, '/home/u', none)).toBe('/fn')
+    expect(functionsDir({ MOKUTAB_DATA_DIR: '/data/mt' }, '/home/u', none)).toBe(join('/data/mt', 'functions'))
+    expect(functionsDir({}, '/home/u', none)).toBe(join('/home/u', '.mokutab', 'functions'))
+    // A 1.x machine not yet moved over: its old folder, while the new one is not there.
+    const legacy = join('/home/u', '.workatomcp', 'functions')
+    expect(functionsDir({}, '/home/u', p => p === legacy)).toBe(legacy)
+    expect(functionsDir({}, '/home/u', () => true)).toBe(join('/home/u', '.mokutab', 'functions'))
   })
 })
 
@@ -474,6 +480,161 @@ describe('when a sync runs by itself', () => {
     clock.advance(1200)
     await Promise.resolve()
     expect(calls).toBe(4) // the master's own folder moved
+    runner.close()
+  })
+})
+
+describe("MokuTab's own save lock", () => {
+  test('a save in progress there (a fresh lock): that machine waits for next time, its lock untouched, no stop', async () => {
+    const m = await seeded(['server-2', 'laptop', 'desk'], ['laptop', 'desk'])
+    const [master, laptop, desk] = m.ms as [
+      ReturnType<typeof machine>,
+      ReturnType<typeof machine>,
+      ReturnType<typeof machine>,
+    ]
+    const before = await desk.head()
+    const lock = join(desk.dir, FN_SAVE_LOCK)
+    writeFileSync(lock, '4242')
+    laptop.put('netsuite/login.yaml', 'name: netsuite.login\nversion: 2\n')
+    const c = await laptop.commit('netsuite.login v2')
+    const r = await m.sync.syncAll()
+    expect(r.ok).toBe(false)
+    expect(r.rounds.find(x => x.device === 'desk')).toMatchObject({ did: 'skip', why: 'busy' })
+    expect(await master.head()).toBe(c)
+    expect(await desk.head()).toBe(before)
+    expect(readFileSync(lock, 'utf8')).toBe('4242')
+    const state = JSON.parse(readFileSync(join(m.root, 'state', 'fn-sync', 'state.json'), 'utf8'))
+    expect(state.machines.desk?.stop).toBeUndefined()
+    // The save is done: the next sync brings it, and leaves no lock of its own behind.
+    rmSync(lock)
+    const again = await m.sync.syncAll()
+    expect(again.ok).toBe(true)
+    expect(await desk.head()).toBe(c)
+    expect(existsSync(lock)).toBe(false)
+  })
+
+  test('a lock older than 60 s was left behind: the board takes it as MokuTab would, and removes it after', async () => {
+    const m = await seeded(['server-2', 'laptop'], ['laptop'])
+    const [master, laptop] = m.ms as [ReturnType<typeof machine>, ReturnType<typeof machine>]
+    const lock = join(laptop.dir, FN_SAVE_LOCK)
+    writeFileSync(lock, '4242')
+    const old = new Date(Date.now() - 120_000)
+    utimesSync(lock, old, old)
+    master.put('outlook/mail.send.yaml', 'v: 1\n')
+    const c = await master.commit('mail.send')
+    expect((await m.sync.syncAll()).ok).toBe(true)
+    expect(await laptop.head()).toBe(c)
+    expect(existsSync(lock)).toBe(false)
+  })
+
+  test('held with an exclusive create while the fast-forward runs; a lock taken meanwhile is never removed', async () => {
+    const dir = scratch()
+    const lock = join(dir, FN_SAVE_LOCK)
+    const inside = await withFnSaveLock(dir, async () => {
+      expect(readFileSync(lock, 'utf8')).toStartWith('agent-board ')
+      // Somebody else's while we hold it: the exclusive create refuses.
+      expect(await withFnSaveLock(dir, async () => 'second')).toBe('busy')
+      return 'first'
+    })
+    expect(inside).toBe('first')
+    expect(existsSync(lock)).toBe(false)
+    // Went stale under us and a save took it: it stays the save's.
+    await withFnSaveLock(dir, async () => {
+      writeFileSync(lock, 'bridge 7')
+    })
+    expect(readFileSync(lock, 'utf8')).toBe('bridge 7')
+  })
+
+  test('an empty folder holding only the lock still counts as empty', async () => {
+    const dir = scratch()
+    writeFileSync(join(dir, FN_SAVE_LOCK), '1')
+    expect(await createNodeFunctions({ dir }).look()).toEqual({ state: 'empty' })
+  })
+})
+
+describe('what the secret check lets through', () => {
+  test('vault item ids, NetSuite hosts and client URLs in a function travel', async () => {
+    const m = await seeded(['server-2', 'laptop'], ['laptop'])
+    const [master, laptop] = m.ms as [ReturnType<typeof machine>, ReturnType<typeof machine>]
+    laptop.put(
+      'netsuite/login.yaml',
+      [
+        'name: netsuite.login',
+        'vault: { item: 3f2b8c1e-9a4d-4e6b-8f0a-1c2d3e4f5a6b }',
+        'url: https://1234567-sb1.app.netsuite.com/app/center/card.nl',
+        'sso: https://system.netsuite.com/pages/customerlogin.jsp',
+        'portal: https://portal.example-client.test/login?next=%2Fhome',
+        '',
+      ].join('\n'),
+    )
+    const c = await laptop.commit('netsuite.login: vault item')
+    const r = await m.sync.syncAll()
+    expect(r.ok).toBe(true)
+    expect(r.rounds.flatMap(x => x.refused)).toEqual([])
+    expect(await master.head()).toBe(c)
+  })
+})
+
+describe('a machine left for next time', () => {
+  test('is asked again soon, not in 30 minutes', async () => {
+    let t = 0
+    let next = 1
+    const timers = new Map<number, { at: number; fn: () => void; every?: number }>()
+    const clock = {
+      now: () => t,
+      setTimeout: (fn: () => void, ms: number) => {
+        timers.set(next, { at: t + ms, fn })
+        return next++
+      },
+      clearTimeout: (h: unknown) => timers.delete(h as number),
+      setInterval: (fn: () => void, ms: number) => {
+        timers.set(next, { at: t + ms, fn, every: ms })
+        return next++
+      },
+      clearInterval: (h: unknown) => timers.delete(h as number),
+    }
+    const advance = async (ms: number): Promise<void> => {
+      const end = t + ms
+      for (;;) {
+        const due = [...timers.entries()].filter(([, x]) => x.at <= end).sort((a, b) => a[1].at - b[1].at)[0]
+        if (!due) break
+        const [id, x] = due
+        t = x.at
+        if (x.every) x.at += x.every
+        else timers.delete(id)
+        x.fn()
+        for (let i = 0; i < 5; i++) await Promise.resolve()
+      }
+      t = end
+    }
+    let calls = 0
+    const sync = {
+      syncAll: async () => {
+        calls++
+        const rounds = calls === 1 ? [{ device: 'laptop', did: 'skip', why: 'busy', refused: [] }] : []
+        return { ok: calls > 1, dryRun: false, branch: 'master', head: null, rounds, at: 0 }
+      },
+      stamp: () => undefined,
+      setStamp: () => {},
+    }
+    const { createFnSyncRunner } = await import('../../src/services/nodes/fn-sync.ts')
+    const runner = createFnSyncRunner({
+      sync,
+      local: { stamp: () => undefined } as never,
+      nodes: () => null,
+      links: { link: () => null, onChange: () => () => {} } as never,
+      log: () => {},
+      clock,
+      tickMs: 1000,
+      settleMs: 100,
+      retryMs: 5000,
+    })
+    await advance(200)
+    expect(calls).toBe(1)
+    await advance(6000)
+    expect(calls).toBe(2)
+    await advance(60_000)
+    expect(calls).toBe(2)
     runner.close()
   })
 })

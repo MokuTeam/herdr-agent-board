@@ -65,9 +65,11 @@ The profiles are a setting: a node's own list goes in `PROFILES` when the script
   `~/.mokutab/functions`, so one copy serves every profile. A function that never ran OK on a machine is
   a hidden draft there; the laptop's `fn-state.json`, put into each profile's state once, carries that over.
 - The functions stay in step across the owner's machines through the master (#864), by themselves: the
-  folder is MokuTab's git repository, and the master keeps a bare hub of it in its board state
-  (`fn-sync/hub.git`). Commits travel as git bundles over the node link, authors and all; a machine
-  only fast-forwards, with its tracked files clean. Changes not committed, another branch checked
+  folder (`MOKUTAB_FN_DIR`, else `<MOKUTAB_DATA_DIR or ~/.mokutab>/functions`, else a 1.x machine's
+  `~/.workatomcp/functions`) is MokuTab's git repository, and the master keeps a bare hub of its
+  checked-out branch in its board state (`fn-sync/hub.git`); other local branches stay local. Commits
+  travel as git bundles over the node link, authors and all; a machine only fast-forwards, with its
+  tracked files clean, while holding MokuTab's `.fn-save.lock` (a save in progress there is waited for). Changes not committed, another branch checked
   out, or commits that went another way than the others' stop the sync for that machine and nothing
   is written there; a diverged commit is kept in the hub as `refs/conflicts/<machine>`. A commit
   bringing a file the board's secret check flags, or one over 256 KB, is refused with its path. It
