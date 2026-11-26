@@ -193,6 +193,17 @@ test('registered in the panel, it posts in its lane as the owner agent, is held 
       }),
     ),
   ).toEqual({ threads: [], waited: 1 })
+  // The role command uses the same guarded Team setting as the panel and updates the live card.
+  expect(await teamAgents('mark-master', [], ctx(CLAUDE))).toBe('ok · marked as master')
+  const marked = await waitFor(
+    async () => ((await (await fetch(`${url}/api/board`)).json()) as { items: (Card & { teamMaster?: true })[] }).items,
+    items => items.some(i => i.key === CLAUDE && i.teamMaster === true),
+    'the marked master card',
+  )
+  expect(marked.find(i => i.key === 'service-juno')).not.toHaveProperty('teamMaster')
+  expect(await teamAgents('mark-master', ['off'], ctx(CLAUDE))).toBe('ok · master flag removed')
+  expect((await post(url, '/api/team/agents', { master: { key: 'absent', on: true } })).status).toBe(400)
+
   annaClient.close()
 })
 
@@ -257,6 +268,14 @@ test('with "Confirm with a passkey" on, adding a service agent waits for the own
   expect(await confirm(add.id as string)).toEqual([200, { ok: true, done: true }])
   const [, on] = await answer(post(url, '/api/team/passkeys', { op: 'on' }))
   expect(await confirm(on.id as string)).toEqual([200, { ok: true, done: true }])
+
+  expect(await answer(post(url, '/api/team/agents', { mastersOnly: true }))).toEqual([200, { ok: true }])
+  const [widened, widening] = await answer(post(url, '/api/team/agents', { mastersOnly: false }))
+  expect(widened).toBe(428)
+  const policy = async () => (await (await fetch(`${url}/api/team/agents`)).json()) as Reply
+  expect((await policy()).mastersOnly).toBe(true)
+  expect(await confirm(widening.id as string)).toEqual([200, { ok: true, done: true }])
+  expect(await policy()).not.toHaveProperty('mastersOnly')
 
   // A wrong lane is said at once; a good one waits for the passkey, and nothing is added meanwhile.
   expect(await answer(post(url, '/api/team/services', { add: { name: 'Juno', lane: 'nowhere' } }))).toEqual([

@@ -4,6 +4,7 @@ import { existsSync, statSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { localAgyLimits } from '../adapters/agy-limits.ts'
 import { readArchiveLog } from '../adapters/archive-store.ts'
+import { allCards } from '../adapters/cards.ts'
 import { readUsageFile } from '../adapters/claude-home.ts'
 import { createEdgeLog, type EdgeLog } from '../adapters/edge-log.ts'
 import { FILE_TOKEN } from '../adapters/files.ts'
@@ -49,6 +50,7 @@ import type { RemoteView } from '../core/remote.ts'
 import { heldByDevice, type ScheduleEntry } from '../core/schedule-rules.ts'
 import type { SetupSummary } from '../core/setup.ts'
 import { spawnLimitsOf } from '../core/spawn-limits.ts'
+import { teamConfig } from '../core/team.ts'
 import { todosConfig } from '../core/todos.ts'
 import { turnResumeConfig } from '../core/turn-resume.ts'
 import type { Item } from '../core/types.ts'
@@ -403,9 +405,17 @@ export function createBoardState({
     // A node's own cards show its questions with options as its master holds them (#784).
     const fromMaster = masterDecisions?.() ?? null
     const list = fromMaster ? fromMaster.items(mine) : mine
+    // The owner's Team directory marks node cards in the master's card store.
+    const teamCards = others && teamConfig(cfg.team) ? allCards() : null
     // Another device's cards carry their tasks only while this board's config turns them on, as its own.
     const theirs = nodeDecisions(
-      others?.items.map(({ todos: own, ...rest }) => (todos && own ? { ...rest, todos: own } : rest)),
+      others?.items.map(({ todos: own, ...rest }) => {
+        if (teamCards) {
+          if (teamCards.get(rest.key)?.teamMaster === true) rest.teamMaster = true
+          else delete rest.teamMaster
+        }
+        return todos && own ? { ...rest, todos: own } : rest
+      }),
     )
     // A call agent started for a cross-device session (#618, #700) has call.parent naming that
     // card: inherit its parent's lane/workspace/title when unset and sit right beside the parent card.

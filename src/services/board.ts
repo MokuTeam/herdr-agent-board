@@ -539,6 +539,7 @@ export async function collect(
       autoName,
       category,
       categorySet: !!card.category,
+      ...(card.teamMaster === true && { teamMaster: true as const }),
       doing,
       // A card written before doingAt (#321): its last change, the latest the doing can be from.
       doingAt: card.doing ? (card.doingAt ?? card.updatedAt ?? null) : doing && call ? call.updated : null,

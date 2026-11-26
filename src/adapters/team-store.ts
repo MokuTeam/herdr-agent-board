@@ -793,6 +793,8 @@ export interface PeerAgents {
   loop?: number
 }
 export interface AgentSettings {
+  /** Limit direct peer addressing to marked masters (#867). Absent on existing boards. */
+  mastersOnly?: true
   /** The owner's global off: overrides every peer. */
   off: boolean
   /** The session that gets notices of new threads and of threads nobody handles. */
@@ -832,6 +834,7 @@ export function changeAgents<R>(fn: (s: AgentSettings) => R): R {
 function readAgentsFrom(f: AgentsFile): AgentSettings {
   return {
     off: f.off === true,
+    ...(f.mastersOnly === true && { mastersOnly: true }),
     listener: isRecord(f.listener) && typeof f.listener.key === 'string' ? f.listener : null,
     peers: bare(f.peers),
     paused: bare(isRecord(f.paused) ? (f.paused as Record<string, number>) : {}),

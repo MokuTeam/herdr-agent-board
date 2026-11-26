@@ -292,7 +292,7 @@ button.team-quote:hover { background: color-mix(in srgb, var(--accent) 14%, tran
 .team-mention.none .team-mention-about { white-space: normal; line-height: 1.35; }
 .team-mention.none:hover { background: none; }
 .team-mention.none[aria-selected="true"] { background: var(--fill-2); }
-/* What teammates can address (#832), shown, not set. */
+/* Direct addressing settings and directory (#832, #867). */
 .team-exposed { display: flex; flex-direction: column; gap: 8px; }
 .team-exposed summary { list-style: none; cursor: pointer; }
 .team-exposed summary::-webkit-details-marker { display: none; }
@@ -300,6 +300,9 @@ button.team-quote:hover { background: color-mix(in srgb, var(--accent) 14%, tran
 .team-exposed[open] summary h3::after { content: " ⌄"; }
 .team-exposed > * + * { margin-top: 8px; }
 .team-expose { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; border-radius: 8px; background: var(--fill-2); }
+.team-exposure-control { display: grid; gap: 4px; min-width: 0; }
+.team-exposure-control select { max-width: 100%; min-width: 0; padding: 4px 6px; border: 0; border-radius: 6px; background: var(--fill); color: inherit; font: inherit; }
+.team-expose button { align-self: flex-start; }
 .team-expose-code { font-weight: 600; }
 .team-send { flex: none; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 50%; background: var(--accent); color: #fff; cursor: pointer; transition: transform 100ms ease-out, background 120ms ease; }
 .team-send svg { stroke-width: 2; }

@@ -336,11 +336,12 @@ describe('what teammates can address, shown in People and agents', () => {
     expect(findAll(rows, el => el.tag === 'button').map(el => text(el.children))).toEqual(['Save alias'])
   })
 
-  test('nothing reachable (or an older board): no section at all', () => {
+  test('the owner can set exposure when there are no reachable agents yet', () => {
     const { exposed: _e, ...plain } = AGENTS
-    expect(
-      findAll(renderInBoard(<TeamBody {...props({ agents: plain })} />, board()), el => el.attrs.has('data-exposed')),
-    ).toEqual([])
+    const nodes = renderInBoard(<TeamBody {...props({ agents: plain })} />, board())
+    const settings = findAll(nodes, el => el.attrs.has('data-exposed'))
+    expect(text(settings)).toContain('Peers can reach')
+    expect(findAll(settings, el => el.attrs.has('data-expose'))).toEqual([])
   })
 })
 

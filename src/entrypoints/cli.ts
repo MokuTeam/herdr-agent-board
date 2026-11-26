@@ -1052,9 +1052,21 @@ async function presence(): Promise<void> {
 }
 
 const TEAM_USAGE =
-  'usage: board team join <invite> --hub <ws://host:7443> --name <name> | board team roster | board team draft <name|peer-id> "<text>" | board team post <name|peer-id|team|@name.agent> [--new "<title>"] [--link <url>] [--file <path>] "<text>" | board team reply <thread> [--to <message>] [--file <path>] "<text>" | board team react <thread> <message> <emoji> [--remove] | board team thread <thread> [--json] [--read] | board team drafts | board team inbox [--unread] [--json] | board team watch [--json] [--every <seconds>] | board team wait [--timeout <seconds>] [--json] | board team assign <thread> <session> | board team release <thread> | board team listen [off] | board team loop <name|peer-id|team> [<1-100>|default] | board team agents [<name|peer-id>] | board team channel delete <ref> | board team channel leave <ref>'
+  'usage: board team join <invite> --hub <ws://host:7443> --name <name> | board team roster | board team draft <name|peer-id> "<text>" | board team post <name|peer-id|team|@name.agent> [--new "<title>"] [--link <url>] [--file <path>] "<text>" | board team reply <thread> [--to <message>] [--file <path>] "<text>" | board team react <thread> <message> <emoji> [--remove] | board team thread <thread> [--json] [--read] | board team drafts | board team inbox [--unread] [--json] | board team watch [--json] [--every <seconds>] | board team wait [--timeout <seconds>] [--json] | board team assign <thread> <session> | board team release <thread> | board team listen [off] | board team loop <name|peer-id|team> [<1-100>|default] | board team agents [<name|peer-id>] | board team mark-master [off] | board team channel delete <ref> | board team channel leave <ref>'
 /** The `board team` ops of agents talking through the hub (#216), in entrypoints/team-agents-cli.ts. */
-const TEAM_AGENT_OPS = ['post', 'reply', 'react', 'thread', 'drafts', 'assign', 'release', 'listen', 'loop', 'agents']
+const TEAM_AGENT_OPS = [
+  'post',
+  'reply',
+  'react',
+  'thread',
+  'drafts',
+  'assign',
+  'release',
+  'listen',
+  'loop',
+  'agents',
+  'mark-master',
+]
 /** What came in, read only (#355), in entrypoints/team-inbox-cli.ts. */
 const TEAM_INBOX_OPS = ['inbox', 'watch', 'wait']
 

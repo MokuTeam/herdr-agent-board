@@ -40,6 +40,7 @@
 // channel), wait for the passkey as the switches do.
 import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
+import { writeCard } from '../../adapters/cards.ts'
 import { editTeamServices } from '../../adapters/config-file.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { uploadsCheck } from '../../adapters/own-files.ts'
@@ -151,6 +152,7 @@ function agentsView(cfg: Pick<Config, 'categories' | 'team'>, exposed?: unknown[
   const team = typeof cfg.team === 'object' && cfg.team !== null ? (cfg.team as Record<string, unknown>) : {}
   return {
     off: s.off,
+    ...(s.mastersOnly && { mastersOnly: true }),
     listener: s.listener,
     peers: s.peers,
     paused: s.paused,
@@ -173,7 +175,41 @@ function agentsView(cfg: Pick<Config, 'categories' | 'team'>, exposed?: unknown[
 function agentsChange(
   cfg: Pick<Config, 'categories'>,
   body: Record<string, unknown>,
+  router?: TeamRouter,
 ): { ok: true; apply: () => void } | { ok: false; error: string } {
+  if (Object.hasOwn(body, 'mastersOnly')) {
+    const { mastersOnly } = body
+    if (Object.keys(body).length !== 1 || typeof mastersOnly !== 'boolean') return { ok: false, error: 'body' }
+    return {
+      ok: true,
+      apply() {
+        changeAgents(s => {
+          if (mastersOnly) s.mastersOnly = true
+          else delete s.mastersOnly
+        })
+        audit('agents', null, { mastersOnly, by: 'ui' })
+      },
+    }
+  }
+  if (Object.hasOwn(body, 'master')) {
+    const { master } = body
+    if (
+      Object.keys(body).length !== 1 ||
+      !isRecord(master) ||
+      typeof master.key !== 'string' ||
+      typeof master.on !== 'boolean'
+    )
+      return { ok: false, error: 'body' }
+    const { key, on } = master
+    if (!router?.hasSession(key)) return { ok: false, error: 'session' }
+    return {
+      ok: true,
+      apply() {
+        writeCard(key, { teamMaster: on ? true : '' })
+        audit('agents', null, { session: key, master: on, by: 'ui' })
+      },
+    }
+  }
   if (body.listener !== undefined) {
     const listener = body.listener === null ? null : sessionFrom(body.listener)
     if (body.listener !== null && !listener) return { ok: false, error: 'body' }
@@ -388,7 +424,7 @@ export function teamRoutes(
         ? { status: 200, body: { ok: true } }
         : { status: 404, body: { ok: false, error: 'peer' } }
     if (a.kind === 'agents') {
-      const c = agentsChange(lanes(), a.change)
+      const c = agentsChange(lanes(), a.change, router)
       if (!c.ok) return { status: 400, body: c }
       c.apply()
       onAgents?.()
@@ -490,6 +526,11 @@ export function teamRoutes(
               ? { channel: channelTitle }
               : { who: team.nameOf(c.peer) })),
         ...(c.off === false && { allOn: true }),
+        ...(c.mastersOnly === false && { allAgents: true }),
+        ...(isRecord(c.master) &&
+          typeof c.master.key === 'string' && {
+            master: router?.sessionName(c.master.key) ?? c.master.key,
+          }),
         ...(typeof c.on === 'boolean' && { on: c.on }),
         ...(Array.isArray(c.lanes) && { lanes: c.lanes.map(l => titles.get(l as string) ?? String(l)) }),
         ...(typeof c.allLanes === 'boolean' && { allLanes: c.allLanes }),
@@ -817,7 +858,7 @@ export function teamRoutes(
           syncDirectory()
           return json(200, { ok: true })
         }
-        const c = agentsChange(lanes(), change)
+        const c = agentsChange(lanes(), change, router)
         if (!c.ok) return json(400, c)
         // Narrowing is never held back; widening waits for the owner's passkey.
         if (widens(readAgents(), change)) {
