@@ -127,6 +127,10 @@ export const DOOR_ROUTES: readonly DoorRoute[] = [
   { method: 'POST', path: '/api/node/telegram', door: true },
   // Guided master handover (#697): preflight, backup/prepare, bundle, apply, verify, commit, rollback, re-pair.
   { method: 'GET', path: '/api/node/handover/check', door: true },
+  // The MokuTab functions registry (#864): the master reads, bundles and moves the node's folder.
+  { method: 'GET', path: '/api/node/functions', door: true },
+  { method: 'POST', path: '/api/node/functions/bundle', door: true },
+  { method: 'POST', path: '/api/node/functions/take', door: true },
   { method: 'POST', path: '/api/node/handover/prepare', door: true },
   { method: 'PUT', path: '/api/node/handover/bundle', door: true },
   { method: 'POST', path: '/api/node/handover/apply', door: true },
