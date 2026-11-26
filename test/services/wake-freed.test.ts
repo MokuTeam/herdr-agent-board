@@ -1191,3 +1191,142 @@ test('#243 review 2: herdr not saying which shell runs at first sight: nothing n
   expect(readSessions(mute.file)['w1:p1']).toMatchObject({ terminal: 'term-a' })
   expect(readSessions(mute.file)['w1:p1']).not.toHaveProperty('shellPid')
 })
+
+// ------------------------------------------------------------------ #888: Windows settle, alone guard, moved freed, and non-Claude giveBack
+
+test('#888 Windows: waits for pwsh prompt to settle after /exit and refuses when child runs under shell; Linux skips settle & table', async () => {
+  // 1) Windows settle race: right after /exit screen still lacks a prompt, then shows prompt on 2nd poll -> closes tab.
+  const paneWin = claudePane('w1:p2', 't2', SID)
+  const wWin = world({ panes: [paneWin] })
+  runningSession(wWin.work, { id: SID, name: 'Billing', cwd: PROJECT, n: 1 })
+  exitsOnPrompt(wWin.io, paneWin, join(wWin.work, 'sessions', '1.json'))
+  let polls = 0
+  const baseScreen = wWin.io.screen.bind(wWin.io)
+  wWin.io.screen = async p => {
+    polls++
+    if (p === 'w1:p2' && polls < 2) return `Resume this session with:\nclaude --resume ${SID}\n`
+    return baseScreen(p)
+  }
+  const winEngine = createWakeEngine({ ...wWin.deps, platform: 'win32' })
+  expect(await winEngine.sleep(SID)).toEqual({ ok: true, pane: 'w1:p2', name: 'Billing' })
+  expect(closes(wWin.io)).toEqual([['tab', 'close', 't2']])
+  expect(polls).toBeGreaterThanOrEqual(2)
+
+  // 2) Windows alone guard: child process under shell pid -> keeps pane open, never closes.
+  const paneChild = claudePane('w1:p2', 't2', SID)
+  const wChild = world({ panes: [paneChild] })
+  wChild.table.push(under(4005, 'node'))
+  runningSession(wChild.work, { id: SID, name: 'Billing', cwd: PROJECT, n: 1 })
+  exitsOnPrompt(wChild.io, paneChild, join(wChild.work, 'sessions', '1.json'))
+  const childEngine = createWakeEngine({ ...wChild.deps, platform: 'win32' })
+  expect(await childEngine.sleep(SID)).toEqual({ ok: true, pane: 'w1:p2', name: 'Billing' })
+  expect(closes(wChild.io)).toEqual([])
+  expect(paneChild.label).toBe('💤 Billing')
+
+  // 3) Linux control: does not poll/settle when screen is not idle and does not call processTable.
+  const paneLinux = claudePane('w1:p2', 't2', SID)
+  const wLinux = world({ panes: [paneLinux] })
+  let tableCalls = 0
+  wLinux.io.screens['w1:p2'] = `claude --resume ${SID}\n`
+  runningSession(wLinux.work, { id: SID, name: 'Billing', cwd: PROJECT, n: 1 })
+  exitsOnPrompt(wLinux.io, paneLinux, join(wLinux.work, 'sessions', '1.json'))
+  const linuxEngine = createWakeEngine({
+    ...wLinux.deps,
+    platform: 'linux',
+    processTable: async () => {
+      tableCalls++
+      return wLinux.table
+    },
+  })
+  expect(await linuxEngine.sleep(SID)).toEqual({ ok: true, pane: 'w1:p2', name: 'Billing' })
+  expect(closes(wLinux.io)).toEqual([])
+  expect(tableCalls).toBe(0)
+})
+
+test('#888 moved freed sleeper is forgotten on remember() so held() releases the workspace last tab', async () => {
+  const at = Date.now() - HOUR
+  const master = claudePane('w1:p1', 't1', SID2)
+  const w = world({
+    panes: [master],
+    sessions: work => ({
+      [SID]: asleep(work, SID, 'Billing', {
+        freed: { pane: 'w1:p2', workspace: 'w1', workspaceLabel: 'Main', tabLabel: 'Billing', topic: '', at },
+      }),
+    }),
+  })
+  w.io.tabs.splice(1, 1)
+  w.io.panes.splice(
+    w.io.panes.findIndex(p => p.pane_id === 'w1:s2'),
+    1,
+  )
+  const movedIds = new Set<string>()
+  const deps = { ...w.deps, moved: (ids: readonly string[]) => new Set(ids.filter(id => movedIds.has(id))) }
+  runningSession(w.work, { id: SID2, name: 'Master', cwd: PROJECT, n: 1 })
+  exitsOnPrompt(w.io, master, join(w.work, 'sessions', '1.json'))
+  const engine = createWakeEngine(deps)
+  // While SID is still unmoved, Master in t1 cannot give back the workspace's last tab.
+  expect(await engine.sleep(SID2)).toMatchObject({ ok: true, pane: 'w1:p1' })
+  expect(closes(w.io)).toEqual([])
+
+  // Mark SID moved to another device: remember() forgets SID and Master's kept pane goes in tidy/giveBack.
+  movedIds.add(SID)
+  w.io.screens['w1:p1'] = `PS ${PROJECT}> board resume ${SID2} --profile work`
+  await engine.remember()
+  expect(readSessions(w.file)[SID]).toBeUndefined()
+  expect(closes(w.io)).toEqual([['tab', 'close', 't1']])
+})
+
+test('#888 giveBack closes a kept Codex sleeper pane once its tab loses focus', async () => {
+  const CID = '509dfc37-b58e-4851-9988-a8c7befe9f0d'
+  const pane: FakePane = {
+    pane_id: 'w1:p2',
+    tab_id: 't2',
+    workspace_id: 'w1',
+    terminal_id: 'term-c1',
+    cwd: PROJECT,
+    agent: 'codex',
+    agent_status: 'idle',
+    agent_session: { value: CID },
+    terminal_title_stripped: 'Codex Job',
+  }
+  const w = afterTidy({ panes: [pane] })
+  const side = w.io.panes.find(p => p.pane_id === 'w1:s2') as FakePane
+  side.focused = true
+  w.io.busy.add('w1:p2')
+  w.io.screens['w1:p2'] = `PS ${PROJECT}> `
+  w.io.on(
+    argv => argv[1] === 'prompt' && argv[2] === 'w1:p2' && argv[3] === '/exit',
+    () => {
+      pane.agent = null
+      pane.agent_session = null
+      delete pane.agent_status
+      w.io.busy.delete('w1:p2')
+    },
+  )
+  const tabOps = w.deps.tabs
+  if (!tabOps) throw new Error('missing tabOps')
+  const codexFile = join(w.dir, 'state', 'wake-codex.json')
+  const engine = createWakeEngine({
+    ...w.deps,
+    codexFile,
+    codex: {
+      herdr: w.io,
+      codex: { line: id => `board resume --codex ${id}`, draft: () => '' },
+      hasConversation: id => id === CID,
+      home: w.home,
+      exists: () => true,
+      newTab: (ws, cwd, label) => tabOps.newTab(ws, cwd, label),
+      newWorkspace: (cwd, label, tabLabel) => tabOps.newWorkspace(cwd, label, tabLabel),
+    },
+  })
+  expect(await engine.sleep(CID)).toEqual({ ok: true, pane: 'w1:p2', name: 'Codex Job' })
+  // Kept while focused; terminal noted on first remember(), then freed once unfocused.
+  expect(closes(w.io)).toEqual([])
+  await engine.remember()
+  expect(JSON.parse(readFileSync(codexFile, 'utf8'))[CID]?.terminal).toBe('term-c1')
+  side.focused = false
+  w.io.screens['w1:p2'] = `PS ${PROJECT}> board resume --codex ${CID}`
+  await engine.remember()
+  expect(closes(w.io)).toEqual([['tab', 'close', 't2']])
+  expect(JSON.parse(readFileSync(codexFile, 'utf8'))[CID]?.freed).toMatchObject({ pane: 'w1:p2', tabLabel: 'Billing' })
+})

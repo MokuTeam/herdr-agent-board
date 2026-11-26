@@ -483,3 +483,29 @@ test('plain Claude setup never calls AgyOps, and same-shape Claude + agy UUIDs s
   expect(await mixed.sleeping()).toEqual([])
   expect((await mixed.sleepingAll()).map(s => s.session)).toEqual([ID])
 })
+
+test('closes agy tab on sleep when closePanes is on and restores tabLabel in a new tab (#888)', async () => {
+  const w = world()
+  w.io.tabs.push(
+    { tab_id: 't1', workspace_id: 'w5', label: '1', number: 1 },
+    { tab_id: 't9', workspace_id: 'w5', label: 'Agy Tab', number: 2 },
+  )
+  w.io.panes.push({ pane_id: 'w5:p1', tab_id: 't1', workspace_id: 'w5', cwd: w.project, agent: 'claude' }, {
+    pane_id: 'w5:s9',
+    tab_id: 't9',
+    workspace_id: 'w5',
+    cwd: w.project,
+    label: 'Sidebar',
+    tokens: { 'herdr-sidebar-git': '1' },
+  } as FakePane)
+  w.io.screens['w5:p9'] = `PS ${w.project}> `
+  const engine = createWakeEngine(w.deps)
+  expect(await engine.sleep(ID)).toEqual({ ok: true, pane: 'w5:p9', name: 'Gemini Dev' })
+  expect(w.io.calls).toContainEqual(['tab', 'close', 't9'])
+  expect(await engine.sleepingAll()).toMatchObject([{ agent: 'agy', session: ID, pane: '' }])
+
+  const woke = await engine.wake(ID)
+  expect(woke).toEqual({ ok: true, pane: 'w5:p20', name: 'Gemini Dev' })
+  expect(w.tabs).toEqual([['tab', 'w5', w.project, 'Agy Tab']])
+  expect(await engine.sleepingAll()).toEqual([])
+})

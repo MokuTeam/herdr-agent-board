@@ -54,6 +54,7 @@ import {
   agySleeperPane,
   agySleepingOf,
   agySleepLabel,
+  agyWakeLine,
   agyWoken,
   findAgySleeper,
 } from '../../core/wake/agy.ts'
@@ -153,6 +154,8 @@ export interface WakeEngineDeps {
   follow?: Follow
   /** Of these session ids, those in the board's archive; default: the archive's records. */
   archived?(sessions: readonly string[]): Set<string>
+  /** Of these session ids, those moved to another device; default: the card store's `moved` mark. */
+  moved?(sessions: readonly string[]): Set<string>
   /** The marker of the sleepers in kept panes given them back once (#204); default: `wake-tidy.json` beside the session file. */
   tidyFile?: string
   /**
@@ -368,6 +371,24 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     const files = archivedFiles()
     return new Set(ids.filter(id => isArchived(files, id) && getArchived(id)?.state === 'archived'))
   }
+  const moved = (ids: readonly string[]): Set<string> => {
+    if (deps.moved) return deps.moved(ids)
+    return new Set(
+      ids.filter(id => {
+        try {
+          return !!readCard(id)?.moved
+        } catch {
+          return false
+        }
+      }),
+    )
+  }
+  const freshAlone = processTable
+    ? async (pid: number): Promise<boolean | null> => {
+        const rows = await processTable().catch(() => null)
+        return rows ? nothingUnder(rows, pid) : null
+      }
+    : undefined
 
   /** The card or the schedule not following is logged: the sleep or the wake goes on. */
   function followed(what: () => void): void {
@@ -492,25 +513,54 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     return seen
   }
 
-  /** Sleepers whose pane wake closed (Claude) or agy sleepers whose session went to the archive since: forgotten (#204, #631). */
+  /** Sleepers whose pane wake closed or moved to another device, or whose session went to the archive: forgotten (#204, #631, #888). */
   function forgetArchived(): void {
-    const freed = Object.entries(sessions).filter(([, s]) => isFreed(s))
+    const freedClaude = Object.entries(sessions).filter(([, s]) => isFreed(s))
     const agyIds = Object.keys(agys).filter(id => !agyGoing.has(id))
-    if (!freed.length && !agyIds.length) return
-    const gone = archived([...freed.map(([, s]) => s.session), ...agyIds])
-    if (!gone.size) return
-    if (freed.some(([, s]) => gone.has(s.session))) {
-      sessions = Object.fromEntries(Object.entries(sessions).filter(([, s]) => !(isFreed(s) && gone.has(s.session))))
+    const piIds = Object.keys(pis).filter(id => !piGoing.has(id))
+    const codexFreed = Object.keys(codexes).filter(id => !codexGoing.has(id) && !!codexes[id]?.freed)
+    const freedIds = [
+      ...freedClaude.map(([, s]) => s.session),
+      ...agyIds.filter(id => !!agys[id]?.freed),
+      ...piIds.filter(id => !!pis[id]?.freed),
+      ...codexFreed,
+    ]
+    const archiveCheck = [...freedClaude.map(([, s]) => s.session), ...agyIds, ...piIds]
+    const gone = archiveCheck.length ? archived(archiveCheck) : new Set<string>()
+    const shifted = freedIds.length ? moved(freedIds) : new Set<string>()
+    if (!gone.size && !shifted.size) return
+    const dropClaude = new Set([...gone, ...shifted])
+    if (freedClaude.some(([, s]) => dropClaude.has(s.session))) {
+      sessions = Object.fromEntries(
+        Object.entries(sessions).filter(([, s]) => !(isFreed(s) && dropClaude.has(s.session))),
+      )
       save()
-      for (const [, s] of freed) if (gone.has(s.session)) deps.log(`${s.session} is in the archive: no longer asleep`)
+      for (const [, s] of freedClaude) {
+        if (gone.has(s.session)) deps.log(`${s.session} is in the archive: no longer asleep`)
+        else if (shifted.has(s.session)) deps.log(`${s.session} was moved to another device: no longer asleep`)
+      }
     }
-    const agyGone = agyIds.filter(id => gone.has(id))
+    const agyGone = agyIds.filter(id => gone.has(id) || (!!agys[id]?.freed && shifted.has(id)))
     if (agyGone.length) {
       const next = { ...agys }
       for (const id of agyGone) delete next[id]
       agys = next
       saveAgys()
       for (const id of agyGone) deps.log(`${id} (agy) is in the archive: no longer asleep`)
+    }
+    const piGone = piIds.filter(id => gone.has(id) || (!!pis[id]?.freed && shifted.has(id)))
+    if (piGone.length) {
+      const next = { ...pis }
+      for (const id of piGone) delete next[id]
+      pis = next
+      savePis()
+      for (const id of piGone) deps.log(`${id} (pi) is in the archive: no longer asleep`)
+    }
+    const codexShifted = codexFreed.filter(id => shifted.has(id))
+    if (codexShifted.length) {
+      for (const id of codexShifted) delete codexes[id]
+      saveCodex()
+      for (const id of codexShifted) deps.log(`${id} (codex) was moved to another device: no longer asleep`)
     }
   }
 
@@ -543,14 +593,18 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     kept: () => unfreed(pane, session),
   })
 
+  const heldIn = (place: FreedPlace | undefined, ws: { workspace_id: string; label?: string }): boolean =>
+    !!place && (place.workspace === ws.workspace_id || (!!ws.label && place.workspaceLabel === ws.label))
+
   /**
    * What freeing a pane goes by besides the snapshot: a workspace another sleeper whose pane was
    * closed comes back to is not closed with its last tab (core/wake/freed.ts).
    */
   const held = (ws: { workspace_id: string; label?: string }): boolean =>
-    Object.values(sessions).some(
-      e => isFreed(e) && (e.freed.workspace === ws.workspace_id || (!!ws.label && e.freed.workspaceLabel === ws.label)),
-    )
+    Object.values(sessions).some(e => isFreed(e) && heldIn(e.freed, ws)) ||
+    Object.values(agys).some(s => heldIn(s.freed, ws)) ||
+    Object.values(codexes).some(s => heldIn(s.freed, ws)) ||
+    Object.values(pis).some(s => heldIn(s.freed, ws))
 
   /**
    * Sessions asleep in a pane wake left them in before #204 (put to sleep, not exited by the user):
@@ -574,7 +628,15 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
           const label = `💤 ${s.name}`
           if (!p || p.agent || p.label !== label) continue
           looked++
-          const rules = { label, held, now: now(), log: deps.log, sleep }
+          const rules = {
+            label,
+            held,
+            now: now(),
+            log: deps.log,
+            sleep,
+            platform,
+            ...(freshAlone && { alone: freshAlone }),
+          }
           const place = await withPane(pane, () =>
             freePane(deps.herdr, { pane, session: s.session }, freeMarks(pane, s.session), rules),
           ).then(
@@ -608,14 +670,107 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
    * to note with its shell's process, the first time it is seen asleep. `restored`: the terminal of
    * a pane herdr gave another one than the noted. Neither: a look again in the same shell.
    */
+  type DueKind = 'claude' | 'agy' | 'codex' | 'pi'
+
   type Due = {
+    kind: DueKind
+    key: string
     pane: string
     session: string
+    promptSession: string
     slept_at: number
     label: string
     shell: string
     note?: string
     restored?: string
+  }
+
+  /** State read/write hooks for kept sleepers of any agent kind in giveBack (#243, #888). */
+  function keptRecord(
+    kind: DueKind,
+    key: string,
+  ): {
+    name: string
+    session: string
+    slept_at?: number
+    exited?: true
+    terminal?: string
+    shellPid?: number
+    freed?: FreedPlace
+    line: string | null
+    stillAsleep(d: Due): boolean
+    freeMarks(): { freeing(place: FreedPlace): void; kept(): void }
+    note(terminal: string, pid: number | null): void
+  } | null {
+    if (kind === 'claude') {
+      const s = sessions[key]
+      if (!s) return null
+      const dir = s.profileDir ?? defaultProfileDir(homedir(), platform)
+      const found = s.exited ? null : lineFor(s.session, lineProfile(deps.profiles(), dir))
+      return {
+        name: s.name,
+        session: s.session,
+        ...(s.slept_at !== undefined && { slept_at: s.slept_at }),
+        ...(s.exited && { exited: s.exited }),
+        ...(s.terminal !== undefined && { terminal: s.terminal }),
+        ...(s.shellPid !== undefined && { shellPid: s.shellPid }),
+        ...(isFreed(s) && { freed: s.freed }),
+        line: found && 'line' in found ? found.line : null,
+        stillAsleep: d => stillAsleep(d, sessions[d.pane]),
+        freeMarks: () => freeMarks(key, s.session),
+        note(terminal, pid) {
+          const cur = sessions[key]
+          if (!cur) return
+          const { shellPid: _was, ...rest } = cur
+          sessions = { ...sessions, [key]: { ...rest, terminal, ...(pid !== null && { shellPid: pid }) } }
+          save()
+        },
+      }
+    }
+    const store =
+      kind === 'pi'
+        ? { map: pis, save: savePis, going: piGoing, line: piWakeLine(key) }
+        : kind === 'agy'
+          ? { map: agys, save: saveAgys, going: agyGoing, line: agyWakeLine(key) }
+          : { map: codexes, save: saveCodex, going: codexGoing, line: codexIO().codex.line(key) }
+    const s = store.map[key]
+    if (!s) return null
+    return {
+      name: s.name,
+      session: s.session,
+      slept_at: s.slept_at,
+      ...(s.terminal !== undefined && { terminal: s.terminal }),
+      ...(s.shellPid !== undefined && { shellPid: s.shellPid }),
+      ...(s.freed && { freed: s.freed }),
+      line: store.line,
+      stillAsleep(d) {
+        const cur = store.map[key]
+        return !!cur && !cur.freed && cur.slept_at === d.slept_at && !store.going.has(key)
+      },
+      freeMarks: () => ({
+        freeing(place) {
+          const cur = store.map[key]
+          if (!cur) return
+          store.map[key] = { ...cur, freed: place }
+          store.save()
+          followed(() => follow.paneClosed(cur.session, cur.pane))
+        },
+        kept() {
+          const cur = store.map[key]
+          if (!cur?.freed) return
+          const { freed: _place, ...rest } = cur
+          store.map[key] = rest as typeof cur
+          store.save()
+        },
+      }),
+      note(terminal, pid) {
+        const cur = store.map[key]
+        if (!cur) return
+        const { shellPid: _was, ...rest } = cur
+        store.map[key] = { ...rest, terminal, ...(pid !== null && { shellPid: pid }) } as typeof cur
+        store.save()
+      },
+    }
   }
 
   /**
@@ -639,25 +794,53 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
   async function giveBack(snap: HerdrSnapshot): Promise<void> {
     if (!tidied || tidying || deps.readOnly || !deps.settings().closePanes || !snap.panes.length) return
     const due: Due[] = []
-    for (const [pane, s] of Object.entries(sessions)) {
-      if (!s.slept_at || isFreed(s) || !SESSION_ID.test(s.session) || going.has(pane)) continue
+    const consider = (
+      kind: DueKind,
+      key: string,
+      pane: string,
+      session: string,
+      promptSession: string,
+      slept_at: number,
+      terminalRecorded: string | undefined,
+      exited: boolean,
+      labels: readonly string[],
+    ): void => {
       const p = snap.panes.find(x => x.pane_id === pane)
       const label = p?.label
-      if (!p || p.agent || !label || !sleepLabels(s).includes(label)) continue
+      if (!p || p.agent || !label || !labels.includes(label)) return
       const terminal = typeof p.terminal_id === 'string' && p.terminal_id ? p.terminal_id : undefined
       const sleep = {
+        kind,
+        key,
         pane,
-        session: s.session,
-        slept_at: s.slept_at,
+        session,
+        promptSession,
+        slept_at,
         label,
-        shell: `${pane} ${s.slept_at} ${terminal}`,
+        shell: `${pane} ${slept_at} ${terminal}`,
       }
-      if (terminal && s.terminal && terminal !== s.terminal) {
+      if (terminal && terminalRecorded && terminal !== terminalRecorded) {
         if (!tabFocused(snap, pane)) due.push({ ...sleep, restored: terminal })
-        continue
+        return
       }
-      if (terminal && !s.terminal) due.push({ ...sleep, note: terminal })
-      if (!s.exited && !keptShells.has(sleep.shell) && freePlan(snap, pane, now(), { label, held })) due.push(sleep)
+      if (terminal && !terminalRecorded) due.push({ ...sleep, note: terminal })
+      if (!exited && !keptShells.has(sleep.shell) && freePlan(snap, pane, now(), { label, held })) due.push(sleep)
+    }
+    for (const [pane, s] of Object.entries(sessions)) {
+      if (!s.slept_at || isFreed(s) || !SESSION_ID.test(s.session) || going.has(pane)) continue
+      consider('claude', pane, pane, s.session, s.session, s.slept_at, s.terminal, !!s.exited, sleepLabels(s))
+    }
+    for (const [id, s] of Object.entries(agys)) {
+      if (s.freed || agyGoing.has(id)) continue
+      consider('agy', id, s.pane, s.session, s.session, s.slept_at, s.terminal, false, [agySleepLabel(s)])
+    }
+    for (const [id, s] of Object.entries(codexes)) {
+      if (s.freed || codexGoing.has(id)) continue
+      consider('codex', id, s.pane, s.session, s.session, s.slept_at, s.terminal, false, [agySleepLabel(s)])
+    }
+    for (const [file, s] of Object.entries(pis)) {
+      if (s.freed || piGoing.has(file)) continue
+      consider('pi', file, s.pane, s.session, piSessionId(s.session), s.slept_at, s.terminal, false, [sleepLabel(s)])
     }
     if (!due.length) return
     await during(async () => {
@@ -687,21 +870,23 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
    * for. `alone`: whether its shell has started nothing, by the process table (pane-ops lookAgain).
    */
   async function lookAt(d: Due, alone?: (pid: number) => Promise<boolean | null>): Promise<void> {
-    const s = sessions[d.pane]
-    if (!stillAsleep(d, s)) return
-    const dir = s.profileDir ?? defaultProfileDir(homedir(), platform)
-    const found = s.exited ? null : lineFor(s.session, lineProfile(deps.profiles(), dir))
-    const line = found && 'line' in found ? found.line : null
+    const rec = keptRecord(d.kind, d.key)
+    if (!rec?.stillAsleep(d)) return
     const restored = d.restored !== undefined
-    const target = { pane: d.pane, session: s.session, line, ...(s.shellPid !== undefined && { shellPid: s.shellPid }) }
+    const target = {
+      pane: d.pane,
+      session: d.promptSession,
+      line: rec.line,
+      ...(rec.shellPid !== undefined && { shellPid: rec.shellPid }),
+    }
     const rules = { label: d.label, held, now: now(), log: deps.log, sleep, restored, ...(alone && { alone }) }
-    const r: LookedAt = await lookAgain(deps.herdr, target, freeMarks(d.pane, s.session), rules).catch(err => {
-      deps.log(`${s.name}: the pane ${d.pane} it sleeps in could not be looked at: ${messageOf(err)}`)
+    const r: LookedAt = await lookAgain(deps.herdr, target, rec.freeMarks(), rules).catch(err => {
+      deps.log(`${rec.name}: the pane ${d.pane} it sleeps in could not be looked at: ${messageOf(err)}`)
       return 'later' as const
     })
     if (r === 'freed') {
       unanswered.delete(d.shell)
-      return deps.log(`${s.name}: gave back the pane ${d.pane} it slept in`)
+      return deps.log(`${rec.name}: gave back the pane ${d.pane} it slept in`)
     }
     // The user looks at its tab: judged once they look elsewhere, however long that takes, the
     // clock for an answer started afresh then.
@@ -716,7 +901,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     if (d.restored !== undefined) {
       await noteShell(d, d.restored, false)
       deps.log(
-        `${s.name}: kept in the pane ${d.pane} herdr gave a new terminal${r === 'typed' ? ', its wake line typed again' : ''}`,
+        `${rec.name}: kept in the pane ${d.pane} herdr gave a new terminal${r === 'typed' ? ', its wake line typed again' : ''}`,
       )
       // As a sleep leaves it: given back once its place allows it.
       if (r === 'line' || r === 'typed') return
@@ -738,16 +923,16 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     if (pid === null && first) {
       const since = unanswered.get(asked)
       if (since === undefined)
-        deps.log(`${sessions[d.pane]?.name}: herdr does not say which shell runs in ${d.pane}; asked again later`)
+        deps.log(
+          `${keptRecord(d.kind, d.key)?.name}: herdr does not say which shell runs in ${d.pane}; asked again later`,
+        )
       unanswered.set(asked, since ?? now())
       if (since === undefined || now() - since < GIVE_BACK_WAIT_MS) return
     }
     unanswered.delete(asked)
-    const cur = sessions[d.pane]
-    if (!stillAsleep(d, cur)) return
-    const { shellPid: _was, ...rest } = cur
-    sessions = { ...sessions, [d.pane]: { ...rest, terminal, ...(pid !== null && { shellPid: pid }) } }
-    save()
+    const rec = keptRecord(d.kind, d.key)
+    if (!rec?.stillAsleep(d)) return
+    rec.note(terminal, pid)
   }
 
   /**
@@ -773,6 +958,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     pis = rest
     savePis()
     deps.log(`${s.name || s.session} (pi) ${why}: no longer asleep in ${s.pane}`)
+    if (s.freed) return
     const pane = snap?.panes.find(p => p.pane_id === s.pane)
     if (!snap || pane?.label === sleepLabel(s)) await deps.herdr.rename(s.pane, null).catch(() => {})
   }
@@ -822,6 +1008,20 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
         pis = rest
         savePis()
       },
+      freeing(place: FreedPlace) {
+        const cur = pis[file]
+        if (!cur) return
+        pis = { ...pis, [file]: { ...cur, freed: place } }
+        savePis()
+        followed(() => follow.paneClosed(file, pane.pane_id))
+      },
+      kept() {
+        const cur = pis[file]
+        if (!cur?.freed) return
+        const { freed: _place, ...rest } = cur
+        pis = { ...pis, [file]: rest }
+        savePis()
+      },
     }
     try {
       const r = await putPiToSleep(
@@ -834,7 +1034,13 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
           ...(account && { account }),
         },
         marks,
-        { ...timing, boardOnPath: deps.boardOnPath() },
+        {
+          ...timing,
+          boardOnPath: deps.boardOnPath(),
+          free: deps.settings().closePanes && { held },
+          platform,
+          ...(freshAlone && { alone: freshAlone }),
+        },
       )
       return r.ok ? { ok: true, pane: pane.pane_id, name } : { ok: false, error: r.error }
     } finally {
@@ -847,6 +1053,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     const timeoutMs = deps.settings().wakeTimeoutSec * 1000
     const outcome = await wakePi(piOps, s, snap, { ...timing, timeoutMs })
     if (!outcome.ok) return { ok: false, error: outcome.error }
+    if (s.freed || outcome.pane !== s.pane) followed(() => follow.paneOpened(s.session, outcome.pane))
     // Its old pane, when it woke elsewhere, keeps its label only while it is still a shell there.
     await forgetPi(s, outcome.pane === s.pane ? null : await snapshotNow().catch(() => null), 'woke')
     deps.log(`woke ${s.name} (pi) in ${outcome.pane} on request`)
@@ -877,6 +1084,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     agys = rest
     saveAgys()
     deps.log(`${s.name || s.session} (agy) ${why}: no longer asleep in ${s.pane}`)
+    if (s.freed) return
     const pane = snap?.panes.find(p => p.pane_id === s.pane)
     if (!snap || pane?.label === agySleepLabel(s)) await deps.herdr.rename(s.pane, null).catch(() => {})
   }
@@ -929,6 +1137,20 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
         agys = rest
         saveAgys()
       },
+      freeing(place: FreedPlace) {
+        const cur = agys[id]
+        if (!cur) return
+        agys = { ...agys, [id]: { ...cur, freed: place } }
+        saveAgys()
+        followed(() => follow.paneClosed(id, pane.pane_id))
+      },
+      kept() {
+        const cur = agys[id]
+        if (!cur?.freed) return
+        const { freed: _place, ...rest } = cur
+        agys = { ...agys, [id]: rest }
+        saveAgys()
+      },
     }
     try {
       const r = await putAgyToSleep(
@@ -940,7 +1162,13 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
           ...(label && { workspaceLabel: label }),
         },
         marks,
-        { ...timing, boardOnPath: deps.boardOnPath() },
+        {
+          ...timing,
+          boardOnPath: deps.boardOnPath(),
+          free: deps.settings().closePanes && { held },
+          platform,
+          ...(freshAlone && { alone: freshAlone }),
+        },
       )
       return r.ok ? { ok: true, pane: pane.pane_id, name } : { ok: false, error: r.error }
     } finally {
@@ -953,6 +1181,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     const timeoutMs = deps.settings().wakeTimeoutSec * 1000
     const outcome = await wakeAgy(agyOps, s, snap, { ...timing, timeoutMs })
     if (!outcome.ok) return { ok: false, error: outcome.error }
+    if (s.freed || outcome.pane !== s.pane) followed(() => follow.paneOpened(s.session, outcome.pane))
     await forgetAgy(s, outcome.pane === s.pane ? null : await snapshotNow().catch(() => null), 'woke')
     deps.log(`woke ${s.name} (agy) in ${outcome.pane} on request`)
     return { ok: true, pane: outcome.pane, name: s.name }
@@ -968,8 +1197,10 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
       if (s && (gone.has(id) || woken.has(id))) {
         delete codexes[id]
         saveCodex()
-        const pane = snap.panes.find(p => p.pane_id === s.pane)
-        if (!gone.has(id) && pane?.label === agySleepLabel(s)) await deps.herdr.rename(s.pane, null).catch(() => {})
+        if (!s.freed) {
+          const pane = snap.panes.find(p => p.pane_id === s.pane)
+          if (!gone.has(id) && pane?.label === agySleepLabel(s)) await deps.herdr.rename(s.pane, null).catch(() => {})
+        }
       }
     }
   }
@@ -998,8 +1229,28 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
             delete codexes[id]
             saveCodex()
           },
+          freeing(place) {
+            const cur = codexes[id]
+            if (!cur) return
+            codexes[id] = { ...cur, freed: place }
+            saveCodex()
+            followed(() => follow.paneClosed(id, pane.pane_id))
+          },
+          kept() {
+            const cur = codexes[id]
+            if (!cur?.freed) return
+            const { freed: _place, ...rest } = cur
+            codexes[id] = rest
+            saveCodex()
+          },
         },
-        { ...timing, boardOnPath: deps.boardOnPath() },
+        {
+          ...timing,
+          boardOnPath: deps.boardOnPath(),
+          free: deps.settings().closePanes && { held },
+          platform,
+          ...(freshAlone && { alone: freshAlone }),
+        },
       )
       return result.ok ? { ok: true, pane: pane.pane_id, name } : result
     } finally {
@@ -1015,7 +1266,8 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
       if (!outcome.ok) return { ok: false, error: outcome.error }
       delete codexes[s.session]
       saveCodex()
-      if (snap.panes.find(p => p.pane_id === s.pane)?.label === agySleepLabel(s))
+      if (s.freed || outcome.pane !== s.pane) followed(() => follow.paneOpened(s.session, outcome.pane))
+      if (!s.freed && snap.panes.find(p => p.pane_id === s.pane)?.label === agySleepLabel(s))
         await deps.herdr.rename(s.pane, null).catch(() => {})
       return { ok: true, pane: outcome.pane, name: s.name }
     } finally {
@@ -1175,6 +1427,8 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
       return await putToSleep(deps.herdr, { pane, session: s.session, name: s.name, profile }, marks, {
         ...timing,
         free: deps.settings().closePanes && { held },
+        platform,
+        ...(freshAlone && { alone: freshAlone }),
       })
     } finally {
       going.delete(pane)

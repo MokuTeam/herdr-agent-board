@@ -300,6 +300,28 @@ test('a leftover closes with its tab when only herdr-sidebar’s panes are besid
     'close',
     'old-tab',
   ])
+  // Expired herdr-sidebar pane (no tokens left after restart, identified by label: 'Sidebar').
+  assert.deepEqual(
+    closeOfLeftover(
+      [
+        { pane_id: 'wZ:p5', tab_id: 'old-tab', label },
+        { pane_id: 'wZ:s5', tab_id: 'old-tab', label: 'Sidebar' },
+      ],
+      'wZ:p5',
+    ),
+    ['tab', 'close', 'old-tab'],
+  )
+  // Never closes a tab when a pane with label 'Sidebar' actually runs an agent.
+  assert.deepEqual(
+    closeOfLeftover(
+      [
+        { pane_id: 'wZ:p5', tab_id: 'old-tab', label },
+        { pane_id: 'wZ:s5', tab_id: 'old-tab', label: 'Sidebar', agent: 'claude' },
+      ],
+      'wZ:p5',
+    ),
+    ['pane', 'close', 'wZ:p5'],
+  )
   assert.deepEqual(closeOfLeftover(many, 'w1:p7'), ['pane', 'close', 'w1:p7'])
   assert.deepEqual(closeOfLeftover(many, 'w1:pd'), ['pane', 'close', 'w1:pd'])
 })

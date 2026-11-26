@@ -12,6 +12,7 @@
 // the board's; else it is left alone. The old plugin removed by hand: its takeover runs once, before the new pane opens
 // (takeover.ts). An error is logged and recorded in the status file, never thrown.
 import { asSnapshot, type HerdrPane, type HerdrSnapshot, type HerdrWorkspace } from '../../adapters/herdr.ts'
+import { isSidebarPane } from '../../core/board-pane.ts'
 import { sameDir } from '../../core/launch/names.ts'
 import type { WakeConfig } from '../../core/wake/config.ts'
 import { STARTING_MS, type WakeStatusFile } from '../../core/wake/status.ts'
@@ -100,8 +101,7 @@ const panesOf = (snap: HerdrSnapshot, tab: string) => snap.panes.filter(p => p.t
 export const workspaceOf = (snap: HerdrSnapshot, pane: HerdrPane): string | undefined =>
   pane.workspace_id ?? snap.tabs.find(t => t.tab_id === pane.tab_id)?.workspace_id
 /** herdr-sidebar's pane, which that plugin adds to every tab (as entrypoints/open.ts orphanTabs reads it). */
-const isSidebar = (p: HerdrPane): boolean =>
-  !p.agent && Object.keys(p.tokens ?? {}).some(k => k.startsWith('herdr-sidebar'))
+const isSidebar = isSidebarPane
 
 /**
  * Whether a pane is what wake leaves behind: herdr-sidebar's, or one with no agent in the plugin's

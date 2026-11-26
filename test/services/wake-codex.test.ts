@@ -142,3 +142,26 @@ test.each(['claude', 'agy', 'pi', undefined])('skips Codex reaper calls for pane
   await engine.reapRound()
   expect(w.io.calls.filter(a => a[0] !== 'api')).toEqual([])
 })
+
+test('closes Codex tab on sleep when beside only Sidebar and restores tabLabel on wake (#888)', async () => {
+  const w = world()
+  w.pane.tab_id = 't2'
+  w.io.tabs.push(
+    { tab_id: 't1', workspace_id: 'w5', label: '1', number: 1 },
+    { tab_id: 't2', workspace_id: 'w5', label: 'Codex Work', number: 2 },
+  )
+  w.io.panes.push(
+    { pane_id: 'w5:p1', tab_id: 't1', workspace_id: 'w5', cwd, agent: 'claude' },
+    { pane_id: 'w5:s2', tab_id: 't2', workspace_id: 'w5', cwd, label: 'Sidebar' },
+  )
+  w.io.screens[PANE] = `PS ${cwd}> `
+  const engine = createWakeEngine(w.deps)
+  expect(await engine.sleep(ID)).toEqual({ ok: true, pane: PANE, name: label })
+  expect(w.io.calls).toContainEqual(['tab', 'close', 't2'])
+  expect(await engine.sleepingAll()).toMatchObject([{ agent: 'codex', session: ID, pane: '' }])
+
+  // Reopen via engine with tabLabel preserved in freed metadata.
+  const reopened = createWakeEngine(w.deps)
+  expect(await reopened.wake(ID)).toEqual({ ok: true, pane: 'w5:p10', name: label })
+  expect(JSON.parse(readFileSync(w.file, 'utf8'))).toEqual({})
+})

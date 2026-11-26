@@ -253,7 +253,7 @@ export function launchRunner({
         }
         l.workspaceId = ws.id
         l.newWorkspace = false
-        await openLaunchTab(l, ws, false)
+        await openLaunchTab(l, ws, true)
       } else {
         // In the profile's env: what starts in its first tab runs in that profile.
         const ws = await openInProfile(l, env => workspaceCreate(l.cwd, l.workspaceLabel, env))

@@ -1438,3 +1438,72 @@ test('Return of an unmoved Claude session archived from a subdirectory still res
     await b.proc.exited
   }
 }, 30_000)
+
+test('archive closes tab when only expired Sidebar remains beside it, and checks renamed sleeping agy & Windows shell (#888)', async () => {
+  // 1) Expired Sidebar pane (label: 'Sidebar', no tokens) beside archived session -> tab close, not pane close.
+  const box = await sandbox()
+  const dir = project(box)
+  const state = herdrState(dir)
+  const panes = (state['pane list'] as { result: { panes: Record<string, unknown>[] } }).result.panes.map(p =>
+    p.pane_id === 'wP:p3' ? { pane_id: 'wP:p3', tab_id: 'wP:t1', workspace_id: 'wP', label: 'Sidebar', cwd: dir } : p,
+  )
+  box.state({
+    ...state,
+    'pane list': { result: { panes } },
+    'api snapshot': {
+      result: { snapshot: { panes, tabs: [], workspaces: [{ workspace_id: 'wP', label: 'Personal' }] } },
+    },
+  })
+  const b = await board(box, { archiveUndoSec: 0.5 })
+  try {
+    assert.equal((await b.archive()).body.ok, true)
+    await until(() => record(box)?.state === 'archived', 10_000)
+    assert.ok(calls(box).includes('tab close wP:t1'), calls(box).join('\n'))
+    assert.equal(
+      calls(box).some(c => c.startsWith('pane close ')),
+      false,
+    )
+  } finally {
+    b.proc.kill()
+    await b.proc.exited
+  }
+
+  // 2) Unit check of freeToClose for Windows process table guard & renamed sleeping agy session (subprocess so HERDR_BIN_PATH is read at module load).
+  const box2 = await sandbox()
+  const dir2 = project(box2)
+  box2.state(herdrState(dir2, { asleep: true, label: '💤 Custom Agy Name' }))
+  const probeScript = join(box2.dir, 'probe-free.ts')
+  writeFileSync(
+    probeScript,
+    `
+import { translator } from ${JSON.stringify(join(import.meta.dir, '../../src/core/i18n/translator.ts'))}
+import { freeToClose } from ${JSON.stringify(join(import.meta.dir, '../../src/services/archive.ts'))}
+import { defaultDeps } from ${JSON.stringify(join(import.meta.dir, '../../src/services/deps.ts'))}
+const deps = defaultDeps({} as never)
+const subject = {
+  key: ${JSON.stringify(S)},
+  session: ${JSON.stringify(S)},
+  name: 'Custom Agy Name',
+  autoName: 'Original Auto',
+  category: 'personal',
+  agent: 'agy',
+  pane: 'wP:p1',
+} as never
+const winIdle = await freeToClose(deps, subject, translator('en'), async () => [{ pid: 7, ppid: 1, bytes: 1024, name: 'pwsh' }])
+const winBusy = await freeToClose(deps, subject, translator('en'), async () => [
+  { pid: 7, ppid: 1, bytes: 1024, name: 'pwsh' },
+  { pid: 99, ppid: 7, bytes: 1024, name: 'node' },
+])
+const unixIdle = await freeToClose(deps, subject, translator('en'), null)
+console.log(JSON.stringify({ winIdle: winIdle.ok, winBusy, unixIdle: unixIdle.ok }))
+`,
+  )
+  const proc = Bun.spawn([process.execPath, probeScript], { env: box2.env, stdout: 'pipe', stderr: 'pipe' })
+  const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+  assert.equal(await proc.exited, 0, err)
+  assert.deepEqual(JSON.parse(out.trim()), {
+    winIdle: true,
+    winBusy: { ok: false, why: 'archive.why.shellBusy' },
+    unixIdle: true,
+  })
+}, 30_000)

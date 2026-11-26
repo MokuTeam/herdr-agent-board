@@ -6,7 +6,7 @@
 import type { PaneFacts, PaneHeld } from '../core/pane-report.ts'
 import { paneProcesses, snapshot } from './herdr.ts'
 import { run } from './process.ts'
-import { peekPiSleepers, peekWakeSessions } from './wake-files.ts'
+import { peekAgySleepers, peekPiSleepers, peekWakeSessions, wakeCodexFile } from './wake-files.ts'
 
 /** A process: its pid, its parent's, its memory in bytes, and its program's name (lower case, no folder, no `.exe`). */
 export interface MemRow {
@@ -125,7 +125,9 @@ export async function paneFacts(wakeOn: boolean): Promise<PaneFacts | null> {
   if (wakeOn) {
     sleepers = new Set()
     for (const [pane, s] of Object.entries(peekWakeSessions())) if (s.slept_at && !s.freed) sleepers.add(pane)
-    for (const s of Object.values(peekPiSleepers())) sleepers.add(s.pane)
+    for (const s of Object.values(peekPiSleepers())) if (!s.freed) sleepers.add(s.pane)
+    for (const s of Object.values(peekAgySleepers())) if (!s.freed) sleepers.add(s.pane)
+    for (const s of Object.values(peekAgySleepers(wakeCodexFile()))) if (!s.freed) sleepers.add(s.pane)
   }
   return { panes: snap.panes, held, sleepers }
 }

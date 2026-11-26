@@ -1857,3 +1857,94 @@ test('spawn-agent --thread: an agent herdr named once and gone by the failure ge
   const shown = JSON.parse((await boardCli(box, ['thread', 'show', 'atlas-1', '--json'])).stdout)
   assert.equal(shown.thread.assignee.key, OLD)
 }, 60_000)
+
+test('spawn-agent closes its newly created empty tab on failure before an agent appears, never when seen or busy (#888)', async () => {
+  // Timeout before any agent starts in a new tab with an expired Sidebar -> closes tab.
+  const box = await sandbox()
+  const emptyPane = { pane_id: 'wA:p9', tab_id: 'wA:t9', workspace_id: 'wA', terminal_id: 'term-9', agent: null }
+  const sidebarPane = { pane_id: 'wA:s9', tab_id: 'wA:t9', workspace_id: 'wA', label: 'Sidebar' }
+  box.state({
+    ...STATE,
+    'pane get': { result: { pane: emptyPane } },
+    'pane process-info': { result: { process_info: { shell_pid: 4000, foreground_processes: [{ pid: 4000 }] } } },
+    'pane list': { result: { panes: [emptyPane, sidebarPane] } },
+    'tab close': { result: null },
+  })
+  const timedOut = await runSpawn(box, [
+    '--name',
+    'NeverUp',
+    '--cwd',
+    box.dir,
+    '--workspace',
+    'wA',
+    '--timeout-sec',
+    '1',
+  ])
+  assert.equal(timedOut.code, 1)
+  assert.ok(
+    box.calls().some(c => c.join(' ') === 'tab close wA:t9'),
+    JSON.stringify(box.calls()),
+  )
+
+  // Shared tab with user pane -> closes only the spawn pane.
+  const boxShared = await sandbox()
+  boxShared.state({
+    ...STATE,
+    'pane run': { error: 'exec failed', code: 'exec_failed' },
+    'pane get': { result: { pane: emptyPane } },
+    'pane process-info': { result: { process_info: { shell_pid: 4000, foreground_processes: [{ pid: 4000 }] } } },
+    'pane list': {
+      result: { panes: [emptyPane, { pane_id: 'wA:u1', tab_id: 'wA:t9', workspace_id: 'wA', label: 'user' }] },
+    },
+    'pane close': { result: null },
+  })
+  const runFailed = await runSpawn(boxShared, ['--name', 'RunFail', '--cwd', boxShared.dir, '--workspace', 'wA'])
+  assert.equal(runFailed.code, 1)
+  assert.ok(boxShared.calls().some(c => c.join(' ') === 'pane close wA:p9'))
+  assert.equal(
+    boxShared.calls().some(c => c[0] === 'tab' && c[1] === 'close'),
+    false,
+  )
+
+  // Busy shell (foreground child running) -> leaves pane/tab open.
+  const boxBusy = await sandbox()
+  boxBusy.state({
+    ...STATE,
+    'pane get': { result: { pane: emptyPane } },
+    'pane process-info': {
+      result: { process_info: { shell_pid: 4000, foreground_processes: [{ pid: 4000 }, { pid: 4001 }] } },
+    },
+    'tab close': { result: null },
+    'pane close': { result: null },
+  })
+  const busy = await runSpawn(boxBusy, [
+    '--name',
+    'BusyShell',
+    '--cwd',
+    boxBusy.dir,
+    '--workspace',
+    'wA',
+    '--timeout-sec',
+    '1',
+  ])
+  assert.equal(busy.code, 1)
+  assert.equal(
+    boxBusy.calls().some(c => c[1] === 'close'),
+    false,
+  )
+
+  // Once an agent was seen (e.g. blocked dialog), never closes the tab.
+  const boxSeen = await sandbox()
+  boxSeen.state({
+    ...STATE,
+    'pane get': { result: { pane: { ...emptyPane, agent: 'claude', agent_status: 'blocked' } } },
+    'tab close': { result: null },
+    'pane close': { result: null },
+  })
+  const blocked = await runSpawn(boxSeen, ['--name', 'Blocked', '--cwd', boxSeen.dir, '--workspace', 'wA'])
+  assert.equal(blocked.code, 1)
+  assert.equal(
+    boxSeen.calls().some(c => c[1] === 'close'),
+    false,
+  )
+}, 60_000)

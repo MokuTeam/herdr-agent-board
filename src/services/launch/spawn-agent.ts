@@ -41,10 +41,11 @@ import { readCard, removeCard, writeCard } from '../../adapters/cards.ts'
 import { createClaudeHome } from '../../adapters/claude-home.ts'
 import { noDaemonArgs } from '../../adapters/codex-flags.ts'
 import { cachedCodexModels } from '../../adapters/codex-home.ts'
-import { herdr, herdrText, tabCreateRoot } from '../../adapters/herdr.ts'
+import { asPane, herdr, herdrText, paneProcesses, tabCreateRoot } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { ownerServices } from '../../adapters/owner-services.ts'
 import { pause } from '../../adapters/pacing.ts'
+import { memoryTable, nothingUnder } from '../../adapters/pane-facts.ts'
 import {
   forgetProfilePane,
   possibleProfilePanes,
@@ -53,6 +54,7 @@ import {
 } from '../../adapters/profile-panes.ts'
 import { type Env, inheritedProfileDir, loadProfiles } from '../../adapters/profiles.ts'
 import { AGY_AGENT } from '../../core/agy.ts'
+import { isSidebarPane } from '../../core/board-pane.ts'
 import { CODEX_AGENT, CODEX_NAMING, codexHooksReview, codexInputReady, codexPromptAt } from '../../core/codex.ts'
 import {
   agyTrustDialog,
@@ -158,6 +160,39 @@ export async function paneInfo(pane: string, timeoutMs?: number) {
     terminal: stringAt(p, 'terminal_id'),
     session: stringAt(isRecord(p) ? p.agent_session : null, 'value'),
   }
+}
+
+/**
+ * Closes a newly opened spawn tab (or pane) when startup failed before any agent ever came up in it
+ * (#888): never touches a pane that runs an agent, was reassigned to another terminal, or runs
+ * another process under its shell.
+ */
+async function cleanupEmptySpawnTab(created: {
+  pane: string
+  terminal: string | null
+  workspace: string
+}): Promise<void> {
+  const cur = await paneInfo(created.pane, 5000).catch(() => null)
+  if (!cur || cur.agent) return
+  if (created.terminal && cur.terminal && cur.terminal !== created.terminal) return
+  const procs = await paneProcesses(created.pane, 5000).catch(() => null)
+  if (!procs || procs.foreground.some(pr => pr.pid !== procs.shell)) return
+  if (process.platform === 'win32') {
+    const rows = await memoryTable().catch(() => null)
+    if (!rows || nothingUnder(rows, procs.shell) !== true) return
+  }
+  let closeTab = false
+  if (cur.tab && created.workspace) {
+    const answer = await herdr(['pane', 'list', '--workspace', created.workspace], 5000).catch(() => null)
+    const raw = isRecord(answer) && Array.isArray(answer.panes) ? answer.panes : []
+    const inTab = raw
+      .map(asPane)
+      .filter((x): x is NonNullable<ReturnType<typeof asPane>> => !!x && x.tab_id === cur.tab)
+    if (inTab.some(x => x.pane_id === created.pane) && inTab.every(x => x.pane_id === created.pane || isSidebarPane(x)))
+      closeTab = true
+  }
+  await herdr(closeTab && cur.tab ? ['tab', 'close', cur.tab] : ['pane', 'close', created.pane]).catch(() => {})
+  forgetProfilePane(created.pane)
 }
 
 /** Type a line into the agent's prompt; a leading dash would read as an option to herdr. */
@@ -437,6 +472,7 @@ export async function spawnAgent(
 
   // The tab is labelled before Claude runs: a launcher may name things after it (a Telegram topic).
   let pane = o.pane
+  let createdTab: { pane: string; terminal: string | null; workspace: string } | null = null
   if (pane) {
     const p = await paneInfo(pane)
     // Typed into a running agent, the command would go to it as a prompt.
@@ -480,6 +516,7 @@ export async function spawnAgent(
       throw err
     }
     pane = opened.pane
+    createdTab = { pane: opened.pane, terminal: opened.terminal, workspace: workspace ?? '' }
     // Before Claude runs: a pane the board cannot tell was opened in the profile is never woken
     // there, and the record of an earlier pane of this id (herdr started over) is not this one's.
     if (configDir !== null && profile) recordProfilePane(pane, profile.id, opened.terminal)
@@ -502,65 +539,70 @@ export async function spawnAgent(
       ...(parent && { parent }),
       ...(by && { serviceStartBy: by }),
     })
-  await herdr(['pane', 'run', pane, command])
-
-  const deadline = Date.now() + o.timeoutSec * 1000
   let ready = false
-  let answered = 0
-  // The agent that came up (herdr says): Claude, or pi for a start command that starts it; for
-  // --agent codex, Codex and nothing else.
   let naming: Naming = isCodex ? CODEX_NAMING : CLAUDE_NAMING
   let kind = 'claude'
   let session: string | null = null
   let seen = false
-  while (Date.now() < deadline) {
-    await pause(1500)
-    let p: Awaited<ReturnType<typeof paneInfo>>
-    try {
-      p = await paneInfo(pane, 10_000)
-    } catch (err) {
-      if (/not.?found|no such/i.test(messageOf(err)))
-        throw new Error(`The tab of ${pane} was closed before ${isCodex ? 'Codex' : 'Claude'} got ready`)
-      continue
-    }
-    const own = isCodex ? (p.agent === CODEX_AGENT ? CODEX_NAMING : null) : namingOf(p.agent)
-    if (!own || !p.agent) continue
-    if (!seen) {
-      seen = true
-      onAgent?.(pane)
-    }
-    naming = own
-    kind = p.agent
-    session = p.session
-    // Codex: herdr calls it idle while its hooks still run and the input takes nothing yet, and a
-    // hooks-review screen is no idle either. Only the field on screen counts.
-    const shown = isCodex ? await screen(pane) : ''
-    if (isCodex && codexHooksReview(shown))
-      throw new Error(
-        `Codex in ${pane} waits for its hooks to be trusted. Trust them in that tab (t, then esc), then: herdr agent prompt ${pane} "${naming.command(o.name)}" and send the brief.`,
-      )
-    if ((p.status === 'idle' || p.status === 'done') && (!isCodex || codexInputReady(shown))) {
-      ready = true
-      break
-    }
-    if (p.status === 'blocked') {
-      if (o.trust && answered < 4 && (await answerStartup(pane, cwd, home, claudeDirs, kind))) {
-        answered++
+  try {
+    await herdr(['pane', 'run', pane, command])
+
+    const deadline = Date.now() + o.timeoutSec * 1000
+    let answered = 0
+    // The agent that came up (herdr says): Claude, or pi for a start command that starts it; for
+    // --agent codex, Codex and nothing else.
+    while (Date.now() < deadline) {
+      await pause(1500)
+      let p: Awaited<ReturnType<typeof paneInfo>>
+      try {
+        p = await paneInfo(pane, 10_000)
+      } catch (err) {
+        if (/not.?found|no such/i.test(messageOf(err)))
+          throw new Error(`The tab of ${pane} was closed before ${isCodex ? 'Codex' : 'Claude'} got ready`)
         continue
       }
-      throw new Error(
-        isCodex
-          ? `Codex in ${pane} waits for a dialog (folder trust?). Answer it in that tab, then: herdr agent prompt ${pane} "${naming.command(o.name)}" and send the brief.`
-          : kind === PI_AGENT || kind === AGY_AGENT
-            ? `${naming.title} in ${pane} waits for a dialog. Answer it in that tab, then: herdr agent prompt ${pane} "${naming.command(o.name)}" and send the brief.`
-            : `Claude in ${pane} waits for a dialog (folder trust?). Answer it in that tab, then: herdr agent prompt ${pane} "/rename ${o.name}" and send the brief.`,
-      )
+      const own = isCodex ? (p.agent === CODEX_AGENT ? CODEX_NAMING : null) : namingOf(p.agent)
+      if (!own || !p.agent) continue
+      if (!seen) {
+        seen = true
+        onAgent?.(pane)
+      }
+      naming = own
+      kind = p.agent
+      session = p.session
+      // Codex: herdr calls it idle while its hooks still run and the input takes nothing yet, and a
+      // hooks-review screen is no idle either. Only the field on screen counts.
+      const shown = isCodex ? await screen(pane) : ''
+      if (isCodex && codexHooksReview(shown))
+        throw new Error(
+          `Codex in ${pane} waits for its hooks to be trusted. Trust them in that tab (t, then esc), then: herdr agent prompt ${pane} "${naming.command(o.name)}" and send the brief.`,
+        )
+      if ((p.status === 'idle' || p.status === 'done') && (!isCodex || codexInputReady(shown))) {
+        ready = true
+        break
+      }
+      if (p.status === 'blocked') {
+        if (o.trust && answered < 4 && (await answerStartup(pane, cwd, home, claudeDirs, kind))) {
+          answered++
+          continue
+        }
+        throw new Error(
+          isCodex
+            ? `Codex in ${pane} waits for a dialog (folder trust?). Answer it in that tab, then: herdr agent prompt ${pane} "${naming.command(o.name)}" and send the brief.`
+            : kind === PI_AGENT || kind === AGY_AGENT
+              ? `${naming.title} in ${pane} waits for a dialog. Answer it in that tab, then: herdr agent prompt ${pane} "${naming.command(o.name)}" and send the brief.`
+              : `Claude in ${pane} waits for a dialog (folder trust?). Answer it in that tab, then: herdr agent prompt ${pane} "/rename ${o.name}" and send the brief.`,
+        )
+      }
     }
+    if (!ready)
+      throw new Error(
+        `${isCodex ? 'Codex' : isAgy ? 'Antigravity' : 'Claude'} did not get ready in ${pane} within ${o.timeoutSec} s`,
+      )
+  } catch (err) {
+    if (createdTab && !seen) await cleanupEmptySpawnTab(createdTab).catch(() => {})
+    throw err
   }
-  if (!ready)
-    throw new Error(
-      `${isCodex ? 'Codex' : isAgy ? 'Antigravity' : 'Claude'} did not get ready in ${pane} within ${o.timeoutSec} s`,
-    )
   if (kind === PI_AGENT && carded && isPiSessionFile(session)) moveStartCard(carded, session, profile?.id, o.model)
   // agy has no pre-assigned --session-id: move the start card's lane, profile and model (or save
   // --model alone) onto its conversation card once ready without pinning card.name, so herdr agent

@@ -234,6 +234,18 @@ test('#243 promptShows: no prompt yet, the wake line (wrapped too), an empty pro
   for (const [screen, shows] of cases) expect([screen, promptShows(screen, SID)]).toEqual([screen, shows])
   // Not a session id: never its wake line.
   expect(promptShows('$ board resume pane-7', 'pane-7')).toBe('other')
+
+  // Agy, Codex and pi wake lines (including wrapped across rows and Windows paths with Cyrillic/spaces/%).
+  const AGY_ID = '509dfc37-b58e-4851-9988-a8c7befe9f0d'
+  const PI_ID = '01a15d6d-9f21-7751-a71a-834d50839768'
+  expect(promptShows(`${PS}board resume --agy ${AGY_ID}`, AGY_ID)).toBe('line')
+  expect(promptShows(`${PS}board resume --codex ${AGY_ID}`, AGY_ID)).toBe('line')
+  expect(promptShows(`${PS}board resume --cod\nex ${AGY_ID.slice(0, 12)}\n${AGY_ID.slice(12)}`, AGY_ID)).toBe('line')
+  expect(promptShows(`${PS}board resume --pi ${PI_ID}`, PI_ID)).toBe('line')
+  expect(promptShows(`${PS}board resume --pi ${PI_ID}; echo x`, PI_ID)).toBe('other')
+  expect(promptIdle(`${PS}board resume --codex ${AGY_ID}`, AGY_ID)).toBe(true)
+  expect(promptIdle(`${PS}board resume --agy ${AGY_ID}`, AGY_ID)).toBe(true)
+  expect(promptIdle(`${PS}board resume --pi ${PI_ID}`, PI_ID)).toBe(true)
 })
 
 test('#243 promptRows: one in a shell that has just started (its prompt wrapped too), more once anything ran', () => {

@@ -130,9 +130,9 @@ export async function leftoverBoards(
   return leftovers
 }
 
-/** herdr-sidebar's pane, which that plugin adds to every tab. */
+/** herdr-sidebar's pane (by its metadata tokens, or its label with no agent once tokens expire). */
 export const isSidebarPane = (p: SnapPane): boolean =>
-  !p.agent && Object.keys(p.tokens ?? {}).some(k => k.startsWith('herdr-sidebar'))
+  !p.agent && (Object.keys(p.tokens ?? {}).some(k => k.startsWith('herdr-sidebar')) || p.label === 'Sidebar')
 
 /**
  * What closes a leftover board pane: its whole tab when nothing but herdr-sidebar's panes is beside
