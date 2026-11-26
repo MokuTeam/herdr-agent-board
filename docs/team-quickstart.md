@@ -128,6 +128,17 @@ To update: `git -C /opt/herdr-agent-board pull && systemctl restart hab-hub`.
    it, or call `/api/team/send` directly, and then the message carries no agent mark. The "via agent"
    mark only says the draft came from `board team draft`; it does not say that a person approved it.
 
+## Direct messages to agents
+
+In Team → People and agents → Agents teammates can address, the board owner can choose
+**Every agent in shared lanes** (the default) or **Only masters in shared lanes**. Pick a session
+there to mark it as a master. The badge appears on its card. A Workdesk master can also run
+`board team mark-master` from its session on the board's computer. When passkey confirmation is
+enabled, adding a master or switching back to all agents requires confirmation.
+
+A previous address that is no longer exposed goes to the listener with a note if it arrives from
+a peer's older directory. A master can still hand a thread to an executor in an eligible lane.
+
 ## When something does not work
 
 - **No green dot / "Could not use …" / "Connecting…" for long.** Is Tailscale up on your machine
@@ -286,6 +297,17 @@ Debian или Ubuntu с nginx, от root.
    черновик и отправить его или вызвать `/api/team/send` напрямую, и тогда у сообщения нет пометки
    агента. Пометка «через агента» говорит только, что черновик пришёл из `board team draft`; она не
    значит, что человек его одобрил.
+
+## Прямые обращения к агентам
+
+В «Команда» → «Люди и агенты» → «Агенты, к которым могут обратиться коллеги» владелец выбирает
+**Все агенты в открытых категориях** (по умолчанию) или **Только мастера в открытых категориях**.
+Там же можно выбрать сессию и отметить её мастером. Отметка появится на карточке. Мастер Workdesk
+может выполнить `board team mark-master` из своей сессии на компьютере доски. Если включено
+подтверждение ключом доступа, добавление мастера и возврат к списку всех агентов требуют подтверждения.
+
+Если сообщение пришло по адресу из устаревшего списка, оно попадёт к слушателю с пояснением.
+Мастер по-прежнему может передать тред исполнителю в подходящей категории.
 
 ## Если что-то не работает
 

@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { writeCard } from '../../src/adapters/cards.ts'
 import { archiveDir, teamAgentsFile, teamDirectoryFile } from '../../src/adapters/paths.ts'
 import {
   changeAgents,
@@ -198,6 +199,54 @@ describe('the directory this board sends: what the lanes shared reach', () => {
     await until(() => readDirectoryState().sent[w.P.pub]?.state === 'acked', 'acked')
     expect(await w.router.syncDirectory()).toBe(1)
     expect(sent(w.ws)[1]?.body).toEqual({ text: 'agent directory', agents: [] })
+  })
+
+  test('masters-only filters shared lanes, keeps old handles and leaves hand-offs available', async () => {
+    const w = await world()
+    const worker = { key: 'pane-test-2', name: 'Сборка 100%', category: 'acme', service: true as const }
+    w.items.push(worker)
+    writeCard('sess-acme', { teamMaster: true })
+    writeCard('sess-globex', { teamMaster: true })
+    shareWithAnna(w)
+    changeDirectoryState(d => {
+      d.aliases[worker.key] = 'build-worker'
+    })
+    await w.router.syncDirectory()
+    const first = sent(w.ws)[0]
+    expect(first?.body.text).toContain('build-worker')
+    expect(first?.body.agents).toEqual([{ code: 'acme-work' }, { code: 'sborka-100' }])
+    await word(w, first?.id, 'acked', w.P)
+    await until(() => readDirectoryState().sent[w.P.pub]?.state === 'acked', 'initial directory acked')
+
+    changeAgents(s => {
+      s.mastersOnly = true
+    })
+    expect(await w.router.syncDirectory()).toBe(1)
+    expect(sent(w.ws)[1]?.body).toEqual({ text: 'agent directory', agents: [{ code: 'acme-work' }] })
+    expect(w.router.exposed([w.P.pub, w.Q.pub]).map(x => x.code)).toEqual(['acme-work'])
+    expect(readDirectoryState().handles[worker.key]).toBe('sborka-100')
+
+    const thread = { id: crypto.randomUUID(), title: 'Direct message' }
+    const key = `${w.P.pub}/${thread.id}`
+    await deliver(w, w.P, { text: 'using a cached directory', thread, at: 'sborka-100' })
+    expect(w.schedule.entries.map(e => e.key)).toEqual(['sess-listener'])
+    expect(w.schedule.entries[0]?.text).toContain('@sborka-100, which reaches no agent here now')
+    expect(readThreads()[key]?.handler).toBeNull()
+
+    await deliver(w, w.P, { text: 'to the master', thread, at: 'acme-work' })
+    expect(readThreads()[key]?.handler?.key).toBe('sess-acme')
+    expect(w.router.assign(key, { key: worker.key })).toEqual({ ok: true })
+    expect(readThreads()[key]?.handler?.key).toBe(worker.key)
+
+    writeCard('sess-acme', { teamMaster: '' })
+    expect(w.router.directoryFor(w.P.pub)).toEqual([])
+    changeAgents(s => {
+      delete s.mastersOnly
+    })
+    expect(w.router.directoryFor(w.P.pub)).toEqual([
+      { code: 'acme-work' },
+      { code: 'sborka-100', alias: 'build-worker' },
+    ])
   })
 
   test('one at a time: the next change goes once her board acked the last; unchanged, nothing goes', async () => {

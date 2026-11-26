@@ -42,6 +42,8 @@ export interface TurnMark {
 
 /** The agent's card: what it (or the user) wrote about a session. Unknown fields survive. */
 export interface Card {
+  /** The owner marked this session as a master of its lane or project (#867). */
+  teamMaster?: true
   key?: string
   category?: string
   doing?: string
@@ -339,6 +341,7 @@ export interface TranscriptInfo {
 
 /** A board item: one agent session, merged from herdr, its card and its transcript. */
 export interface Item {
+  teamMaster?: true
   key: string
   session: string | null
   pane: string | null

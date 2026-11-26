@@ -71,6 +71,7 @@ export const CAL_WRITE_SUBS: ReadonlySet<string> = new Set(['add', 'edit', 'rm',
 export const TEAM_NOT_FROM_NODE: Readonly<Record<string, string>> = {
   join: "board team join sets up this board's team identity: run it on the board's computer, not from a node",
   watch: 'board team watch streams continuously: use board team inbox from a node',
+  'mark-master': "board team mark-master changes an owner setting: run it on the board's computer",
 }
 
 /**

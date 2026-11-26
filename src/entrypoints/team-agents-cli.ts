@@ -26,7 +26,7 @@ import { leadingMention, mentionWord, peerOfWord } from '../core/team-directory.
 import { normalizeEmoji } from '../core/team-reactions.ts'
 
 export const AGENT_USAGE =
-  'board team post <name|peer-id|team|@name.agent> [--new "<title>"] [--link <url>] [--file <path>] "<text>" | board team reply <thread> [--to <message>] [--file <path>] "<text>" | board team react <thread> <message> <emoji> [--remove] | board team thread <thread> [--json] [--read] | board team drafts | board team assign <thread> <session> | board team release <thread> | board team listen [off] | board team loop <name|peer-id|team> [<1-100>|default] | board team agents [<name|peer-id>]'
+  'board team post <name|peer-id|team|@name.agent> [--new "<title>"] [--link <url>] [--file <path>] "<text>" | board team reply <thread> [--to <message>] [--file <path>] "<text>" | board team react <thread> <message> <emoji> [--remove] | board team thread <thread> [--json] [--read] | board team drafts | board team assign <thread> <session> | board team release <thread> | board team listen [off] | board team loop <name|peer-id|team> [<1-100>|default] | board team agents [<name|peer-id>] | board team mark-master [off]'
 
 export const CHANNEL_USAGE = 'board team channel delete <ref> | board team channel leave <ref>'
 
@@ -372,6 +372,19 @@ export async function teamAgents(op: string, args: string[], ctx: Ctx): Promise<
       ...(file && { file }),
     })
     return said(reply, status, whoOf(ctx, to))
+  }
+  if (op === 'mark-master') {
+    if (rest.length > 1 || (rest.length === 1 && rest[0] !== 'off'))
+      throw new Error('usage: board team mark-master [off]')
+    const { key } = await ctx.self()
+    const on = rest[0] !== 'off'
+    const { status, reply } = await call(ctx.webPort, '/api/team/agents', { master: { key, on } })
+    if (status === 428 && isRecord(reply) && typeof reply.confirm === 'string')
+      throw new Error(
+        printable(`waits for the owner: open ${reply.confirm} within 2 minutes and confirm it with a passkey`),
+      )
+    if (!isRecord(reply) || reply.ok !== true) throw new Error(`the board answered ${status}`)
+    return on ? 'ok · marked as master' : 'ok · master flag removed'
   }
   if (op === 'agents') {
     // The peers' agent directories (#832): whom `@name.agent` reaches, read only.

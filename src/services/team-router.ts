@@ -12,6 +12,7 @@
 import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs'
 import { basename, join, sep } from 'node:path'
 import { archivedFiles, isArchived } from '../adapters/archive-store.ts'
+import { readCard } from '../adapters/cards.ts'
 import { configDir, stateDir, uploadsDir } from '../adapters/paths.ts'
 import { addEntry, listEntries, updateEntry } from '../adapters/schedule-store.ts'
 import {
@@ -204,6 +205,7 @@ export interface TeamRouter {
   listen(session: SessionRef | null, caller?: SessionRef): { ok: true } | { ok: false; error: string }
   /** What the board calls a session (its card's name), never what a caller said; null when it has none. */
   sessionName(key: string): string | null
+  hasSession(key: string): boolean
   /** The directory a peer would get now (#832): every session a message from them could reach. */
   directoryFor(peer: string): DirectoryEntry[]
   /**
@@ -274,19 +276,21 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
    * archive's own records are read, not only the board's last look), their handles and the
    * switches. With `assign`, each session in a lane shared with someone who has Agents on gets its
    * handle, kept in team-directory.json from then on; without, only the handles there count.
+   * In masters-only mode the live sessions still reserve their handles when hidden.
    */
   function world(s: ReturnType<typeof readAgents>, assign = false): ReachWorld {
     const archived = archivedFiles()
     const sessions = items()
       .filter(i => !isArchived(archived, i.key))
       .map(i => ({ key: i.key, name: i.name || i.autoName || '', lane: i.category }))
+    const reachable = s.mastersOnly ? sessions.filter(i => readCard(i.key)?.teamMaster === true) : sessions
     const state = readDirectoryState()
     let handles = state.handles
     if (assign && !globalOff(s.off)) {
       const open = Object.entries(s.peers).filter(([p, sw]) => isPeerId(p) && sw?.on)
       // Every session on the board counts as there: one in a lane shared with nobody now keeps its handle.
       const next = assignHandles(
-        sessions.filter(x => open.some(([, sw]) => sharesLane(sw, x.lane))),
+        reachable.filter(x => open.some(([, sw]) => sharesLane(sw, x.lane))),
         handles,
         new Set(sessions.map(x => x.key)),
       )
@@ -297,7 +301,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
         handles = next
       }
     }
-    return { handles, aliases: state.aliases, off: globalOff(s.off), peers: s.peers, sessions }
+    return { handles, aliases: state.aliases, off: globalOff(s.off), peers: s.peers, sessions: reachable }
   }
 
   function nameOf(key: string): string | null {
@@ -544,10 +548,10 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       const ref = threadRef(parts.scope, parts.id)
       // Addressed to one of this board's agents by its handle (#832): the board's mapping, while the
       // session's lane is shared with the sender; anything else goes to the listener with a note,
-      // never a guess, and never to an archived session. An empty board (its first look has not
-      // happened yet) proves nothing: the message is routed as any other.
+      // never a guess, and never to an archived session. Under the default policy an empty board
+      // still routes as any other message while waiting for its first look.
       // Only in a pair's thread: addressing is a pair's, weighed by this board's switches for that person.
-      if (e.at && !isTeam && known.length) {
+      if (e.at && !isTeam && (known.length || s.mastersOnly)) {
         const addr = { who, agent: e.via === 'agent', ref, team: isTeam, code: e.at }
         const hit = reach(e.at, e.from, world(s))
         if (hit) {
@@ -610,6 +614,10 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
     },
 
     sessionName: nameOf,
+
+    hasSession(key) {
+      return items().some(i => i.key === key) && !isArchived(archivedFiles(), key)
+    },
 
     directoryFor(peer) {
       return directoryFor(peer, world(readAgents()))

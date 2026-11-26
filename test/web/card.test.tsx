@@ -33,6 +33,13 @@ test('the card shows its status by the name', () => {
   expect(bare).toContain('>Needs me<')
 })
 
+test('only a marked card shows the master badge', () => {
+  const marked = item({ key: 'marked', teamMaster: true })
+  const ordinary = item({ key: 'ordinary' })
+  expect(bothCards({ items: [marked] }, marked.key).react).toContain('>Master<')
+  expect(bothCards({ items: [ordinary] }, ordinary.key).react).not.toContain('>Master<')
+})
+
 test('a Claude card shows its context and effort at its foot; another agent’s does not (#193)', () => {
   const fields = { context: 85_000, contextPct: 42, contextSize: 200_000, effort: 'high', effortLive: true as const }
   const a = item({ key: 'a', name: 'Alpha', agent: 'claude', status: 'working', column: 'work', ...fields })

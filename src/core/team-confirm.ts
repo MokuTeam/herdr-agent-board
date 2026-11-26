@@ -118,6 +118,7 @@ export function fromComputer(url: string, port: number): boolean {
 /** What the agents' switches are now, as far as widening goes. */
 export interface AgentsNow {
   off: boolean
+  mastersOnly?: true
   peers: Record<string, { on: boolean; lanes: string[]; allLanes?: unknown } | undefined>
 }
 
@@ -128,6 +129,11 @@ export interface AgentsNow {
  * listener, removing lanes, unsharing every lane and muting are free.
  */
 export function widens(now: AgentsNow, change: Record<string, unknown>): boolean {
+  if (change.mastersOnly !== undefined) return change.mastersOnly === false && now.mastersOnly === true
+  if (change.master !== undefined)
+    return (
+      typeof change.master === 'object' && change.master !== null && 'on' in change.master && change.master.on === true
+    )
   // A welcome (#355) widens as its parts do: Agents on, a lane added, a channel joined.
   if (Array.isArray(change.channels) && change.channels.length) return true
   if (change.listener !== undefined) return change.listener !== null

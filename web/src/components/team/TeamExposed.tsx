@@ -1,11 +1,10 @@
-// What teammates can address on this board (#832), in People and agents: exposure follows the
-// lanes shared in the switches above. Owners can publish an alias alongside the canonical handle. Each session a teammate reaches, by its
-// handle (`@Me.handle`), its lane, and who reaches it now. Nothing to turn on here: a session leaves
-// the list when it leaves the lane, is archived, or the lane is no longer shared.
+// The owner's direct addressing policy and the resulting directory (#832, #867).
+import { useState } from 'react'
 import { MAX_CODE } from '../../../../src/core/team-wire.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import type { AgentsChange, AgentsView, TeamView } from '../../models/team.ts'
 import { mentionWord } from '../../models/team.ts'
+import { useBoardContext } from '../../state/BoardProvider.tsx'
 
 export function TeamExposed({
   view,
@@ -19,8 +18,11 @@ export function TeamExposed({
   onAgents(change: AgentsChange): void
 }) {
   const t = useT()
+  const { data } = useBoardContext()
+  const [key, setKey] = useState('')
+  const items = data?.items ?? []
+  const item = items.find(i => i.key === key)
   const exposed = agents.exposed ?? []
-  if (!exposed.length) return null
   const me = mentionWord(view.me.name ?? '')
   const nameOf = (peer: string): string => view.roster.find(p => p.peer === peer)?.name ?? peer.slice(0, 8)
   const laneOf = (id: string): string => agents.lanes.find(l => l.id === id)?.title ?? id
@@ -30,6 +32,41 @@ export function TeamExposed({
         <h3>{t('team.exposed')}</h3>
       </summary>
       <p className="hint">{t('team.exposedAbout')}</p>
+      <label className="team-exposure-control">
+        <span>{t('team.exposureMode')}</span>
+        <select
+          value={agents.mastersOnly ? 'masters' : 'all'}
+          disabled={disabled}
+          onChange={e => onAgents({ mastersOnly: e.currentTarget.value === 'masters' })}
+        >
+          <option value="all">{t('team.exposureAll')}</option>
+          <option value="masters">{t('team.exposureMasters')}</option>
+        </select>
+      </label>
+      <div className="team-expose">
+        <label className="team-exposure-control">
+          <span>{t('team.masterCard')}</span>
+          <select value={item?.key ?? ''} disabled={disabled} onChange={e => setKey(e.currentTarget.value)}>
+            <option value="">{t('team.pickMasterCard')}</option>
+            {items.map(i => (
+              <option key={i.key} value={i.key}>
+                {i.name || i.key} · {laneOf(i.category)}
+                {i.teamMaster ? ` · ${t('card.teamMaster')}` : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+        {item && (
+          <button
+            className="mini"
+            type="button"
+            disabled={disabled}
+            onClick={() => onAgents({ master: { key: item.key, on: !item.teamMaster } })}
+          >
+            {t(item.teamMaster ? 'team.unmarkMaster' : 'team.markMaster')}
+          </button>
+        )}
+      </div>
       {exposed.map(e => (
         <div key={e.code} className="team-expose" data-expose={e.code}>
           <div className="team-switch-row">

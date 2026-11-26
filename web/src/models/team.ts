@@ -197,6 +197,7 @@ export const isThreadLines = (v: unknown): v is { thread: ThreadView | null; lin
  * the board's `loopDefault` when none is set. `allLanes` (#386): every lane is shared, later ones too.
  */
 export interface AgentsView {
+  mastersOnly?: true
   off: boolean
   listener: { key: string; name?: string } | null
   peers: Record<string, { on: boolean; lanes: string[]; allLanes?: unknown; muted?: boolean; loop?: number }>
@@ -392,12 +393,15 @@ export const isAgentsView = (v: unknown): v is AgentsView =>
       v.services.every(
         x => isObj(x) && typeof x.key === 'string' && typeof x.name === 'string' && typeof x.lane === 'string',
       ))) &&
+  (v.mastersOnly === undefined || v.mastersOnly === true) &&
   (v.exposed === undefined || (Array.isArray(v.exposed) && v.exposed.every(isExposedAgent)))
 
 /** One change of the switches, as POST /api/team/agents takes it. */
 export type AgentsChange =
   | { publishAlias: { key: string; name: string | null } }
   | { off: boolean }
+  | { mastersOnly: boolean }
+  | { master: { key: string; on: boolean } }
   | { listener: null }
   | { peer: string; on?: boolean; lanes?: string[]; allLanes?: boolean; muted?: boolean; loop?: number | null }
 

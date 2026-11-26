@@ -68,6 +68,8 @@ export function confirmLines(a: Reply, t: Translator): ConfirmLines {
       }
     case 'agents': {
       const items: string[] = []
+      if (a.allAgents === true) items.push(t('team.exposureAll'))
+      if (typeof a.master === 'string') items.push(t('team.confirm.markMaster', { name: a.master }))
       if (a.allOn === true) items.push(t('team.confirm.item.allOn'))
       if (typeof a.listener === 'string') items.push(t('team.confirm.item.listener', { session: a.listener }))
       if (a.on === true) items.push(t('team.confirm.item.on'))

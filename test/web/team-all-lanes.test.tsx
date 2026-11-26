@@ -100,6 +100,23 @@ function lanesOf(nodes: Node[], scope: string): [string, string | undefined, boo
 }
 
 describe('the switches (#386)', () => {
+  test('the direct addressing choice is visible even with an empty directory', () => {
+    const changes: unknown[] = []
+    const onAgents = (change: unknown) => void changes.push(change)
+    const select = (agents: AgentsView, value: string) => {
+      const control = hostsOf(props({ agents, onAgents })).find(
+        h => h.tag === 'select' && (h.props.value === 'all' || h.props.value === 'masters'),
+      )
+      expect(control?.props.value).toBe(agents.mastersOnly ? 'masters' : 'all')
+      const change = control?.props.onChange
+      if (typeof change !== 'function') throw new Error('missing exposure mode control')
+      change({ currentTarget: { value } })
+    }
+    select(AGENTS, 'masters')
+    select({ ...AGENTS, mastersOnly: true }, 'all')
+    expect(changes).toEqual([{ mastersOnly: true }, { mastersOnly: false }])
+  })
+
   test('every scope has All lanes above its lanes; a click turns it on, and off again', () => {
     const changes: unknown[] = []
     const p = props({ onAgents: c => void changes.push(c) })
