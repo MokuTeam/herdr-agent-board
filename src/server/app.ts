@@ -8,9 +8,10 @@
 
 import { randomBytes, randomUUID } from 'node:crypto'
 import { existsSync, type FSWatcher, mkdirSync, mkdtempSync, readFileSync, rmSync, watch } from 'node:fs'
-import { hostname, tmpdir } from 'node:os'
+import { homedir, hostname, tmpdir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { localAgyLimits } from '../adapters/agy-limits.ts'
+import { listArchive } from '../adapters/archive-store.ts'
 import { allCards, readCard } from '../adapters/cards.ts'
 import {
   editNodes,
@@ -35,6 +36,7 @@ import {
 import { snapshot, workspaceList } from '../adapters/herdr.ts'
 import { hasDesktop, observe as observeComputer } from '../adapters/idle.ts'
 import { isRecord } from '../adapters/json-store.ts'
+import { knownFolders } from '../adapters/known-folders.ts'
 import { activateNodeRelayKey, createNodeJoinStore, stageNodeRelayKey } from '../adapters/node-join-store.ts'
 import {
   createDeviceStore,
@@ -2057,6 +2059,14 @@ export async function startServer({
       launch: id => launches.list().find(l => l.id === id),
       profiles: () => deps.profiles(),
       workspaces: () => workspaceList(8000),
+      // A start by a repository's address runs in a checkout this computer already has (#816).
+      known: () =>
+        knownFolders({
+          sessions: board.items(),
+          archived: listArchive(),
+          profileDirs: deps.profiles().list.map(p => p.dir),
+          home: homedir(),
+        }),
     })
     const nodeStore = createNodeStore()
     doorStore = nodeStore

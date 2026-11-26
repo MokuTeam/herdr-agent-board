@@ -4,8 +4,9 @@
 // off: a node has nobody at its keyboard, and a remote that asks for a login is a refusal. The
 // author the master's checkout gives goes into the checkout's own config, never the global one (#611).
 import { realpathSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import { type GitIdentity, identityOf } from '../core/git-access.ts'
+import { repoAddress } from '../core/portable.ts'
 import { run } from './process.ts'
 
 /** A clone may take minutes; a fetch, a checkout and the questions far less. */
@@ -177,4 +178,41 @@ export async function moveTo(dir: string, state: RepoState): Promise<RepoDone> {
   }
   const ff = await git(dir, ['merge', '--ff-only', '--quiet', `refs/remotes/origin/${state.ref}`])
   return ff.ok ? { ok: true } : { ok: false, why: ff.why }
+}
+
+/**
+ * The main checkout the folder `dir` belongs to (through a linked worktree too) and the address of
+ * its `origin` as core/portable.ts repoAddress gives it (null: no origin, or one it does not read),
+ * or null when it is in no checkout with a work tree (#816). Only `origin`: every later step fetches
+ * and branches from it, so another remote with the address asked for does not make the checkout
+ * that repository's. The URL as the checkout's git config has it, before any `insteadOf`.
+ */
+export async function checkoutOrigin(dir: string): Promise<{ root: string; origin: string | null } | null> {
+  const common = await git(dir, ['rev-parse', '--path-format=absolute', '--git-common-dir'])
+  if (!common.ok || !common.out) return null
+  const at = resolve(common.out)
+  if (!/(^|[\\/])\.git$/.test(at)) return null
+  const root = dirname(at)
+  const url = await git(root, ['config', '--get', 'remote.origin.url'])
+  return { root, origin: url.ok && url.out ? repoAddress(url.out) : null }
+}
+
+/**
+ * A new worktree of the checkout at `dir` in `path` (#816), started from `base` (a commit or a
+ * remote branch): on `branch` (the local one when there is one, else made from `base` without an
+ * upstream, so a push never goes to `base`'s branch), or detached with no branch.
+ */
+export async function addWorktreeFrom(
+  dir: string,
+  path: string,
+  branch: string | null,
+  base: string,
+): Promise<RepoDone> {
+  let args: string[]
+  if (!branch) args = ['worktree', 'add', '--quiet', '--detach', '--', path, base]
+  else if ((await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`])).ok)
+    args = ['worktree', 'add', '--quiet', '--', path, branch]
+  else args = ['worktree', 'add', '--quiet', '--no-track', '-b', branch, '--', path, base]
+  const r = await git(dir, args, FETCH_MS)
+  return r.ok ? { ok: true } : { ok: false, why: r.why }
 }

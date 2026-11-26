@@ -750,7 +750,8 @@ caches, `.env`) never travel; the target rebuilds what it needs, and a secret go
 gets secrets. A session at work is refused too ("try again when it is free"): its conversation must be
 whole before it is copied, and `--when-free` stays a profile move's. A free one is put to sleep
 first, as `board sleep` does. On a node the repository is the clone under `node.workRoot` by its
-address, as a placed start has it, cloned when missing; back on this computer it is the checkout the
+address, cloned when missing (a move does not yet look for the owner's own checkout, as a placed
+start does since #816); back on this computer it is the checkout the
 session left. Either is fetched, and the branch found: the checkout itself when it is on it, else
 the worktree that has it, else a new worktree beside it. It is only fast-forwarded: a checkout
 there with commits of its own on the branch is refused, and so is one with changes, unless they are
@@ -4924,6 +4925,22 @@ and its first arguments, one per element, no shell, the board adding `call --cla
 MokuPilot node bridge (on by default for paired devices and `local`; no UI toggle yet): set
 `node.pilotBridge: false` in the node's `config.json` or `nodes.devices.<id>.pilotBridge: false`
 (or `nodes.devices.local.pilotBridge: false`) on the master to turn it off.
+
+A node's repository starts (#816): a start the master hands a node by a repository's address runs
+in the checkout of that repository the node's computer already has, not in a second clone. The node
+looks, in this order, at `node.repos` (`{ "github.com/acme/atlas": "~/Projects/atlas" }`, optional),
+the folders its own sessions ran in (live, then archived), and the folders its Claude profiles were
+used in (`projects` of their `.claude.json`); a folder in a linked worktree counts as its main
+checkout, and it matches when its `origin` has the address, in any case (a fork with the repository as
+`upstream` does not). Only when none has the repository is it cloned under `node.workRoot` as before,
+and also when the owner's checkout cannot be fetched or has no such branch. The owner's checkout is fetched, and used as it is only when
+no worktree is asked for and it is clean on the branch asked for (fast-forwarded when merely behind);
+it is never switched, reset or cleaned, and the master's git author is not written into it.
+Anything else gets a worktree of its own from the remote branch, at
+`<node.worktreeRoot>/<checkout folder name>/<branch or session name>`, `node.worktreeRoot` defaulting
+to `<node.workRoot>/worktree` (with `workRoot: "~"`: `~/worktree/<project>/<name>`), and refused
+inside the checkout. The card shows the folder the session really runs in. Nothing changes between
+master and node: an older master or node works as before.
 
 `tunnel` (the board [through your own domain](#another-computer-or-a-tablet-through-your-own-domain);
 Settings → Remote access… and `board tunnel on|off` set it): `on` (false), `host` (the server),
