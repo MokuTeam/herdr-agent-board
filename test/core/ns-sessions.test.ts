@@ -214,11 +214,18 @@ describe('the store', () => {
     const other = { ...LAPTOP, run_id: 'run-9' }
     expect(s.lock(A, U, holder, 900)).toEqual({ ok: true, lock_id: 'lock-1', until: c.now() + 120_000 })
     expect(s.lock(A, U, other, 60)).toEqual({ ok: false, code: 'locked', holder, until: c.now() + 120_000 })
-    // The same machine and profile with another run is another holder.
-    expect(s.lock(A, U, { ...holder, run_id: 'run-2' }, 60).ok).toBe(false)
+    // The same machine and profile extends it, whatever run asks; the lock then names that run.
+    expect(s.lock(A, U, { ...holder, run_id: 'run-2' }, 60)).toEqual({
+      ok: true,
+      lock_id: 'lock-1',
+      until: c.now() + 60_000,
+    })
+    // A late release from the earlier run of that seat leaves the newer run's lock alone.
+    expect(s.unlock(A, U, holder)).toBe(false)
     expect(s.lock(A, U, holder, 30)).toEqual({ ok: true, lock_id: 'lock-1', until: c.now() + 30_000 })
     expect(s.unlock(A, U, other)).toBe(false)
-    expect(s.unlock(A, U, holder)).toBe(true)
+    // A release that names no run matches the seat.
+    expect(s.unlock(A, U, { ...holder, run_id: '' })).toBe(true)
     expect(s.lock(A, U, other, 60)).toMatchObject({ ok: true, lock_id: 'lock-2' })
     // Expiry releases it.
     c.go(60_000)

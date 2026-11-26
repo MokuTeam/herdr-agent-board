@@ -303,8 +303,12 @@ export interface NsStore {
 }
 
 const keyOf = (account: string, user: string | null): string => `${account}\u0000${user ?? ''}`
-const sameHolder = (a: NsHolder, b: NsHolder): boolean =>
-  a.machine === b.machine && a.profile === b.profile && a.run_id === b.run_id
+// One machine and profile is one seat: it may extend its own lock whatever run asks. A release
+// names the run as well when both sides know it, so a late unlock from an earlier run of the same
+// seat does not drop the lock of the run that holds it now.
+const sameSeat = (a: NsHolder, b: NsHolder): boolean => a.machine === b.machine && a.profile === b.profile
+const sameRun = (a: NsHolder, b: NsHolder): boolean =>
+  sameSeat(a, b) && (!a.run_id || !b.run_id || a.run_id === b.run_id)
 
 export function createNsStore(o: NsStoreOptions = {}): NsStore {
   const now = o.now ?? Date.now
@@ -481,8 +485,8 @@ export function createNsStore(o: NsStoreOptions = {}): NsStore {
       const held = locks.get(k)
       const until = t + Math.min(Math.max(1, Math.floor(ttlS)), NS_LOCK_MAX_S) * 1000
       if (held && held.until > t) {
-        if (!sameHolder(held.holder, holder))
-          return { ok: false, code: 'locked', holder: held.holder, until: held.until }
+        if (!sameSeat(held.holder, holder)) return { ok: false, code: 'locked', holder: held.holder, until: held.until }
+        held.holder = holder
         held.until = until
         return { ok: true, lock_id: held.id, until }
       }
@@ -495,7 +499,7 @@ export function createNsStore(o: NsStoreOptions = {}): NsStore {
       const t = now()
       const k = keyOf(account, user)
       const held = locks.get(k)
-      if (!held || held.until <= t || !sameHolder(held.holder, holder)) return false
+      if (!held || held.until <= t || !sameRun(held.holder, holder)) return false
       locks.delete(k)
       return true
     },
