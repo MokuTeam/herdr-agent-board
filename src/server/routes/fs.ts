@@ -4,7 +4,7 @@
 // stat says they are missing, the others refuse them.
 import { statSync } from 'node:fs'
 import { basename, extname } from 'node:path'
-import { describe, MEDIA_TYPES, openWith, preview, resolvePath } from '../../adapters/files.ts'
+import { describe, isForeignPath, MEDIA_TYPES, openWith, preview, resolvePath } from '../../adapters/files.ts'
 import { listDirs } from '../../adapters/folders.ts'
 import { t } from '../../core/lang.ts'
 import { type Body, json, type Route, type RouteContext } from '../http.ts'
@@ -40,7 +40,8 @@ function byteRange(header: string | null, size: number): { start: number; end: n
  */
 async function raw(req: Request, ctx: RouteContext): Promise<Response> {
   const { path: target } = resolvePath(ctx.url.searchParams.get('path'))
-  if (target && ctx.ownFile(target)) return ownRefusal()
+  if (!target || isForeignPath(target)) return json(404, { error: 'not found' })
+  if (ctx.ownFile(target)) return ownRefusal()
   const type = MEDIA_TYPES[extname(target).slice(1).toLowerCase()]
   const st = target ? statSync(target, { throwIfNoEntry: false }) : null
   if (!type || !st?.isFile()) return json(404, { error: 'not found' })
@@ -84,7 +85,8 @@ export function attachment(name: string): string {
 /** GET /api/fs/download: any file the quick look can show, saved on the viewer's device, never shown inline. */
 function download(ctx: RouteContext): Response {
   const { path: target } = resolvePath(ctx.url.searchParams.get('path'))
-  if (target && ctx.ownFile(target)) return ownRefusal()
+  if (!target || isForeignPath(target)) return json(404, { error: 'not found' })
+  if (ctx.ownFile(target)) return ownRefusal()
   const st = target ? statSync(target, { throwIfNoEntry: false }) : null
   if (!st?.isFile()) return json(404, { error: 'not found' })
   const headers = {
@@ -113,7 +115,7 @@ export function fsRoutes(): Route[] {
       // A blank path lists the roots; any other is the folder listDirs reads.
       if (String(body.path ?? '').trim()) {
         const { path: target } = resolvePath(body.path)
-        if (target && ctx.ownFile(target)) return ownRefusal()
+        if (target && !isForeignPath(target) && ctx.ownFile(target)) return ownRefusal()
       }
       return json(200, await listDirs(body.path, { git: !!body.git }))
     }),
@@ -123,6 +125,7 @@ export function fsRoutes(): Route[] {
       const items = raws.map(raw => {
         const { path: target, line } = resolvePath(raw, String(body.cwd ?? ''))
         if (!target) return { raw, line, path: '', exists: false }
+        if (isForeignPath(target)) return { raw, line, ...describe(target) }
         // Missing, so the page shows no link for it.
         if (ctx.ownFile(target)) return { raw, line, path: target, name: basename(target), exists: false }
         return { raw, line, ...describe(target) }
@@ -133,6 +136,7 @@ export function fsRoutes(): Route[] {
       const body = await ctx.body()
       const { path: target } = resolvePath(body.path, String(body.cwd ?? ''))
       if (!target) return missing(body)
+      if (isForeignPath(target)) return json(200, preview(target))
       return ctx.ownFile(target) ? ownRefusal() : json(200, preview(target))
     }),
     post('/api/fs/open', async (_req, ctx) => {

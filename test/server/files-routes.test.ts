@@ -63,4 +63,40 @@ test('file API: stat, preview, raw bytes behind the token with ranges, and refus
 
   assert.equal((await post('/api/open-url', { url: 'javascript:alert(1)' })).status, 400)
   assert.equal((await post('/api/fs/open', { path: join(files, 'nope.txt') })).status, 404)
+
+  if (process.platform !== 'win32') {
+    const winCwd = 'C:\\Projects\\Demo'
+    const winAbs = 'C:/Projects/Demo/dist/popup.html'
+    const foreignStat = (await (
+      await post('/api/fs/stat', { cwd: winCwd, paths: [winAbs, 'dist/popup.html', '/srv/demo/nope.txt'] })
+    ).json()) as { items: { raw: string; path: string; name?: string; exists: boolean }[] }
+    assert.deepEqual(foreignStat.items, [
+      { raw: winAbs, line: null, path: 'C:\\Projects\\Demo\\dist\\popup.html', name: 'popup.html', exists: false },
+      {
+        raw: 'dist/popup.html',
+        line: null,
+        path: 'C:\\Projects\\Demo\\dist\\popup.html',
+        name: 'popup.html',
+        exists: false,
+      },
+      { raw: '/srv/demo/nope.txt', line: null, path: '/srv/demo/nope.txt', name: 'nope.txt', exists: false },
+    ])
+    const foreignPreview = (await (await post('/api/fs/preview', { cwd: winCwd, path: winAbs })).json()) as {
+      path: string
+      exists: boolean
+      error?: string
+    }
+    assert.deepEqual(foreignPreview, {
+      path: 'C:\\Projects\\Demo\\dist\\popup.html',
+      name: 'popup.html',
+      exists: false,
+      error: 'missing',
+    })
+    const foreignOpen = await post('/api/fs/open', { cwd: winCwd, path: winAbs })
+    assert.equal(foreignOpen.status, 404)
+    assert.equal(
+      ((await foreignOpen.json()) as { error: string }).error,
+      'Not found: C:\\Projects\\Demo\\dist\\popup.html',
+    )
+  }
 }, 20_000)

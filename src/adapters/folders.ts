@@ -3,7 +3,7 @@ import type { Dirent, Stats } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, sep } from 'node:path'
-import { resolvePath } from './files.ts'
+import { isForeignPath, resolvePath } from './files.ts'
 import { gitInfo, repoRoot } from './git.ts'
 
 // A path someone typed can be a share that is offline: no file-system call on it may hold the
@@ -76,7 +76,7 @@ const isDir = (st: Stats | null | typeof SLOW | undefined): boolean => !!st && s
 export async function listDirs(raw: unknown, { git = false }: { git?: boolean } = {}): Promise<DirListing> {
   if (!String(raw ?? '').trim()) return { path: '', exists: true, dir: true, roots: await roots(), entries: [] }
   const { path } = resolvePath(raw)
-  if (!path) return { path: String(raw), exists: false }
+  if (!path || isForeignPath(path)) return { path: path || String(raw), exists: false }
   const st = await statOf(path)
   if (st === SLOW) return { path, exists: false, slow: true }
   if (!st) return { path, exists: false }

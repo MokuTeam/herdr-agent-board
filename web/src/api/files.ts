@@ -2,6 +2,7 @@
 // (stat), a preview, opening a file or folder with the system or a web link in the browser, a
 // session checkout's changes and its project's past sessions. Every answer is narrowed before use;
 // a refusal comes back as an `error` (with its HTTP status), as the old page had it.
+import { parseNodeKey } from '../../../src/core/node-key.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import type { FolderEntry, PathInfo, Preview } from '../models/files.ts'
 import type { Changes, HistoryHit, HistoryReply } from '../models/quick-look.ts'
@@ -117,22 +118,24 @@ export function historyOf(value: unknown): HistoryReply {
   }
 }
 
+const nodeField = (key?: string | null): { key?: string } => (key && parseNodeKey(key) ? { key } : {})
+
 /** The files API, its texts in the page's language. */
 export function filesApi(t: () => Translator) {
   return {
     /** What the paths written in `cwd` are; nothing for those the server did not say. */
-    async stat(cwd: string, paths: string[]): Promise<PathInfo[]> {
-      const r = await filesPost('/api/fs/stat', { cwd, paths }, t())
+    async stat(cwd: string, paths: string[], key?: string | null): Promise<PathInfo[]> {
+      const r = await filesPost('/api/fs/stat', { ...nodeField(key), cwd, paths }, t())
       return list(r.items)
         .map(pathInfoOf)
         .filter(i => i !== null)
     },
-    async preview(path: string): Promise<Preview> {
-      return previewOf(await filesPost('/api/fs/preview', { path }, t()))
+    async preview(path: string, key?: string | null): Promise<Preview> {
+      return previewOf(await filesPost('/api/fs/preview', { ...nodeField(key), path }, t()))
     },
     /** Opens with the system (`open`) or shows in its folder (`reveal`); the error, if any. */
-    async open(path: string, how: 'open' | 'reveal'): Promise<string | null> {
-      const r = await filesPost('/api/fs/open', { path, how }, t())
+    async open(path: string, how: 'open' | 'reveal', key?: string | null): Promise<string | null> {
+      const r = await filesPost('/api/fs/open', { ...nodeField(key), path, how }, t())
       return str(r.error) ?? null
     },
     /** A web link in the default browser: the refusal, if any. */

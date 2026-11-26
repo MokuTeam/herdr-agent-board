@@ -115,25 +115,36 @@ describe('the quick look on another device', () => {
     expect(remoteTools(null, WIN, 't')).toEqual({ download: null, local: null })
   })
 
-  test('at the computer (no list): neither, as before', () => {
+  test('at the computer (no list): neither, as before; a node session file still downloads through its key', () => {
     expect(remoteTools(file, null, 't')).toEqual({ download: null, local: null })
+    expect(remoteTools(file, null, 't', '@win-node:s1')).toEqual({
+      download: '/api/fs/download?key=%40win-node%3As1&path=%2Fdata%2Fwork%2Fa%20b.zip&t=t',
+      local: null,
+    })
+    expect(remoteTools({ ...file, dir: true }, null, 't', '@win-node:s1')).toEqual({
+      download: null,
+      local: null,
+    })
+    expect(downloadUrl('C:\\Projects\\Demo\\a.zip', 'tok', '@win-node:s1')).toBe(
+      `/api/fs/download?key=${encodeURIComponent('@win-node:s1')}&path=${encodeURIComponent('C:\\Projects\\Demo\\a.zip')}&t=tok`,
+    )
   })
 
-  const view = (data: typeof file): LookView => ({
+  const view = (data: typeof file, key?: string): LookView => ({
     hidden: false,
     closing: false,
     depth: 1,
-    top: { kind: 'file', path: data.path, line: null },
+    top: { kind: 'file', path: data.path, line: null, ...(key && { key }) },
     head: { kind: data.kind, name: data.name, path: data.path },
     drawn: 1,
     data,
     loading: false,
     mode: 'view',
   })
-  const draw = (local: PathMap[] | null, data = file, lang = 'en') =>
+  const draw = (local: PathMap[] | null, data = file, lang = 'en', key?: string) =>
     renderToStaticMarkup(
       <I18nProvider lang={lang}>
-        <QuickLookView view={view(data)} canEdit token="tok" local={local} />
+        <QuickLookView view={view(data, key)} canEdit token="tok" local={local} />
       </I18nProvider>,
     )
 
@@ -156,6 +167,18 @@ describe('the quick look on another device', () => {
     const home = draw(null)
     expect(home).not.toContain('ql-download')
     expect(home).not.toContain('ql-local')
+    expect(home).toContain('data-ql="open"')
+    // A node session file at the computer offers Download with ?key= and disables/hides Open and Reveal.
+    const nodeHtml = draw(null, { ...file, path: 'C:\\Projects\\Demo\\a.zip' }, 'en', '@win-node:s1')
+    expect(nodeHtml).toContain(
+      'class="icon-button ql-download" href="/api/fs/download?key=%40win-node%3As1&amp;path=C%3A%5CProjects%5CDemo%5Ca.zip&amp;t=tok" download=""',
+    )
+    expect(nodeHtml).not.toContain('ql-local')
+    expect(nodeHtml).not.toContain('data-ql="open"')
+    expect(nodeHtml).toContain('class="button primary ql-open" disabled=""')
+    expect(nodeHtml).toContain(
+      'class="icon-button ql-reveal" title="Show in folder" aria-label="Show in folder" disabled=""',
+    )
   })
 })
 

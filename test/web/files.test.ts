@@ -53,9 +53,13 @@ describe('icons', () => {
 })
 
 describe('paths, either separator', () => {
-  test('the raw bytes of a file go with the run token', () => {
+  test('the raw bytes of a file go with the run token, and a node key when on another device', () => {
     expect(rawUrl('C:\\a b\\x.png', 'tok&1')).toBe('/api/fs/raw?path=C%3A%5Ca%20b%5Cx.png&t=tok%261')
     expect(rawUrl('/a/x.png', null)).toBe('/api/fs/raw?path=%2Fa%2Fx.png&t=')
+    expect(rawUrl('C:\\a b\\x.png', 'tok&1', '@win-node:s1')).toBe(
+      '/api/fs/raw?key=%40win-node%3As1&path=C%3A%5Ca%20b%5Cx.png&t=tok%261',
+    )
+    expect(rawUrl('/a/x.png', 'tok', 'local-session')).toBe('/api/fs/raw?path=%2Fa%2Fx.png&t=tok')
   })
 
   test('a file name', () => {
@@ -118,9 +122,10 @@ describe('the quick look', () => {
     expect(bodyClass({})).toBe('ql-body k-undefined')
   })
 
-  test('open and reveal need the board; copy only a path that is there (or denied)', () => {
+  test('open and reveal need the board and this computer; copy only a path that is there (or denied)', () => {
     expect(actionsOff({ path: '/a' }, true)).toEqual({ open: false, reveal: false, copy: false })
     expect(actionsOff({ path: '/a' }, false)).toEqual({ open: true, reveal: true, copy: false })
+    expect(actionsOff({ path: '/a' }, true, true)).toEqual({ open: true, reveal: true, copy: false })
     expect(actionsOff({ path: '/a', error: 'denied' }, true)).toEqual({ open: false, reveal: false, copy: false })
     expect(actionsOff({ path: '/a', error: 'missing' }, true)).toEqual({ open: true, reveal: true, copy: true })
     expect(actionsOff({ path: '' }, true)).toEqual({ open: true, reveal: true, copy: true })
@@ -176,5 +181,9 @@ describe('what the server said about a path', () => {
     expect(book.get('/w', 'b.md', 1000 + FRESH_MS.missing)?.exists).toBe(false)
     expect(book.get('/w', 'b.md', 1001 + FRESH_MS.missing)).toBeNull()
     expect(book.get('/other', 'a.md', 1000)).toBeNull()
+    // Different node scopes do not collide on the same cwd and raw path.
+    book.put('/w', { raw: 'a.md', path: 'C:\\w\\a.md', name: 'a.md', exists: true }, 1000, 'win-node')
+    expect(book.get('/w', 'a.md', 1000, 'win-node')?.path).toBe('C:\\w\\a.md')
+    expect(book.get('/w', 'a.md', 1000)?.path).toBe('/w/a.md')
   })
 })

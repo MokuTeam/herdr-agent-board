@@ -675,13 +675,14 @@ export function launchMenu(l: MenuLaunch, ctx: MenuContext): MenuEntry[] {
 }
 
 /** A file or folder chip in the conversation: the quick look's own actions, and copying the path. */
-export function chipMenu(chip: { dir: boolean }, ctx: MenuContext): MenuEntry[] {
+export function chipMenu(chip: { dir: boolean; remote?: boolean | undefined }, ctx: MenuContext): MenuEntry[] {
   const { t } = ctx
   const edit = ctx.canEdit ? {} : { disabled: true, reason: t('live.off') }
+  const here = !ctx.remote && !chip.remote
   return tidy<MenuEntry>([
     { id: 'look', label: t('menu.quickLook'), hint: 'Enter' },
-    !ctx.remote && { id: 'open', label: t('ql.open'), ...edit },
-    !ctx.remote && { id: 'reveal', label: t('ql.reveal'), ...edit },
+    here && { id: 'open', label: t('ql.open'), ...edit },
+    here && { id: 'reveal', label: t('ql.reveal'), ...edit },
     SEP,
     { id: 'copyPath', label: t('ql.copy') },
     chip.dir && {

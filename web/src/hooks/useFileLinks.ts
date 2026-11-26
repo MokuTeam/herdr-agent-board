@@ -10,8 +10,12 @@ import type { QuickLook } from './useQuickLook.ts'
 
 const CHIP = '[data-fs="file"], [data-fs="dir"]'
 
-/** What a chip opens: its full path, at its line. */
-const targetOf = (chip: HTMLElement) => ({ path: chip.dataset.abs ?? '', line: Number(chip.dataset.line) || null })
+/** What a chip opens: its full path, at its line, and the node session key when on another device. */
+const targetOf = (chip: HTMLElement) => ({
+  path: chip.dataset.abs ?? '',
+  line: Number(chip.dataset.line) || null,
+  ...(chip.dataset.key && { key: chip.dataset.key }),
+})
 
 /** Returns how a web link opens: in the default browser through the board, else in a new tab. */
 export function useFileLinks(look: QuickLook['look']): (href: string) => Promise<void> {

@@ -566,6 +566,21 @@ async function upgrades(world: FakeWorld) {
     ['/work', ['a.ts', 'later.md']],
     ['/work', ['later.md']],
   ])
+  // Local chips carry no data-key; node session chips carry data-key and isolate their stat cache.
+  expect(root.querySelector('[data-path="a.ts"]')?.dataset.key).toBeUndefined()
+  const nodeAsked: [string, string[], string | undefined][] = []
+  const nodeChips = fileChips({
+    t: () => en,
+    now: () => now,
+    stat: async (cwd, paths, key) => {
+      nodeAsked.push([cwd, paths, key])
+      return paths.map(raw => info({ raw, path: `C:\\Projects\\Demo\\${raw}` }))
+    },
+  })
+  root.innerHTML = '<code class="fs-cand" data-path="dist/popup.html">dist/popup.html</code>'
+  await nodeChips.upgrade(asRoot, 'C:\\Projects\\Demo', '@win-node:s1')
+  expect(nodeAsked).toEqual([['C:\\Projects\\Demo', ['dist/popup.html'], '@win-node:s1']])
+  expect(root.querySelector('[data-path="dist/popup.html"]')?.dataset.key).toBe('@win-node:s1')
 }
 
 // #176: a CSV of many thousand rows opens at once, its rows drawn block by block as they scroll

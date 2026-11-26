@@ -4,6 +4,7 @@
 // gets its icon and name drawn into it (components/files/FileChip.tsx). Thumbnails and tool lines
 // keep their look.
 import { useState } from 'react'
+import { parseNodeKey } from '../../../src/core/node-key.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import { filesApi } from '../api/files.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
@@ -39,7 +40,7 @@ export type ChipContent = Omit<ChipEntry, 'id' | 'el'>
  * Marks a candidate with what the server said: missing, or a file or folder with its full path,
  * kind and line, focusable as a button. Returns what to draw into it when it becomes a chip.
  */
-export function markChip(el: ChipElement, info: PathInfo, t: Translator): ChipContent | null {
+export function markChip(el: ChipElement, info: PathInfo, t: Translator, key?: string): ChipContent | null {
   if (!info.exists) {
     el.dataset.fs = 'missing'
     if (el.matches('a.fs')) el.title = t('ql.missing', { path: info.path || el.dataset.path || '' })
@@ -49,6 +50,7 @@ export function markChip(el: ChipElement, info: PathInfo, t: Translator): ChipCo
   el.dataset.abs = info.path
   el.dataset.kind = String(info.kind)
   if (info.line) el.dataset.line = String(info.line)
+  if (key && parseNodeKey(key)) el.dataset.key = key
   el.title = info.line ? `${info.path}:${info.line}` : info.path
   el.tabIndex = 0
   el.setAttribute('role', 'button')
@@ -61,14 +63,14 @@ export function markChip(el: ChipElement, info: PathInfo, t: Translator): ChipCo
 }
 
 export interface ChipsDeps {
-  stat(cwd: string, paths: string[]): Promise<PathInfo[]>
+  stat(cwd: string, paths: string[], key?: string): Promise<PathInfo[]>
   t(): Translator
   now(): number
 }
 
 export interface FileChipsApi {
-  /** Turn the path candidates under `root` into chips; `cwd` resolves relative ones. */
-  upgrade(root: ParentNode, cwd?: string): Promise<void>
+  /** Turn the path candidates under `root` into chips; `cwd` resolves relative ones; `key` routes to a node. */
+  upgrade(root: ParentNode, cwd?: string, key?: string | null): Promise<void>
   /** The chips on the page. */
   readonly list: Store<readonly ChipEntry[]>
 }
@@ -81,10 +83,10 @@ export function fileChips(deps: ChipsDeps): FileChipsApi {
 
   let changed = false
 
-  function apply(el: HTMLElement, info: PathInfo): void {
+  function apply(el: HTMLElement, info: PathInfo, key?: string): void {
     const was = chips.get(el)
     // A chip already drawn keeps its label: its words are its own content now.
-    const content = markChip(el, info, deps.t())
+    const content = markChip(el, info, deps.t(), key)
     if (!content) return
     if (!was) el.replaceChildren()
     chips.set(el, { id: was?.id ?? ++ids, el, ...content, label: was?.label ?? content.label })
@@ -104,20 +106,23 @@ export function fileChips(deps: ChipsDeps): FileChipsApi {
 
   return {
     list,
-    async upgrade(root, cwd = '') {
+    async upgrade(root, cwd = '', key = '') {
+      const nodeKey = key && parseNodeKey(key) ? key : undefined
+      const scope = nodeKey ? (parseNodeKey(nodeKey)?.device ?? '') : ''
       const ask: HTMLElement[] = []
       for (const el of root.querySelectorAll<HTMLElement>('[data-path]:not([data-fs])')) {
-        const info = known.get(cwd, el.dataset.path ?? '', deps.now())
-        if (info) apply(el, info)
+        const info = known.get(cwd, el.dataset.path ?? '', deps.now(), scope)
+        if (info) apply(el, info, nodeKey)
         else ask.push(el)
       }
       publish()
       const paths = [...new Set(ask.map(el => el.dataset.path ?? ''))]
       if (!paths.length) return
-      for (const info of await deps.stat(cwd, paths)) known.put(cwd, info, deps.now())
+      const items = await (nodeKey ? deps.stat(cwd, paths, nodeKey) : deps.stat(cwd, paths))
+      for (const info of items) known.put(cwd, info, deps.now(), scope)
       for (const el of ask) {
-        const info = el.isConnected && known.get(cwd, el.dataset.path ?? '', deps.now())
-        if (info) apply(el, info)
+        const info = el.isConnected && known.get(cwd, el.dataset.path ?? '', deps.now(), scope)
+        if (info) apply(el, info, nodeKey)
       }
       publish()
     },
@@ -130,7 +135,7 @@ export function useFileChips(): FileChipsApi {
   const latest = useLatest(t)
   const [chips] = useState(() => {
     const api = filesApi(() => latest.current)
-    return fileChips({ stat: (cwd, paths) => api.stat(cwd, paths), t: () => latest.current, now: Date.now })
+    return fileChips({ stat: (cwd, paths, key) => api.stat(cwd, paths, key), t: () => latest.current, now: Date.now })
   })
   return chips
 }

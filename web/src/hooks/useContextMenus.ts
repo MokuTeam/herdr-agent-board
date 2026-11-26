@@ -301,9 +301,9 @@ export function boardActions(deps: ActionDeps): BoardMenuActions {
     sleepers: () => dispatch({ type: 'toggleSleepers' }),
     search: () => document.getElementById('search')?.focus(),
     copy,
-    openPath: async (path, how) => {
+    openPath: async (path, how, key) => {
       if (!deps.canEdit()) return toast(deps.t()('live.off'), true)
-      const error = await filesApi(() => deps.t()).open(path, how)
+      const error = await filesApi(() => deps.t()).open(path, how, key)
       if (error) toast(error, true)
     },
     look: (target, el) => deps.quickLook.look(target, el),

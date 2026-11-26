@@ -28,7 +28,7 @@ export interface HistoryProps {
   /** The query submitted (trimmed). */
   onSearch?: ((query: string) => void) | undefined
   /** A hit opened: its paths become chips. */
-  upgrade?: ((root: HTMLElement, cwd: string) => void) | undefined
+  upgrade?: ((root: HTMLElement, cwd: string, key?: string | null) => void) | undefined
 }
 
 export function History({ target, onSearch, upgrade }: HistoryProps) {
@@ -76,7 +76,7 @@ function Hits({ target, upgrade }: Pick<HistoryProps, 'target' | 'upgrade'>) {
   if (!d.results?.length) return <LookEmpty icon="search" text={t('history.empty')} />
   return d.results.map((hit, i) => (
     // biome-ignore lint/suspicious/noArrayIndexKey: the hits in the order found; a new search draws them anew
-    <Hit key={i} hit={hit} i={i} query={target.query} cwd={target.cwd} upgrade={upgrade} />
+    <Hit key={i} hit={hit} i={i} query={target.query} cwd={target.cwd} sessionKey={target.key} upgrade={upgrade} />
   ))
 }
 
@@ -85,11 +85,12 @@ interface HitProps {
   i: number
   query: string | undefined
   cwd: string
-  upgrade?: ((root: HTMLElement, cwd: string) => void) | undefined
+  sessionKey: string
+  upgrade?: ((root: HTMLElement, cwd: string, key?: string | null) => void) | undefined
 }
 
 /** A hit: who and when, the excerpt with the query marked; opened, the whole message. */
-function Hit({ hit, i, query, cwd, upgrade }: HitProps) {
+function Hit({ hit, i, query, cwd, sessionKey, upgrade }: HitProps) {
   const t = useT()
   const [open, setOpen] = useState(false)
   // The whole message is drawn the first time it opens, then kept.
@@ -97,7 +98,7 @@ function Hit({ hit, i, query, cwd, upgrade }: HitProps) {
   const full = useRef<HTMLDivElement>(null)
   // biome-ignore lint/correctness/useExhaustiveDependencies: drawn is when its paths are new
   useLayoutEffect(() => {
-    if (drawn && full.current) upgrade?.(full.current, cwd)
+    if (drawn && full.current) upgrade?.(full.current, cwd, sessionKey)
   }, [drawn])
   const toggle = () => {
     setOpen(was => !was)

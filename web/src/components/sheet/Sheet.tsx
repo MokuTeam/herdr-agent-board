@@ -65,7 +65,7 @@ export interface SheetSlots {
    */
   question?: ((item: Item, detail: SessionDetail | null) => ReactNode) | undefined
   /** After the conversation is drawn: its paths (data-path) become file chips (25c, files.upgrade). */
-  upgradeFiles?: ((body: HTMLElement, cwd: string) => void) | undefined
+  upgradeFiles?: ((body: HTMLElement, cwd: string, key?: string | null) => void) | undefined
   /** The quick look of the checkout's changes, opened from `button` (25c). */
   onChanges?: ((key: string, button: HTMLElement) => void) | undefined
   /** The quick look of the project's past sessions, opened from `button` (25c). */
@@ -185,7 +185,7 @@ export function Sheet(slots: SheetSlots) {
   // The conversation drawn anew (a new detail, the session shown, the language): its paths are new.
   // biome-ignore lint/correctness/useExhaustiveDependencies: these are when to look, not what it reads
   useLayoutEffect(() => {
-    if (body.current && drawn) upgradeFiles?.(body.current, cwd)
+    if (body.current && drawn) upgradeFiles?.(body.current, cwd, shown.key)
   }, [detail.value.data, drawn, shown.key, cwd, t, upgradeFiles])
   const form = shown.item ? question?.(shown.item, detail.value.data) : null
   const hasForm = form !== null && form !== undefined && form !== false

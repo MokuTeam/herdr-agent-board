@@ -6,6 +6,7 @@
 // focus, keys and zoom are hooks/useQuickLook.ts's.
 import { Fragment, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { parseNodeKey } from '../../../../src/core/node-key.ts'
 import type { Translator } from '../../../../src/core/types.ts'
 import type { LookRefs, QuickLookEngine } from '../../hooks/useQuickLook.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
@@ -49,7 +50,7 @@ export interface LookHandlers {
   act(how: 'open' | 'reveal' | 'copy' | 'local'): void
   go(path: string): void
   search(query: string): void
-  upgrade(root: HTMLElement, cwd: string): void
+  upgrade(root: HTMLElement, cwd: string, key?: string | null): void
   /** The zoom bar's button. */
   zoom(): void
 }
@@ -144,9 +145,10 @@ export function QuickLookView({
   const t = useT()
   // The past sessions say so in the page's language as it is now (the old page's relabel drew them again).
   const head = view.top?.kind === 'history' && !view.hidden ? { ...view.head, name: t('history.title') } : view.head
-  const off = actionsOff(view.data, canEdit)
+  const nodeKey = view.top?.key && parseNodeKey(view.top.key) ? view.top.key : undefined
+  const off = actionsOff(view.data, canEdit, !!nodeKey)
   const file = view.data && isFileLook(view.data) && !view.hidden && !view.loading ? view.data : null
-  const remote = remoteTools(file, local, token)
+  const remote = remoteTools(file, local, token, nodeKey)
   const label = (key: string) => ({ title: t(key), 'aria-label': t(key) })
   return (
     <div className="ql" hidden={view.hidden} ref={refs.layer}>
@@ -352,14 +354,16 @@ function LookBody({ view, token, onImage, onImageGone, onPages, onZoomable, onZo
   if (view.loading || !d) return <div className="ql-wait">{t('loading')}</div>
   if (isChangesLook(d)) return <Changes key={idOf(d)} data={d} onOpen={on.go} />
   if (!isFileLook(d)) return null
+  const nodeKey = top.key && parseNodeKey(top.key) ? top.key : undefined
   return (
     <Preview
       key={idOf(d)}
       data={d}
       mode={view.mode}
       token={token}
+      sessionKey={nodeKey}
       onGo={on.go}
-      onOpen={() => on.act?.('open')}
+      onOpen={nodeKey ? undefined : () => on.act?.('open')}
       onImage={img => onImage?.(img, d)}
       onImageGone={onImageGone}
       onPages={n => onPages?.(n, d)}
@@ -395,7 +399,11 @@ export function QuickLook({ engine }: { engine: QuickLookEngine }) {
         body.scrollTop = hit.offsetTop - body.clientHeight / 3
       })
     else body.scrollTop = 0
-    if (showsMarkdown(view) && view.mode === 'view') engine.upgrade(body, parentOf(view.data.path ?? ''))
+    if (showsMarkdown(view) && view.mode === 'view') {
+      const nodeKey = view.top?.key && parseNodeKey(view.top.key) ? view.top.key : undefined
+      if (nodeKey) engine.upgrade(body, parentOf(view.data.path ?? ''), nodeKey)
+      else engine.upgrade(body, parentOf(view.data.path ?? ''))
+    }
   }, [view.data, view.mode, view.loading, view.hidden])
   if (typeof document === 'undefined') return null
   return createPortal(

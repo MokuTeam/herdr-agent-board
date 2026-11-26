@@ -202,6 +202,53 @@ describe('what it shows', () => {
     expect(opened).toEqual([])
     expect(toasts).toEqual([[en('mobile.readOnly'), true]])
   })
+
+  test('a node session preserves its key through preview, folder/changes steps, and open/reveal', async () => {
+    const layer = mount('<div class="ql"><div class="ql-scrim"></div><section class="ql-win"></section></div>')
+    const win = layer.querySelector<HTMLElement>('.ql-win')
+    const scrim = layer.querySelector<HTMLDivElement>('.ql-scrim')
+    if (!win || !scrim) throw new Error('no window')
+    const chip = mount('<code class="fs-chip" data-fs="file">popup.html</code>')
+    const previewCalls: [string, string | undefined][] = []
+    const openCalls: [string, string, string | undefined][] = []
+    const api = {
+      preview: async (path: string, key?: string) => {
+        previewCalls.push([path, key])
+        return { path, name: 'popup.html', kind: 'text', text: '<html/>', lines: 1 }
+      },
+      changes: async () => ({ available: true, root: 'C:\\Projects\\Demo', branch: 'main', status: ' M a.ts' }),
+      history: async () => ({ results: [] }),
+      open: async (path: string, how: string, key?: string) => {
+        openCalls.push([how, path, key])
+        return null
+      },
+    } as unknown as FilesApi
+    const look = quickLookEngine({
+      refs: { layer: ref(layer as HTMLDivElement), win: ref(win), scrim: ref(scrim), body: ref(null) },
+      focus: () => ({ open() {}, close() {}, isTop: () => true }),
+      api,
+      t: () => en,
+      canEdit: () => true,
+      toast() {},
+      upgrade() {},
+    })
+    look.look({ path: 'C:\\Projects\\Demo\\dist\\popup.html', key: '@win-node:s1' }, chip)
+    await world.flush()
+    look.engine.go('C:\\Projects\\Demo\\src\\app.ts')
+    await world.flush()
+    look.engine.act('reveal')
+    await world.flush()
+    look.lookChanges('@win-node:s1', chip)
+    await world.flush()
+    look.engine.go('C:\\Projects\\Demo\\a.ts')
+    await world.flush()
+    expect(previewCalls).toEqual([
+      ['C:\\Projects\\Demo\\dist\\popup.html', '@win-node:s1'],
+      ['C:\\Projects\\Demo\\src\\app.ts', '@win-node:s1'],
+      ['C:\\Projects\\Demo\\a.ts', '@win-node:s1'],
+    ])
+    expect(openCalls).toEqual([['reveal', 'C:\\Projects\\Demo\\src\\app.ts', '@win-node:s1']])
+  })
 })
 
 /** An image as drawn on its stage, `natural` its own size once loaded (none: an SVG without one). */

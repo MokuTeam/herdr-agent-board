@@ -39,7 +39,7 @@ export type HistoryState = { loading: true } | HistoryReply
 
 /** What the quick look shows a step of. */
 export type LookTarget =
-  | { kind: 'file'; path: string; line: number | null }
+  | { kind: 'file'; path: string; line: number | null; key?: string | undefined }
   /** `cache`: the changes as last read. */
   | { kind: 'changes'; key: string; cache?: ChangesLook }
   | { kind: 'history'; key: string; cwd: string; query?: string; result?: HistoryState }
@@ -99,7 +99,7 @@ export interface LookView {
 
 export interface QuickLookDeps {
   t(): Translator
-  preview(path: string): Promise<Preview>
+  preview(path: string, key?: string): Promise<Preview>
   changes(key: string): Promise<Changes>
   history(key: string, query: string): Promise<HistoryReply>
   changed(view: LookView): void
@@ -168,7 +168,7 @@ export function quickLookNav(deps: QuickLookDeps): QuickLookNav {
     drawHead({ path: target.path, name: fileName(target.path), kind: 'file' })
     loading = true
     changed()
-    const d = await deps.preview(target.path)
+    const d = await (target.key ? deps.preview(target.path, target.key) : deps.preview(target.path))
     if (at !== seq) return
     if (d.kind !== 'markdown') mode = 'view'
     shown({ ...d, line: target.line })
