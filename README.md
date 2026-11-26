@@ -5109,6 +5109,12 @@ banner naming the node and master (and a link when a URL is known). Opening the 
 the shared board. Boards without `node` (standalone and master boards) and the herdr TUI board
 are unchanged.
 
+While the page stays on the node's board (no URL, or `?local=1`), it shows the other machines'
+sessions beside the node's own (#904): the master's under its id (`@<master>:<key>`), the other
+nodes' as the master names them, from the master's slices (below). Their cards act through the
+master as any other machine's do; a card of the master's own is answered by the master by its own
+key. They follow the slices' pace (every 15 seconds) and stay as last heard while the master is away.
+
 ### A node's board asks its master (the master relay)
 
 Some of what a node's own web board is asked belongs to its master: threads live in the master's
@@ -5153,7 +5159,8 @@ Three more paths are the master's answers for a node only, never routes of its o
 
 - `GET /api/board-slices`: the master's `time`, `calendar`, `journal` and `presence` parts of its
   payload, and since #786 Team's `teamRev` and `teamUnread` and its `devices`. Since #784 also its
-  `decisions` cut to the asking node's sessions (their keys as the node names them): the node's
+  `decisions` cut to the asking node's sessions (their keys as the node names them), and since #904
+  the other machines' sessions (`items`, never the asking node's own): the node's
   cards and queue show a question the master holds as the master has it, while the node's card
   still carries it and the master still lists it, and "went by default" is the master's. The node
   asks again at once when the questions its cards carry for the master change. The node asks for
