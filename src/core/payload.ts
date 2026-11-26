@@ -34,6 +34,9 @@ export interface BoardCategory {
   profile?: string
 }
 
+/** A lane as a device has it (#923): what the page draws while its device switch shows that device. */
+export type DeviceLane = Pick<BoardCategory, 'id' | 'title' | 'color'>
+
 /** A color the category editor offers. */
 export type Swatch = { name: string; hex: string }
 
@@ -104,6 +107,11 @@ export interface BoardPayload {
   items: Item[]
   launches: LaunchView[]
   categories: BoardCategory[]
+  /**
+   * On a node whose page draws its master's lanes (#923): its own lanes, which its master gives its
+   * row in `devices`. Absent on every other board.
+   */
+  ownLanes?: DeviceLane[]
   swatches: Swatch[]
   columns: { id: ColumnId; title: string }[]
   /** Without the scheduler's bookkeeping (claim, tried, waited). */
@@ -273,6 +281,11 @@ export interface BoardDevice extends DeviceView {
   pilotBridge?: false
   /** It keeps its own profiles and gets no bundle (#802, `nodes.devices.<id>.ownProfiles`); absent, it gets them. */
   ownProfiles?: true
+  /**
+   * The lanes as that device has them (#923): a node's from its payload, this computer's its own. The
+   * device switch on it draws these. Absent from a node older than that.
+   */
+  lanes?: DeviceLane[]
   /** The thresholds placement holds it to; null until the board writes them from its first status. */
   maxSessions: number | null
   minFreeMemMb: number | null

@@ -4,9 +4,10 @@
 // its switch shows (#502, only on a master's board with more than one device). With one column
 // shown alone (the Terminal style's W M O D I), only that column's.
 import { useMemo } from 'react'
+import type { BoardCategory } from '../../../src/core/payload.ts'
 import type { Item, LaunchView } from '../../../src/core/types.ts'
 import type { BoardPayload } from '../api/client.ts'
-import { catOf, colOf, visibleItems } from '../models/board-view.ts'
+import { catOf, colOf, deviceLanes, visibleItems } from '../models/board-view.ts'
 import { deviceShown, pickedDevice } from '../models/devices.ts'
 import { pendingLaunches, placeholderOf } from '../models/launch.ts'
 import { pickedProfile, profileShown } from '../models/profiles.ts'
@@ -19,6 +20,8 @@ export interface BoardView {
   anyProfile: Item[]
   /** The items on show whatever the device switch picks: what it counts (#502). */
   anyDevice: Item[]
+  /** The lanes drawn: the payload's, or the picked device's own (#923, deviceLanes). */
+  lanes: BoardCategory[]
 }
 
 /** Launches not yet a session on the board: the server's, and the page's own until the server has them. */
@@ -35,7 +38,7 @@ export function useBoardView(): BoardView {
   const device = pickedDevice(ui.device ?? 'all', data?.devices)
   return useMemo(() => {
     const categoryOf = (item: Item): string => catOf(moves, item)
-    if (!data) return { visible: [], categoryOf, anyProfile: [], anyDevice: [] }
+    if (!data) return { visible: [], categoryOf, anyProfile: [], anyDevice: [], lanes: [] }
     const options = { query, sleepers, categories: data.categories, categoryOf, archiving }
     const onTheirWay = launchesOnTheirWay(data, launched, now).map(placeholderOf)
     const anyProfileHere = visibleItems(data.items, options).concat(onTheirWay)
@@ -49,6 +52,7 @@ export function useBoardView(): BoardView {
     const anyProfile = onDevice(anyProfileHere)
     const all = onDevice(anyDevice)
     const visible = column ? all.filter(it => colOf(moves, it) === column) : all
-    return { visible, categoryOf, anyProfile, anyDevice }
+    const lanes = deviceLanes(data.categories, data.devices, device, all, categoryOf)
+    return { visible, categoryOf, anyProfile, anyDevice, lanes }
   }, [data, query, sleepers, profile, device, moves, launched, now, archiving, column])
 }

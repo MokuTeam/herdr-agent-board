@@ -481,9 +481,18 @@ export function createBoardState({
     const agyLimits = pickAgyLimits([localAgy, ...remoteAgy])
     const held = others ? heldByDevice(schedules) : null
     const { items: relayedItems, categories: relayedLanes, ...fromSlices } = masterSlices?.() ?? {}
+    // This board's own lanes (#923): its config's and its own cards', not those only another device's
+    // cards bring; its row in `devices` carries them, and a node's payload for its master.
+    const ownLanes =
+      others || relayedLanes?.length
+        ? categories
+            .filter(c => c.configured || items.some(i => i.category === c.id))
+            .map(({ id, title, color }) => ({ id, title, color }))
+        : []
     const devices = others
       ? others.devices.map(d => {
-          const n = d.id !== LOCAL ? (held?.[d.id] ?? 0) : 0
+          if (d.id === LOCAL) return { ...d, lanes: ownLanes }
+          const n = held?.[d.id] ?? 0
           return n > 0 ? { ...d, held: n } : d
         })
       : undefined
@@ -502,6 +511,7 @@ export function createBoardState({
       launches: others ? [...launches.list(), ...others.launches] : launches.list(),
       // A node's page draws its master's lanes, then its own the master does not have (#923).
       categories: relayedLanes?.length ? lanesWithMaster(relayedLanes, categories) : categories,
+      ...(relayedLanes?.length && { ownLanes }),
       swatches: SWATCHES,
       columns: COLUMNS.map(({ id, title }) => ({ id, title })),
       schedules: others ? [...schedules, ...others.schedules] : schedules,

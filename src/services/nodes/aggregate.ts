@@ -234,6 +234,8 @@ export function createNodeAggregate(o: NodeAggregateOptions): NodeAggregate {
         out.devices.push({
           ...boardDevice(view, device, got?.at ?? null, steady(view.id, status)),
           ...(update && { update }),
+          // Its lanes as it has them (#923), for the device switch on it.
+          ...(got?.part.lanes && { lanes: got.part.lanes }),
         })
         if (!got) continue
         out.items.push(...got.part.items)

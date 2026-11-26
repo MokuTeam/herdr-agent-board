@@ -52,12 +52,12 @@ export function Board({
 }: BoardProps) {
   const t = useT()
   const { data, ui, canMutate, canEdit, dispatch, toast } = useBoardContext()
-  const { visible } = useBoardView()
+  const { visible, lanes: categories } = useBoardView()
   const actions = useSessionActions()
   const goToSession = useGoToSession()
   const root = useRef<HTMLElement>(null)
   const dropPlace = useRef<HTMLDivElement>(null)
-  const lanes = data ? lanesOf(data, visible, ui.filter, ui.moves) : []
+  const lanes = data ? lanesOf({ ...data, categories }, visible, ui.filter, ui.moves) : []
   const itemOf = (key: string): Item | undefined => data?.items.find(i => i.key === key)
   // The card whose sessions are marked; a card no longer on show marks none.
   const [relatedTo, setRelatedTo] = useState<string | null>(null)
