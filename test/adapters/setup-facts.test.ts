@@ -66,6 +66,26 @@ describe('findCommand', () => {
       gone: true,
     })
   })
+
+  test('on Windows, falls back to mixed-case Path when PATH is empty and strips quoted PATH entries', () => {
+    const cmd = findCommand('agy', {
+      env: { PATH: '', Path: '"C:\\Program Files\\Antigravity\\bin";C:\\Windows\\System32', PATHEXT: '.COM;.EXE;.CMD' },
+      platform: 'win32',
+      exists: f => f === 'C:\\Program Files\\Antigravity\\bin\\agy.cmd',
+      read: () => null,
+    })
+    assert.deepEqual(cmd.ps, { file: 'C:\\Program Files\\Antigravity\\bin\\agy.cmd', target: null })
+    assert.equal(cmd.sh, null)
+
+    const exe = findCommand('agy', {
+      env: { Path: '"C:\\Users\\alice\\AppData\\Local\\Programs\\agy"' },
+      platform: 'win32',
+      exists: f => f === 'C:\\Users\\alice\\AppData\\Local\\Programs\\agy\\agy.exe',
+      read: () => null,
+    })
+    assert.deepEqual(exe.ps, { file: 'C:\\Users\\alice\\AppData\\Local\\Programs\\agy\\agy.exe', target: null })
+    assert.deepEqual(exe.sh, { file: 'C:\\Users\\alice\\AppData\\Local\\Programs\\agy\\agy.exe', target: null })
+  })
 })
 
 describe('gatherFacts', () => {

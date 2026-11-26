@@ -252,6 +252,7 @@ export function createNodeUpdate(d: NodeUpdateDeps): NodeUpdate {
         d.log(`node: the installer for ${short(now)} failed: ${firstLines(r.detail, 2) || 'no output'}`)
         return
       }
+      for (const line of r.detail.split(/\r?\n/)) if (line.includes(': not changed:')) d.log(`node: ${line.trim()}`)
       mkdirSync(d.dir, { recursive: true })
       writeFileSync(installedFile, `${JSON.stringify({ commit: now, at: Date.now() })}\n`)
       d.log(

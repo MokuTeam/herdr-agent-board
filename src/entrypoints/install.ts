@@ -44,6 +44,7 @@ import {
   agyMcpPlan,
   agySettingsDir,
   agySettingsPlan,
+  detectAgy,
   installAgyHooks,
   installAgyMcp,
   installAgySettings,
@@ -64,6 +65,7 @@ import { t } from '../core/lang.ts'
 import { boardMcpOff, boardMcpUrl } from '../core/mcp-register.ts'
 import { DEFAULT_PROFILE, shownProfiles } from '../core/profiles.ts'
 import { boardFiles, checkSetup, report, SKILL, TEAM_SKILL, THREADS_SKILL, tomlValue } from '../core/setup.ts'
+import type { LaunchSpec } from '../core/types.ts'
 import { wakeSwitch } from '../core/wake/config.ts'
 import { threadsConfig } from '../core/work-threads.ts'
 import { ensureToastApp, toastAppState } from '../integrations/toast-mac.ts'
@@ -108,6 +110,26 @@ const isFolder = (path: string): boolean => {
 }
 // The board's MCP server (#814): in every harness unless config.json says "boardMcp": false.
 const mcpOn = (): boolean => !boardMcpOff(readConfigFile())
+const agyPlatform = process.env.BOARD_TEST_PLATFORM || process.platform
+const rawLaunch = (): LaunchSpec | undefined => {
+  const raw = readConfigFile()
+  return raw && typeof raw === 'object' && !Array.isArray(raw) && raw.launch && typeof raw.launch === 'object'
+    ? (raw.launch as LaunchSpec)
+    : undefined
+}
+const agyPresent = (): boolean =>
+  detectAgy({ launch: rawLaunch(), env: process.env, home: homedir(), platform: agyPlatform })
+function writeAgySkills(dir: string, list: readonly { name: string; text: string | null }[]): void {
+  for (const s of list) {
+    if (s.text === null) continue
+    const skill = installSkill(dir, s.text, s.name)
+    console.log(
+      skill.action === 'foreign'
+        ? `skipped ${skill.file}: a skill of that name that is not ours`
+        : `skill: ${skill.file}`,
+    )
+  }
+}
 const mcpLines = (list: ReturnType<typeof registerBoardMcp>): void => {
   for (const r of list) if (r.action !== 'same') console.log(registeredLine(r))
 }
@@ -133,6 +155,7 @@ if (args.includes('--mcp') || args.includes('--no-mcp')) {
       cli: paths.cli,
       profiles: shownProfiles(loadProfiles({ shownDir: inheritedProfileDir() })),
       codexHome: dedicatedCodexHome(),
+      agyInstalled: agyPresent(),
     })
     mcpLines(list)
     if (list.every(r => r.action === 'same')) console.log(`board MCP: ${on ? 'in place' : 'not registered'} everywhere`)
@@ -143,7 +166,7 @@ if (args.includes('--mcp') || args.includes('--no-mcp')) {
   }
   process.exit(0)
 }
-// Opt-in: the normal Claude install never reads or changes an Antigravity CLI folder.
+// Opt-in: Antigravity CLI only, leaving Claude alone.
 if (args.includes('--agy')) {
   try {
     if (args.includes('--toast') || args.includes('--no-toast'))
@@ -165,15 +188,7 @@ if (args.includes('--agy')) {
       { name: TEAM_SKILL, from: files.teamSkill },
       ...(threadsConfig(loadConfig().threads) ? [{ name: THREADS_SKILL, from: files.threadsSkill }] : []),
     ].map(s => ({ ...s, text: readText(s.from) }))
-    for (const s of agySkills) {
-      if (s.text === null) continue
-      const skill = installSkill(dir, s.text, s.name)
-      console.log(
-        skill.action === 'foreign'
-          ? `skipped ${skill.file}: a skill of that name that is not ours`
-          : `skill: ${skill.file}`,
-      )
-    }
+    writeAgySkills(dir, agySkills)
     console.log(`Antigravity CLI hooks: SessionStart, PreInvocation -> ${script} in ${plan.file}`)
     if (mcpOn()) console.log(`Antigravity CLI MCP: the board's tools -> ${paths.cli} mcp --http in ${mcpPlan.file}`)
     console.log(
@@ -368,6 +383,48 @@ try {
         "wake hooks: not added: the separate herdr-wake plugin's are there (Settings → Sleep and wake… → Switch over…)",
       )
   }
+  // Antigravity CLI hooks, status line, skills and herdr integration: automatically when agy is installed.
+  // A machine without agy leaves ~/.gemini untouched.
+  const hasAgy = agyPresent()
+  if (hasAgy) {
+    const dir = agyConfigDir()
+    const settingsDir = agySettingsDir()
+    const script = join(ROOT, 'src', 'entrypoints', 'agy-hook.ts')
+    const agyStatusline = join(ROOT, 'src', 'entrypoints', 'agy-statusline.ts')
+    try {
+      const plan = agyHooksPlan(dir, script)
+      installAgyHooks(plan)
+      console.log(`Antigravity CLI hooks: SessionStart, PreInvocation -> ${script} in ${plan.file}`)
+      if (Bun.which('bun') === null)
+        console.log('Antigravity CLI hooks: warning: bun is not on PATH; add Bun to PATH before starting agy.')
+    } catch (err) {
+      console.log(`Antigravity CLI hooks: not changed: ${messageOf(err)}`)
+    }
+    try {
+      const settingsPlan = agySettingsPlan(settingsDir, paths.bun, agyStatusline)
+      installAgySettings(settingsPlan)
+      console.log(
+        settingsPlan.statusLineSet
+          ? `Antigravity CLI status line: ${agyStatusline} in ${settingsPlan.file}`
+          : `Antigravity CLI status line in ${settingsPlan.file}: left as it was (not ours)`,
+      )
+    } catch (err) {
+      console.log(`Antigravity CLI status line: not changed: ${messageOf(err)}`)
+    }
+    try {
+      writeAgySkills(dir, skills)
+    } catch (err) {
+      console.log(`Antigravity CLI skills: not changed: ${messageOf(err)}`)
+    }
+    try {
+      await agyIntegrationInstall()
+      console.log(`herdr's hook: antigravity-cli integration in ${dir}`)
+    } catch (err) {
+      console.log(
+        `herdr's Antigravity CLI hook: not installed: ${messageOf(err).split(/\r?\n/)[0]}. Run herdr integration install antigravity-cli.`,
+      )
+    }
+  }
   // The board's MCP server (#814): each shown profile's user scope, and Codex, agy and pi where they are the board's.
   if (mcpOn())
     mcpLines(
@@ -378,6 +435,7 @@ try {
         cli: paths.cli,
         profiles,
         codexHome: dedicatedCodexHome(),
+        agyInstalled: hasAgy,
       }),
     )
   if (toasts) {

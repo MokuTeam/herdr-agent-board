@@ -1,10 +1,58 @@
 // Only Antigravity CLI's `~/.gemini/config/hooks.json`, `mcp_config.json`,
 // `~/.gemini/antigravity-cli/settings.json`, and their backups.
 // Herdr's `"herdr"` hook group and any other user/plugin hooks, MCP servers or custom statusLine stay untouched.
-import { constants, copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { constants, copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, posix, win32 } from 'node:path'
 import { planAgyHooks, planAgyMcp, planAgySettings } from '../core/agy-hooks.ts'
+import { agyConfigured } from '../core/launch/agents.ts'
+import type { LaunchSpec } from '../core/types.ts'
+import { findCommand } from './setup-facts.ts'
+
+export interface AgyDetectOptions {
+  launch?: LaunchSpec | undefined
+  env?: Record<string, string | undefined> | undefined
+  home?: string | undefined
+  platform?: string | undefined
+  exists?: ((file: string) => boolean) | undefined
+}
+
+const isFolder = (file: string): boolean => {
+  try {
+    return statSync(file).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Whether Antigravity CLI (`agy`) is installed or configured on this machine: via `launch.agy`,
+ * `agy` on PATH (including `.cmd`/`.exe`/`.ps1` on Windows), or standard user install folders
+ * (`~/.local/bin`, and `%APPDATA%\npm` on Windows) when a daemon's PATH omits them.
+ */
+export function detectAgy(o: AgyDetectOptions = {}): boolean {
+  if (agyConfigured(o.launch)) return true
+  const env = o.env ?? process.env
+  const home = o.home ?? homedir()
+  const platform = o.platform ?? process.platform
+  const exists = o.exists ?? existsSync
+  const found = findCommand('agy', { env, platform, exists })
+  if (found.ps ?? found.sh) return true
+  const candidates = platform === 'win32' ? ['agy.exe', 'agy.cmd', 'agy.bat', 'agy.ps1', 'agy'] : ['agy']
+  const joinFor = (dir: string, ...parts: string[]): string =>
+    platform === 'win32' && !dir.startsWith('/') ? win32.join(dir, ...parts) : posix.join(dir, ...parts)
+  const dirs = [
+    joinFor(home, '.local', 'bin'),
+    ...(platform === 'win32' && env.APPDATA ? [joinFor(env.APPDATA, 'npm')] : []),
+  ]
+  for (const dir of dirs) {
+    for (const name of candidates) {
+      const file = joinFor(dir, name)
+      if (exists(file) && !isFolder(file)) return true
+    }
+  }
+  return false
+}
 
 export function agyConfigDir(env: Record<string, string | undefined> = process.env, home = homedir()): string {
   return env.ANTIGRAVITY_CONFIG_DIR || join(home, '.gemini', 'config')

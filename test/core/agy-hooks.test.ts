@@ -58,6 +58,29 @@ describe('Antigravity CLI hooks.json planning (core/agy-hooks.ts)', () => {
     expect(() => planAgyHooks({ 'agent-board': [] }, SCRIPT)).toThrow('not an object')
     expect(() => planAgyHooks({ 'agent-board': { SessionStart: {} } }, SCRIPT)).toThrow('not a list')
   })
+
+  test('normalizes Windows paths with spaces and Cyrillic for cmd /c and replaces bun.exe board hooks', () => {
+    const winScript = 'C:\\Users\\Анна 100%\\herdr-agent-board\\src\\entrypoints\\agy-hook.ts'
+    const before = {
+      herdr: { PreInvocation: [{ type: 'command', command: 'herdr-state' }] },
+      'agent-board': {
+        SessionStart: [
+          {
+            type: 'command',
+            command: 'bun.exe "C:\\old\\agent-board\\src\\entrypoints\\agy-hook.ts" --herdr-agent-board-hook',
+            timeout: 10,
+          },
+        ],
+      },
+    }
+    const next = planAgyHooks(before, winScript)
+    const group = next[AGY_HOOK_KEY] as Record<string, { type: string; command: string; timeout: number }[]>
+    const expected = 'bun "C:/Users/Анна 100%/herdr-agent-board/src/entrypoints/agy-hook.ts" --herdr-agent-board-hook'
+    expect(group.SessionStart).toEqual([{ type: 'command', command: expected, timeout: 10 }])
+    expect(group.PreInvocation).toEqual([{ type: 'command', command: expected, timeout: 10 }])
+    expect(next.herdr).toEqual(before.herdr)
+    expect(planAgyHooks(next, winScript)).toEqual(next)
+  })
 })
 
 describe('Antigravity CLI mcp_config.json planning (core/agy-hooks.ts)', () => {

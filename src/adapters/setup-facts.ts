@@ -103,8 +103,9 @@ export function findCommand(
 ): CommandFinds {
   // Paths as `platform` writes them, which need not be the system this runs on (the tests).
   const paths = platform === 'win32' ? win32 : posix
-  const dirs = String(env.PATH ?? env.Path ?? '')
+  const dirs = String(env.PATH || env.Path || '')
     .split(paths.delimiter)
+    .map(d => (platform === 'win32' ? d.trim().replace(/^"(.*)"$/, '$1') : d))
     .filter(Boolean)
   const exts = [
     '.ps1',
@@ -115,8 +116,9 @@ export function findCommand(
   ]
   const hit = (list: string[]): CommandHit | null => {
     for (const dir of dirs) {
+      const joinDir = platform === 'win32' && dir.startsWith('/') ? posix.join : paths.join
       for (const n of list) {
-        const file = paths.join(dir, n)
+        const file = joinDir(dir, n)
         if (!exists(file) || isFolder(file)) continue
         const target = size(file) <= SHIM_MAX ? shimTarget(read(file)) : null
         return { file, target, ...(target && !exists(target) && { gone: true as const }) }

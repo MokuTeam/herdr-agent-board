@@ -24,16 +24,18 @@ import {
 } from '../core/mcp-register.ts'
 import { claudeStateFile } from '../core/move.ts'
 import { DEFAULT_PROFILE } from '../core/profiles.ts'
+import type { LaunchSpec } from '../core/types.ts'
+import { detectAgy } from './agy-hooks.ts'
 import { editJson, writeWhole } from './bundle-files.ts'
 
 type Env = Record<string, string | undefined>
 export type Harness = 'claude' | 'codex' | 'agy' | 'pi'
 
-/** One file's outcome: written, already as it should be, or why it was left as it was. */
+/** One file's outcome: written, already as it should be, skipped, or why it was left as it was. */
 export interface McpRegistered {
   harness: Harness
   file: string
-  action: 'written' | 'removed' | 'same' | 'failed'
+  action: 'written' | 'removed' | 'same' | 'skipped' | 'failed'
   error?: string
 }
 
@@ -49,6 +51,10 @@ export interface McpRegisterOptions {
   profiles: readonly { id: string; dir: string }[]
   /** config.json `codexHome` (install.ts --codex-home), when set. */
   codexHome?: string | null
+  /** config.json `launch`, used when checking whether Antigravity CLI is installed. */
+  launch?: LaunchSpec | undefined
+  /** Override for whether Antigravity CLI is installed (defaults to detectAgy). */
+  agyInstalled?: boolean | undefined
   /** Which harnesses; all of them when not said. */
   only?: readonly Harness[]
   home?: string
@@ -194,8 +200,18 @@ export function registerBoardMcp(o: McpRegisterOptions): McpRegistered[] {
     }
   if (wants('agy')) {
     const file = join(dirs.agy, 'mcp_config.json')
-    if (o.on ? agyHasBoardHooks(dirs.agy) : existsSync(file))
-      out.push(editMcpJson('agy', file, o.on ? stdioMcpEntry(o.bun, o.cli) : null))
+    if (o.on) {
+      if (agyHasBoardHooks(dirs.agy)) out.push(editMcpJson('agy', file, stdioMcpEntry(o.bun, o.cli)))
+      else if (o.agyInstalled ?? detectAgy({ launch: o.launch, env: o.env, home, platform }))
+        out.push({
+          harness: 'agy',
+          file,
+          action: 'skipped',
+          error: `Antigravity CLI board hooks are missing in ${join(dirs.agy, 'hooks.json')} (run bun src/entrypoints/install.ts --agy)`,
+        })
+    } else if (existsSync(file)) {
+      out.push(editMcpJson('agy', file, null))
+    }
   }
   if (wants('pi')) {
     const file = join(dirs.pi, 'mcp.json')
@@ -210,7 +226,7 @@ const HARNESS: Record<Harness, string> = { claude: 'Claude', codex: 'Codex', agy
 /** One line for the install's output. */
 export function registeredLine(r: McpRegistered): string {
   const what = `board MCP (${BOARD_MCP}) for ${HARNESS[r.harness]}`
-  if (r.action === 'failed') return `${what}: not changed: ${r.error}`
+  if (r.action === 'failed' || r.action === 'skipped') return `${what}: not changed: ${r.error}`
   if (r.action === 'removed') return `${what}: removed from ${r.file}`
   return `${what}: ${r.file}`
 }

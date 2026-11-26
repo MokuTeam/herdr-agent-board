@@ -123,3 +123,112 @@ test('invalid hooks.json stops --agy before writing anything, and normal Claude 
   expect(readFileSync(file, 'utf8')).toBe('{broken')
   expect(existsSync(join(box.env.USERPROFILE as string, '.claude/settings.json'))).toBe(true)
 })
+
+test('normal install on a Windows home with agy.cmd or agy.exe installs agy hooks, MCP, statusLine, skills, and herdr integration', async () => {
+  for (const binName of ['agy.cmd', 'agy.exe']) {
+    const box = await sandbox()
+    const home = box.env.USERPROFILE as string
+    const config = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json')
+    mkdirSync(dirname(config), { recursive: true })
+    writeFileSync(config, '{"language":"en","wakeUrl":"","wake":false}')
+    const winBin = join(box.dir, 'win-agy-bin')
+    mkdirSync(winBin, { recursive: true })
+    writeFileSync(join(winBin, binName), binName.endsWith('.cmd') ? '@echo off\r\n' : '')
+
+    const agyDir = join(home, '.gemini', 'config')
+    mkdirSync(agyDir, { recursive: true })
+    const hooksBefore = JSON.stringify({
+      other: { PreInvocation: [{ type: 'command', command: 'echo other' }] },
+    })
+    const mcpBefore = JSON.stringify({ mcpServers: { external: { url: 'https://example.com/mcp' } } })
+    writeFileSync(join(agyDir, 'hooks.json'), hooksBefore)
+    writeFileSync(join(agyDir, 'mcp_config.json'), mcpBefore)
+
+    const env = {
+      BOARD_TEST_PLATFORM: 'win32',
+      PATH: '',
+      Path: `${dirname(process.execPath)};"${winBin}"`,
+      PATHEXT: '.COM;.EXE;.BAT;.CMD',
+    }
+    for (let n = 0; n < 2; n++) {
+      const res = await install(box, [], env)
+      expect(res.code).toBe(0)
+      expect(res.stderr).toBe('')
+      const hooks = JSON.parse(readFileSync(join(agyDir, 'hooks.json'), 'utf8')) as Record<
+        string,
+        Record<string, { command: string }[]>
+      >
+      expect(hooks.other?.PreInvocation?.[0]?.command).toBe('echo other')
+      expect(hooks['agent-board']?.SessionStart?.[0]?.command).toBe(
+        `bun "${join(root, 'src', 'entrypoints', 'agy-hook.ts').replace(/\\/g, '/')}" --herdr-agent-board-hook`,
+      )
+      expect(hooks['agent-board']?.PreInvocation?.[0]?.command).toBe(
+        `bun "${join(root, 'src', 'entrypoints', 'agy-hook.ts').replace(/\\/g, '/')}" --herdr-agent-board-hook`,
+      )
+      expect(readFileSync(join(agyDir, 'hooks.json.bak-agent-board'), 'utf8')).toBe(hooksBefore)
+
+      const mcp = JSON.parse(readFileSync(join(agyDir, 'mcp_config.json'), 'utf8')) as {
+        mcpServers: Record<string, { command?: string; args?: string[]; url?: string }>
+      }
+      expect(mcp.mcpServers.external).toEqual({ url: 'https://example.com/mcp' })
+      expect(mcp.mcpServers['agent-board']).toEqual({
+        command: process.execPath,
+        args: [join(root, 'src', 'entrypoints', 'cli.ts'), 'mcp', '--http'],
+      })
+      expect(readFileSync(join(agyDir, 'mcp_config.json.bak-agent-board'), 'utf8')).toBe(mcpBefore)
+      expect(
+        res.stdout.includes(`board MCP (agent-board) for Antigravity CLI: ${join(agyDir, 'mcp_config.json')}`),
+      ).toBe(n === 0)
+    }
+    expect(existsSync(join(home, '.gemini', 'antigravity-cli', 'settings.json'))).toBe(true)
+    expect(existsSync(join(agyDir, 'skills', 'herdr-agents', 'SKILL.md'))).toBe(true)
+    expect(existsSync(join(agyDir, 'skills', 'agent-board-team', 'SKILL.md'))).toBe(true)
+    expect(box.calls()).toContainEqual(['integration', 'install', 'antigravity-cli'])
+  }
+})
+
+test('normal install on a Windows home without agy creates neither agy hooks nor agy MCP', async () => {
+  const box = await sandbox()
+  const home = box.env.USERPROFILE as string
+  const config = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json')
+  mkdirSync(dirname(config), { recursive: true })
+  writeFileSync(config, '{"language":"en","wakeUrl":"","wake":false}')
+  const res = await install(box, [], { BOARD_TEST_PLATFORM: 'win32' })
+  expect(res.code).toBe(0)
+  expect(existsSync(join(home, '.gemini'))).toBe(false)
+  expect(box.calls().filter(c => c[2] === 'antigravity-cli')).toEqual([])
+})
+
+test('install --mcp and broken hooks.json print "not changed:" when agy is installed without board hooks', async () => {
+  const box = await sandbox()
+  const home = box.env.USERPROFILE as string
+  const config = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json')
+  mkdirSync(dirname(config), { recursive: true })
+  writeFileSync(config, '{"language":"en","wakeUrl":"","wake":false}')
+  const winBin = join(box.dir, 'win-agy-bin')
+  mkdirSync(winBin, { recursive: true })
+  writeFileSync(join(winBin, 'agy.cmd'), '@echo off\r\n')
+  const agyDir = join(home, '.gemini', 'config')
+  mkdirSync(agyDir, { recursive: true })
+  writeFileSync(join(agyDir, 'hooks.json'), JSON.stringify({ herdr: {} }))
+
+  const env = {
+    BOARD_TEST_PLATFORM: 'win32',
+    PATH: `${dirname(process.execPath)};${winBin}`,
+    PATHEXT: '.EXE;.CMD',
+  }
+  const mcpOnly = await install(box, ['--mcp'], env)
+  expect(mcpOnly.code).toBe(0)
+  expect(mcpOnly.stdout).toContain('board MCP (agent-board) for Antigravity CLI: not changed:')
+  expect(mcpOnly.stdout).toContain('Antigravity CLI board hooks are missing')
+  expect(existsSync(join(agyDir, 'mcp_config.json'))).toBe(false)
+
+  // Broken hooks.json during normal install leaves Claude install green and logs why agy MCP was skipped.
+  writeFileSync(join(agyDir, 'hooks.json'), '{broken')
+  const normal = await install(box, [], env)
+  expect(normal.code).toBe(0)
+  expect(normal.stdout).toContain('Antigravity CLI hooks: not changed:')
+  expect(normal.stdout).toContain('board MCP (agent-board) for Antigravity CLI: not changed:')
+  expect(readFileSync(join(agyDir, 'hooks.json'), 'utf8')).toBe('{broken')
+  expect(existsSync(join(agyDir, 'mcp_config.json'))).toBe(false)
+})

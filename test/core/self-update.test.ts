@@ -76,6 +76,8 @@ test('what a pull needs: bun install for the lock files, the installer for its i
   expect(planFor(['skills/herdr-agents/SKILL.md'])).toEqual({ install: false, installer: true, restart: false })
   expect(planFor(['src/core/install-plan.ts'])).toEqual({ install: false, installer: true, restart: true })
   expect(planFor(['src/adapters/hook-settings.ts']).installer).toBe(true)
+  expect(planFor(['src/core/agy-hooks.ts'])).toEqual({ install: false, installer: true, restart: true })
+  expect(planFor(['src/adapters/agy-hooks.ts'])).toEqual({ install: false, installer: true, restart: true })
 })
 
 test('lock files bun install takes before the merge: only ones changed in place', () => {
