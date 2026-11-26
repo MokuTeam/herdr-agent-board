@@ -530,7 +530,26 @@ test('a running pi whose name is only near the top of its file sleeps under that
   expect(await createWakeEngine(w.deps).sleep('w1:p1')).toEqual({ ok: true, pane: 'w1:p1', name: 'pricing-sync' })
 })
 
-test('closes pi tab on sleep when closePanes is on and restores tabLabel in a new tab (#888)', async () => {
+test('closes pi tab on sleep on win32 when closePanes is on, leaves pane open on linux, and restores tabLabel (#888)', async () => {
+  const wLinux = world()
+  wLinux.pane.tab_id = 't2'
+  wLinux.io.tabs.push(
+    { tab_id: 't1', workspace_id: 'w1', label: '1', number: 1 },
+    { tab_id: 't2', workspace_id: 'w1', label: 'Pi Work', number: 2 },
+  )
+  wLinux.io.panes.push(
+    { pane_id: 'w1:p0', tab_id: 't1', workspace_id: 'w1', cwd: wLinux.project, agent: 'claude' },
+    { pane_id: 'w1:s2', tab_id: 't2', workspace_id: 'w1', cwd: wLinux.project, label: 'Sidebar' },
+  )
+  const stopLinux = wLinux.ops.procs.signal
+  wLinux.ops.procs.signal = (pid, sig) => {
+    const ok = stopLinux(pid, sig)
+    if (pid === PI_PID) wLinux.io.screens['w1:p1'] = `PS ${wLinux.project}> `
+    return ok
+  }
+  expect(await createWakeEngine(wLinux.deps).sleep('w1:p1')).toEqual({ ok: true, pane: 'w1:p1', name: 'Billing' })
+  expect(wLinux.io.calls.some(c => c[1] === 'close')).toBe(false)
+
   const w = world()
   w.pane.tab_id = 't2'
   w.io.tabs.push(
@@ -547,7 +566,11 @@ test('closes pi tab on sleep when closePanes is on and restores tabLabel in a ne
     if (pid === PI_PID) w.io.screens['w1:p1'] = `PS ${w.project}> `
     return ok
   }
-  const engine = createWakeEngine(w.deps)
+  const engine = createWakeEngine({
+    ...w.deps,
+    platform: 'win32',
+    processTable: async () => [{ pid: 4000, ppid: 1, bytes: 1024, name: 'pwsh' }],
+  })
   expect(await engine.sleep('w1:p1')).toEqual({ ok: true, pane: 'w1:p1', name: 'Billing' })
   expect(w.io.calls).toContainEqual(['tab', 'close', 't2'])
   expect(await engine.sleepingAll()).toMatchObject([{ agent: 'pi', session: w.file, pane: '' }])

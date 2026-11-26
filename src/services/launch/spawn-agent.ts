@@ -45,7 +45,7 @@ import { asPane, herdr, herdrText, paneProcesses, tabCreateRoot } from '../../ad
 import { isRecord } from '../../adapters/json-store.ts'
 import { ownerServices } from '../../adapters/owner-services.ts'
 import { pause } from '../../adapters/pacing.ts'
-import { memoryTable, nothingUnder } from '../../adapters/pane-facts.ts'
+import { type MemRow, memoryTable, nothingUnder } from '../../adapters/pane-facts.ts'
 import {
   forgetProfilePane,
   possibleProfilePanes,
@@ -163,24 +163,35 @@ export async function paneInfo(pane: string, timeoutMs?: number) {
 }
 
 /**
- * Closes a newly opened spawn tab (or pane) when startup failed before any agent ever came up in it
- * (#888): never touches a pane that runs an agent, was reassigned to another terminal, or runs
- * another process under its shell.
+ * On Windows (#888), closes a newly opened spawn tab (or pane) when startup failed before any agent
+ * ever came up in it: captures the last 10 non-empty screen lines for error diagnostics first, then
+ * closes only if no agent, matching terminal_id, idle foreground, and nothingUnder in the process
+ * table. Returns the captured screen tail (or empty string if blank), or null when left open.
  */
-async function cleanupEmptySpawnTab(created: {
-  pane: string
-  terminal: string | null
-  workspace: string
-}): Promise<void> {
+async function cleanupEmptySpawnTab(
+  created: {
+    pane: string
+    terminal: string | null
+    workspace: string
+  },
+  processTable: (() => Promise<readonly MemRow[] | null>) | null,
+): Promise<string | null> {
   const cur = await paneInfo(created.pane, 5000).catch(() => null)
-  if (!cur || cur.agent) return
-  if (created.terminal && cur.terminal && cur.terminal !== created.terminal) return
+  if (!cur || cur.agent) return null
+  if (created.terminal && cur.terminal && cur.terminal !== created.terminal) return null
   const procs = await paneProcesses(created.pane, 5000).catch(() => null)
-  if (!procs || procs.foreground.some(pr => pr.pid !== procs.shell)) return
-  if (process.platform === 'win32') {
-    const rows = await memoryTable().catch(() => null)
-    if (!rows || nothingUnder(rows, procs.shell) !== true) return
+  if (!procs || procs.foreground.some(pr => pr.pid !== procs.shell)) return null
+  if (processTable) {
+    const rows = await processTable().catch(() => null)
+    if (!rows || nothingUnder(rows, procs.shell) !== true) return null
   }
+  const rawScreen = await screen(created.pane).catch(() => '')
+  const tail = rawScreen
+    .split(/\r?\n/)
+    .map(l => l.trimEnd())
+    .filter(Boolean)
+    .slice(-10)
+    .join('\n')
   let closeTab = false
   if (cur.tab && created.workspace) {
     const answer = await herdr(['pane', 'list', '--workspace', created.workspace], 5000).catch(() => null)
@@ -193,6 +204,7 @@ async function cleanupEmptySpawnTab(created: {
   }
   await herdr(closeTab && cur.tab ? ['tab', 'close', cur.tab] : ['pane', 'close', created.pane]).catch(() => {})
   forgetProfilePane(created.pane)
+  return tail
 }
 
 /** Type a line into the agent's prompt; a leading dash would read as an option to herdr. */
@@ -377,6 +389,8 @@ export async function spawnAgent(
     ticketNames = false,
     nodeEnv,
     onAgent,
+    platform,
+    processTable,
   }: {
     claude?: string[]
     pi?: string[]
@@ -397,8 +411,12 @@ export async function spawnAgent(
      * on, whether or not it gets ready. A start command that never came up as one is never told.
      */
     onAgent?: (pane: string) => void
+    platform?: string
+    processTable?: (() => Promise<readonly MemRow[] | null>) | null
   } = {},
 ): Promise<SpawnResult> {
+  const winPlatform = platform ?? process.platform
+  const winTable = processTable === undefined ? (winPlatform === 'win32' ? memoryTable : null) : processTable
   const cwd = absoluteDir(o.cwd)
   let isDir = false
   try {
@@ -600,7 +618,10 @@ export async function spawnAgent(
         `${isCodex ? 'Codex' : isAgy ? 'Antigravity' : 'Claude'} did not get ready in ${pane} within ${o.timeoutSec} s`,
       )
   } catch (err) {
-    if (createdTab && !seen) await cleanupEmptySpawnTab(createdTab).catch(() => {})
+    if (winPlatform === 'win32' && createdTab && !seen) {
+      const tail = await cleanupEmptySpawnTab(createdTab, winTable).catch(() => null)
+      if (tail && err instanceof Error) err.message = `${err.message}\nLast terminal output:\n${tail}`
+    }
     throw err
   }
   if (kind === PI_AGENT && carded && isPiSessionFile(session)) moveStartCard(carded, session, profile?.id, o.model)

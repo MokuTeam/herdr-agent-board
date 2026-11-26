@@ -51,6 +51,7 @@ export interface MoveOutDeps {
   items(): Item[]
   log(text: string): void
   home?: string
+  platform?: string
   /** Process table check where herdr omits child processes under a shell (Windows); null elsewhere. */
   processTable?: (() => Promise<readonly MemRow[] | null>) | null
   /** git's facts of a folder (adapters/git.ts), handed in so tests can stand in. */
@@ -84,8 +85,8 @@ const paneGone = (err: unknown): boolean => err instanceof HerdrError && err.cod
 export function createMoveOut(o: MoveOutDeps): MoveOut {
   const { deps } = o
   const home = o.home ?? homedir()
-  const processTable =
-    o.processTable === undefined ? (process.platform === 'win32' ? memoryTable : null) : o.processTable
+  const platform = o.platform ?? process.platform
+  const processTable = o.processTable === undefined ? (platform === 'win32' ? memoryTable : null) : o.processTable
   const git = o.git ?? { checkout: checkoutFacts, info: gitInfo, identity: checkoutIdentity }
   const changes = git.changes ?? checkoutChangeList
   const packs = new Map<string, Packed>()
@@ -286,29 +287,36 @@ export function createMoveOut(o: MoveOutDeps): MoveOut {
               // Only a shell nobody uses: a program started in it since (a server, the owner's own) keeps it.
               const procs = await paneProcesses(pane.id, 10_000)
               const others = procs ? procs.foreground.filter(pr => pr.pid !== procs.shell) : null
-              const winClear = processTable
-                ? await processTable()
-                    .then(rows => (rows ? nothingUnder(rows, procs?.shell ?? -1) === true : false))
-                    .catch(() => false)
-                : true
-              if (procs && !others?.length && winClear) {
-                let closeTab = false
-                if (live.workspace_id && live.tab_id) {
-                  const answer = await herdr(['pane', 'list', '--workspace', live.workspace_id], 10_000).catch(
-                    () => null,
-                  )
-                  const raw = isRecord(answer) && Array.isArray(answer.panes) ? answer.panes : []
-                  const inTab = raw
-                    .map(asPane)
-                    .filter((x): x is NonNullable<ReturnType<typeof asPane>> => !!x && x.tab_id === live.tab_id)
-                  if (
-                    inTab.some(x => x.pane_id === pane.id) &&
-                    inTab.every(x => x.pane_id === pane.id || isSidebarPane(x))
-                  )
-                    closeTab = true
+              if (platform !== 'win32') {
+                if (procs && !others?.length) {
+                  await herdr(['pane', 'close', pane.id])
+                  notes.push('its pane closed')
                 }
-                await herdr(closeTab && live.tab_id ? ['tab', 'close', live.tab_id] : ['pane', 'close', pane.id])
-                notes.push('its pane closed')
+              } else {
+                const winClear = processTable
+                  ? await processTable()
+                      .then(rows => (rows ? nothingUnder(rows, procs?.shell ?? -1) === true : false))
+                      .catch(() => false)
+                  : true
+                if (procs && !others?.length && winClear) {
+                  let closeTab = false
+                  if (live.workspace_id && live.tab_id) {
+                    const answer = await herdr(['pane', 'list', '--workspace', live.workspace_id], 10_000).catch(
+                      () => null,
+                    )
+                    const raw = isRecord(answer) && Array.isArray(answer.panes) ? answer.panes : []
+                    const inTab = raw
+                      .map(asPane)
+                      .filter((x): x is NonNullable<ReturnType<typeof asPane>> => !!x && x.tab_id === live.tab_id)
+                    if (
+                      inTab.some(x => x.pane_id === pane.id) &&
+                      inTab.every(x => x.pane_id === pane.id || isSidebarPane(x))
+                    )
+                      closeTab = true
+                  }
+                  await herdr(closeTab && live.tab_id ? ['tab', 'close', live.tab_id] : ['pane', 'close', pane.id])
+                  notes.push('its pane closed')
+                }
               }
             }
           } else if (live?.agent) {

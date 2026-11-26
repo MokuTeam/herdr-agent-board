@@ -515,19 +515,22 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
 
   /** Sleepers whose pane wake closed or moved to another device, or whose session went to the archive: forgotten (#204, #631, #888). */
   function forgetArchived(): void {
+    const win = platform === 'win32'
     const freedClaude = Object.entries(sessions).filter(([, s]) => isFreed(s))
     const agyIds = Object.keys(agys).filter(id => !agyGoing.has(id))
-    const piIds = Object.keys(pis).filter(id => !piGoing.has(id))
-    const codexFreed = Object.keys(codexes).filter(id => !codexGoing.has(id) && !!codexes[id]?.freed)
-    const freedIds = [
-      ...freedClaude.map(([, s]) => s.session),
-      ...agyIds.filter(id => !!agys[id]?.freed),
-      ...piIds.filter(id => !!pis[id]?.freed),
-      ...codexFreed,
-    ]
+    const piIds = win ? Object.keys(pis).filter(id => !piGoing.has(id)) : []
+    const codexFreed = win ? Object.keys(codexes).filter(id => !codexGoing.has(id) && !!codexes[id]?.freed) : []
+    const freedIds = win
+      ? [
+          ...freedClaude.map(([, s]) => s.session),
+          ...agyIds.filter(id => !!agys[id]?.freed),
+          ...piIds.filter(id => !!pis[id]?.freed),
+          ...codexFreed,
+        ]
+      : []
     const archiveCheck = [...freedClaude.map(([, s]) => s.session), ...agyIds, ...piIds]
     const gone = archiveCheck.length ? archived(archiveCheck) : new Set<string>()
-    const shifted = freedIds.length ? moved(freedIds) : new Set<string>()
+    const shifted = win && freedIds.length ? moved(freedIds) : new Set<string>()
     if (!gone.size && !shifted.size) return
     const dropClaude = new Set([...gone, ...shifted])
     if (freedClaude.some(([, s]) => dropClaude.has(s.session))) {
@@ -548,6 +551,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
       saveAgys()
       for (const id of agyGone) deps.log(`${id} (agy) is in the archive: no longer asleep`)
     }
+    if (!win) return
     const piGone = piIds.filter(id => gone.has(id) || (!!pis[id]?.freed && shifted.has(id)))
     if (piGone.length) {
       const next = { ...pis }
@@ -830,17 +834,19 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
       if (!s.slept_at || isFreed(s) || !SESSION_ID.test(s.session) || going.has(pane)) continue
       consider('claude', pane, pane, s.session, s.session, s.slept_at, s.terminal, !!s.exited, sleepLabels(s))
     }
-    for (const [id, s] of Object.entries(agys)) {
-      if (s.freed || agyGoing.has(id)) continue
-      consider('agy', id, s.pane, s.session, s.session, s.slept_at, s.terminal, false, [agySleepLabel(s)])
-    }
-    for (const [id, s] of Object.entries(codexes)) {
-      if (s.freed || codexGoing.has(id)) continue
-      consider('codex', id, s.pane, s.session, s.session, s.slept_at, s.terminal, false, [agySleepLabel(s)])
-    }
-    for (const [file, s] of Object.entries(pis)) {
-      if (s.freed || piGoing.has(file)) continue
-      consider('pi', file, s.pane, s.session, piSessionId(s.session), s.slept_at, s.terminal, false, [sleepLabel(s)])
+    if (platform === 'win32') {
+      for (const [id, s] of Object.entries(agys)) {
+        if (s.freed || agyGoing.has(id)) continue
+        consider('agy', id, s.pane, s.session, s.session, s.slept_at, s.terminal, false, [agySleepLabel(s)])
+      }
+      for (const [id, s] of Object.entries(codexes)) {
+        if (s.freed || codexGoing.has(id)) continue
+        consider('codex', id, s.pane, s.session, s.session, s.slept_at, s.terminal, false, [agySleepLabel(s)])
+      }
+      for (const [file, s] of Object.entries(pis)) {
+        if (s.freed || piGoing.has(file)) continue
+        consider('pi', file, s.pane, s.session, piSessionId(s.session), s.slept_at, s.terminal, false, [sleepLabel(s)])
+      }
     }
     if (!due.length) return
     await during(async () => {
@@ -1037,7 +1043,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
         {
           ...timing,
           boardOnPath: deps.boardOnPath(),
-          free: deps.settings().closePanes && { held },
+          free: platform === 'win32' && deps.settings().closePanes && { held },
           platform,
           ...(freshAlone && { alone: freshAlone }),
         },
@@ -1165,7 +1171,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
         {
           ...timing,
           boardOnPath: deps.boardOnPath(),
-          free: deps.settings().closePanes && { held },
+          free: platform === 'win32' && deps.settings().closePanes && { held },
           platform,
           ...(freshAlone && { alone: freshAlone }),
         },
@@ -1247,7 +1253,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
         {
           ...timing,
           boardOnPath: deps.boardOnPath(),
-          free: deps.settings().closePanes && { held },
+          free: platform === 'win32' && deps.settings().closePanes && { held },
           platform,
           ...(freshAlone && { alone: freshAlone }),
         },

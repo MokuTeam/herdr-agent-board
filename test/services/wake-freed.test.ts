@@ -1243,8 +1243,28 @@ test('#888 Windows: waits for pwsh prompt to settle after /exit and refuses when
   expect(tableCalls).toBe(0)
 })
 
-test('#888 moved freed sleeper is forgotten on remember() so held() releases the workspace last tab', async () => {
+test('#888 moved freed sleeper is forgotten on win32 remember() so held() releases the workspace last tab; linux skips moved()', async () => {
   const at = Date.now() - HOUR
+  // Linux control: does not call moved() even when freed sleepers exist.
+  let movedChecks = 0
+  const wLinux = world({
+    sessions: work => ({
+      [SID]: asleep(work, SID, 'Billing', {
+        freed: { pane: 'w1:p2', workspace: 'w1', workspaceLabel: 'Main', tabLabel: 'Billing', topic: '', at },
+      }),
+    }),
+  })
+  await createWakeEngine({
+    ...wLinux.deps,
+    platform: 'linux',
+    moved: () => {
+      movedChecks++
+      return new Set([SID])
+    },
+  }).remember()
+  expect(movedChecks).toBe(0)
+  expect(readSessions(wLinux.file)[SID]).toBeDefined()
+
   const master = claudePane('w1:p1', 't1', SID2)
   const w = world({
     panes: [master],
@@ -1260,7 +1280,11 @@ test('#888 moved freed sleeper is forgotten on remember() so held() releases the
     1,
   )
   const movedIds = new Set<string>()
-  const deps = { ...w.deps, moved: (ids: readonly string[]) => new Set(ids.filter(id => movedIds.has(id))) }
+  const deps = {
+    ...w.deps,
+    platform: 'win32',
+    moved: (ids: readonly string[]) => new Set(ids.filter(id => movedIds.has(id))),
+  }
   runningSession(w.work, { id: SID2, name: 'Master', cwd: PROJECT, n: 1 })
   exitsOnPrompt(w.io, master, join(w.work, 'sessions', '1.json'))
   const engine = createWakeEngine(deps)
@@ -1276,7 +1300,7 @@ test('#888 moved freed sleeper is forgotten on remember() so held() releases the
   expect(closes(w.io)).toEqual([['tab', 'close', 't1']])
 })
 
-test('#888 giveBack closes a kept Codex sleeper pane once its tab loses focus', async () => {
+test('#888 giveBack closes a kept Codex sleeper pane on win32 once its tab loses focus, and ignores it on linux', async () => {
   const CID = '509dfc37-b58e-4851-9988-a8c7befe9f0d'
   const pane: FakePane = {
     pane_id: 'w1:p2',
@@ -1306,27 +1330,37 @@ test('#888 giveBack closes a kept Codex sleeper pane once its tab loses focus', 
   const tabOps = w.deps.tabs
   if (!tabOps) throw new Error('missing tabOps')
   const codexFile = join(w.dir, 'state', 'wake-codex.json')
-  const engine = createWakeEngine({
-    ...w.deps,
-    codexFile,
-    codex: {
-      herdr: w.io,
-      codex: { line: id => `board resume --codex ${id}`, draft: () => '' },
-      hasConversation: id => id === CID,
-      home: w.home,
-      exists: () => true,
-      newTab: (ws, cwd, label) => tabOps.newTab(ws, cwd, label),
-      newWorkspace: (cwd, label, tabLabel) => tabOps.newWorkspace(cwd, label, tabLabel),
-    },
-  })
-  expect(await engine.sleep(CID)).toEqual({ ok: true, pane: 'w1:p2', name: 'Codex Job' })
-  // Kept while focused; terminal noted on first remember(), then freed once unfocused.
+  const makeEngine = (platform: string) =>
+    createWakeEngine({
+      ...w.deps,
+      platform,
+      codexFile,
+      codex: {
+        herdr: w.io,
+        codex: { line: id => `board resume --codex ${id}`, draft: () => '' },
+        hasConversation: id => id === CID,
+        home: w.home,
+        exists: () => true,
+        newTab: (ws, cwd, label) => tabOps.newTab(ws, cwd, label),
+        newWorkspace: (cwd, label, tabLabel) => tabOps.newWorkspace(cwd, label, tabLabel),
+      },
+    })
+  // First sleep on win32 while focused -> kept in pane.
+  const winEngine = makeEngine('win32')
+  expect(await winEngine.sleep(CID)).toEqual({ ok: true, pane: 'w1:p2', name: 'Codex Job' })
   expect(closes(w.io)).toEqual([])
-  await engine.remember()
-  expect(JSON.parse(readFileSync(codexFile, 'utf8'))[CID]?.terminal).toBe('term-c1')
+  // Linux engine does not touch Codex sleepers in giveBack even when unfocused.
   side.focused = false
   w.io.screens['w1:p2'] = `PS ${PROJECT}> board resume --codex ${CID}`
-  await engine.remember()
+  await makeEngine('linux').remember()
+  expect(closes(w.io)).toEqual([])
+  expect(JSON.parse(readFileSync(codexFile, 'utf8'))[CID]?.terminal).toBeUndefined()
+  // Windows engine notes terminal then gives back once unfocused.
+  side.focused = true
+  await winEngine.remember()
+  expect(JSON.parse(readFileSync(codexFile, 'utf8'))[CID]?.terminal).toBe('term-c1')
+  side.focused = false
+  await winEngine.remember()
   expect(closes(w.io)).toEqual([['tab', 'close', 't2']])
   expect(JSON.parse(readFileSync(codexFile, 'utf8'))[CID]?.freed).toMatchObject({ pane: 'w1:p2', tabLabel: 'Billing' })
 })
