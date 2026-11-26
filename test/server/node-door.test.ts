@@ -11,6 +11,7 @@ import { connect } from 'node:net'
 import { hostname } from 'node:os'
 import { join } from 'node:path'
 import { createNodeStore } from '../../src/adapters/node-store.ts'
+import { relayMatch } from '../../src/core/master-relay.ts'
 import { doorRefusal, NODE_API } from '../../src/core/node-door.ts'
 import { NODE_PORT } from '../../src/core/nodes.ts'
 import { REMOTE_API } from '../../src/core/remote.ts'
@@ -163,13 +164,27 @@ const mainHello = (): string =>
  * through the door, or refused, by accident.
  */
 const CLASSIFIED: Record<string, [method: string, raw: string, door: 'door' | 'refused'][]> = {
-  // The master relay (#764): first in a node's own table, never the door's; what it passes up to
+  // The master relay (#764): first in a node's own table but for the NetSuite store's check (#860),
+  // never the door's; what it passes up to
   // the master is no path of the door's, so a master never asks a node for its own threads.
   'ANY ^\\/api\\/': [
     ['GET', '/api/threads', 'refused'],
     ['GET', '/api/threads/events', 'refused'],
     ['POST', '/api/threads/atlas-1', 'refused'],
   ],
+  // The NetSuite session store (#860): a bridge on this computer, with its token; a node's own route
+  // (first, before the relay) checks it and passes the rest up to its master's store.
+  'ANY ^\\/api\\/ns-sessions(?:\\/|$)': [
+    ['GET', '/api/ns-sessions/list', 'refused'],
+    ['POST', '/api/ns-sessions/entry', 'refused'],
+  ],
+  'POST /api/ns-sessions/entry': [['POST', '/api/ns-sessions/entry', 'refused']],
+  'GET /api/ns-sessions/entry': [['GET', '/api/ns-sessions/entry', 'refused']],
+  'POST /api/ns-sessions/touch': [['POST', '/api/ns-sessions/touch', 'refused']],
+  'POST /api/ns-sessions/dead': [['POST', '/api/ns-sessions/dead', 'refused']],
+  'POST /api/ns-sessions/lock': [['POST', '/api/ns-sessions/lock', 'refused']],
+  'POST /api/ns-sessions/unlock': [['POST', '/api/ns-sessions/unlock', 'refused']],
+  'GET /api/ns-sessions/list': [['GET', '/api/ns-sessions/list', 'refused']],
   'GET /api/setup': [['GET', '/api/setup', 'refused']],
   'GET /api/process': [['GET', '/api/process', 'refused']],
   'GET /api/hello': [['GET', '/api/hello', 'door']],
@@ -293,12 +308,25 @@ const CLASSIFIED: Record<string, [method: string, raw: string, door: 'door' | 'r
   ],
   'POST /api/team/listen': [['POST', '/api/team/listen', 'refused']],
   'GET /api/team/agents': [['GET', '/api/team/agents', 'refused']],
+  // The peers' agent directories (#832) and the owner's service agents (#819): Team stays local.
+  'GET /api/team/directory': [['GET', '/api/team/directory', 'refused']],
   'POST /api/team/agents': [['POST', '/api/team/agents', 'refused']],
+  'POST /api/team/services': [['POST', '/api/team/services', 'refused']],
   'POST /api/team/draft': [['POST', '/api/team/draft', 'refused']],
   'POST ^\\/api\\/team\\/draft\\/([^/]+)\\/(send|discard)$': [['POST', '/api/team/draft/d1/send', 'refused']],
   'POST /api/team/trust': [['POST', '/api/team/trust', 'refused']],
   'POST ^\\/api\\/team\\/threads\\/team\\/([^/]+)\\/members$': [
     ['POST', '/api/team/threads/team/general/members', 'refused'],
+  ],
+  // A team channel's delete, leave and restore (#855): the owner's, as its members are.
+  'POST ^\\/api\\/team\\/threads\\/team\\/([^/]+)\\/delete$': [
+    ['POST', '/api/team/threads/team/general/delete', 'refused'],
+  ],
+  'POST ^\\/api\\/team\\/threads\\/team\\/([^/]+)\\/leave$': [
+    ['POST', '/api/team/threads/team/general/leave', 'refused'],
+  ],
+  'POST ^\\/api\\/team\\/threads\\/team\\/([^/]+)\\/restore$': [
+    ['POST', '/api/team/threads/team/general/restore', 'refused'],
   ],
   'GET /api/team/welcome': [['GET', '/api/team/welcome', 'refused']],
   'POST /api/team/welcome': [['POST', '/api/team/welcome', 'refused']],
@@ -403,12 +431,23 @@ describe('the master door', () => {
         expect([method, raw, refused === null ? 'door' : 'refused']).toEqual([method, raw, door])
         // Through the door: a refused one is the door's 404. An allowed one reaches the board: a GET
         // answers as the web board answers it (hello aside, which has its own test), a POST is not
-        // the door's 404.
+        // the door's 404. A GET the node's own page passes up to its master (#786, the relay's
+        // table: the launch options) is the node's own answer on the door, which has no relay; the
+        // page's is the master's, and no master holds the relay's stream here.
         const [status, text] = await said(method === 'GET' ? master.get(raw) : master.post(raw, {}))
         if (door === 'refused') expect([method, raw, status, text]).toEqual([method, raw, 404, NOT_FOUND])
         else if (method === 'POST')
           expect([method, raw, status === 404 && text === NOT_FOUND]).toEqual([method, raw, false])
-        else if (raw !== '/api/hello')
+        else if (relayMatch(method, raw, () => true)?.kind === 'table') {
+          expect([method, raw, status]).toEqual([method, raw, 200])
+          const [pageStatus, pageText] = await said(fetch(url + raw))
+          expect([method, raw, pageStatus, JSON.parse(pageText).error]).toEqual([
+            method,
+            raw,
+            503,
+            'node-master-offline',
+          ])
+        } else if (raw !== '/api/hello')
           expect([method, raw, status, text]).toEqual([method, raw, ...(await said(fetch(url + raw)))])
       }
     }
@@ -639,10 +678,15 @@ describe('without node', () => {
     const url = `http://127.0.0.1:${webPort}`
     const reloads = (): number => proc.messages.filter(m => (m as { reloaded?: boolean }).reloaded).length
 
-    // The same table, in the same order, as the board with `node` without the master relay's route
-    // (#764), which only a node puts first: the door adds no route to it.
-    expect(routeTable(proc)).toEqual(nodeTable.filter(r => !(r.method === 'ANY' && r.path === '^\\/api\\/')))
-    expect(nodeTable[0]).toEqual({ method: 'ANY', path: '^\\/api\\/' })
+    // The same table, in the same order, as the board with `node` without the two routes only a node
+    // puts first: the NetSuite store's check of its bridge's token (#860), then the master relay
+    // (#764). The door adds no route to it.
+    const nodeOnly = [
+      { method: 'ANY', path: '^\\/api\\/ns-sessions(?:\\/|$)' },
+      { method: 'ANY', path: '^\\/api\\/' },
+    ]
+    expect(nodeTable.slice(0, 2)).toEqual(nodeOnly)
+    expect(routeTable(proc)).toEqual(nodeTable.slice(2))
     expect(await (await fetch(`${url}/api/hello`)).text()).toBe(mainHello())
     expect(await listens(doorPort)).toBe(false)
     if (defaultFree) expect(await listens(NODE_PORT)).toBe(false)
