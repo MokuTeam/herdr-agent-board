@@ -6,12 +6,14 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test
 import { JSDOM } from 'jsdom'
 import { act, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
+import { translator } from '../../src/core/i18n/translator.ts'
 import { DevicesPanel } from '../../web/src/components/devices/DevicesPanel.tsx'
 import { NsSessionsSection } from '../../web/src/components/devices/NsSessionsSection.tsx'
 import { I18nProvider } from '../../web/src/i18n/I18nProvider.tsx'
 import {
   type NsSessionEntry,
   type NsSessionsSnapshot,
+  nsSessionRow,
   sanitizeNsSessionsSnapshot,
 } from '../../web/src/models/ns-sessions.ts'
 import { BoardContext } from '../../web/src/state/BoardProvider.tsx'
@@ -165,6 +167,17 @@ describe('NsSessionsSection (#897)', () => {
     const rendered = serializeNodes(findAll(nodes, el => hasClass(el, 'ns-sessions')))
     expect(rendered).toContain('Unknown (seen')
     expect(rendered).toContain('about ')
+
+    const deadRow = nsSessionRow(
+      { ...ENTRY_DEAD, last_event: null, last_where: { machine: '', profile: '' } },
+      {},
+      NOW,
+      translator('en'),
+    )
+    expect(deadRow.absExpiryText).toBe('-')
+    expect(deadRow.idleLeftText).toBe('-')
+    expect(deadRow.lastEventText).toBe('-')
+    expect(deadRow.lastActivityText).toContain(' -')
   })
 
   describe('interactive DOM behavior (fetch, SSE, notify toggle, forget, read-only)', () => {

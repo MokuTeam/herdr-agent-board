@@ -102,6 +102,15 @@ describe('ns-sessions notify prefs & planning', () => {
     expect(r1.notices[0]?.state).toBe('dying')
     for (const n of r1.notices) notified.add(n.key)
 
+    // Activity moves the same fp back from dying to live, then dying again -> keeps key, NO repeat notice.
+    const liveSameFp = meta({ state: 'live' })
+    const rLive = planNsNotices([liveSameFp, autoRenewEntry], NO_NS_NOTIFY_PREFS, notified, 'UTC', tEn)
+    expect(rLive.notices).toEqual([])
+    expect(rLive.activeKeys.has(r1.notices[0]?.key ?? '')).toBe(true)
+
+    const dyingAgain = planNsNotices([dyingEntry, autoRenewEntry], NO_NS_NOTIFY_PREFS, notified, 'UTC', tEn)
+    expect(dyingAgain.notices).toEqual([])
+
     // Same fp transitions to dead -> does NOT fire again.
     const deadSameFp = meta({ state: 'dead', dead_at: T + 60_000 })
     const r2 = planNsNotices([deadSameFp, autoRenewEntry], NO_NS_NOTIFY_PREFS, notified, 'UTC', tEn)

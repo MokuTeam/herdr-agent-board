@@ -201,7 +201,7 @@ function formatLeft(at: number, now: number, t: Translator): string {
 }
 
 function formatLastEvent(ev: NsSessionLastEvent | null, lang: Lang, t: Translator): string {
-  if (!ev) return '—'
+  if (!ev) return '-'
   const where = ev.where?.machine ? `${ev.where.machine}/${ev.where.profile}` : ''
   let label: string
   if (ev.kind === 'published') label = where ? t('ns.event.published', { where }) : t('ns.event.publishedUnknown')
@@ -226,11 +226,8 @@ export function nsSessionRow(
   const hasPref = Object.hasOwn(notifyPrefs, entry.account)
   const notifyOn = hasPref ? notifyPrefs[entry.account] === true : entry.auto_renew === false
   const deadReason = entry.dead_reason ? t(`ns.dead.${entry.dead_reason}`) : null
-  const where = entry.last_where.machine ? `${entry.last_where.machine}/${entry.last_where.profile}` : '—'
-  const absClock =
-    entry.state === 'dead'
-      ? formatClock(entry.dead_at ?? entry.abs_expiry, t.lang)
-      : `${formatClock(entry.abs_expiry, t.lang)} (${formatLeft(entry.abs_expiry, now, t)})`
+  const where = entry.last_where.machine ? `${entry.last_where.machine}/${entry.last_where.profile}` : '-'
+  const absClock = `${formatClock(entry.abs_expiry, t.lang)} (${formatLeft(entry.abs_expiry, now, t)})`
   return {
     key: `${entry.account}\u0000${entry.user ?? ''}`,
     account: entry.account,
@@ -254,10 +251,12 @@ export function nsSessionRow(
             ago: formatAgo(entry.first_seen, now, t),
           }),
     absExpiryText:
-      entry.abs_expiry_estimated && (entry.state !== 'dead' || entry.dead_at === null)
-        ? t('ns.absExpiryAbout', { value: absClock })
-        : absClock,
-    idleLeftText: entry.state === 'dead' ? '—' : formatLeft(entry.idle_expiry, now, t),
+      entry.state === 'dead'
+        ? '-'
+        : entry.abs_expiry_estimated
+          ? t('ns.absExpiryAbout', { value: absClock })
+          : absClock,
+    idleLeftText: entry.state === 'dead' ? '-' : formatLeft(entry.idle_expiry, now, t),
     idleLow: entry.state === 'dying',
     lastActivityText: `${formatAgo(entry.last_activity, now, t)} · ${where}`,
     holders: entry.holders,

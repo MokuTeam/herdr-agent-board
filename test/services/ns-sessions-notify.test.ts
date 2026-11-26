@@ -94,6 +94,14 @@ describe('ns-sessions prefs & notify service', () => {
       expect(toasts[0]?.body).toBe('1234567 ends at 20:00; log in when convenient, the login will be shared')
       expect(dayDeliveries).toEqual([{ key: 'day-1', body: toasts[0]?.body ?? '' }])
 
+      // Touch moves the same fp from dying -> live -> idle dying again: NO repeat notice.
+      store.touch('1234567', nsFingerprint(SECRET), { machine: 'laptop', profile: 'work' })
+      expect(toasts).toHaveLength(1)
+      t += NS_IDLE_MS - NS_DYING_MS
+      svc.check()
+      expect(toasts).toHaveLength(1)
+      expect(dayDeliveries).toHaveLength(1)
+
       // Explicit death of the same fp does NOT fire a second notice.
       store.dead('1234567', nsFingerprint(SECRET), 'logout', { machine: 'laptop', profile: 'work' })
       expect(toasts).toHaveLength(1)

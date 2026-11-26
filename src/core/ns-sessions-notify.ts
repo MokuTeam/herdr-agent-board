@@ -91,9 +91,9 @@ export function planNsNotices(
   const notices: NsNotice[] = []
   const activeKeys = new Set<string>()
   for (const e of entries) {
-    if (e.state !== 'dying' && e.state !== 'dead') continue
     const key = nsNoticeKey(e)
     activeKeys.add(key)
+    if (e.state !== 'dying' && e.state !== 'dead') continue
     if (notified.has(key)) continue
     if (!shouldNotifyAccount(e.account, e.auto_renew, prefs)) continue
     const { title, body, endsAt } = formatNsNotice(e, zone, t)

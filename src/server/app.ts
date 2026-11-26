@@ -1356,9 +1356,18 @@ export async function startServer({
   board.publish()
   // NetSuite session death & expiry notices (#897): fires once per session lifetime for accounts
   // without auto-renew or toggled on; zero timers while the store holds no live/dying entries.
+  // Read notify prefs once and refresh in place when toggled, avoiding disk reads per store change.
+  let nsNotifyPrefs = readNsNotifyPrefs()
+  const nsPrefs = {
+    get: () => nsNotifyPrefs,
+    set: (account: string, value: boolean | null) => {
+      nsNotifyPrefs = updateNsNotifyPrefs(cur => setAccountNotify(cur, account, value))
+      return nsNotifyPrefs
+    },
+  }
   const nsNotify = createNsSessionsNotify({
     store: nsStore,
-    prefs: () => readNsNotifyPrefs(),
+    prefs: nsPrefs.get,
     desktop: { show: toast => (desks.on() ? desks.notice : localNotice()).show(toast) },
     items: board.items,
     log,
@@ -1452,10 +1461,7 @@ export async function startServer({
     ...nsSessionRoutes({
       store: () => (isNodeOnly(cfg) ? null : nsStore),
       tokenOk: given => nsTokens.check(given),
-      prefs: {
-        get: () => readNsNotifyPrefs(),
-        set: (account, value) => updateNsNotifyPrefs(cur => setAccountNotify(cur, account, value)),
-      },
+      prefs: nsPrefs,
       log,
     }),
     // The away journal (#489): its list and the strip's dismiss (404 while off).
