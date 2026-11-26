@@ -204,6 +204,28 @@ test("a node's bridge reaches the master's store through its own board; values s
   expect(again.status).toBe(409)
   expect(again.json).toMatchObject({ ok: false, code: 'dead_fp' })
 
+  // Node UI (without bridge token) can open SSE events, toggle notify, and forget on the master.
+  const ac = new AbortController()
+  const sseRes = await fetch(`${nodeBase}/events`, { signal: ac.signal })
+  expect(sseRes.status).toBe(200)
+  const reader = sseRes.body?.getReader()
+  if (!reader) throw new Error('missing SSE body')
+  const sseChunk = new TextDecoder().decode((await reader.read()).value)
+  expect(sseChunk).toContain('event: sessions')
+  expect(sseChunk).toContain(A)
+  expect(sseChunk).not.toContain(SECRET)
+  expect(sseChunk).not.toContain(NEWER)
+  ac.abort()
+  await reader.cancel().catch(() => {})
+
+  const notifyOnNode = await call(nodeBase, 'POST', 'notify', { body: { account: A, notify: true } })
+  expect(notifyOnNode.status).toBe(200)
+  expect(notifyOnNode.json).toMatchObject({ ok: true, account: A, notify: true })
+  const forgetOnNode = await call(nodeBase, 'POST', 'forget', { body: { account: A, user: U } })
+  expect(forgetOnNode.status).toBe(200)
+  expect(forgetOnNode.json).toEqual({ ok: true, removed: true })
+  expect((await call(masterBase, 'GET', 'list')).json).toMatchObject({ ok: true, entries: [], notify: { [A]: true } })
+
   // No value or token anywhere it could leak: either board's log, payload or journal, the admin log.
   const seen = [
     ...lists.map(l => l.text),
@@ -240,5 +262,5 @@ test('a board without node keeps its own store, and writes nothing where there i
   const { url } = await serveBoard(box, { language: 'en' })
   expect(existsSync(join(box.env.HOME as string, 'browser'))).toBe(false)
   expect((await call(`${url}/api/ns-sessions`, 'POST', 'entry', { body: entry(SECRET, 'laptop') })).status).toBe(401)
-  expect((await call(`${url}/api/ns-sessions`, 'GET', 'list')).json).toEqual({ ok: true, entries: [] })
+  expect((await call(`${url}/api/ns-sessions`, 'GET', 'list')).json).toEqual({ ok: true, entries: [], notify: {} })
 }, 30_000)

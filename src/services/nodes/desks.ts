@@ -15,6 +15,7 @@
 //   first, and asks that overlap share one round.
 import { combineDesks, type DeskReading, type DeskToast, deskReadingOf, rankDesks } from '../../core/desk.ts'
 import type { Observation } from '../../core/presence.ts'
+import type { NoticeDesktop, NoticeToast } from '../../integrations/notice-toast.ts'
 import type { ReminderDesktop, ReminderToast } from '../../integrations/reminder-toast.ts'
 import type { TeamDesktop, TeamToast } from '../../integrations/team-toast.ts'
 import type { NodeLinks } from './links.ts'
@@ -28,6 +29,8 @@ export interface Desks {
   reminder: ReminderDesktop
   /** Team's notifications, each on the active desk. */
   team: TeamDesktop
+  /** Plain board notices, each on the active desk (#897). */
+  notice: NoticeDesktop
 }
 
 export interface DesksOptions {
@@ -42,7 +45,7 @@ export interface DesksOptions {
   /** This computer's reading (adapters/idle.ts observe). */
   observeHere(): Promise<Observation>
   /** This computer's own notifiers, made when first used. */
-  local: { reminder(): ReminderDesktop; team(): TeamDesktop }
+  local: { reminder(): ReminderDesktop; team(): TeamDesktop; notice?: () => NoticeDesktop }
   log(text: string): void
   now?: () => number
   /** How long a node has to answer the ask: its own reading may take PowerShell some seconds. */
@@ -222,6 +225,12 @@ export function createDesks(o: DesksOptions): Desks {
     },
   }
 
+  const notice: NoticeDesktop = {
+    show(toast: NoticeToast) {
+      void route('notice', { kind: 'notice', toast }, () => o.local.notice?.().show(toast))
+    },
+  }
+
   return {
     on: () => o.on(),
     async observe() {
@@ -229,5 +238,6 @@ export function createDesks(o: DesksOptions): Desks {
     },
     reminder,
     team,
+    notice,
   }
 }

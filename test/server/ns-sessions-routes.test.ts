@@ -17,6 +17,7 @@ import {
   nsBridgeDirs,
 } from '../../src/adapters/ns-store-tokens.ts'
 import { createNsStore, type NsStore, nsFingerprint } from '../../src/core/ns-sessions.ts'
+import { NO_NS_NOTIFY_PREFS, type NsNotifyPrefs, setAccountNotify } from '../../src/core/ns-sessions-notify.ts'
 import { dispatch, type GuardState, type Route } from '../../src/server/http.ts'
 import { type NsRelay, nsNodeRoute, nsSessionRoutes } from '../../src/server/routes/ns-sessions.ts'
 
@@ -66,10 +67,23 @@ interface Call {
 function harness(o: { store?: NsStore | null; routes?: (r: Route[]) => Route[] } = {}) {
   const store = o.store === undefined ? createNsStore() : o.store
   const logs: string[] = []
-  const base = nsSessionRoutes({ store: () => store, tokenOk: t => t === TOKEN, log: l => logs.push(l) })
+  let prefs: NsNotifyPrefs = NO_NS_NOTIFY_PREFS
+  const base = nsSessionRoutes({
+    store: () => store,
+    tokenOk: t => t === TOKEN,
+    prefs: {
+      get: () => prefs,
+      set: (account, val) => {
+        prefs = setAccountNotify(prefs, account, val)
+        return prefs
+      },
+    },
+    log: l => logs.push(l),
+  })
   const routes = o.routes ? o.routes(base) : base
   return {
     logs,
+    routes,
     store: store as NsStore,
     async call(method: string, path: string, c: Call = {}) {
       const headers: Record<string, string> = { 'content-type': 'application/json' }
@@ -126,7 +140,7 @@ describe('routes', () => {
       expect(noBoard.status).toBe(401)
       expect(noBoard.json).toMatchObject({ ok: false, code: 'unauthorized', message: 'X-Board: 1 is missing' })
     }
-    expect((await h.call('GET', 'list', { token: null })).json).toEqual({ ok: true, entries: [] })
+    expect((await h.call('GET', 'list', { token: null })).json).toEqual({ ok: true, entries: [], notify: {} })
     expect((await h.call('GET', 'list')).status).toBe(200)
     // The store has POST and GET only: the relay carries no other method.
     expect((await h.call('PUT', 'entry', { body: entry() })).status).toBe(405)
@@ -245,14 +259,19 @@ describe('routes', () => {
     expect(Object.keys((list.json.entries as Record<string, unknown>[])[0] ?? {}).sort()).toEqual(
       [
         'abs_expiry',
+        'abs_expiry_estimated',
         'account',
+        'auto_renew',
+        'dead_at',
         'dead_reason',
+        'first_seen',
         'fp',
         'generation',
         'holders',
         'host',
         'idle_expiry',
         'last_activity',
+        'last_event',
         'last_where',
         'lock',
         'login_at',
@@ -262,7 +281,7 @@ describe('routes', () => {
         'user',
       ].sort(),
     )
-    expect((await h.call('GET', 'list?account=7654321')).json).toEqual({ ok: true, entries: [] })
+    expect((await h.call('GET', 'list?account=7654321')).json).toEqual({ ok: true, entries: [], notify: {} })
     expect(list.text).not.toContain(SECRET)
     expect(list.text).not.toContain(ROUTING)
   })
@@ -362,6 +381,64 @@ describe('routes', () => {
       expect(text).not.toContain(ROUTING)
       expect(text).not.toContain(TOKEN)
     }
+  })
+
+  test('forget, notify, imported where via client header, and SSE events without cookie values', async () => {
+    const h = harness()
+    await h.call('POST', 'entry', { body: entry(SECRET, { auto_renew: false }), client: 'mokutab/2.2.0 laptop/work' })
+    const got = await h.call('GET', `entry?account=${A}&user=${U}`, { client: 'mokutab/2.2.0 server-2/main' })
+    expect(got.status).toBe(200)
+    expect(h.store.list()[0]).toMatchObject({
+      holders: ['laptop', 'server-2'],
+      last_event: { kind: 'imported', where: SERVER },
+    })
+
+    // Owner UI notify toggle & forget work without bridge token, refused remotely.
+    expect((await h.call('POST', 'notify', { body: { account: A, notify: true }, remote: true })).status).toBe(401)
+    expect((await h.call('POST', 'forget', { body: { account: A, user: U }, remote: true })).status).toBe(401)
+
+    const notifyRes = await h.call('POST', 'notify', { body: { account: A, notify: false }, token: null })
+    expect(notifyRes.status).toBe(200)
+    expect(notifyRes.json).toEqual({ ok: true, account: A, notify: false, prefs: { [A]: false } })
+    expect((await h.call('GET', 'list', { token: null })).json.notify).toEqual({ [A]: false })
+
+    // SSE stream sends initial snapshot + live updates without X-Board header (EventSource), refuses cross-site.
+    const crossSiteReq = new Request('http://127.0.0.1:12999/api/ns-sessions/events', {
+      headers: { 'sec-fetch-site': 'cross-site' },
+    })
+    const crossRes = await dispatch(h.routes, crossSiteReq, new URL(crossSiteReq.url), '/api/ns-sessions/events', {
+      port: 12999,
+      token: 'fs',
+      stale: () => false,
+    })
+    expect(crossRes.status).toBe(401)
+
+    const ac = new AbortController()
+    const sseReq = new Request('http://127.0.0.1:12999/api/ns-sessions/events', { signal: ac.signal })
+    const sseRes = await dispatch(h.routes, sseReq, new URL(sseReq.url), '/api/ns-sessions/events', {
+      port: 12999,
+      token: 'fs',
+      stale: () => false,
+    })
+    expect(sseRes.status).toBe(200)
+    const reader = sseRes.body?.getReader()
+    if (!reader) throw new Error('missing SSE body')
+    const decoder = new TextDecoder()
+    const first = decoder.decode((await reader.read()).value)
+    expect(first).toContain('event: sessions')
+    expect(first).toContain(A)
+    expect(first).not.toContain(SECRET)
+    expect(first).not.toContain(ROUTING)
+
+    // Forget removes entry and pushes an updated SSE event.
+    const forgetRes = await h.call('POST', 'forget', { body: { account: A, user: U }, token: null })
+    expect(forgetRes.status).toBe(200)
+    expect(forgetRes.json).toEqual({ ok: true, removed: true })
+    const second = decoder.decode((await reader.read()).value)
+    expect(second).toContain('"entries":[]')
+    expect(second).not.toContain(SECRET)
+    ac.abort()
+    await reader.cancel().catch(() => {})
   })
 })
 

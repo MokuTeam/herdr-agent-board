@@ -31,6 +31,14 @@ const DEAD_FPS = 32
 export type NsState = 'live' | 'dying' | 'dead'
 export type NsDeadReason = 'login_redirect' | 'import_bounced' | 'switch' | 'logout' | 'expired'
 const DEAD_REASONS: ReadonlySet<string> = new Set(['login_redirect', 'import_bounced', 'switch', 'logout', 'expired'])
+export type NsEventKind = 'published' | 'imported' | 'activity' | 'dead' | 'expired'
+
+export interface NsLastEvent {
+  kind: NsEventKind
+  at: number
+  where: NsWhere | null
+  reason?: NsDeadReason | null
+}
 
 export interface NsCookie {
   name: string
@@ -63,6 +71,8 @@ export interface NsPublish {
   cookies: NsCookie[]
   origin: NsWhere
   login_at: number | null
+  seen_at?: number | null
+  auto_renew?: boolean | null
 }
 
 /** What the list shows of an entry: never a value. */
@@ -74,14 +84,19 @@ export interface NsMeta {
   fp: string
   state: NsState
   generation: number
-  login_at: number
+  login_at: number | null
+  first_seen: number
   abs_expiry: number
+  abs_expiry_estimated: boolean
   idle_expiry: number
   last_activity: number
   last_where: NsWhere
   origin: NsWhere
   holders: string[]
+  dead_at: number | null
   dead_reason: NsDeadReason | null
+  auto_renew: boolean | null
+  last_event: NsLastEvent | null
   lock: { holder: NsHolder; until: number } | null
 }
 
@@ -96,13 +111,16 @@ interface Entry {
   fp: string
   generation: number
   origin: NsWhere
-  loginAt: number
+  loginAt: number | null
+  firstSeen: number
   lastActivity: number
   lastWhere: NsWhere
   deadAt: number | null
   deadReason: NsDeadReason | null
   /** Which prediction a death matched (abs, idle or none): kept for tuning the policies (phase 3), not shown yet. */
   deadMatched: 'abs' | 'idle' | 'none' | null
+  autoRenew: boolean | null
+  lastEvent: NsLastEvent | null
   holders: Set<string>
   /** Fingerprints this key saw die, newest last. */
   deadFps: string[]
@@ -134,7 +152,7 @@ export interface NsTaken {
   fp: string
   generation: number
   state: NsState
-  login_at: number
+  login_at: number | null
   last_activity: number
   cookies: NsCookie[]
 }
@@ -235,7 +253,13 @@ export function nsPublishOf(raw: unknown): NsPublish {
   if (!origin) throw new NsBodyError('origin')
   const loginAt = time(raw.login_at)
   if (loginAt === undefined) throw new NsBodyError('login_at')
-  if (time(raw.seen_at) === undefined) throw new NsBodyError('seen_at')
+  const seenAt = time(raw.seen_at)
+  if (seenAt === undefined) throw new NsBodyError('seen_at')
+  let autoRenew: boolean | null = null
+  if (raw.auto_renew !== undefined && raw.auto_renew !== null) {
+    if (typeof raw.auto_renew !== 'boolean') throw new NsBodyError('auto_renew')
+    autoRenew = raw.auto_renew
+  }
   if (!Array.isArray(raw.cookies) || raw.cookies.length < 1 || raw.cookies.length > NS_MAX_COOKIES)
     throw new NsBodyError('cookies')
   const cookies = raw.cookies.map((c, i) => cookieOf(c, host, i))
@@ -244,7 +268,19 @@ export function nsPublishOf(raw: unknown): NsPublish {
   if (!jsid) throw new NsBodyError('cookies.JSESSIONID')
   // The bridge's fp, recomputed: one that does not match is refused.
   if (!isNsFp(raw.fp) || raw.fp !== nsFingerprint(jsid.value)) throw new NsBodyError('fp')
-  return { account, user, host, role, role_id: roleId, fp: raw.fp, cookies, origin, login_at: loginAt }
+  return {
+    account,
+    user,
+    host,
+    role,
+    role_id: roleId,
+    fp: raw.fp,
+    cookies,
+    origin,
+    login_at: loginAt,
+    seen_at: seenAt,
+    auto_renew: autoRenew,
+  }
 }
 
 function cookieOf(raw: unknown, host: string, i: number): NsCookie {
@@ -289,15 +325,21 @@ export interface NsStoreOptions {
 export interface NsStore {
   publish(p: NsPublish): NsPublishResult
   /** The values of the live entry of (account, user); with no user, the account's only live one. */
-  take(account: string, user: string | null): NsTakeResult
+  take(account: string, user: string | null, where?: NsWhere | null): NsTakeResult
   touch(account: string, fp: string, where: NsWhere): { matched: boolean; state: NsState | null }
-  dead(account: string, fp: string, reason: NsDeadReason): boolean
+  dead(account: string, fp: string, reason: NsDeadReason, where?: NsWhere | null): boolean
   lock(account: string, user: string | null, holder: NsHolder, ttlS: number): NsLockResult
   /** Releases the lock of (account, user) when `holder` holds it. */
   unlock(account: string, user: string | null, holder: NsHolder): boolean
+  /** Drops the entry of (account, user) and its cookie values from the store. */
+  forget(account: string, user: string | null): boolean
   /** Which prediction the entry's death matched, for tests and phase 3. */
   deadMatched(account: string, user: string | null): 'abs' | 'idle' | 'none' | null
   list(account?: string | null): NsMeta[]
+  /** Next timestamp (epoch ms) when a live/dying entry transitions state, or null when none do. */
+  nextTransitionAt(t?: number): number | null
+  /** Subscribe to store metadata/state mutations; returns an unsubscribe function. */
+  subscribe(listener: () => void): () => void
   /** Every value dropped (the board stops). */
   clear(): void
 }
@@ -318,16 +360,45 @@ export function createNsStore(o: NsStoreOptions = {}): NsStore {
   const newId = o.newId ?? randomUUID
   const entries = new Map<string, Entry>()
   const locks = new Map<string, Lock>()
+  const firstSeenByFp = new Map<string, number>()
+  const listeners = new Set<() => void>()
 
-  const absOf = (e: Entry): number => e.loginAt + absMs
+  const emit = (): void => {
+    for (const fn of [...listeners]) {
+      try {
+        fn()
+      } catch {}
+    }
+  }
+
+  const absOf = (e: Entry): number => (e.loginAt ?? e.firstSeen) + absMs
   const idleOf = (e: Entry): number => e.lastActivity + idleMs
 
-  function kill(e: Entry, reason: NsDeadReason, at: number): void {
+  function recordFirstSeen(account: string, fp: string, seenAt: number | null | undefined, t: number): number {
+    const seen = seenAt !== undefined && seenAt !== null && seenAt <= t ? seenAt : t
+    const fk = keyOf(account, fp)
+    const prev = firstSeenByFp.get(fk)
+    const earliest = prev !== undefined ? Math.min(prev, seen) : seen
+    if (!firstSeenByFp.has(fk) && firstSeenByFp.size >= Math.max(max * 4, 2000)) {
+      const oldest = firstSeenByFp.keys().next().value
+      if (oldest !== undefined) firstSeenByFp.delete(oldest)
+    }
+    firstSeenByFp.set(fk, earliest)
+    return earliest
+  }
+
+  function kill(e: Entry, reason: NsDeadReason, at: number, where: NsWhere | null = null): void {
     if (e.deadAt !== null) return
     e.deadMatched = at >= absOf(e) - NS_DYING_MS ? 'abs' : at >= idleOf(e) - NS_DYING_MS ? 'idle' : 'none'
     e.deadAt = at
     e.deadReason = reason
     e.cookies = null
+    e.lastEvent = {
+      kind: reason === 'expired' ? 'expired' : 'dead',
+      at,
+      where: where ? { ...where } : null,
+      reason,
+    }
     e.deadFps = [...e.deadFps.filter(f => f !== e.fp), e.fp].slice(-DEAD_FPS)
   }
 
@@ -361,29 +432,59 @@ export function createNsStore(o: NsStoreOptions = {}): NsStore {
     return true
   }
 
-  function releaseBy(account: string, user: string | null, origin: NsWhere): void {
+  function releaseBy(account: string, user: string | null, origin: NsWhere): boolean {
     const k = keyOf(account, user)
     const l = locks.get(k)
-    if (l && l.holder.machine === origin.machine && l.holder.profile === origin.profile) locks.delete(k)
+    if (l && l.holder.machine === origin.machine && l.holder.profile === origin.profile) {
+      locks.delete(k)
+      return true
+    }
+    return false
   }
 
-  function merge(e: Entry, p: NsPublish): void {
-    if (e.role === null && p.role !== null) e.role = p.role
-    if (e.roleId === null && p.role_id !== null) e.roleId = p.role_id
-    e.holders.add(p.origin.machine)
+  function merge(e: Entry, p: NsPublish, firstSeen: number, realLoginAt: number | null): boolean {
+    let changed = false
+    if (firstSeen < e.firstSeen) {
+      e.firstSeen = firstSeen
+      changed = true
+    }
+    if (e.loginAt === null && realLoginAt !== null) {
+      e.loginAt = realLoginAt
+      changed = true
+    }
+    if (e.role === null && p.role !== null) {
+      e.role = p.role
+      changed = true
+    }
+    if (e.roleId === null && p.role_id !== null) {
+      e.roleId = p.role_id
+      changed = true
+    }
+    if (p.auto_renew !== undefined && p.auto_renew !== null && e.autoRenew !== p.auto_renew) {
+      e.autoRenew = p.auto_renew
+      changed = true
+    }
+    if (!e.holders.has(p.origin.machine)) {
+      e.holders.add(p.origin.machine)
+      changed = true
+    }
+    return changed
   }
 
   return {
     publish(p) {
       const t = now()
       prune(t)
+      const realLoginAt = p.login_at !== null && p.login_at <= t ? p.login_at : null
       // No user known (no loaded tab): the entry with this session, else one kept as unknown.
       if (p.user === null) {
         const same = byFp(p.account, p.fp)
         if (same) {
           if (stateOf(same, t) === 'dead') return { ok: false, code: 'dead_fp' }
-          merge(same, p)
-          releaseBy(p.account, same.user, p.origin)
+          const firstSeen = recordFirstSeen(p.account, p.fp, p.seen_at, t)
+          const changed = merge(same, p, firstSeen, realLoginAt)
+          const unlocked = releaseBy(p.account, same.user, p.origin)
+          if (changed || unlocked) emit()
           return { ok: true, stored: false, generation: same.generation, state: stateOf(same, t) }
         }
       }
@@ -392,16 +493,18 @@ export function createNsStore(o: NsStoreOptions = {}): NsStore {
       if (cur?.deadFps.includes(p.fp)) return { ok: false, code: 'dead_fp' }
       if (cur && cur.fp === p.fp) {
         if (stateOf(cur, t) === 'dead') return { ok: false, code: 'dead_fp' }
-        merge(cur, p)
-        releaseBy(p.account, p.user, p.origin)
+        const firstSeen = recordFirstSeen(p.account, p.fp, p.seen_at, t)
+        const changed = merge(cur, p, firstSeen, realLoginAt)
+        const unlocked = releaseBy(p.account, p.user, p.origin)
+        if (changed || unlocked) emit()
         return { ok: true, stored: false, generation: cur.generation, state: stateOf(cur, t) }
       }
       // The same session kept as unknown gets its user now.
-      if (p.user !== null) {
-        const unknown = entries.get(keyOf(p.account, null))
-        if (unknown?.fp === p.fp) entries.delete(keyOf(p.account, null))
-      }
+      const unknown = p.user !== null ? entries.get(keyOf(p.account, null)) : undefined
+      const inheritedLoginAt = unknown?.fp === p.fp ? unknown.loginAt : null
       if (!cur && !makeRoom()) return { ok: false, code: 'store_full' }
+      if (unknown?.fp === p.fp) entries.delete(keyOf(p.account, null))
+      const firstSeen = recordFirstSeen(p.account, p.fp, p.seen_at, t)
       const e: Entry = {
         account: p.account,
         user: p.user,
@@ -412,21 +515,25 @@ export function createNsStore(o: NsStoreOptions = {}): NsStore {
         fp: p.fp,
         generation: (cur?.generation ?? 0) + 1,
         origin: p.origin,
-        loginAt: p.login_at !== null && p.login_at <= t ? p.login_at : t,
+        loginAt: realLoginAt ?? inheritedLoginAt,
+        firstSeen,
         lastActivity: t,
         lastWhere: p.origin,
         deadAt: null,
         deadReason: null,
         deadMatched: null,
+        autoRenew: p.auto_renew ?? cur?.autoRenew ?? null,
+        lastEvent: { kind: 'published', at: t, where: { ...p.origin } },
         holders: new Set([p.origin.machine]),
         deadFps: cur?.deadFps ?? [],
       }
       entries.set(k, e)
       releaseBy(p.account, p.user, p.origin)
+      emit()
       return { ok: true, stored: true, generation: e.generation, state: stateOf(e, t) }
     },
 
-    take(account, user) {
+    take(account, user, where = null) {
       const t = now()
       prune(t)
       let e: Entry | undefined
@@ -444,6 +551,9 @@ export function createNsStore(o: NsStoreOptions = {}): NsStore {
         e = alive[0]
       }
       if (!e?.cookies || stateOf(e, t) === 'dead') return { ok: false, code: 'none' }
+      if (where) e.holders.add(where.machine)
+      e.lastEvent = { kind: 'imported', at: t, where: where ? { ...where } : null }
+      emit()
       return {
         ok: true,
         account: e.account,
@@ -467,14 +577,18 @@ export function createNsStore(o: NsStoreOptions = {}): NsStore {
       e.lastActivity = t
       e.lastWhere = where
       e.holders.add(where.machine)
-      return { matched: true, state: stateOf(e, t) }
+      e.lastEvent = { kind: 'activity', at: t, where: { ...where } }
+      const state = stateOf(e, t)
+      emit()
+      return { matched: true, state }
     },
 
-    dead(account, fp, reason) {
+    dead(account, fp, reason, where = null) {
       const t = now()
       const e = byFp(account, fp)
       if (!e || stateOf(e, t) === 'dead') return false
-      kill(e, reason, t)
+      kill(e, reason, t, where)
+      emit()
       return true
     },
 
@@ -488,10 +602,12 @@ export function createNsStore(o: NsStoreOptions = {}): NsStore {
         if (!sameSeat(held.holder, holder)) return { ok: false, code: 'locked', holder: held.holder, until: held.until }
         held.holder = holder
         held.until = until
+        emit()
         return { ok: true, lock_id: held.id, until }
       }
       const id = newId()
       locks.set(k, { id, holder, until })
+      emit()
       return { ok: true, lock_id: id, until }
     },
 
@@ -501,7 +617,21 @@ export function createNsStore(o: NsStoreOptions = {}): NsStore {
       const held = locks.get(k)
       if (!held || held.until <= t || !sameRun(held.holder, holder)) return false
       locks.delete(k)
+      emit()
       return true
+    },
+
+    forget(account, user) {
+      const k = keyOf(account, user)
+      const e = entries.get(k)
+      if (e) {
+        e.cookies = null
+        firstSeenByFp.delete(keyOf(account, e.fp))
+      }
+      const hadEntry = entries.delete(k)
+      const hadLock = locks.delete(k)
+      if (hadEntry || hadLock) emit()
+      return hadEntry
     },
 
     deadMatched(account, user) {
@@ -525,23 +655,56 @@ export function createNsStore(o: NsStoreOptions = {}): NsStore {
             state,
             generation: e.generation,
             login_at: e.loginAt,
+            first_seen: e.firstSeen,
             abs_expiry: absOf(e),
+            abs_expiry_estimated: e.loginAt === null,
             idle_expiry: idleOf(e),
             last_activity: e.lastActivity,
             last_where: { ...e.lastWhere },
             origin: { ...e.origin },
             holders: [...e.holders].sort(),
+            dead_at: e.deadAt,
             dead_reason: e.deadReason,
+            auto_renew: e.autoRenew,
+            last_event: e.lastEvent
+              ? {
+                  ...e.lastEvent,
+                  where: e.lastEvent.where ? { ...e.lastEvent.where } : null,
+                }
+              : null,
             lock: l && l.until > t ? { holder: { ...l.holder }, until: l.until } : null,
           }
         })
         .sort((a, b) => a.account.localeCompare(b.account) || (a.user ?? '').localeCompare(b.user ?? ''))
     },
 
+    nextTransitionAt(t = now()) {
+      let min: number | null = null
+      for (const e of entries.values()) {
+        if (e.deadAt !== null) continue
+        const absAt = absOf(e)
+        if (absAt <= t) return t
+        const dyingAt = Math.min(absAt, idleOf(e)) - NS_DYING_MS
+        const next = dyingAt > t ? dyingAt : absAt
+        if (min === null || next < min) min = next
+      }
+      return min
+    },
+
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    },
+
     clear() {
+      const had = entries.size > 0 || locks.size > 0
       for (const e of entries.values()) e.cookies = null
       entries.clear()
       locks.clear()
+      firstSeenByFp.clear()
+      if (had) emit()
     },
   }
 }
@@ -554,14 +717,16 @@ export function nsListLine(m: NsMeta, t: number): string {
   }
   const ago = (at: number): string => span(t - at)
   const left = (at: number): string => (at <= t ? 'now' : `in ${span(at - t)}`)
+  const endsAt = Math.min(m.abs_expiry, m.idle_expiry)
+  const endsLabel = m.abs_expiry_estimated && m.abs_expiry <= m.idle_expiry ? 'ends about' : 'ends'
   const parts = [
     m.account,
     m.user ?? '(user unknown)',
     m.state + (m.dead_reason ? ` (${m.dead_reason})` : ''),
     `fp ${m.fp}`,
     `gen ${m.generation}`,
-    `login ${ago(m.login_at)} ago`,
-    ...(m.state === 'dead' ? [] : [`ends ${left(Math.min(m.abs_expiry, m.idle_expiry))}`]),
+    m.login_at !== null ? `login ${ago(m.login_at)} ago` : `login unknown (seen ${ago(m.first_seen)} ago)`,
+    ...(m.state === 'dead' ? [] : [`${endsLabel} ${left(endsAt)}`]),
     `active ${ago(m.last_activity)} ago on ${m.last_where.machine}/${m.last_where.profile}`,
     ...(m.lock ? [`locked by ${m.lock.holder.machine}/${m.lock.holder.profile}`] : []),
   ]

@@ -13,13 +13,18 @@ const meta = {
   state: 'live',
   generation: 2,
   login_at: T - 3_600_000,
+  first_seen: T - 3_600_000,
   abs_expiry: T + 11 * 3_600_000,
+  abs_expiry_estimated: false,
   idle_expiry: T + 2 * 3_600_000,
   last_activity: T - 120_000,
   last_where: { machine: 'server-2', profile: 'main' },
   origin: { machine: 'laptop', profile: 'work' },
   holders: ['laptop', 'server-2'],
+  dead_at: null,
   dead_reason: null,
+  auto_renew: null,
+  last_event: null,
   lock: null,
   // What no store sends, and this command never prints whatever comes.
   cookies: [{ name: 'JSESSIONID', value: 'fake-cli-value-55aa' }],
@@ -51,6 +56,18 @@ test('lines and JSON hold the metadata, never a value', async () => {
   const json = await run(['list', '--json'], 200, { ok: true, entries: [meta] })
   expect(JSON.parse(json.out.join('\n'))).toEqual([{ ...meta, cookies: undefined }].map(({ cookies: _, ...m }) => m))
   for (const r of [lines, json]) expect(r.out.join('\n')).not.toContain('fake-cli-value-55aa')
+
+  const estimated = {
+    ...meta,
+    login_at: null,
+    first_seen: T - 10 * 3_600_000,
+    abs_expiry: T + 90 * 60_000,
+    abs_expiry_estimated: true,
+    idle_expiry: T + 3 * 3_600_000,
+  }
+  const estLines = await run(['list'], 200, { ok: true, entries: [estimated] })
+  expect(estLines.out[0]).toContain('login unknown (seen 10h00 ago)')
+  expect(estLines.out[0]).toContain('ends about in 1h30')
 })
 
 test('an empty store, no store, and a wrong word', async () => {

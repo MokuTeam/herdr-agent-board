@@ -22,6 +22,7 @@ import { JOURNAL_STRINGS } from './journal-strings.ts'
 import { LAUNCH_STRINGS } from './launch-strings.ts'
 import { MENTION_STRINGS } from './mention-strings.ts'
 import { NODE_STRINGS } from './node-strings.ts'
+import { NS_SESSIONS_STRINGS } from './ns-sessions-strings.ts'
 import { ONESHOT_STRINGS } from './oneshot-strings.ts'
 import { PRESENCE_STRINGS } from './presence-strings.ts'
 import { PROFILE_STRINGS } from './profile-strings.ts'
@@ -1595,6 +1596,8 @@ for (const code of Object.keys(ACCESS_STRINGS) as Lang[]) Object.assign(STRINGS[
 for (const code of Object.keys(SERVER_STRINGS) as Lang[]) Object.assign(STRINGS[code], SERVER_STRINGS[code])
 // And making a server a node (#509).
 for (const code of Object.keys(NODE_STRINGS) as Lang[]) Object.assign(STRINGS[code], NODE_STRINGS[code])
+// And the NetSuite session store view and notices (#897).
+for (const code of Object.keys(NS_SESSIONS_STRINGS) as Lang[]) Object.assign(STRINGS[code], NS_SESSIONS_STRINGS[code])
 // And setting up the relay on a server for machines behind NAT (#511).
 for (const code of Object.keys(RELAY_STRINGS) as Lang[]) Object.assign(STRINGS[code], RELAY_STRINGS[code])
 // And what the one command says on the server ("Do it myself").

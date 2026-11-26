@@ -91,12 +91,16 @@ test('a reminder, its clear and a Team message pass; each field is held to its k
   expect(deskToastOf({ kind: 'reminder-clear', id: REMINDER.id })).toEqual({ kind: 'reminder-clear', id: REMINDER.id })
   const team = { id: 'm-1', thread: 'team/general', title: 'anna', body: 'hello', label: 'Team chat' }
   expect(deskToastOf({ kind: 'team', toast: team })).toEqual({ kind: 'team', toast: team })
+  const notice = { id: 'ns-1234567-0a1b2c3d', title: 'NetSuite · 1234567', body: '1234567 ends at 20:05' }
+  expect(deskToastOf({ kind: 'notice', toast: notice })).toEqual({ kind: 'notice', toast: notice })
 
   expect(deskToastOf({ kind: 'reminder', toast: { ...REMINDER, join: 'file:///etc/passwd' } })).toBeNull()
   expect(deskToastOf({ kind: 'reminder', toast: { ...REMINDER, id: '../x' } })).toBeNull()
   expect(deskToastOf({ kind: 'reminder', toast: { ...REMINDER, title: 'x'.repeat(5000) } })).toBeNull()
   expect(deskToastOf({ kind: 'reminder-clear', id: '-rf' })).toBeNull()
   expect(deskToastOf({ kind: 'team', toast: { ...team, thread: 'not a key' } })).toBeNull()
+  expect(deskToastOf({ kind: 'notice', toast: { ...notice, id: 'has space' } })).toBeNull()
+  expect(deskToastOf({ kind: 'notice', toast: { ...notice, body: 'x'.repeat(5000) } })).toBeNull()
   expect(deskToastOf({ kind: 'exec', toast: REMINDER })).toBeNull()
   expect(deskToastOf(null)).toBeNull()
 })
