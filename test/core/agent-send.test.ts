@@ -361,3 +361,41 @@ test('#693 targetsOf includePaneless keeps paneless non-sleeping cards while def
     target: { key: A, name: 'anna' },
   })
 })
+
+test('#912 planSend strips own device prefix (@<own>:<key>) for master-side sessions shown on node pages', () => {
+  const targets = targetsOf([
+    card(A, 'Master Worker', { pane: 'w1:p1' }),
+    card(`@server-2:${B}`, 'Other Node', { device: 'server-2', pane: 'w2:p1' }),
+  ])
+  const plan = planSend({
+    targets,
+    to: `@laptop:${A}`,
+    message: 'ping master',
+    from: { key: `@server-1:${C}`, name: 'Laptop Node', device: 'server-1' },
+    own: 'laptop',
+    now: 1000,
+  })
+  if ('error' in plan) throw new Error(plan.error)
+  expect(plan.entry).toMatchObject({ key: A, text: 'ping master', fromDevice: 'server-1' })
+
+  // A foreign prefix is never stripped; standalone (own: '') leaves @<id>: as-is.
+  const wrongPrefix = planSend({
+    targets,
+    to: `@other:${A}`,
+    message: 'ping',
+    from: { key: `@server-1:${C}`, name: 'Laptop Node', device: 'server-1' },
+    own: 'laptop',
+    now: 1000,
+  })
+  expect(wrongPrefix).toEqual({ error: `no session "@other:${A}" on the board` })
+
+  const standalone = planSend({
+    targets,
+    to: `@laptop:${A}`,
+    message: 'ping',
+    from: { key: B, name: 'Local', device: null },
+    own: '',
+    now: 1000,
+  })
+  expect(standalone).toEqual({ error: `no session "@laptop:${A}" on the board` })
+})

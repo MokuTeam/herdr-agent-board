@@ -24,6 +24,7 @@ import { boxBytes, generateKey, sign } from '../../src/core/team.ts'
 import { generateBoxKey } from '../../src/core/team-box.ts'
 import { startHarness } from '../hub/harness.ts'
 import { serveBoard } from '../support/board-server.ts'
+import { tool } from '../support/mcp-client.ts'
 import { type FakePane, nodeBoard, nodePair, PAIR_ENV, type PairNode } from '../support/node-pair.ts'
 import { type Sandbox, sandbox, until } from '../support/sandbox.ts'
 import { SCREEN } from '../support/sleeper-fixtures.ts'
@@ -947,4 +948,139 @@ test('#698 board team from a node reaches master team, keeps draft offline, pull
   } finally {
     hub.stop()
   }
+}, 90_000)
+
+test('#912 node CLI board agents, board send, board list, thread, and schedule match MCP across master and peer nodes', async () => {
+  const MASTER_S = 'aaaaaaaa-1111-4111-8111-111111111111'
+  const S1 = 'bbbbbbbb-2222-4222-8222-222222222222'
+  const S2 = 'cccccccc-3333-4333-8333-333333333333'
+  const pair = await nodePair({
+    count: 2,
+    env: ENV,
+    masterCfg: { threads: true, scheduleTickSec: 10 },
+    panes: (id, box) =>
+      id === 'server-1'
+        ? [{ pane_id: 'p1', agent: 'claude', agent_session: { value: S1 }, agent_status: 'idle', cwd: box.dir }]
+        : [{ pane_id: 'p2', agent: 'agy', agent_session: { value: S2 }, agent_status: 'idle', cwd: box.dir }],
+    masterPanes: box => [
+      { pane_id: 'm1', agent: 'claude', agent_session: { value: MASTER_S }, agent_status: 'idle', cwd: box.dir },
+    ],
+  })
+  const [node1, node2] = pair.nodes as [PairNode, PairNode]
+  herdrOf(node1.box, [
+    { pane_id: 'p1', agent: 'claude', agent_session: { value: S1 }, agent_status: 'idle', cwd: node1.box.dir },
+  ])
+  herdrOf(node2.box, [
+    { pane_id: 'p2', agent: 'agy', agent_session: { value: S2 }, agent_status: 'idle', cwd: node2.box.dir },
+  ])
+  nodeConfigFile(node1)
+  nodeConfigFile(node2)
+  writeConfig(pair.master.box, { language: 'en', port: portOf(pair.master.url), threads: true })
+  await pair.waitDevice(node1.id, d => d.link?.state === 'online', 10_000)
+  await pair.waitDevice(node2.id, d => d.link?.state === 'online', 10_000)
+
+  expect((await cli(pair.master.box, ['cat', 'atlas', '--session', MASTER_S])).code).toBe(0)
+  expect((await cli(node1.box, ['cat', 'atlas', '--session', S1])).code).toBe(0)
+  expect((await cli(node2.box, ['cat', 'atlas', '--session', S2])).code).toBe(0)
+  await waitFor('master sees all three sessions', async () => {
+    const payload = (await (await fetch(`${pair.master.url}/api/board`)).json()) as {
+      items: { key: string; name?: string }[]
+    }
+    return payload.items.some(i => i.key === MASTER_S) &&
+      payload.items.some(i => i.key === `@${node1.id}:${S1}`) &&
+      payload.items.some(i => i.key === `@${node2.id}:${S2}`)
+      ? payload.items
+      : null
+  })
+
+  // Create a thread and a master-held schedule entry for node1's session.
+  const made = await cli(node1.box, ['thread', 'new', '--session', S1, 'Cross-device CLI check'])
+  expect(made.code, made.stderr).toBe(0)
+  const masterSchedDir = join(stateFolder(pair.master.box), 'schedule')
+  mkdirSync(masterSchedDir, { recursive: true })
+  writeFileSync(
+    join(masterSchedDir, 'ab912c.json'),
+    JSON.stringify({
+      id: 'ab912c',
+      key: `@${node1.id}:${S1}`,
+      name: 'p1',
+      text: 'master held',
+      at: Date.now() + 20 * 60_000,
+      next: Date.now() + 20 * 60_000,
+      created: Date.now(),
+      by: 'agent',
+    }),
+  )
+
+  // Compare MCP agents(list) on node1 against CLI `board agents` (with HERDR_PANE_ID and broken HERDR_BIN_PATH).
+  const mcpAgents = await tool(node1.url, 'agents', { op: 'list' }, { 'x-board-pane': 'p1' })
+  expect(mcpAgents.error, mcpAgents.text).toBe(false)
+  const paneEnv = { HERDR_PANE_ID: 'p1', HERDR_BIN_PATH: join(node1.box.dir, 'missing-herdr.exe') }
+  const cliAgents = await node1.box.run('cli', { args: ['agents'], env: {} }, paneEnv).exited
+  expect(cliAgents.code, cliAgents.stderr).toBe(0)
+  expect(cliAgents.stdout.trim()).toBe(mcpAgents.text)
+  expect(cliAgents.stdout).toContain('m1 [aaaaaaaa]')
+  expect(cliAgents.stdout).toContain('p1 [bbbbbbbb]')
+  expect(cliAgents.stdout).toContain('(this session)')
+  expect(cliAgents.stdout).toContain('p2 [cccccccc]')
+
+  const cliAgentsJson = await node1.box.run('cli', { args: ['agents', '--json'], env: {} }, paneEnv).exited
+  expect(cliAgentsJson.code, cliAgentsJson.stderr).toBe(0)
+  expect(JSON.parse(cliAgentsJson.stdout)).toMatchObject([
+    { key: MASTER_S, self: false },
+    { key: `@${node1.id}:${S1}`, device: node1.id, self: true },
+    { key: `@${node2.id}:${S2}`, device: node2.id, self: false },
+  ])
+
+  // Sessionless CLI on node1 (`board agents` and `board list`): reaches master via /api/node-cli.
+  const ownerAgents = await node1.box.run('cli', { args: ['agents'], env: {} }).exited
+  expect(ownerAgents.code, ownerAgents.stderr).toBe(0)
+  expect(ownerAgents.stdout).toContain('m1 [aaaaaaaa]')
+  expect(ownerAgents.stdout).toContain('p1 [bbbbbbbb]')
+  expect(ownerAgents.stdout).toContain('p2 [cccccccc]')
+  expect(ownerAgents.stdout).not.toContain('(this session)')
+
+  const ownerList = await node1.box.run('cli', { args: ['list'], env: {} }).exited
+  expect(ownerList.code, ownerList.stderr).toBe(0)
+  expect(ownerList.stdout).toContain('m1')
+  expect(ownerList.stdout).toContain('p1')
+  expect(ownerList.stdout).toContain('p2')
+
+  // `board send` from node1 CLI reaches master session (by name, "Name [ref]", and @<masterId>:<key>) and peer node.
+  const masterId = (
+    (await (await fetch(`${pair.master.url}/api/board`)).json()) as {
+      devices?: { id: string; status?: { id?: string } }[]
+    }
+  ).devices?.find(d => d.id === 'local')?.status?.id
+  expect(masterId).toBeTruthy()
+  for (const [to, msg] of [
+    ['m1', 'cli send by name'],
+    ['m1 [aaaaaaaa]', 'cli send by ref'],
+    [`@${masterId}:${MASTER_S}`, 'cli send by master prefix'],
+    ['p2', 'cli send to peer node'],
+  ] as const) {
+    const sent = await node1.box.run('cli', { args: ['send', to, msg], env: {} }, paneEnv).exited
+    expect(sent.code, sent.stderr).toBe(0)
+    expect(sent.stdout).toContain('ok · queued for ')
+  }
+  const schedDir = join(stateFolder(pair.master.box), 'schedule')
+  const texts = readdirSync(schedDir)
+    .filter(f => f.endsWith('.json'))
+    .map(f => (JSON.parse(readFileSync(join(schedDir, f), 'utf8')) as { text: string }).text)
+  expect(texts).toEqual(
+    expect.arrayContaining([
+      'cli send by name',
+      'cli send by ref',
+      'cli send by master prefix',
+      'cli send to peer node',
+    ]),
+  )
+
+  // Other read commands (`board thread list`, `board schedule`) from node1 shell with broken HERDR_BIN_PATH.
+  const threadsOut = await node1.box.run('cli', { args: ['thread', 'list'], env: {} }, paneEnv).exited
+  expect(threadsOut.code, threadsOut.stderr).toBe(0)
+  expect(threadsOut.stdout).toContain('Cross-device CLI check')
+  const schedOut = await node1.box.run('cli', { args: ['schedule'], env: {} }, paneEnv).exited
+  expect(schedOut.code, schedOut.stderr).toBe(0)
+  expect(schedOut.stdout).toContain('master held')
 }, 90_000)

@@ -166,10 +166,11 @@ async function runCli(
   box: Sandbox,
   args: string[],
   stdin?: string,
+  extraEnv: Record<string, string> = {},
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const proc = Bun.spawn([process.execPath, join(root, 'src/entrypoints/cli.ts'), ...args], {
     cwd: root,
-    env: { ...box.env, CLAUDE_CODE_SESSION_ID: '' },
+    env: { ...box.env, CLAUDE_CODE_SESSION_ID: '', ...extraEnv },
     ...(stdin !== undefined && { stdin: new TextEncoder().encode(stdin) }),
     stdout: 'pipe',
     stderr: 'pipe',
@@ -279,5 +280,111 @@ test('#628 board mcp --agents serves ListAgents and SendMessage over stdio JSON-
     expect(scheduled(box)).toMatchObject([{ key: MON, text: 'hello via mcp', from: { key: ME, name: 'Laptop Work' } }])
   } finally {
     board.stop()
+  }
+})
+
+test('#912 board agents without a session on a node goes via /api/node-cli, and pane shells without herdr resolve via /api/board', async () => {
+  const box = await sandbox()
+  const PANE_SID = '509dfc37-b58e-4851-9988-a8c7befe9f0d'
+  const calls: { path: string; body: unknown }[] = []
+  let cliAnswer: { status: number; body: unknown } = {
+    status: 200,
+    body: {
+      code: 0,
+      out: ['Master Session [3e4f5a6b]  ·  claude  ·  master-box  ·  working'],
+      err: [],
+    },
+  }
+  const server = Bun.serve({
+    hostname: '127.0.0.1',
+    port: 0,
+    async fetch(req) {
+      const path = new URL(req.url).pathname
+      if (req.method === 'GET' && path === '/api/board')
+        return Response.json({
+          items: [
+            {
+              key: PANE_SID,
+              session: PANE_SID,
+              agent: 'claude',
+              name: 'Pane Worker',
+              pane: 'w5:p7',
+              cwd: '/tmp/work',
+              status: 'working',
+            },
+          ],
+        })
+      const body = await req.json()
+      calls.push({ path, body })
+      if (req.method === 'POST' && path === '/api/node-cli')
+        return Response.json(cliAnswer.body, { status: cliAnswer.status })
+      if (req.method === 'POST' && path === '/api/node/call')
+        return Response.json({
+          state: 'answered',
+          code: 0,
+          out: ['Pane Worker [509dfc37]  ·  claude  ·  node win-node  ·  working  ·  (this session)'],
+          err: [],
+        })
+      return new Response(null, { status: 404 })
+    },
+  })
+  try {
+    // On a node without a session: uses /api/node-cli for plain and --json agents.
+    config(box, { port: server.port, node: { id: 'win-node', port: 12430 } })
+    const noSess = await runCli(box, ['agents'])
+    expect(noSess.code, noSess.stderr).toBe(0)
+    expect(noSess.stdout.trim()).toBe('Master Session [3e4f5a6b]  ·  claude  ·  master-box  ·  working')
+    expect(calls.at(-1)).toEqual({ path: '/api/node-cli', body: { cmd: 'agents', argv: [] } })
+
+    cliAnswer = {
+      status: 200,
+      body: {
+        code: 0,
+        out: [JSON.stringify([{ key: ME, name: 'Master Session', self: false }])],
+        err: [],
+      },
+    }
+    const noSessJson = await runCli(box, ['agents', '--json'])
+    expect(noSessJson.code, noSessJson.stderr).toBe(0)
+    expect(JSON.parse(noSessJson.stdout)).toMatchObject([{ key: ME, name: 'Master Session' }])
+    expect(calls.at(-1)).toEqual({ path: '/api/node-cli', body: { cmd: 'agents', argv: ['--json'] } })
+
+    // Offline master on /api/node-cli (503 node-master-offline): falls back to local board.
+    cliAnswer = { status: 503, body: { ok: false, error: 'node-master-offline' } }
+    const offlineFallback = await runCli(box, ['agents'])
+    expect(offlineFallback.code, offlineFallback.stderr).toBe(0)
+    expect(offlineFallback.stdout.trim()).toBe('Pane Worker [509dfc37]  ·  claude  ·  working')
+
+    // In a herdr pane when HERDR_BIN_PATH is broken/missing from PATH: falls back to /api/board for pane resolution.
+    const brokenHerdrEnv = {
+      HERDR_PANE_ID: 'w5:p7',
+      HERDR_BIN_PATH: join(box.dir, 'missing-herdr.exe'),
+    }
+    const viaPane = await runCli(box, ['agents'], undefined, brokenHerdrEnv)
+    expect(viaPane.code, viaPane.stderr).toBe(0)
+    expect(viaPane.stdout.trim()).toBe(
+      'Pane Worker [509dfc37]  ·  claude  ·  node win-node  ·  working  ·  (this session)',
+    )
+    expect(calls.at(-1)).toEqual({
+      path: '/api/node/call',
+      body: { cmd: 'agents', argv: [], session: PANE_SID, lane: null, files: [] },
+    })
+
+    const sendViaPane = await runCli(box, ['send', 'Master Session', 'hello from pane'], undefined, brokenHerdrEnv)
+    expect(sendViaPane.code, sendViaPane.stderr).toBe(0)
+    expect(calls.at(-1)).toEqual({
+      path: '/api/node/call',
+      body: { cmd: 'send', argv: ['Master Session', 'hello from pane'], session: PANE_SID, lane: null, files: [] },
+    })
+
+    // Standalone board (no `node`): never touches /api/node/call or /api/node-cli.
+    calls.length = 0
+    config(box, { port: server.port })
+    const standalone = await runCli(box, ['agents'])
+    expect(standalone.code, standalone.stderr).toBe(0)
+    expect(standalone.stdout.trim()).toBe('Pane Worker [509dfc37]  ·  claude  ·  working')
+    expect(calls).toEqual([])
+  } finally {
+    server.stop(true)
   }
 })

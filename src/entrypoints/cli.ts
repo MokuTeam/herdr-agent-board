@@ -357,8 +357,39 @@ interface Session {
 }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
-const paneOf = async (pane: string): Promise<HerdrPane | undefined> =>
-  (await snapshot()).panes.find(x => x.pane_id === pane)
+const paneOf = async (pane: string): Promise<HerdrPane | undefined> => {
+  try {
+    return (await snapshot()).panes.find(x => x.pane_id === pane)
+  } catch (err) {
+    if (cfg.web !== false) {
+      const body = await boardAnswer()
+      const items = Array.isArray(body?.items) ? body.items : null
+      const it = items?.find(x => isRecord(x) && !x.device && x.sleeping !== true && x.pane === pane)
+      if (isRecord(it)) {
+        const sid =
+          typeof it.session === 'string' && it.session
+            ? it.session
+            : typeof it.key === 'string' && it.key && it.key !== `pane-${pane}`
+              ? it.key
+              : null
+        const title =
+          typeof it.name === 'string' && it.name
+            ? it.name
+            : typeof it.autoName === 'string' && it.autoName
+              ? it.autoName
+              : undefined
+        return {
+          pane_id: pane,
+          agent: typeof it.agent === 'string' && it.agent ? it.agent : 'claude',
+          ...(sid && { agent_session: { value: sid } }),
+          ...(typeof it.cwd === 'string' && it.cwd && { cwd: it.cwd }),
+          ...(title && { name: title, terminal_title_stripped: title }),
+        }
+      }
+    }
+    throw err
+  }
+}
 
 // Which session this is (#488): one reading with spawn-agent --thread, services/own-session.ts.
 /** A real Claude child has a new id; a root Codex can carry the Claude id its hook recorded. */
@@ -390,7 +421,7 @@ async function resolveSession({ archived = false }: { archived?: boolean } = {})
     if (UUID.test(target)) return { key: target, cwd: '' }
     const t = target.toLowerCase()
     const item = (await collect(deps)).find(i =>
-      [i.name, i.autoName, i.pane, i.session].some(v => v && v.toLowerCase() === t),
+      [i.name, i.autoName, i.pane, i.session, i.key].some(v => v && v.toLowerCase() === t),
     )
     if (item) return { key: item.key, cwd: item.cwd, name: item.name, pane: item.pane }
     const r = archived
@@ -453,8 +484,6 @@ async function nodeCaller(): Promise<{ key: string; lane: string | null } | null
 async function tryNodeRead(cmd: 'cats' | 'list', fallbackNote: string): Promise<boolean> {
   if (!nodeConfig(cfg.node)) return false
   const caller = await nodeCaller()
-  // Outside a session the categories are the owner's, up the relay (#780); the list stays a session's.
-  if (!caller?.key && cmd !== 'cats') return false
   const { callBoard, callBoardAsOwner } = await import('./node-call.ts')
   const answer = caller?.key
     ? await callBoard(cfg.port)({ cmd, argv: [], session: caller.key, lane: null, files: [] })
@@ -750,7 +779,7 @@ async function runSend(
   const s = await resolveSession()
   const { nodeConfig } = await import('../core/nodes.ts')
   if (nodeConfig(config.node)) {
-    const { callBoard } = await import('./thread-cli.ts')
+    const { callBoard } = await import('./node-call.ts')
     const answer = await callBoard(config.port)({
       cmd: 'send',
       argv: [to, message],
@@ -834,15 +863,12 @@ async function runAgents({
     selfKey = s?.key ?? ''
   } catch {}
   const { nodeConfig } = await import('../core/nodes.ts')
-  if (nodeConfig(config.node) && selfKey) {
-    const { callBoard } = await import('./thread-cli.ts')
-    const answer = await callBoard(config.port)({
-      cmd: 'agents',
-      argv: json ? ['--json'] : [],
-      session: selfKey,
-      lane: null,
-      files: [],
-    })
+  if (nodeConfig(config.node)) {
+    const { callBoard, callBoardAsOwner } = await import('./node-call.ts')
+    const argv = json ? ['--json'] : []
+    const answer = selfKey
+      ? await callBoard(config.port)({ cmd: 'agents', argv, session: selfKey, lane: null, files: [] })
+      : await callBoardAsOwner(config.port)({ cmd: 'agents', argv })
     if (answer?.state === 'answered' && answer.code === 0) return { code: 0, out: answer.out, err: answer.err }
   }
   const body = config.web === false ? null : fresh ? await fetchBoard(config.port) : await boardAnswer()

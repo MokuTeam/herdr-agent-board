@@ -49,7 +49,7 @@ export type NodeCallAnswer =
 /** How long the command waits for its board: kept/slow uplink waits (20-35 s) and room. */
 const CALL_WAIT_MS = 45_000
 /** `board agents` is a read the caller waits on (ListAgents): a hanging board falls back to the local list soon. */
-const AGENTS_WAIT_MS = 5_000
+const AGENTS_WAIT_MS = 15_000
 /** spawn-agent's start (#760): the master follows it up to SPAWN_FOLLOW_MAX_SEC, the node's board waits past that. */
 const SPAWN_WAIT_MS = (SPAWN_FOLLOW_MAX_SEC + 40) * 1000
 
@@ -112,7 +112,7 @@ export const callBoardAsOwner =
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-board': '1' },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(CALL_WAIT_MS),
+        signal: AbortSignal.timeout(body.cmd === 'agents' ? AGENTS_WAIT_MS : CALL_WAIT_MS),
       })
       const value: unknown = await res.json().catch(() => null)
       const reply = typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {}
