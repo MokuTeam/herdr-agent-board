@@ -91,7 +91,13 @@ import {
 } from '../adapters/ssh.ts'
 import { rekeySession } from '../adapters/work-thread-store.ts'
 import { connectWorkdeskEvents } from '../adapters/workdesk-events.ts'
-import { nodeSlicesView, nodesAnswerForNode, withNodeDecisions, withNodeItems } from '../core/board-slices.ts'
+import {
+  nodeSlicesView,
+  nodesAnswerForNode,
+  withNodeDecisions,
+  withNodeItems,
+  withNodeLanes,
+} from '../core/board-slices.ts'
 import { NODE_PROGRAMS } from '../core/bundle.ts'
 import { itemLane } from '../core/categories.ts'
 import { answerText, decisionsConfig } from '../core/decisions.ts'
@@ -1852,9 +1858,12 @@ export async function startServer({
       // The node's own page asks as the owner; a node session reads its panels by their own paths.
       if (from?.who.kind !== 'owner') return json(403, { ok: false, error: 'owner' })
       // Since #784 with the master's decisions for that node's sessions; since #904 with the other
-      // machines' sessions, this board's own under its id.
+      // machines' sessions, this board's own under its id; since #923 with its lanes.
       const selfId = nodesConfig(cfg.nodes, hostname())?.id ?? ''
-      const slices = withNodeDecisions(board.slices(), board.decisions(), from.device)
+      const slices = withNodeLanes(
+        withNodeDecisions(board.slices(), board.decisions(), from.device),
+        board.shownCategories(),
+      )
       return json(200, { ok: true, slices: withNodeItems(slices, board.shownItems(), from.device, selfId) })
     }
     if (req.method === 'POST' && raw === NODE_CLI_PATH) {

@@ -8,7 +8,7 @@ import { deviceMarkerOf } from './device-marker.ts'
 import { BOARD_SLICE_KEYS } from './master-relay.ts'
 import { decisionsForNode, decisionsSliceOf } from './node-decisions.ts'
 import { nodeKey, parseNodeKey } from './nodes.ts'
-import type { BoardDevice, BoardPayload } from './payload.ts'
+import type { BoardCategory, BoardDevice, BoardPayload } from './payload.ts'
 import type { Item } from './types.ts'
 
 /** What devicesForNode reads of a device row: the payload's and GET /api/nodes' rows both have it. */
@@ -34,10 +34,17 @@ export type BoardSlices = Partial<
    * answer to a node.
    */
   items?: Item[]
+  /**
+   * The master's lanes as its payload has them (#923): the node's page draws them, so the other
+   * machines' cards have their lanes, titles and colours there too. Only in the answer to a node.
+   */
+  categories?: BoardCategory[]
 }
 
 /** More than this many sessions from the master are not one answer (a payload holds far fewer). */
 const ITEMS_MAX = 2000
+/** Nor more lanes than this (a board has a dozen). */
+const LANES_MAX = 500
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
@@ -64,7 +71,16 @@ export function boardSlicesOf(raw: unknown): BoardSlices | null {
   const decisions = raw.slices.decisions === undefined ? null : decisionsSliceOf(raw.slices.decisions)
   // A master since #904 gives the other machines' sessions; an older one none (the node shows its own).
   const items = nodeItemsOf(raw.slices.items)
-  return { ...out, ...(decisions && { decisions }), ...(items && { items }) }
+  // A master since #923 gives its lanes; an older one none (the node draws its own).
+  const categories = nodeLanesOf(raw.slices.categories)
+  return { ...out, ...(decisions && { decisions }), ...(items && { items }), ...(categories && { categories }) }
+}
+
+/** The master's lanes as its answer carries them: each with an id and a title, or none at all. */
+function nodeLanesOf(raw: unknown): BoardCategory[] | null {
+  if (!Array.isArray(raw) || !raw.length || raw.length > LANES_MAX) return null
+  const ok = raw.every(c => isObject(c) && typeof c.id === 'string' && c.id !== '' && typeof c.title === 'string')
+  return ok ? (raw as BoardCategory[]) : null
 }
 
 /** The other machines' sessions as a master's answer carries them: each keyed by its machine, or none at all. */
@@ -109,6 +125,20 @@ export function withNodeItems(
   master: string,
 ): BoardSlices {
   return { ...slices, items: itemsForNode(items, device, master) }
+}
+
+/** The master's answer to a node's GET /api/board-slices with its lanes (#923); none while it has none. */
+export function withNodeLanes(slices: BoardSlices, categories: readonly BoardCategory[]): BoardSlices {
+  return categories.length ? { ...slices, categories: [...categories] } : slices
+}
+
+/**
+ * The lanes a node's page draws (#923): the master's, in its order with its titles and colours, then
+ * those of the node's own (`own`, from its config and its cards) the master does not have.
+ */
+export function lanesWithMaster(master: readonly BoardCategory[], own: readonly BoardCategory[]): BoardCategory[] {
+  const ids = new Set(master.map(c => c.id))
+  return [...master, ...own.filter(c => !ids.has(c.id))]
 }
 
 /**
@@ -168,10 +198,12 @@ export function nodeSlicesView(
   o: { self: string; ownTeam: boolean; ownDevices: boolean; online: boolean },
 ): Partial<BoardPayload> {
   // Decisions (#784) go with the node's own queue and cards (core/node-decisions.ts withMasterDecisions).
-  const { devices, deviceMarker, teamRev, teamUnread, decisions: _decisions, items, ...rest } = slices
+  const { devices, deviceMarker, teamRev, teamUnread, decisions: _decisions, items, categories, ...rest } = slices
   const out: Partial<BoardPayload> = { ...rest }
   // The other machines' sessions (#904): beside the node's own, on a node that is no master itself.
   if (!o.ownDevices && items) out.items = items
+  // And the master's lanes for them (#923), on the same terms.
+  if (!o.ownDevices && categories) out.categories = categories
   if (!o.ownTeam) {
     if (teamRev !== undefined) out.teamRev = teamRev
     if (teamUnread !== undefined) out.teamUnread = teamUnread
