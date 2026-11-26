@@ -16,6 +16,7 @@ import {
 import { leadingMention } from '../../../../src/core/team-directory.ts'
 import { QUICK_REACTIONS } from '../../../../src/core/team-reactions.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
+import { esc } from '../../models/markdown.ts'
 import { delivery, type ThreadLine } from '../../models/team.ts'
 import { agentMark, bubbleTime, deliveryOf, fullWhen, type Quote, senderName, toneOf } from '../../models/team-chat.ts'
 import { classNames } from '../class-names.ts'
@@ -270,8 +271,6 @@ const Text = memo(function Text({ text }: { text: string }) {
   return <MessageText text={text} decorate={mentionMark(text)} />
 })
 
-const ESCAPED: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
-
 /**
  * A message that starts with `@Name.handle` (#875): that mention in its first paragraph wrapped in
  * `.team-at`, so whoever reads the chat sees whom it addressed. Only the tag is added, around the
@@ -281,7 +280,7 @@ const ESCAPED: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;'
 export function mentionMark(text: string): ((html: string) => string) | undefined {
   const m = leadingMention(text)
   if (!m) return undefined
-  const word = `@${m.who}.${m.code}`.replace(/[&<>"']/g, c => ESCAPED[c] as string)
+  const word = esc(`@${m.who}.${m.code}`)
   const head = `<p>${word}`
   return html => {
     if (!html.startsWith(head)) return html

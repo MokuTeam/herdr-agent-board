@@ -532,7 +532,20 @@ describe('the router and an addressed message', () => {
     expect(readThreads()['team/general']?.handler ?? null).toBeNull()
     expect(Object.keys(readThreads()).filter(k => k.startsWith(`${w.P.pub}/`))).toEqual([])
 
-    // Its answer, a reply to that message, goes to the chat by anna's switches: everyone reads it there.
+    // Its answer goes to everyone in the chat: ben shares no lane with this board, so it waits for the owner.
+    expect(
+      await w.router.agentPost({
+        to: 'team',
+        thread: { id: 'general' },
+        replyTo: id,
+        text: 'not for ben',
+        session: { key: 'sess-acme' },
+      }),
+    ).toMatchObject({ ok: true, sent: false, reason: 'lane' })
+    // With acme shared with ben too, the reply goes to the chat by anna's switches: everyone reads it there.
+    changeAgents(x => {
+      x.peers[w.Q.pub] = { on: true, lanes: ['acme'] }
+    })
     const before = sent(w.ws).length
     const r = await w.router.agentPost({
       to: 'team',
@@ -587,9 +600,64 @@ describe('the router and an addressed message', () => {
     expect(first).not.toBe(last)
     expect(w.schedule.entries).toHaveLength(1)
     expect(w.schedule.entries[0]).toMatchObject({ key: 'sess-acme', teamThread: `team/${ch.id}`, teamCount: 2 })
-    expect(w.schedule.entries[0]?.text).toContain(`(2 new messages, the last ${last.slice(0, 8)})`)
+    expect(w.schedule.entries[0]?.text).toContain(`(2 new messages, the latest to you: ${last.slice(0, 8)})`)
     expect(w.schedule.entries[0]?.text).toContain(`--to ${last.slice(0, 8)}`)
     expect(readThreads()[`team/${ch.id}`]?.handler ?? null).toBeNull()
+  })
+
+  test('a reply in a channel with her alone goes by her switches; once her Agents are off it waits for the owner', async () => {
+    const w = await world()
+    await ready(w)
+    const ch = { id: crypto.randomUUID(), title: 'ops', group: true as const, members: [w.me, w.P.pub].sort() }
+    const id = await deliver(w, w.P, {
+      text: '@me.acme-work look',
+      thread: ch,
+      post: crypto.randomUUID(),
+      at: 'acme-work',
+    })
+    const reply = (text: string) =>
+      w.router.agentPost({ to: 'team', thread: { id: ch.id }, replyTo: id, text, session: { key: 'sess-acme' } })
+    expect(await reply('looked')).toMatchObject({ ok: true, sent: true, thread: `team/${ch.id}` })
+    expect(sent(w.ws).at(-1)?.to).toBe(w.P.pub)
+    changeAgents(x => {
+      x.peers[w.P.pub] = { on: false, lanes: ['acme'] }
+    })
+    expect(await reply('looked again')).toMatchObject({ ok: true, sent: false, reason: 'off' })
+  })
+
+  test('a muted team chat: an addressed message there reaches no session either', async () => {
+    const w = await world()
+    await ready(w)
+    changeAgents(x => {
+      x.peers.team = { on: false, lanes: [], muted: true }
+    })
+    await deliver(w, w.P, {
+      text: '@me.acme-work hi',
+      thread: { id: 'general', group: true },
+      post: crypto.randomUUID(),
+      at: 'acme-work',
+    })
+    expect(w.schedule.entries).toEqual([])
+  })
+
+  test('the addressed notice keeps its words when a plain message follows in the same chat', async () => {
+    const w = await world()
+    await ready(w)
+    changeAgents(x => {
+      x.peers.team = { on: true, lanes: ['acme'] }
+      x.listener = { key: 'sess-acme', name: 'acme-work' }
+    })
+    const id = await deliver(w, w.P, {
+      text: '@me.acme-work look',
+      thread: { id: 'general', group: true },
+      post: crypto.randomUUID(),
+      at: 'acme-work',
+    })
+    await deliver(w, w.Q, { text: 'unrelated', thread: { id: 'general', group: true }, post: crypto.randomUUID() })
+    expect(w.schedule.entries).toHaveLength(1)
+    expect(w.schedule.entries[0]).toMatchObject({ key: 'sess-acme', teamThread: 'team/general', teamCount: 2 })
+    expect(w.schedule.entries[0]?.text).toContain(`--to ${id.slice(0, 8)}`)
+    expect(w.schedule.entries[0]?.text).toContain('wrote to you as @acme-work')
   })
 
   test("a mention in the team chat from someone whose Agents are off: routed by the team's switches, as any team message", async () => {

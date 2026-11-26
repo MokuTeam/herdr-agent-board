@@ -213,10 +213,9 @@ export function noticeText(p: NoticeParts): string {
  * Where an addressed message was written (#875), and which one: the team chat by name, and the
  * message's ref (the last one's, with a count), so the answer goes to it there.
  */
-function addressedWhere(p: Omit<NoticeParts, 'route'> & { message?: string }): { where: string; to: string } {
+function addressedWhere(p: Omit<NoticeParts, 'route'> & { message: string }): { where: string; to: string } {
   const where = p.team ? (p.ref === TEAM ? 'the team chat' : `the team thread ${p.ref}`) : `thread ${p.ref}`
-  if (!p.message) return { where: `${where}${p.count > 1 ? ` (${p.count} new messages)` : ''}`, to: '' }
-  const which = p.count > 1 ? `${p.count} new messages, the last ${p.message}` : `message ${p.message}`
+  const which = p.count > 1 ? `${p.count} new messages, the latest to you: ${p.message}` : `message ${p.message}`
   return { where: `${where} (${which})`, to: ` --to ${p.message}` }
 }
 
@@ -224,7 +223,7 @@ function addressedWhere(p: Omit<NoticeParts, 'route'> & { message?: string }): {
  * The notice for the session a peer's message named by its handle (#832): who, where, as whom,
  * and how to answer that message where it was written (#875).
  */
-export function addressedText(p: Omit<NoticeParts, 'route'> & { code: string; message?: string }): string {
+export function addressedText(p: Omit<NoticeParts, 'route'> & { code: string; message: string }): string {
   const who = p.agent ? `${p.who}'s agent` : p.who
   const { where, to } = addressedWhere(p)
   return `${who} wrote to you as @${p.code} in ${where}. Read it: board team thread ${p.ref}; answer there with board team reply ${p.ref}${to} "...".`
@@ -234,7 +233,7 @@ export function addressedText(p: Omit<NoticeParts, 'route'> & { code: string; me
  * The listener's notice for a message that named a handle no agent here answers to for its sender
  * (#832): no such session, its lane not shared with them, or archived. Never routed to a guessed one.
  */
-export function unreachableText(p: Omit<NoticeParts, 'route'> & { code: string; message?: string }): string {
+export function unreachableText(p: Omit<NoticeParts, 'route'> & { code: string; message: string }): string {
   const who = p.agent ? `${p.who}'s agent` : p.who
   const { where, to } = addressedWhere(p)
   return `${who} wrote in ${where} to @${p.code}, which reaches no agent here now (no session has that handle, its lane is not shared with them, or it was archived). Read it: board team thread ${p.ref}. Then answer (board team reply ${p.ref}${to} "..."), hand it to a session (board team assign ${p.ref} <session>), or ask the owner.`

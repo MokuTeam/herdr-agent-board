@@ -158,9 +158,10 @@ test("B's directory on A: listed for the composer and the CLI; A's @ben.helper n
 
 test('#875: a mention in the team chat stays there: the session hears of that message, answers it there as a reply, everyone gets the answer, nobody gets a topic', async () => {
   const { A, B, C, b, c, router, schedule } = await boards()
-  // Agents on for B with acme shared; the team's own switches stay off.
+  // Agents on for B with acme shared, and acme shared with the team: the answer may be read by everyone there.
   changeAgents(x => {
     x.peers[B.pub] = { on: true, lanes: ['acme'] }
+    x.peers.team = { on: true, lanes: ['acme'] }
     x.listener = { key: 'sess-listener', name: 'day' }
   })
   expect(await router.syncDirectory()).toBe(1)

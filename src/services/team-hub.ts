@@ -1443,7 +1443,9 @@ export function createTeam({
     // Named in the call, or by the text's leading `@Name.code` (a held draft sent later says it so).
     // In the team chat or a channel too (#875): only that peer's copy names the agent, and everyone
     // reads the message as written; their board weighs it by the switches it keeps for this one.
-    const at = target.at ?? mentionAt(body, recipients)
+    let at = target.at ?? mentionAt(body, recipients)
+    // Someone a team post skips (their key changed) is named by nobody: the others read it as written.
+    if (team && at && !recipients.some(p => p.peer === at?.peer) && skipped.length) at = undefined
     if (at === null || (at && !(recipients.some(p => p.peer === at.peer) && listed(at.peer, at.code))))
       return { ok: false, error: 'agent' }
     // A reply (#370): a line of this thread, named on the wire as its sender's board named it.
