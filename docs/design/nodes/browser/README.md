@@ -37,13 +37,15 @@ that lets Chrome's sandbox use user namespaces (Ubuntu 23.10 and later forbid th
 
 | Profile | Display | CDP | VNC | noVNC |
 |---|---|---|---|---|
-| `bsd` (the owner's main work) | :50 | 127.0.0.1:9223 | 5950 | 127.0.0.1:6080 |
-| `bb` (a second employer) | :51 | 127.0.0.1:9224 | 5951 | 127.0.0.1:6081 |
-| `pf` (bb's client A in Workato), server-2 | :52 | 127.0.0.1:9225 | 5952 | 127.0.0.1:6082 |
-| `legacy` (bb's client B in Workato), server-2 | :53 | 127.0.0.1:9226 | 5953 | 127.0.0.1:6083 |
+| `work` (the default `PROFILES`) | :50 | 127.0.0.1:9223 | 5950 | 127.0.0.1:6080 |
+| `personal` (the default `PROFILES`) | :51 | 127.0.0.1:9224 | 5951 | 127.0.0.1:6081 |
+| `client-a` (an example: a copy of `personal` for one Workato workspace) | :52 | 127.0.0.1:9225 | 5952 | 127.0.0.1:6082 |
 
-- Chrome for Testing 155 is copied from `/opt/nanoclaw-host/browsers/` when it is there, else the same
-  version is downloaded; it lives in `~/browser/chrome/`. Profiles are in `~/browser/profiles/<name>/`
+The profiles are a setting: a node's own list goes in `PROFILES` when the script runs
+(`PROFILES="work:50:9223 personal:51:9224 client-a:52:9225:personal"`), and a later run needs the same list.
+
+- Chrome for Testing 155 is copied from `CFT_FROM` when that names one already on the machine
+  (`CFT_FROM=/opt/<somewhere>/cft-155.0.8059.39/chrome-linux64`), else the same version is downloaded; it lives in `~/browser/chrome/`. Profiles are in `~/browser/profiles/<name>/`
   and persist. Windows profiles cannot be copied (DPAPI): each profile is signed in once by hand.
 - The mokutab and mokubot extensions are loaded unpacked from `~/browser/extensions/`.
 - mokutab: one bridge for every profile, as on a laptop. Chrome on Linux finds the native messaging host
@@ -54,7 +56,7 @@ that lets Chrome's sandbox use user namespaces (Ubuntu 23.10 and later forbid th
 - The bridge's default profile, where a call that names none goes, is `DEFAULT_PROFILE` (the first one in
   `PROFILES` unless set). The bridge reads it from `~/browser/state/<profile>/state/mcp-chrome-bridge/default-profile.json`
   of whichever profile started it, so the script writes it into each profile's file that names another one.
-  A stale name there (server-2 had an old `"default"`) made the first profile to reconnect the default.
+  A stale name there (an old `"default"`) made the first profile to reconnect the default.
 - mokubot: one MCP server (`agent-board-mokubot-mcp`, HTTP 127.0.0.1:12440, WebSocket bridge from
   8765); the extensions of both profiles connect to it, and the tools pick the NetSuite account by
   `account_id` (`netsuite_list_accounts`).
@@ -67,16 +69,16 @@ that lets Chrome's sandbox use user namespaces (Ubuntu 23.10 and later forbid th
 
 Workato keeps the chosen client workspace in the session cookie, so every Workato tab of one profile is
 in the same workspace, and an agent that switches it moves every other agent of that profile too. Each
-client that agents work on in parallel gets a profile of its own, copied from `bb` with its logins: a
-fourth field in `PROFILES` (`pf:52:9225:bb`) copies `~/browser/profiles/bb` once, while bb's Chrome is
+client that agents work on in parallel gets a profile of its own, copied from `personal` with its logins: a
+fourth field in `PROFILES` (`client-a:52:9225:personal`) copies `~/browser/profiles/personal` once, while that Chrome is
 stopped, and the run starts the new one with its own display, CDP port, units and mokutab name. Google
-SSO and Workato then work in the copy as they do in bb; Workato may still ask to sign in once
+SSO and Workato then work in the copy as they do in `personal`; Workato may still ask to sign in once
 (its "Google" button). Then the profile is put in its workspace once:
-`workato_switch_environment {"profile":"pf","workspace":<workspace id>}`.
+`workato_switch_environment {"profile":"client-a","workspace":<workspace id>}`.
 
-A session working on that client calls `chrome_switch_profile {"profile":"pf"}` at its start (or passes
+A session working on that client calls `chrome_switch_profile {"profile":"client-a"}` at its start (or passes
 `profile` on each call) and checks with `workato_session_context`. Another client is one more entry,
-such as `clientc:54:9227:bb`, and one script run.
+such as `client-b:53:9226:personal`, and one script run.
 
 Units: `agent-board-xvfb@<name>`, `agent-board-chrome@<name>`, `agent-board-mokubot-mcp`, enabled;
 `agent-board-vnc@<name>` and `agent-board-novnc@<name>`, on demand.
@@ -87,7 +89,7 @@ The board's bundle does not send the master's loopback MCP servers (its report s
 `bound (local-url)`), so the script writes these into the node user's `~/.claude.json` and the bundle
 leaves them alone:
 
-- `mokutab`: `http://127.0.0.1:12306/mcp`; a call names the profile (`bsd`, `bb`, `pf`) or goes to the default one.
+- `mokutab`: `http://127.0.0.1:12306/mcp`; a call names the profile (`work`, `personal`, `client-a`) or goes to the default one.
 - `mokubot-netsuite`: `http://127.0.0.1:12440/mcp`.
 
 Both Claude profiles of the node (`~/.claude.json`, `~/.claude-work/.claude.json`) get them, and their
@@ -113,7 +115,8 @@ A client reachable only over the laptop's VPN stays on the laptop: no profile fo
   both. A bridge reads a new session when Chrome starts it again (the Chrome unit's restart).
 
 NetSuite logins go through the mokutab function `netsuite.login`, which opens the account's own URL
-(`https://<account>.app.netsuite.com/`). A `~/browser/bin/netsuite-login.mjs` put there by hand (server-2) is
+(`https://<account>.app.netsuite.com/`). Only for an account that signs in by SSO does it still visit
+`system.netsuite.com`, where that sign-in starts. A `~/browser/bin/netsuite-login.mjs` put there by hand is
 moved to the backups: it logged in through `system.netsuite.com`, which opens a session in the user's default
 account and ends that account's session everywhere else.
 
@@ -149,8 +152,8 @@ Commands on the server run as the node user: `sudo -iu agent-board`, then
    `(umask 077; read -rs -p 'Master password: ' p; printf '%s' "$p" > ~/.config/agent-board-bw/master-password; unset p; echo)`,
    then `systemctl --user restart agent-board-bw-unlock` and `journalctl --user -u agent-board-bw-unlock -n 3 -o cat` (says `unlocked`).
    When no node session is running: `systemctl --user restart herdr`.
-2. Google sign-in per profile: `systemctl --user start agent-board-novnc@bsd agent-board-novnc@bb` on the
+2. Google sign-in per profile: `systemctl --user start agent-board-novnc@work agent-board-novnc@personal` on the
    server; `ssh -N -L 6080:127.0.0.1:6080 -L 6081:127.0.0.1:6081 <server>` on the laptop; open
-   http://127.0.0.1:6080/vnc.html (bsd) and http://127.0.0.1:6081/vnc.html (bb), sign in to Chrome with the
+   http://127.0.0.1:6080/vnc.html (work) and http://127.0.0.1:6081/vnc.html (personal), sign in to Chrome with the
    profile's Google account and turn Sync on, then sign in to NetSuite and Workato. Afterwards
-   `systemctl --user stop agent-board-vnc@bsd agent-board-vnc@bb`.
+   `systemctl --user stop agent-board-vnc@work agent-board-vnc@personal`.

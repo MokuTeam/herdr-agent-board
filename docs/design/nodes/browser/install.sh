@@ -17,13 +17,14 @@ set -euo pipefail
 NODE_USER=${NODE_USER:-agent-board}
 STAGE=${STAGE:-/tmp/agent-board-browser}
 CFT_VERSION=${CFT_VERSION:-155.0.8059.39}
-# A Chrome for Testing already on the machine is copied; without one the same version is downloaded.
-CFT_FROM=${CFT_FROM:-/opt/nanoclaw-host/browsers/cft-$CFT_VERSION/chrome-linux64}
+# A Chrome for Testing already on the machine (its chrome-linux64 folder) is copied; without one the same
+# version is downloaded.
+CFT_FROM=${CFT_FROM:-}
 # name:display:cdp port[:copy of]. VNC is 5900+display, noVNC 6030+display. The first profile is the one a
 # CLI's browser login opens in (BROWSER). A fourth field makes a new profile as a copy of that one, logins
 # included: a profile per client for Workato, which keeps the client workspace in the profile's cookie.
-# server-2: "bsd:50:9223 bb:51:9224 pf:52:9225:bb legacy:53:9226:bb".
-PROFILES=${PROFILES:-"bsd:50:9223 bb:51:9224"}
+# A node passes its own list, the same one on every run: "work:50:9223 personal:51:9224 client-a:52:9225:personal".
+PROFILES=${PROFILES:-"work:50:9223 personal:51:9224"}
 # One mokutab bridge for every profile: each extension joins it under its profile name, as on a laptop.
 # 12306 is mokutab's default; give another one where something else holds it (server-1: 12307).
 MOKUTAB_PORT=${MOKUTAB_PORT:-12306}
@@ -130,7 +131,7 @@ say "chrome for testing $CFT_VERSION"
 CHROME_DIR="$B/chrome/cft-$CFT_VERSION/chrome-linux64"
 if [ ! -x "$CHROME_DIR/chrome" ]; then
   mkdir -p "$B/chrome/cft-$CFT_VERSION"
-  if [ -x "$CFT_FROM/chrome" ]; then
+  if [ -n "$CFT_FROM" ] && [ -x "$CFT_FROM/chrome" ]; then
     cp -a "$CFT_FROM" "$B/chrome/cft-$CFT_VERSION/"
   else
     tmp=$(mktemp -d)
@@ -300,7 +301,7 @@ EOF
 
 put "$B/bin/open-in-chrome.mjs" 0644 <<'EOF'
 // open-in-chrome.mjs <url>: opens the URL as a new tab in the browser profile named by
-// AGENT_BROWSER_CDP (default 9223, profile bsd). Used as BROWSER, so a CLI's browser login lands there.
+// AGENT_BROWSER_CDP (default 9223, the first profile). Used as BROWSER, so a CLI's browser login lands there.
 const url = process.argv[2]
 const port = process.env.AGENT_BROWSER_CDP || '9223'
 const v = await (await fetch('http://127.0.0.1:' + port + '/json/version')).json()
@@ -315,7 +316,7 @@ put "$B/bin/open-in-chrome" 0755 <<EOF
 AGENT_BROWSER_CDP="\${AGENT_BROWSER_CDP:-$FIRST}" exec "$NODE_BIN" "$B/bin/open-in-chrome.mjs" "\$@"
 EOF
 
-# netsuite-login.mjs, put beside these by hand on server-2, logged in through system.netsuite.com, which opens a
+# netsuite-login.mjs, put beside these by hand on a node, logged in through system.netsuite.com, which opens a
 # session in the user's default account and ends that account's session everywhere else. The mokutab function
 # netsuite.login logs in by the account's own URL; the old script goes to the backups.
 if [ -f "$B/bin/netsuite-login.mjs" ]; then mkdir -p "$BACKUP"; mv "$B/bin/netsuite-login.mjs" "$BACKUP/"; fi

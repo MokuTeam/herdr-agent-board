@@ -80,12 +80,12 @@ test.skipIf(process.platform === 'win32')(
     const n = node()
     mkdirSync(n.env.BWDIR as string, { recursive: true })
     writeFileSync(join(n.env.BWDIR as string, 'session.env'), `BW_SESSION=${FAKE_SESSION}\n`)
-    const got = startWrapper(n, 'bsd')
+    const got = startWrapper(n, 'work')
     assert.equal(got.session, FAKE_SESSION)
     assert.equal(got.appdata, n.env.BW_APPDATA)
     // the per-profile state folders stay as they were
-    assert.equal(got.config, join(n.env.B as string, 'state/bsd/config'))
-    assert.ok(existsSync(join(n.env.B as string, 'state/bsd/state')))
+    assert.equal(got.config, join(n.env.B as string, 'state/work/config'))
+    assert.ok(existsSync(join(n.env.B as string, 'state/work/state')))
     assert.equal(got.args, 'chrome-extension://x/')
   },
 )
@@ -94,10 +94,10 @@ test.skipIf(process.platform === 'win32')(
   'with the vault not unlocked yet (no session file) the bridge still starts, without a session',
   () => {
     const n = node()
-    const got = startWrapper(n, 'bb')
+    const got = startWrapper(n, 'personal')
     assert.equal(got.session, '')
     assert.equal(got.appdata, n.env.BW_APPDATA)
-    assert.equal(got.config, join(n.env.B as string, 'state/bb/config'))
+    assert.equal(got.config, join(n.env.B as string, 'state/personal/config'))
   },
 )
 
@@ -107,15 +107,15 @@ test.skipIf(process.platform === 'win32')(
     const n = node()
     const file = join(n.root, 'default-profile.json')
     // none yet
-    assert.equal(JSON.parse(fn(n, 'default_profile_json', [file, 'bsd'])).profile, 'bsd')
+    assert.equal(JSON.parse(fn(n, 'default_profile_json', [file, 'work'])).profile, 'work')
     // the old literal that made the first profile to reconnect the default
     writeFileSync(file, JSON.stringify({ profile: 'default', set_at: '2026-11-23T11:03:41.657Z' }))
-    const fresh = JSON.parse(fn(n, 'default_profile_json', [file, 'bsd']))
-    assert.equal(fresh.profile, 'bsd')
+    const fresh = JSON.parse(fn(n, 'default_profile_json', [file, 'work']))
+    assert.equal(fresh.profile, 'work')
     assert.ok(!Number.isNaN(Date.parse(fresh.set_at)))
     // unreadable
     writeFileSync(file, '{not json')
-    assert.equal(JSON.parse(fn(n, 'default_profile_json', [file, 'bsd'])).profile, 'bsd')
+    assert.equal(JSON.parse(fn(n, 'default_profile_json', [file, 'work'])).profile, 'work')
   },
 )
 
@@ -124,9 +124,9 @@ test.skipIf(process.platform === 'win32')(
   () => {
     const n = node()
     const file = join(n.root, 'default-profile.json')
-    const kept = JSON.stringify({ profile: 'bsd', set_at: '2026-11-26T14:20:00.000Z' })
+    const kept = JSON.stringify({ profile: 'work', set_at: '2026-11-26T14:20:00.000Z' })
     writeFileSync(file, kept)
-    assert.equal(fn(n, 'default_profile_json', [file, 'bsd']), '')
+    assert.equal(fn(n, 'default_profile_json', [file, 'work']), '')
     assert.equal(readFileSync(file, 'utf8'), kept)
   },
 )
