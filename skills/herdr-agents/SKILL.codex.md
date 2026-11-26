@@ -50,7 +50,7 @@ The board's threads (`threads` and `thread` MCP tools; fallback `board thread`, 
 
 - `thread` (`op: "new"`, `title: "<title>"`, `to: "<session name>"`) makes a thread in your lane, given to that session. Fallback: `board --session <sid> thread new "<title>" --to <session name>`.
 - Put the key in the worker's brief: "Work in thread atlas-13: post your status and result there with the `thread` MCP tool (`op: "post"`, or `board --session <its sid> thread post` as fallback), a report as `files` (`--file`); send me nothing else."
-- You watch every thread you create. When the worker finishes, a line arrives as a prompt: `[board reminder from threads] atlas-13 done: <summary>. More: board thread changes`. Read more with `threads` (`op: "show"`, `key`) — or `board thread show <key>` — only if you need it.
+- You watch every thread you create. When the worker finishes, a line arrives as a prompt: `[board reminder from threads] atlas-13 done: <summary>. More: board thread changes`. Read more with `threads` (`op: "show"`, `key`, or `board thread show <key>`) only if you need it.
 - `threads` (`op: "changes"`) prints what moved since you last asked; `thread` (`op: "watch"`, `key` or omit `key` for `--mine`) adds a watch (CLI fallback for `--lane <id>` or `show --full`).
 - Without threads: `herdr agent wait <pane> --until idle --until done` (add `--timeout <ms>`), then `herdr agent read <pane> --source recent-unwrapped --lines 120`. Idle does not mean the task is done: tell the worker in its brief to end with a line you can find.
 
@@ -60,7 +60,7 @@ Your brief names a key (`atlas-13`). Report there, not in a message back:
 
 - `thread` (`op: "post"`, `key: "atlas-13"`, `status: "doing"`, `summary: "<where it stands, one line>"`) at a step worth knowing.
 - `thread` (`op: "post"`, `key: "atlas-13"`, `status: "done"`, `summary: "<the result, one line>"`, `files: ["out/report.md"]`) when you finish (fallback: `board --session <sid> thread done atlas-13 "<summary>" --file out/report.md`). The summary is the one line the others hear: make it say the result.
-- `thread` (`op: "post"`, `key: "atlas-13"`, `status: "waiting"`, `summary` / `text` — CLI fallback for `--waiting "<on what>"`) when blocked outside the board.
+- `thread` (`op: "post"`, `key: "atlas-13"`, `status: "waiting"`, `summary` / `text`; CLI fallback for `--waiting "<on what>"`) when blocked outside the board.
 - `thread` (`op: "ask"`, `key: "atlas-13"`, `text: "<question for the owner>"`) when you need the owner's answer; the thread waits on the owner and your card moves to "needs the user".
 - A flag or argument a call does not take is refused: read the error and fix it.
 

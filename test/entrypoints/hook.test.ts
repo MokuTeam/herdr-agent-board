@@ -650,6 +650,16 @@ test('Claude with agent-board MCP registered (#911): MCP-first brief, team, wait
   const prompt = { hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: box.dir, prompt: 'go on' }
   expect(await runHook(box, prompt)).toBe(context('UserPromptSubmit', waitReminder({ wait: 'CI' }, true)))
 
+  // Prompt presenceNews uses MCP wording (`card op ask`) when MCP is registered.
+  const presenceDir = join(box.env.LOCALAPPDATA as string, 'herdr/plugins/agent-board')
+  mkdirSync(presenceDir, { recursive: true })
+  writeFileSync(join(presenceDir, 'presence.json'), JSON.stringify({ state: 'call', since: 5000, by: 'auto' }))
+  putCard(box, { key: 's1', wait: 'CI', presenceSeen: 1000, briefV: BRIEF_VERSION })
+  const callNews = JSON.parse(await runHook(box, prompt)).hookSpecificOutput.additionalContext as string
+  expect(callNews).toContain(waitReminder({ wait: 'CI' }, true))
+  expect(callNews).toContain('card op ask')
+  expect(callNews).not.toContain('board ask')
+
   // Custom profile without its own .claude.json keeps command brief; with it gets MCP-first brief.
   const work = profileFolder(box, '.claude-work')
   putCard(box, { key: 's2' })

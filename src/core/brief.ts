@@ -98,7 +98,7 @@ export function brief(
       '- spawn: start another session in a new herdr tab (name, cwd, brief, profile, device, lane, agent, trust).',
       full && todos?.agents && todosBrief(true),
       full && sinks.length > 0 && secretsBrief(sinks),
-      calendar && calendarBrief(true),
+      full && calendar && calendarBrief(true),
       // Codex hears of threads too: its sessions report into them and run the masters' (skills/herdr-agents/SKILL.codex.md).
       threads?.agents && threadsBrief(threads, true),
       opts.team && teamBrief(),

@@ -151,8 +151,10 @@ async function main(): Promise<void> {
     if (presence) patch.presenceSeen = presence.since
     else if (card?.presenceSeen !== undefined) patch.presenceSeen = ''
   } else if (isNewTurn) {
-    if (card?.wait) context = waitReminder(card, boardMcpRegistered('agy', { rawConfig: readConfigFile() }))
-    const news = presenceNews(card)
+    let mcp: boolean | undefined
+    const isMcp = (): boolean => (mcp ??= boardMcpRegistered('agy', { rawConfig: readConfigFile() }))
+    if (card?.wait) context = waitReminder(card, isMcp())
+    const news = presenceNews(card, isMcp)
     if (news) {
       context = context ? `${context}\n${news.line}` : news.line
       patch.presenceSeen = news.seen

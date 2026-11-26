@@ -150,17 +150,22 @@ test('MCP-first brief (#911): names MCP tools first, fallback once, and stays no
     assert.match(mcp, /- schedule: op `remind`.*`every`.*`list`.*`unschedule`/)
     assert.match(mcp, /- agents: op `list`.*`send`/)
     assert.match(mcp, /- spawn: start another session/)
-    assert.match(mcp, /- cal: read the owner's schedule/)
     assert.match(mcp, /- threads \/ thread:/)
     assert.match(mcp, /- team: op `roster`, `inbox`, `thread`.*`post`.*`reply`.*`react`, `wait`, `agents`/)
     assert.match(mcp, /- Fallback: if the MCP server is unavailable/)
     if (agent === 'Claude') {
+      assert.match(mcp, /- cal: read the owner's schedule/)
       assert.match(mcp, /CronCreate or ScheduleWakeup/)
       assert.match(mcp, /board secret request/)
       assert.match(mcp, /board todo add/)
       assert.match(mcp, /card op ask/)
       assert.doesNotMatch(mcp, /board --session/)
+    } else if (agent === 'Antigravity') {
+      assert.match(mcp, /- cal: read the owner's schedule/)
+      assert.match(mcp, /board --session sid-1 <command>/)
+      assert.doesNotMatch(mcp, /CronCreate/)
     } else {
+      assert.doesNotMatch(mcp, /- cal:/)
       assert.match(mcp, /board --session sid-1 <command>/)
       assert.doesNotMatch(mcp, /CronCreate/)
     }

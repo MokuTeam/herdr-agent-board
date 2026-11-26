@@ -220,12 +220,12 @@ async function main(): Promise<void> {
     if (presence) patch.presenceSeen = presence.since
     else if (card?.presenceSeen !== undefined) patch.presenceSeen = ''
   } else if (event === 'UserPromptSubmit') {
-    if (boardCard?.wait) {
-      const mcp = boardMcpRegistered('claude', { rawConfig: readConfigFile(), profileDir: dir })
-      context = waitReminder(boardCard, mcp)
-    }
+    let mcp: boolean | undefined
+    const isMcp = (): boolean =>
+      (mcp ??= boardMcpRegistered('claude', { rawConfig: readConfigFile(), profileDir: dir }))
+    if (boardCard?.wait) context = waitReminder(boardCard, isMcp())
     // Presence changed since this session was told: one line. A card that never heard of it reads nothing.
-    const news = presenceNews(card)
+    const news = presenceNews(card, isMcp)
     if (news) {
       context = context ? `${context}\n${news.line}` : news.line
       patch.presenceSeen = news.seen

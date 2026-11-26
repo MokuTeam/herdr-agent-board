@@ -9,7 +9,6 @@ import { boardMcpRegistered } from '../adapters/mcp-register.ts'
 import { presenceForBrief, presenceNews } from '../adapters/presence-store.ts'
 import { readStdin } from '../adapters/stdin.ts'
 import { brief, CODEX_BRIEF_VERSION, waitReminder } from '../core/brief.ts'
-import { calendarConfig } from '../core/calendar.ts'
 import { CODEX_AGENT, isCodexSession } from '../core/codex.ts'
 import { briefFlags, staleFlagsLine } from '../core/master-flags.ts'
 import { isNotice } from '../core/notices.ts'
@@ -47,9 +46,8 @@ async function main(): Promise<void> {
     const threads = threadsConfig(cfg.threads) ?? threadsConfig(via.threads)
     const mcp = boardMcpRegistered('codex', { rawConfig: readConfigFile() })
     if (mcp) {
-      const calendar = calendarConfig(cfg.calendar) !== null || via.calendar
       const team = teamConfig(cfg.team) !== null || via.team
-      context = brief(cfg, card, cwd, process.env, 'Codex', presence, null, [], calendar, threads, false, null, {
+      context = brief(cfg, card, cwd, process.env, 'Codex', presence, null, [], false, threads, false, null, {
         mcp: true,
         team,
         session: sid,
@@ -67,8 +65,10 @@ async function main(): Promise<void> {
     if (presence) patch.presenceSeen = presence.since
     else if (card?.presenceSeen !== undefined) patch.presenceSeen = ''
   } else {
-    if (card?.wait) context = waitReminder(card, boardMcpRegistered('codex', { rawConfig: readConfigFile() }))
-    const news = presenceNews(card)
+    let mcp: boolean | undefined
+    const isMcp = (): boolean => (mcp ??= boardMcpRegistered('codex', { rawConfig: readConfigFile() }))
+    if (card?.wait) context = waitReminder(card, isMcp())
+    const news = presenceNews(card, isMcp)
     if (news) {
       context = context ? `${context}\n${news.line}` : news.line
       patch.presenceSeen = news.seen
