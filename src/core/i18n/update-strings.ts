@@ -6,6 +6,7 @@ export const UPDATE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
   en: {
     'set.updates': 'Updates…',
     'selfUpdate.title': 'Updates',
+    'selfUpdate.master': 'These settings apply to the master board ({id}). Its nodes follow that version.',
     'selfUpdate.about':
       'The board takes new commits of the branch its folder is on, by itself. It only fast-forwards: it never switches branches, merges or resets.',
     'selfUpdate.switch': 'Update by itself',
@@ -63,6 +64,7 @@ export const UPDATE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
   ru: {
     'set.updates': 'Обновления…',
     'selfUpdate.title': 'Обновления',
+    'selfUpdate.master': 'Настройки действуют на мастер-Борде ({id}). Её версию получают подключённые узлы.',
     'selfUpdate.about':
       'Доска сама берёт новые коммиты ветки, на которой стоит её папка. Только перемотка вперёд: ветку не меняет, не сливает и не сбрасывает.',
     'selfUpdate.switch': 'Обновляться самой',

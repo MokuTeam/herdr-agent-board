@@ -23,6 +23,7 @@ export type WorkdeskMcpConfig = {
 export type WorkdeskConfig = WorkdeskMcpConfig & {
   masters: Map<string, string>
   fallback: string
+  routeNodeMasters?: true
   onlyTaskId?: number
   topologyDeviceId?: string
 }
@@ -74,6 +75,7 @@ export function workdeskConfig(raw: unknown): WorkdeskConfig | null {
     ...mcp,
     masters: mapping,
     fallback: fallback.trim(),
+    ...(config.routeNodeMasters === true && { routeNodeMasters: true }),
     ...(onlyTaskId !== undefined && { onlyTaskId }),
     ...(typeof device === 'string' && DEVICE_ID.test(device) && { topologyDeviceId: device }),
   }

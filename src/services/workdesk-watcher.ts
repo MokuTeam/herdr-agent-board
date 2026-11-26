@@ -22,6 +22,7 @@ import { observeWorkdesk } from './workdesk-topology.ts'
 type Options = {
   cfg: Config
   items(): readonly Item[] | null
+  nodeItems?(): readonly Item[]
   observation?(): BoardObservation | null
   onChange(): void
   log(message: string): void
@@ -44,6 +45,7 @@ function masterFor(items: readonly Item[] | null, name: string): WorkdeskMaster 
 export function createWorkdeskWatcher({
   cfg,
   items,
+  nodeItems,
   observation,
   onChange,
   log,
@@ -205,7 +207,9 @@ export function createWorkdeskWatcher({
                 if (saved?.thread_id || (!eligible.has(task.id) && !resumed)) continue
 
                 const name = saved?.executor ?? active.masters.get(projectKey(task.project)) ?? active.fallback
-                const master = masterFor(items(), name)
+                const local = items()
+                const candidates = active.routeNodeMasters && local ? [...local, ...(nodeItems?.() ?? [])] : local
+                const master = masterFor(candidates, name)
                 if (!master || (saved && master.key !== saved.session_key)) {
                   problem ??= 'master'
                   continue

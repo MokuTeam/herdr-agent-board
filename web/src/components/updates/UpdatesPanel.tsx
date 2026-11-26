@@ -1,4 +1,4 @@
-// Settings → Updates… (#617), on the local board only: the board's update of itself from git. From
+// Settings → Updates… (#617): the board's update of itself from git. From
 // the top: how it stands (a problem in the danger color first), where the checkout is and when it
 // was last checked, with Check now; the switch and how often; what came in with the last update.
 // The view is asked when the panel opens, again whenever the board's payload changes (an update
@@ -131,6 +131,7 @@ export function UpdatesBody({ view, loadError, busy, note, canEdit, onCheck, onS
   return (
     <div className="sheet-body cats-body updates-body">
       <section className="updates-status" aria-live="polite">
+        {view.masterId && <p className="updates-where">{t('selfUpdate.master', { id: view.masterId })}</p>}
         {st && (
           <p
             className={classNames(st.level === 'ok' ? 'access-status' : 'access-problem', 'updates-standing')}
