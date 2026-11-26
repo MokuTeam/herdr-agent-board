@@ -195,7 +195,14 @@ import { formatListLines } from '../core/board-list.ts'
 import { withBoardPaths } from '../core/board-paths.ts'
 import { categoryFor, categoryInfo, itemLane } from '../core/categories.ts'
 import { CODEX_AGENT, isCodexItem, isCodexSession } from '../core/codex.ts'
-import { DECISION_FLAGS, type DecisionView, decisionsConfig, masterHeld, orderQueue } from '../core/decisions.ts'
+import {
+  cardDecisionOf,
+  DECISION_FLAGS,
+  type DecisionView,
+  decisionsConfig,
+  masterHeld,
+  orderQueue,
+} from '../core/decisions.ts'
 import { switchedOff } from '../core/feature-switch.ts'
 import { translator } from '../core/i18n/translator.ts'
 import { t, useLanguage } from '../core/lang.ts'
@@ -3686,6 +3693,34 @@ async function threadContext(c: typeof cfg = cfg): Promise<ThreadCmdContext> {
     // On a node (#781): the decision its master holds for this question, on this session's card.
     setNodeAsk: (question, decision) => {
       if (key) writeCard(key, { ask: question, askSince: Date.now(), by: 'agent', decision: masterHeld(decision) })
+    },
+    settleAsk: async info => {
+      const clearPlain = (who: string | undefined): void => {
+        if (!who || !info.question) return
+        const card = readCard(who)
+        if (card && card.decision === undefined && card.ask === info.question) writeCard(who, { ask: '', askSince: '' })
+      }
+      if (!decisionsConfig(c.decisions)) {
+        clearPlain(info.session ?? info.asker)
+        return
+      }
+      const { settleThreadAsk } = await import('./decisions-cli.ts')
+      const settled = settleThreadAsk(info.thread, Date.now(), {
+        ...(info.session && { session: info.session }),
+        by: key ? 'agent' : 'owner',
+      })
+      const plainKey = info.session ?? info.asker
+      if (plainKey && !settled.includes(plainKey)) clearPlain(plainKey)
+    },
+    clearNodeAsk: settled => {
+      if (!key) return
+      const card = readCard(key)
+      if (!card) return
+      if (cardDecisionOf(card.decision)?.thread?.id === settled.thread) {
+        writeCard(key, { ask: '', askSince: '', decision: '' })
+      } else if (card.decision === undefined && settled.question && card.ask === settled.question) {
+        writeCard(key, { ask: '', askSince: '' })
+      }
     },
     // Case files (#488): where a case's sessions are now and their reminders, from the board's items
     // (asked of herdr once), the archive and the schedule; asked only by brief, and by show of a

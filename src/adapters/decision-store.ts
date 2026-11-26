@@ -127,6 +127,16 @@ export function openDecisions(db: BoardDb): DecisionRow[] {
   return (db.db.query('SELECT * FROM decisions WHERE answered_at IS NULL ORDER BY asked_at').all() as Raw[]).map(rowOf)
 }
 
+/** Open decisions linked to `thread`, optionally narrowed to `session`. */
+export function openThreadDecisions(db: BoardDb, thread: string, session?: string): DecisionRow[] {
+  const sql =
+    session === undefined
+      ? 'SELECT * FROM decisions WHERE answered_at IS NULL AND thread = ? ORDER BY asked_at'
+      : 'SELECT * FROM decisions WHERE answered_at IS NULL AND thread = ? AND session = ? ORDER BY asked_at'
+  const rows = (session === undefined ? db.db.query(sql).all(thread) : db.db.query(sql).all(thread, session)) as Raw[]
+  return rows.map(rowOf)
+}
+
 /** The closed ones, newest first: a session's, those the default answered since `since`, or all. */
 export function closedDecisions(
   db: BoardDb,

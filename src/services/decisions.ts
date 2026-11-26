@@ -17,6 +17,7 @@ import {
   holdDecision,
   insertDecision,
   openDecisions,
+  openThreadDecisions,
   type Via,
 } from '../adapters/decision-store.ts'
 import { isRecord, readJson, replaceFile } from '../adapters/json-store.ts'
@@ -46,7 +47,7 @@ import { parseNodeKey } from '../core/nodes.ts'
 import { cardsWaiting } from '../core/owner-watch.ts'
 import type { ScheduleEntry } from '../core/schedule-rules.ts'
 import type { Card, Item } from '../core/types.ts'
-import { type Party, threadsConfig } from '../core/work-threads.ts'
+import { isOpen, isSession, type Party, threadsConfig } from '../core/work-threads.ts'
 import { beforeAsk, openAsk, postEntry, withThreadsDb } from './work-threads.ts'
 
 /** The board's database for one call (the web board's kept connection, else one of its own). */
@@ -320,13 +321,16 @@ export function markAnswering(
 }
 
 /**
- * Whether the thread still asks the decision's own question: its open ask is the entry the decision
- * was asked with (one asked before that was kept: by the session that asked). Another session's
- * question on the same thread, or none, is not this decision's to answer.
+ * Whether the thread still asks the decision's own question: the thread is still open, not proposed
+ * done by the asking session, and its open ask is the entry the decision was asked with (one asked
+ * before that was kept: by the session that asked). Another session's question on the same thread,
+ * or none, is not this decision's to answer.
  */
 export function ownThreadAsk(db: BoardDb, thread: NonNullable<CardDecision['thread']>, key: string): boolean {
   const head = getThread(db, thread.id)
-  const ask = head ? openAsk(head, entriesOf(db, head.id)) : null
+  if (!head || !isOpen(head.status)) return false
+  if (head.proposed && isSession(head.proposed.by, key)) return false
+  const ask = openAsk(head, entriesOf(db, head.id))
   if (!ask) return false
   return thread.ask ? ask.id === thread.ask : ask.author.kind === 'session' && ask.author.key === key
 }
@@ -441,7 +445,7 @@ const typed = (entry: string): boolean => readLog(300).some(r => isRecord(r) && 
 function threadDefault(db: BoardDb, row: DecisionRow, label: string, now: number): void {
   try {
     const head = getThread(db, row.thread as string)
-    if (!head) return
+    if (!head || !isOpen(head.status) || (head.proposed && isSession(head.proposed.by, row.session))) return
     const entries = entriesOf(db, head.id)
     const ask = openAsk(head, entries)
     if (!ask) return
@@ -613,35 +617,146 @@ const defaultedOf = (db: BoardDb, since: number): DefaultedView[] =>
     at: r.answeredAt ?? 0,
   }))
 
+/**
+ * Withdraws open decisions for `threadId` (optionally scoped to `o.session`), cancels their
+ * scheduled defaults, and clears the matching ask/decision off each card. Returns the session keys
+ * settled.
+ */
+export function settleThreadDecisions(
+  db: BoardDb,
+  threadId: string,
+  now: number,
+  o: { session?: string; by?: string; schedule?: DecisionSchedule } = {},
+): string[] {
+  const by = o.by ?? 'agent'
+  const schedule = o.schedule ?? fileSchedule
+  const settled = new Set<string>()
+  for (const row of openThreadDecisions(db, threadId, o.session)) {
+    closeCardDecision(
+      db,
+      row.session,
+      { answer: null, answeredBy: 'withdrawn', via: 'cleared', at: now },
+      { id: row.id, ask: true, by, schedule },
+    )
+    settled.add(row.session)
+  }
+  if (o.session && !settled.has(o.session)) {
+    const cd = cardDecisionOf(readCard(o.session)?.decision)
+    if (cd?.thread?.id === threadId) {
+      closeCardDecision(
+        db,
+        o.session,
+        { answer: null, answeredBy: 'withdrawn', via: 'cleared', at: now },
+        { id: cd.id, ask: true, by, schedule },
+      )
+      settled.add(o.session)
+    }
+  }
+  return [...settled]
+}
+
+/**
+ * Whether an open thread-linked decision is already settled on its thread: the thread is closed,
+ * proposed done by the asking session, or moved off `owner` without an owner `answer` entry
+ * (leaving answered threads to `clearAsk`, and never racing an in-flight answer).
+ */
+function threadAskSettled(db: BoardDb, row: DecisionRow, card: Card | undefined, now: number): boolean {
+  if (!row.thread) return false
+  if (card && answeringOf(card, now)) return false
+  const head = getThread(db, row.thread)
+  if (!head || !isOpen(head.status)) return true
+  if (head.proposed && isSession(head.proposed.by, row.session)) return true
+  if (head.status !== 'owner') {
+    const entries = entriesOf(db, head.id)
+    const askId = cardDecisionOf(card?.decision)?.thread?.ask
+    const askIdx = askId
+      ? entries.findIndex(e => e.id === askId)
+      : entries.findLastIndex(e => e.type === 'ask' && isSession(e.author, row.session))
+    const answered =
+      askIdx >= 0
+        ? entries.slice(askIdx + 1).some(e => e.type === 'answer' && (!askId || e.replyTo === askId))
+        : entries.some(e => e.type === 'answer')
+    return !answered
+  }
+  return false
+}
+
+/**
+ * Withdraws any open thread decisions whose threads are already done, dropped, proposed done by
+ * the asker, or moved off `owner` without an answer. Returns the settled session keys.
+ */
+export function settleStaleThreadDecisions(
+  db: BoardDb,
+  cards: ReadonlyMap<string, Card>,
+  now: number,
+  schedule: DecisionSchedule = fileSchedule,
+): Set<string> {
+  const settled = new Set<string>()
+  for (const row of openDecisions(db)) {
+    if (!row.thread || !threadAskSettled(db, row, cards.get(row.session), now)) continue
+    try {
+      closeCardDecision(
+        db,
+        row.session,
+        { answer: null, answeredBy: 'withdrawn', via: 'cleared', at: now },
+        { id: row.id, ask: true, by: 'board', schedule },
+      )
+      settled.add(row.session)
+    } catch {}
+  }
+  return settled
+}
+
 /** The payload's queue: owner-watch's set (cards with an ask, the board's own asks), with their options. */
 export function decisionsPayload(
   items: readonly Item[],
   cards: ReadonlyMap<string, Card>,
   o: { now: number; defaults: boolean; seen?: number },
 ): DecisionsPayload {
-  // A node's card (#781) is in the queue only while this board holds a question of it: its plain asks
-  // stay on its card, as before.
-  const own = items.filter(i => !parseNodeKey(i.key) || cardDecisionOf(cards.get(i.key)?.decision))
-  const items_ = orderQueue(
-    cardsWaiting(own, cards).map(w => viewOf(w.card?.key ?? '', w.who, cards.get(w.card?.key ?? ''), w.text)),
-  )
   const seen = o.seen ?? seenAt()
+  let liveCards = cards
   const defaulted = readDecisionsDb(db => {
     // Only a master with nodes' cards in view has any (#781).
     if (items.some(i => parseNodeKey(i.key))) settleNodeDecisions(db, items, cards, o.now)
-    settleLeftOvers(db, cards, o.now)
+    const settled = settleStaleThreadDecisions(db, cards, o.now)
+    if (settled.size) {
+      const updated = new Map(cards)
+      for (const key of settled) {
+        const next = readCard(key)
+        if (next) updated.set(key, next)
+        else updated.delete(key)
+      }
+      liveCards = updated
+    }
+    settleLeftOvers(db, liveCards, o.now)
     return defaultedOf(db, seen)
   }, [] as DefaultedView[])
+  // A node's card (#781) is in the queue only while this board holds a question of it: its plain asks
+  // stay on its card, as before.
+  const own = items.filter(i => !parseNodeKey(i.key) || cardDecisionOf(liveCards.get(i.key)?.decision))
+  const items_ = orderQueue(
+    cardsWaiting(own, liveCards).map(w => viewOf(w.card?.key ?? '', w.who, liveCards.get(w.card?.key ?? ''), w.text)),
+  )
   return { items: items_, defaulted, defaults: o.defaults }
 }
 
 /** `board decisions`: the same from the cards alone (no herdr), for a day assistant. */
-export function decisionsFromCards(cards: ReadonlyMap<string, Card>): DecisionView[] {
+export function decisionsFromCards(cards: ReadonlyMap<string, Card>, now = Date.now()): DecisionView[] {
   // A session's name as its open question's row has it (the card keeps only a name the owner gave).
-  const names = new Map(readDecisionsDb(db => openDecisions(db), [] as DecisionRow[]).map(r => [r.session, r.name]))
+  const { names, settledIds } = readDecisionsDb(
+    db => {
+      const open = openDecisions(db)
+      const settled = new Set<string>()
+      for (const r of open) if (r.thread && threadAskSettled(db, r, cards.get(r.session), now)) settled.add(r.id)
+      return { names: new Map(open.map(r => [r.session, r.name])), settledIds: settled }
+    },
+    { names: new Map<string, string>(), settledIds: new Set<string>() },
+  )
   const list: DecisionView[] = []
   for (const [key, card] of cards) {
     if (typeof card.ask !== 'string' || !card.ask.trim()) continue
+    const cd = cardDecisionOf(card.decision)
+    if (cd && settledIds.has(cd.id)) continue
     const who = (typeof card.name === 'string' && card.name) || names.get(key) || key.slice(0, 8)
     list.push(viewOf(key, who, card, card.ask.trim()))
   }

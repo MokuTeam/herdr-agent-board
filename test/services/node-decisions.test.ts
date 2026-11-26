@@ -384,6 +384,54 @@ describe("the wire and the node's page", () => {
       { id: 'd1', options: ['x'.repeat(501)] },
     ])
       expect(uplinkResultOf({ ...base, decision: bad })).toEqual(base)
+
+    const settled = { thread: 'tid-1', question: 'Press Send?' }
+    expect(uplinkResultOf({ ...base, settled })).toEqual({ ...base, settled })
+    for (const bad of [{ thread: '' }, 'tid-1', { thread: 'tid-1', question: 'x'.repeat(501) }])
+      expect(uplinkResultOf({ ...base, settled: bad })).toEqual(base)
+  })
+
+  test("node session's board thread done / --settle settles master's decision and returns settled (#844)", async () => {
+    const ask = {
+      id: 'na-1',
+      cmd: 'thread',
+      argv: [
+        'ask',
+        'atlas-1',
+        'Press Send?',
+        '--option',
+        'Send',
+        '--option',
+        'Cancel',
+        '--recommend',
+        '1',
+        '--default-after',
+        '2h',
+      ],
+      session: S1,
+      lane: null,
+      files: [],
+    }
+    const settle = {
+      id: 'ns-1',
+      cmd: 'thread',
+      argv: ['post', 'atlas-1', '--settle', 'sent by itself'],
+      session: S1,
+      lane: null,
+      files: [],
+    }
+    const results = await master({ decisions: true, threads: true }, [ask, settle], 2)
+    const [asked] = results('na-1')
+    const [settled] = results('ns-1')
+    expect(asked?.code).toBe(0)
+    expect(asked?.decision?.id).toBeTruthy()
+    expect(settled?.code).toBe(0)
+    expect(settled?.settled?.question).toBe('Press Send?')
+    expect(settled?.settled?.thread).toBeTruthy()
+    expect(row(asked?.decision?.id as string)).toMatchObject({ answeredBy: 'withdrawn', via: 'cleared' })
+    expect(readCard(DEV)?.decision).toBeUndefined()
+    expect(readCard(DEV)?.ask).toBeUndefined()
+    expect(listEntries()).toEqual([])
   })
 
   test("the node's page names its own sessions by bare keys: the master reads them as that device's; another machine's key stays", () => {

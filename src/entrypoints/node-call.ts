@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type { CardDecision } from '../core/decisions.ts'
 import { SPAWN_FOLLOW_MAX_SEC } from '../core/launch/spawn-node.ts'
 import { NODE_CLI_PATH, ownerCliCommand, RELAY_ERRORS } from '../core/master-relay.ts'
-import { isRememberedCall, UPLINK_REFUSED, uplinkResultOf } from '../core/node-uplink.ts'
+import { isRememberedCall, UPLINK_REFUSED, type UplinkSettled, uplinkResultOf } from '../core/node-uplink.ts'
 
 /** A command on a node as it goes to the node's board (services/node/uplink.ts call). */
 export interface NodeCall {
@@ -41,7 +41,7 @@ export interface NodeCall {
 
 /** What the node's board answered (services/node/uplink.ts CallAnswer); null when it did not. */
 export type NodeCallAnswer =
-  | { state: 'answered'; code: number; out: string[]; err: string[]; decision?: CardDecision }
+  | { state: 'answered'; code: number; out: string[]; err: string[]; decision?: CardDecision; settled?: UplinkSettled }
   | { state: 'kept'; id: string }
   | { state: 'unreachable' }
   | null

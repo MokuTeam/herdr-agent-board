@@ -25,10 +25,18 @@ import {
   markAnswering,
   markSeen,
   openOf,
+  ownThreadAsk,
   recordDefault,
   withDecisionsDb,
 } from '../../src/services/decisions.ts'
-import { askOwner, newThread, type ThreadsCtx } from '../../src/services/work-threads.ts'
+import {
+  answerAsk,
+  askOwner,
+  confirmClose,
+  newThread,
+  postEntry,
+  type ThreadsCtx,
+} from '../../src/services/work-threads.ts'
 import { isolatedHome } from '../support/env.ts'
 
 const NOW = Date.parse('2026-11-21T10:00:00Z')
@@ -467,4 +475,115 @@ test("the scheduler's record of a default it typed: tried again once; two failur
   lines.length = 0
   expect(recordDefault(entry, NOW, l => lines.push(l), broken)).toBe(false)
   expect(lines).toHaveLength(2)
+})
+
+test('ownThreadAsk, defaultDue, decisionsPayload, and decisionsFromCards settle done/dropped/proposed-done thread asks while preserving answered ones (#844)', () => {
+  isolatedHome()
+  const annaParty: Party = { kind: 'session', key: ANNA, name: 'anna' }
+  const benParty: Party = { kind: 'session', key: BEN, name: 'ben' }
+  const setupThreadAsk = (who: Party, title: string, now = NOW) =>
+    withDecisionsDb(db => {
+      const ctx: ThreadsCtx = {
+        db,
+        cfg: threadsConfig(true) as NonNullable<ReturnType<typeof threadsConfig>>,
+        actor: who,
+        now,
+      }
+      const made = newThread(ctx, { lane: 'atlas', title })
+      const asked = askOwner(ctx, made.head, 'Continue?')
+      const s = spec({ question: 'Continue?', options: ['Yes', 'No'], recommend: 1, defaultMs: 3_600_000 })
+      const d = askDecision(db, {
+        key: who.kind === 'session' ? who.key : ANNA,
+        name: who.kind === 'session' ? who.name : 'anna',
+        lane: 'atlas',
+        spec: s,
+        ask: asked.head.waitingOn,
+        thread: { id: made.head.id, key: made.head.key, ask: asked.entry.id },
+        now,
+      })
+      return { ...d, head: asked.head, askId: asked.entry.id }
+    })
+
+  // 1. Asker proposes done -> ownThreadAsk false, defaultDue drop, decisionsPayload & decisionsFromCards settle/hide.
+  const t1 = setupThreadAsk(annaParty, 'Proposed by asker')
+  const e1 = getEntry(row(t1.id)?.entry) as ScheduleEntry
+  withDecisionsDb(db => {
+    const h = getThread(db, t1.head.id) as NonNullable<ReturnType<typeof getThread>>
+    postEntry(
+      {
+        db,
+        cfg: threadsConfig(true) as NonNullable<ReturnType<typeof threadsConfig>>,
+        actor: annaParty,
+        now: NOW + 10,
+      },
+      h,
+      { status: 'done', summary: 'self-resolved' },
+    )
+    expect(ownThreadAsk(db, { id: t1.head.id, key: t1.head.key, ask: t1.askId }, ANNA)).toBe(false)
+  })
+  expect(defaultDue(e1, { decisions: true }, NOW + 10)).toBe('drop')
+  const cards1 = new Map<string, Card>([[ANNA, readCard(ANNA) as Card]])
+  expect(decisionsFromCards(cards1, NOW + 10)).toEqual([])
+  const p1 = decisionsPayload([itemOf(ANNA, 'anna')], cards1, { now: NOW + 10, defaults: true, seen: 0 })
+  expect(p1.items).toEqual([])
+  expect(row(t1.id)).toMatchObject({ answeredBy: 'withdrawn', via: 'cleared' })
+  expect(readCard(ANNA)?.decision).toBeUndefined()
+
+  // 2. Proposed done by a DIFFERENT session keeps asker's ownThreadAsk/defaultDue open until owner confirms.
+  const t2 = setupThreadAsk(annaParty, 'Proposed by other')
+  const e2 = getEntry(row(t2.id)?.entry) as ScheduleEntry
+  withDecisionsDb(db => {
+    const h = getThread(db, t2.head.id) as NonNullable<ReturnType<typeof getThread>>
+    postEntry(
+      { db, cfg: threadsConfig(true) as NonNullable<ReturnType<typeof threadsConfig>>, actor: benParty, now: NOW + 20 },
+      h,
+      { status: 'done', summary: 'ben done' },
+    )
+    expect(ownThreadAsk(db, { id: t2.head.id, key: t2.head.key, ask: t2.askId }, ANNA)).toBe(true)
+  })
+  expect(defaultDue(e2, { decisions: true }, NOW + 20)).toBe('go')
+  // Once owner confirms, settled immediately.
+  withDecisionsDb(db => {
+    const h = getThread(db, t2.head.id) as NonNullable<ReturnType<typeof getThread>>
+    confirmClose(
+      {
+        db,
+        cfg: threadsConfig(true) as NonNullable<ReturnType<typeof threadsConfig>>,
+        actor: { kind: 'owner' },
+        now: NOW + 30,
+      },
+      h,
+    )
+    expect(ownThreadAsk(db, { id: t2.head.id, key: t2.head.key, ask: t2.askId }, ANNA)).toBe(false)
+  })
+  expect(defaultDue(e2, { decisions: true }, NOW + 30)).toBe('drop')
+  const p2 = decisionsPayload([itemOf(ANNA, 'anna')], new Map([[ANNA, readCard(ANNA) as Card]]), {
+    now: NOW + 30,
+    defaults: true,
+    seen: 0,
+  })
+  expect(p2.items).toEqual([])
+  expect(row(t2.id)).toMatchObject({ answeredBy: 'withdrawn', via: 'cleared' })
+
+  // 3. Owner answered via thread (type: 'answer'): NOT prematurely withdrawn before clearAsk runs.
+  const t3 = setupThreadAsk(annaParty, 'Answered by owner')
+  withDecisionsDb(db => {
+    const h = getThread(db, t3.head.id) as NonNullable<ReturnType<typeof getThread>>
+    answerAsk(
+      {
+        db,
+        cfg: threadsConfig(true) as NonNullable<ReturnType<typeof threadsConfig>>,
+        actor: { kind: 'owner' },
+        now: NOW + 40,
+      },
+      h,
+      'Go ahead',
+    )
+  })
+  decisionsPayload([itemOf(ANNA, 'anna')], new Map([[ANNA, readCard(ANNA) as Card]]), {
+    now: NOW + 40,
+    defaults: true,
+    seen: 0,
+  })
+  expect(row(t3.id)?.answeredAt).toBeNull()
 })
