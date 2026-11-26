@@ -6,6 +6,7 @@
 import { publicRecord } from '../../core/archive.ts'
 import { t } from '../../core/lang.ts'
 import type { Item } from '../../core/types.ts'
+import { scheduleZone } from '../../core/when.ts'
 import {
   askArchive,
   bringBack,
@@ -42,11 +43,12 @@ export function archiveRoutes(app: ArchiveApp): Route[] {
       path: '/api/archive',
       handle: () => {
         const now = Date.now()
+        const zone = scheduleZone(deps.cfg.time)
         return json(200, {
           records: listArchive().map(r =>
             publicRecord(r, {
               returning: !!r.returning && returningOn(app.launches, r.returning),
-              due: e => dueAgain(e, now),
+              due: e => dueAgain(e, now, zone),
             }),
           ),
           undoMs: undoMs(deps.cfg),
@@ -78,11 +80,12 @@ export function archiveRoutes(app: ArchiveApp): Route[] {
         if (!to) return json(409, { ok: false, error: t('err.gone') })
         if (getArchived(to.key))
           return json(409, { ok: false, error: t('archive.err.heldArchived', { name: to.name }) })
-        if (dueAgain(found.entry, Date.now()) === null)
+        const zone = scheduleZone(deps.cfg.time)
+        if (dueAgain(found.entry, Date.now(), zone) === null)
           return json(409, { ok: false, error: t('archive.err.heldEnded') })
         let moved: ReturnType<typeof moveHeld>
         try {
-          moved = moveHeld(id, { key: to.key, name: to.name, pane: to.pane, ...(to.cwd && { cwd: to.cwd }) })
+          moved = moveHeld(id, { key: to.key, name: to.name, pane: to.pane, ...(to.cwd && { cwd: to.cwd }) }, zone)
         } catch (err) {
           // What the schedule said (that session's entries full, a lock held too long), as the board command says it.
           return json(409, { ok: false, error: err instanceof Error ? err.message : String(err) })

@@ -50,6 +50,7 @@ import type { AgentStatus, Attention, Card, Config, Item, Pin, ToolCall, Transcr
 import { agySleeperPane } from '../core/wake/agy.ts'
 import { piSleeperPane } from '../core/wake/pi.ts'
 import { asciiKey, keyFor } from '../core/wake/topics.ts'
+import { scheduleZone } from '../core/when.ts'
 import { archivedFiles, getArchived, hides, isArchived, settleReturned } from './archive.ts'
 import type { Deps } from './deps.ts'
 import { secretsOf } from './secrets.ts'
@@ -440,7 +441,7 @@ export async function collect(
       // MokuPilot going on in it for a call (#326) is no return: it shows while the call lasts.
       if (record && !call) {
         try {
-          settleReturned(base)
+          settleReturned(base, scheduleZone(cfg.time))
         } catch {} // its record is locked: the next refresh settles it
       }
     }

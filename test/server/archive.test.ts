@@ -13,8 +13,9 @@ import { delimiter, join } from 'node:path'
 import { tidyList } from '../../src/core/archive.ts'
 import { translator } from '../../src/core/i18n/translator.ts'
 import { projectFolderName } from '../../src/core/resume.ts'
+import { clockIn, localZone } from '../../src/core/time.ts'
 import type { Item } from '../../src/core/types.ts'
-import { hides } from '../../src/services/archive.ts'
+import { dueAgain, hides } from '../../src/services/archive.ts'
 import { archiveApi, isBoardPayload } from '../../web/src/api/client.ts'
 import { archiveNotes } from '../../web/src/models/archive-view.ts'
 import { unusedPort } from '../support/board-server.ts'
@@ -1548,3 +1549,206 @@ console.log(JSON.stringify({ winIdle: winIdle.ok, winBusy, winPiIdle: winPiIdle.
   assert.equal(parsed.winTab.find((p: { pane: string }) => p.pane === 'wP:p3')?.plugin, true)
   assert.equal(parsed.linuxTab.find((p: { pane: string }) => p.pane === 'wP:p3')?.plugin, false)
 }, 30_000)
+
+test('#807 dueAgain uses the given zone for past-due repeating entries, and host local time without one', () => {
+  const other = localZone() === 'Pacific/Kiritimati' ? 'Pacific/Honolulu' : 'Pacific/Kiritimati'
+  const now = Date.now()
+  const base = {
+    id: 'rep807',
+    key: S,
+    name: 'Probe',
+    next: now - 3600e3,
+    cron: '57 7 * * *',
+    text: 'monitor',
+  }
+  const zoned = dueAgain(base, now, other)
+  assert.ok(zoned !== null && zoned > now)
+  assert.deepEqual(clockIn(zoned, other), [7, 57, 0])
+
+  const local = dueAgain(base, now)
+  assert.ok(local !== null && local > now)
+  assert.deepEqual([new Date(local).getHours(), new Date(local).getMinutes()], [7, 57])
+
+  const future = { ...base, next: now + 3600e3 }
+  assert.equal(dueAgain(future, now, other), future.next)
+  const once = { id: 'one807', key: S, name: 'Probe', next: now - 60_000, text: 'once' }
+  assert.equal(dueAgain(once, now, other), once.next)
+  assert.equal(dueAgain(once, now), once.next)
+  const ended = { ...base, cron: '0 0 30 2 *' }
+  assert.equal(dueAgain(ended, now, other), null)
+  assert.equal(dueAgain(ended, now), null)
+})
+
+test('#807 archive list, move, Return and kept-on-board compute repeating next run in time.zone (and host time without it)', async () => {
+  const other = localZone() === 'Pacific/Kiritimati' ? 'Pacific/Honolulu' : 'Pacific/Kiritimati'
+  const kill = async (b: Awaited<ReturnType<typeof board>>) => {
+    b.proc.kill()
+    await b.proc.exited
+  }
+  const benPane = (dir: string) => ({
+    pane_id: 'wP:p4',
+    tab_id: 'wP:t4',
+    workspace_id: 'wP',
+    agent: 'claude',
+    agent_session: { value: OTHER },
+    agent_status: 'idle',
+    cwd: dir,
+  })
+  const heldPair = (now: number) => [
+    { id: 'aaa807', key: S, name: 'Probe', pane: 'wP:p1', next: now - 3600e3, cron: '57 7 * * *', text: 'move me' },
+    { id: 'bbb807', key: S, name: 'Probe', pane: 'wP:p1', next: now - 3600e3, cron: '57 7 * * *', text: 'return me' },
+  ]
+
+  // 1) With time.zone: GET /api/archive, POST /api/archive/held (move), and Return after pane close (settleReturned).
+  const box1 = await sandbox()
+  const dir1 = project(box1)
+  writeFileSync(join(box1.cards, `${OTHER}.json`), JSON.stringify({ key: OTHER, name: 'ben', category: 'other' }))
+  herdrWith(box1, dir1, { extra: [benPane(join(box1.dir, 'ben'))] })
+  boardConfig(box1, { time: { zone: other } })
+  const b1 = await board(box1, { archiveUndoSec: 0.4, time: { zone: other } })
+  try {
+    assert.equal((await b1.archive()).body.ok, true)
+    await until(() => record(box1)?.state === 'archived', 10_000)
+    const now1 = Date.now()
+    const rec1 = record(box1) as Rec
+    writeFileSync(archiveFile(box1), JSON.stringify({ ...rec1, held: heldPair(now1) }))
+    await b1.refresh()
+
+    const [listed] = (await b1.list()).records
+    const parked = (listed?.parked ?? []) as { id: string; due: number | null }[]
+    assert.equal(parked.length, 2)
+    for (const p of parked) {
+      assert.ok(typeof p.due === 'number' && p.due > now1)
+      assert.deepEqual(clockIn(p.due, other), [7, 57, 0])
+    }
+
+    const moved = await b1.post('/api/archive/held', { op: 'move', key: S, id: 'aaa807', to: OTHER })
+    assert.equal(moved.status, 200, JSON.stringify(moved.body))
+    const movedEntry = JSON.parse(readFileSync(entryFile(box1, 'aaa807'), 'utf8'))
+    assert.ok(movedEntry.next > now1)
+    assert.deepEqual(clockIn(movedEntry.next, other), [7, 57, 0])
+
+    resumable(box1, dir1)
+    await b1.refresh()
+    const ret1 = await b1.post('/api/archive', { op: 'return', keys: [S] })
+    assert.equal(ret1.status, 200, JSON.stringify(ret1.body))
+    await until(() => calls(box1).some(c => c.startsWith('pane run wP:p9')), 15_000)
+    box1.state({
+      ...JSON.parse(readFileSync(box1.env.FAKE_HERDR_STATE as string, 'utf8')),
+      'api snapshot': {
+        result: {
+          snapshot: { panes: [FRESH(dir1)], tabs: [], workspaces: [{ workspace_id: 'wP', label: 'Personal' }] },
+        },
+      },
+    })
+    await b1.refresh()
+    await until(() => record(box1) === null, 10_000)
+    const restored1 = JSON.parse(readFileSync(entryFile(box1, 'bbb807'), 'utf8'))
+    assert.ok(restored1.next > now1)
+    assert.deepEqual(clockIn(restored1.next, other), [7, 57, 0])
+  } finally {
+    await kill(b1)
+  }
+
+  // 2) With time.zone: Return during the undo toast (state === 'closing' -> takeBack -> putBack).
+  const box2 = await sandbox()
+  const dir2 = project(box2)
+  herdrWith(box2, dir2)
+  const b2 = await board(box2, { archiveUndoSec: 30, time: { zone: other } })
+  try {
+    assert.equal((await b2.archive()).body.ok, true)
+    const now2 = Date.now()
+    const rec2 = record(box2) as Rec
+    assert.equal(rec2.state, 'closing')
+    writeFileSync(
+      archiveFile(box2),
+      JSON.stringify({
+        ...rec2,
+        held: [
+          { id: 'ccc807', key: S, name: 'Probe', pane: 'wP:p1', next: now2 - 3600e3, cron: '57 7 * * *', text: 'undo' },
+        ],
+      }),
+    )
+    const back2 = await b2.post('/api/archive', { op: 'return', keys: [S] })
+    assert.equal(back2.status, 200, JSON.stringify(back2.body))
+    assert.equal(record(box2), null)
+    const restored2 = JSON.parse(readFileSync(entryFile(box2, 'ccc807'), 'utf8'))
+    assert.ok(restored2.next > now2)
+    assert.deepEqual(clockIn(restored2.next, other), [7, 57, 0])
+  } finally {
+    await kill(b2)
+  }
+
+  // 3) With time.zone: Close called off by scheduler when session becomes busy (closeDue -> keep -> putBack).
+  const box3 = await sandbox()
+  const dir3 = project(box3)
+  herdrWith(box3, dir3)
+  const b3 = await board(box3, { archiveUndoSec: 0.3, scheduleTickSec: 0.1, time: { zone: other } })
+  try {
+    assert.equal((await b3.archive()).body.ok, true)
+    const now3 = Date.now()
+    const rec3 = record(box3) as Rec
+    writeFileSync(
+      archiveFile(box3),
+      JSON.stringify({
+        ...rec3,
+        held: [
+          { id: 'ddd807', key: S, name: 'Probe', pane: 'wP:p1', next: now3 - 3600e3, cron: '57 7 * * *', text: 'kept' },
+        ],
+      }),
+    )
+    herdrWith(box3, dir3, { status: 'working' })
+    await until(() => record(box3) === null && existsSync(entryFile(box3, 'ddd807')), 10_000)
+    const restored3 = JSON.parse(readFileSync(entryFile(box3, 'ddd807'), 'utf8'))
+    assert.ok(restored3.next > now3)
+    assert.deepEqual(clockIn(restored3.next, other), [7, 57, 0])
+  } finally {
+    await kill(b3)
+  }
+
+  // 4) Without time.zone: list, move, and Return after pane close keep host local time.
+  const box4 = await sandbox()
+  const dir4 = project(box4)
+  writeFileSync(join(box4.cards, `${OTHER}.json`), JSON.stringify({ key: OTHER, name: 'ben', category: 'other' }))
+  herdrWith(box4, dir4, { extra: [benPane(join(box4.dir, 'ben'))] })
+  const b4 = await board(box4, { archiveUndoSec: 0.4 })
+  try {
+    assert.equal((await b4.archive()).body.ok, true)
+    await until(() => record(box4)?.state === 'archived', 10_000)
+    const now4 = Date.now()
+    const rec4 = record(box4) as Rec
+    writeFileSync(archiveFile(box4), JSON.stringify({ ...rec4, held: heldPair(now4) }))
+    await b4.refresh()
+
+    const [listed4] = (await b4.list()).records
+    const parked4 = (listed4?.parked ?? []) as { id: string; due: number | null }[]
+    for (const p of parked4) {
+      assert.ok(typeof p.due === 'number' && p.due > now4)
+      assert.deepEqual([new Date(p.due).getHours(), new Date(p.due).getMinutes()], [7, 57])
+    }
+
+    const moved4 = await b4.post('/api/archive/held', { op: 'move', key: S, id: 'aaa807', to: OTHER })
+    assert.equal(moved4.status, 200, JSON.stringify(moved4.body))
+    const movedEntry4 = JSON.parse(readFileSync(entryFile(box4, 'aaa807'), 'utf8'))
+    assert.deepEqual([new Date(movedEntry4.next).getHours(), new Date(movedEntry4.next).getMinutes()], [7, 57])
+
+    resumable(box4, dir4)
+    await b4.refresh()
+    assert.equal((await b4.post('/api/archive', { op: 'return', keys: [S] })).status, 200)
+    await until(() => calls(box4).some(c => c.startsWith('pane run wP:p9')), 15_000)
+    box4.state({
+      ...JSON.parse(readFileSync(box4.env.FAKE_HERDR_STATE as string, 'utf8')),
+      'api snapshot': {
+        result: {
+          snapshot: { panes: [FRESH(dir4)], tabs: [], workspaces: [{ workspace_id: 'wP', label: 'Personal' }] },
+        },
+      },
+    })
+    await b4.refresh()
+    await until(() => record(box4) === null, 10_000)
+    const restored4 = JSON.parse(readFileSync(entryFile(box4, 'bbb807'), 'utf8'))
+    assert.deepEqual([new Date(restored4.next).getHours(), new Date(restored4.next).getMinutes()], [7, 57])
+  } finally {
+    await kill(b4)
+  }
+}, 60_000)
