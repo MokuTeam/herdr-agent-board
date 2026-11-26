@@ -519,3 +519,38 @@ describe('renaming a session’s workspace (the React board’s own)', () => {
     expect(none[0]).not.toContain('renameWorkspace')
   })
 })
+
+describe('a node file chip’s menu (#906)', () => {
+  test('hides open and reveal on another device and passes the node key to look', () => {
+    const world = new FakeWorld({ viewport: { w: 800, h: 600 } })
+    world.install()
+    try {
+      const [node] = parseHtml(
+        '<code class="fs-chip" data-fs="file" data-abs="C:\\Projects\\Demo\\popup.html" data-key="@win-node:s1" data-line="4">popup.html</code>',
+      )
+      if (node?.kind !== 'element') throw new Error('no chip')
+      const el = world.mount(node)
+      const looked: unknown[] = []
+      const deps: BoardMenuDeps = {
+        t: () => t,
+        canMutate: () => true,
+        canEdit: () => true,
+        item: () => undefined,
+        column: () => 'idle',
+        category: () => 'other',
+        state: () => ({ open: null, filter: ALL_LANES, sleepers: false, data: { categories: [] } }),
+        tidyCount: () => 0,
+        do: {
+          ...({} as BoardMenuDeps['do']),
+          look: (target, targetEl) => looked.push([target, targetEl === asDom(el)]),
+        },
+      }
+      const m = menuFor(el, { x: 0, y: 0 }, deps)
+      expect(m?.items.map(i => ('id' in i ? i.id : '—'))).toEqual(['look', '—', 'copyPath'])
+      m?.pick('look')
+      expect(looked).toEqual([[{ path: 'C:\\Projects\\Demo\\popup.html', line: 4, key: '@win-node:s1' }, true]])
+    } finally {
+      world.uninstall()
+    }
+  })
+})

@@ -7,7 +7,7 @@ import { execFile } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { closeSync, type Dirent, openSync, readdirSync, readSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { basename, dirname, extname, isAbsolute, resolve } from 'node:path'
+import { basename, dirname, extname, isAbsolute, posix, resolve, win32 } from 'node:path'
 
 export const FILE_TOKEN = randomBytes(18).toString('base64url')
 
@@ -97,17 +97,28 @@ export interface Preview extends FileInfo {
 
 const ext = (p: string): string => extname(p).slice(1).toLowerCase()
 
+/** Whether `path` is a Windows drive or UNC path (either separator). */
+export const isWindowsPath = (path: string): boolean => /^(?:[A-Za-z]:[\\/]|\\\\)/.test(path)
+
+/** Whether `path` belongs to Windows when this process is running elsewhere (never stat'd here). */
+export const isForeignPath = (path: string, platform: string = process.platform): boolean =>
+  platform !== 'win32' && isWindowsPath(path)
+
+const isPosixPath = (path: string): boolean => path.startsWith('/') && !path.startsWith('//')
+
 /** What a file is by its name: image, pdf, video, audio, markdown, json, csv, text, or file (unknown). */
 export function kindOf(path: string): string {
   const e = ext(path)
   const known = KIND_OF.get(e)
   if (known) return known
-  return NAMED.has(basename(path).toLowerCase()) ? 'text' : 'file'
+  const name = isWindowsPath(path) ? win32.basename(path) : basename(path)
+  return NAMED.has(name.toLowerCase()) ? 'text' : 'file'
 }
 
 /**
  * A path as an agent wrote it to { path, line }, absolute: herdr-reveal: / file: prefixes and
- * %-escapes off, ~ expanded, relative ones resolved against the session's folder, :line(:col) split off.
+ * %-escapes off, ~ expanded, relative ones resolved against the session's folder (using that
+ * folder's OS rules when Windows and POSIX differ), :line(:col) split off.
  */
 export function resolvePath(raw: unknown, cwd = ''): { path: string; line: number | null } {
   let p = String(raw ?? '')
@@ -130,16 +141,22 @@ export function resolvePath(raw: unknown, cwd = ''): { path: string; line: numbe
   }
   if (/^~(?=$|[\\/])/.test(p)) p = homedir() + p.slice(1)
   if (!p) return { path: '', line }
-  if (!isAbsolute(p)) {
+  if (isWindowsPath(p)) p = win32.resolve(p)
+  else if (isPosixPath(p)) p = process.platform === 'win32' && !isPosixPath(cwd) ? resolve(p) : posix.resolve(p)
+  else if (!isAbsolute(p)) {
     if (!cwd) return { path: '', line }
-    p = resolve(cwd, p)
+    if (isWindowsPath(cwd)) p = win32.resolve(cwd, p)
+    else if (isPosixPath(cwd)) p = posix.resolve(cwd, p)
+    else p = resolve(cwd, p)
   } else p = resolve(p)
   return { path: p, line }
 }
 
 /** What is at `path`: { path, name, exists, dir, size, mtime, kind }. */
 export function describe(path: string): FileInfo {
-  const name = basename(path) || path
+  const foreign = isForeignPath(path)
+  const name = (foreign ? win32.basename(path) : basename(path)) || path
+  if (foreign) return { path, name, exists: false }
   const st = path ? statSync(path, { throwIfNoEntry: false }) : null
   if (!st) return { path, name, exists: false }
   const dir = st.isDirectory()

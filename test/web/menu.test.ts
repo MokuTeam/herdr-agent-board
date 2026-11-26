@@ -339,6 +339,8 @@ test('lanes, the board, starting sessions and file chips have menus of their own
   assert.deepEqual(ids(launchMenu({ state: 'starting', pane: null }, fresh)), ['copy:cwd', 'dismiss'])
   assert.deepEqual(ids(chipMenu({ dir: true }, fresh)), ['look', 'open', 'reveal', 'copyPath', 'newHere'])
   assert.deepEqual(ids(chipMenu({ dir: false }, fresh)), ['look', 'open', 'reveal', 'copyPath'])
+  assert.deepEqual(ids(chipMenu({ dir: true, remote: true }, fresh)), ['look', 'copyPath', 'newHere'])
+  assert.deepEqual(ids(chipMenu({ dir: false, remote: true }, fresh)), ['look', 'copyPath'])
 })
 
 test('the browser keeps its own menu in fields, on selected text, on links, and with Shift', () => {

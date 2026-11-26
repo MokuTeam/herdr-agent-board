@@ -4,7 +4,7 @@
 // starts as (core/launch/agents.ts), one the board offers, and the model it starts on, if one is
 // asked for (core/launch/model.ts): empty is the profile's default.
 import { cachedCodexModels } from '../../adapters/codex-home.ts'
-import { resolvePath } from '../../adapters/files.ts'
+import { isWindowsPath, resolvePath } from '../../adapters/files.ts'
 import { SLOW, statOf } from '../../adapters/folders.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { CODEX_AGENT } from '../../core/codex.ts'
@@ -176,15 +176,11 @@ export async function checkRequest(
     remote = forcedRemote
   } else {
     cwd = resolvePath(b.cwd).path
-    // A Windows node's folder on a POSIX master (#891) is not absolute here and resolves to nothing:
-    // pinned to that node, it is the node's folder all the same, never stat'd here.
-    const nodeOnly =
-      !cwd &&
-      !!pin &&
-      'device' in pin &&
-      pin.device !== LOCAL &&
-      /^(?:[A-Za-z]:[\\/]|\\\\)/.test(String(b.cwd ?? '').trim())
+    // A Windows node's folder on a POSIX master (#891): never stat'd here.
+    const foreignWin = process.platform !== 'win32' && isWindowsPath(String(b.cwd ?? '').trim())
+    const nodeOnly = foreignWin && !!pin && 'device' in pin && pin.device !== LOCAL
     if (!cwd && !nodeOnly) return fail('cwd', 'launch.err.cwdEmpty')
+    if (foreignWin && !nodeOnly) return fail('cwd', 'launch.err.cwdMissing', { path: cwd })
     const st = nodeOnly ? null : await statOf(cwd, 3000)
     if (st === SLOW) return fail('cwd', 'launch.err.cwdSlow', { path: cwd })
     if (!st && pin && 'device' in pin && pin.device !== LOCAL) {

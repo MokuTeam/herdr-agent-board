@@ -8,6 +8,7 @@
 // page's (hooks/useContextMenus.ts).
 import { archiveBlock } from '../../../src/core/archive.ts'
 import { itemProfile, shownProfiles } from '../../../src/core/item-profile.ts'
+import { parseNodeKey } from '../../../src/core/node-key.ts'
 import type { BoardDevice } from '../../../src/core/payload.ts'
 import type { ScheduleEntry } from '../../../src/core/schedule-rules.ts'
 import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'
@@ -111,8 +112,8 @@ export interface BoardMenuActions {
   sleepers(): unknown
   search(): unknown
   copy(text: string | null | undefined, done: string): unknown
-  openPath(path: string, how: 'open' | 'reveal'): unknown
-  look(target: { path: string; line: number | null }, el: Element): unknown
+  openPath(path: string, how: 'open' | 'reveal', key?: string): unknown
+  look(target: { path: string; line: number | null; key?: string }, el: Element): unknown
   focusLaunch(id: string): unknown
 }
 
@@ -199,12 +200,14 @@ export function menuFor(target: unknown, at: Point, board: BoardMenuDeps): Board
   const chip = el.closest<HTMLElement>('[data-fs="file"], [data-fs="dir"]')
   if (chip) {
     const path = chip.dataset.abs ?? ''
+    const key = chip.dataset.key || undefined
+    const remote = !!key && !!parseNodeKey(key)
     return {
-      items: chipMenu({ dir: chip.dataset.fs === 'dir' }, ctxOf(board)),
+      items: chipMenu({ dir: chip.dataset.fs === 'dir', ...(remote && { remote: true }) }, ctxOf(board)),
       label: path,
       pick: id => {
-        if (id === 'look') board.do.look({ path, line: Number(chip.dataset.line) || null }, chip)
-        else if (id === 'open' || id === 'reveal') board.do.openPath(path, id)
+        if (id === 'look') board.do.look({ path, line: Number(chip.dataset.line) || null, ...(key && { key }) }, chip)
+        else if (id === 'open' || id === 'reveal') key ? board.do.openPath(path, id, key) : board.do.openPath(path, id)
         else if (id === 'copyPath')
           board.do.copy(chip.dataset.line ? `${path}:${chip.dataset.line}` : path, t('ql.copied'))
         else if (id === 'newHere') board.do.newSession({ cwd: path }, chip)

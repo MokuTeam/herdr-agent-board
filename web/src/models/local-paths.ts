@@ -3,6 +3,8 @@
 // names is on this device. Each device keeps its own list of server folder → folder here in its
 // browser; with none kept it starts from a suggestion for its system. Nothing here opens a file.
 
+import { parseNodeKey } from '../../../src/core/node-key.ts'
+
 /** One server folder and where it is on this device. */
 export interface PathMap {
   server: string
@@ -77,19 +79,25 @@ export function localPath(path: string, maps: readonly PathMap[]): string | null
 }
 
 /** Any file as a download: the run's token stands for the X-Board header an <a> cannot send. */
-export const downloadUrl = (path: string, token: string | null | undefined): string =>
-  `/api/fs/download?path=${encodeURIComponent(path)}&t=${encodeURIComponent(token ?? '')}`
+export const downloadUrl = (path: string, token: string | null | undefined, key?: string | null): string =>
+  `/api/fs/download?${key && parseNodeKey(key) ? `key=${encodeURIComponent(key)}&` : ''}path=${encodeURIComponent(path)}&t=${encodeURIComponent(token ?? '')}`
 
 /**
- * The quick look's tools for the board on another device (`maps` null: the board at the computer,
- * none of them): a file that is there downloads; anything there inside a kept folder has a path here.
+ * The quick look's tools for the board on another device or a file on a node (`maps` null and no
+ * node `key`: the board at the computer, none of them): a file that is there downloads; anything
+ * on this board inside a kept folder has a path here.
  */
 export function remoteTools(
   d: { path?: string | undefined; dir?: boolean | undefined; error?: string | null | undefined } | null,
   maps: readonly PathMap[] | null,
   token: string | null | undefined,
+  key?: string | null,
 ): { download: string | null; local: string | null } {
   const path = d?.path
-  if (!maps || !path || (d.error && d.error !== 'denied')) return { download: null, local: null }
-  return { download: d.dir || d.error ? null : downloadUrl(path, token), local: localPath(path, maps) }
+  const node = Boolean(key && parseNodeKey(key))
+  if ((!maps && !node) || !path || (d.error && d.error !== 'denied')) return { download: null, local: null }
+  return {
+    download: d.dir || d.error ? null : downloadUrl(path, token, key),
+    local: !node && maps ? localPath(path, maps) : null,
+  }
 }

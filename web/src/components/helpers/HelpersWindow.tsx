@@ -293,7 +293,7 @@ export function HelpersWindow({
   upgrade,
 }: {
   engine: HelpersEngine
-  upgrade?: (root: HTMLElement, cwd: string) => void
+  upgrade?: (root: HTMLElement, cwd: string, key?: string | null) => void
 }) {
   const view = useStore(engine.view)
   const sheet = useStore(engine.sheet)
@@ -315,7 +315,7 @@ export function HelpersWindow({
     const drawn = JSON.stringify([view.data.helper.status, view.data.conversation])
     if (!view.first && drawn === upgraded.current) return
     upgraded.current = drawn
-    upgrade?.(body, item?.cwd ?? '')
+    upgrade?.(body, item?.cwd ?? '', view.key)
   }, [view.data])
   // The list opened at a workflow run: scrolled to it once, with a glint; a later draw keeps the reader's place.
   const detail = sheet.key === view.key ? sheet.data : null

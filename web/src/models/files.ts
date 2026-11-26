@@ -2,6 +2,7 @@
 // paths taken apart and put together with either separator, sizes and dates, the quick look's
 // footer and actions, history excerpts, and how long what the server said about a path holds.
 // The chips and the quick look draw from here (components/files/), as the old page's files.js did.
+import { parseNodeKey } from '../../../src/core/node-key.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import type { ZoomState } from './zoom.ts'
 
@@ -71,8 +72,8 @@ export const kindOfName = (p: string): string =>
   KIND_BY_EXTENSION.get((p.split('.').pop() ?? '').toLowerCase()) ?? 'text'
 
 /** The bytes of an image, PDF, video or audio file: the run's token stands for the X-Board header. */
-export const rawUrl = (path: string, token: string | null | undefined): string =>
-  `/api/fs/raw?path=${encodeURIComponent(path)}&t=${encodeURIComponent(token ?? '')}`
+export const rawUrl = (path: string, token: string | null | undefined, key?: string | null): string =>
+  `/api/fs/raw?${key && parseNodeKey(key) ? `key=${encodeURIComponent(key)}&` : ''}path=${encodeURIComponent(path)}&t=${encodeURIComponent(token ?? '')}`
 
 // ---------------------------------------------------------------- paths, either separator
 
@@ -159,11 +160,11 @@ export const bodyClass = (d: Pick<LookHead, 'dir' | 'kind'>): string => `ql-body
 
 /**
  * Which of open, reveal and copy are off: all of them without a path that is there (a folder
- * that cannot be read is there); open and reveal also without the board (`canEdit`).
+ * that cannot be read is there); open and reveal also without the board (`canEdit`) or on another device (`remote`).
  */
-export function actionsOff(d: Pick<LookHead, 'error' | 'path'> | null, canEdit: boolean) {
+export function actionsOff(d: Pick<LookHead, 'error' | 'path'> | null, canEdit: boolean, remote = false) {
   const exists = (!d?.error || d.error === 'denied') && !!d?.path
-  return { open: !exists || !canEdit, reveal: !exists || !canEdit, copy: !exists }
+  return { open: !exists || !canEdit || remote, reveal: !exists || !canEdit || remote, copy: !exists }
 }
 
 export function sizeText(n: number | null | undefined, t: Translator): string {
@@ -345,18 +346,18 @@ export interface PathInfo {
 /** A path that was there holds a while; one that was not is asked again soon (the agent may make it). */
 export const FRESH_MS = { found: 300_000, missing: 15_000 }
 
-/** What the server said about paths, by the session folder they were written in. */
+/** What the server said about paths, by the device and session folder they were written in. */
 export function statBook() {
   const known = new Map<string, { at: number; info: PathInfo }>()
-  const key = (cwd: string, raw: string) => `${cwd}\n${raw}`
+  const key = (cwd: string, raw: string, scope = '') => `${scope}\n${cwd}\n${raw}`
   return {
-    get(cwd: string, raw: string, now: number): PathInfo | null {
-      const hit = known.get(key(cwd, raw))
+    get(cwd: string, raw: string, now: number, scope = ''): PathInfo | null {
+      const hit = known.get(key(cwd, raw, scope))
       if (!hit) return null
       return now - hit.at > (hit.info.exists ? FRESH_MS.found : FRESH_MS.missing) ? null : hit.info
     },
-    put(cwd: string, info: PathInfo, now: number): void {
-      known.set(key(cwd, info.raw), { at: now, info })
+    put(cwd: string, info: PathInfo, now: number, scope = ''): void {
+      known.set(key(cwd, info.raw, scope), { at: now, info })
     },
   }
 }

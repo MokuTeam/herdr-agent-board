@@ -200,6 +200,11 @@ describe('a node card through the master', () => {
     expect(JSON.stringify(preview.body)).toContain('anna on the node')
     const stat = await answer(await post(at('/api/fs/stat'), { key: K, paths: [file] }))
     expect((stat.body.items as { exists: boolean }[])[0]?.exists).toBe(true)
+    const relStat = await answer(await post(at('/api/fs/stat'), { key: K, cwd: node.box.dir, paths: ['notes.txt'] }))
+    expect((relStat.body.items as { exists: boolean; path: string }[])[0]).toMatchObject({
+      exists: true,
+      path: file,
+    })
     expect(node.proxy.requests).toContain('POST /api/fs/preview')
     expect(node.proxy.requests).toContain('POST /api/fs/stat')
 

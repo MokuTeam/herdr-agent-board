@@ -2,7 +2,7 @@ import { test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { join, posix, resolve, win32 } from 'node:path'
 import {
   csvSeparator,
   describe,
@@ -37,6 +37,63 @@ test('a path as written: prefixes, escapes, lines, home and the session folder',
   // Either separator, drive letters and POSIX roots: only the extension counts.
   assert.equal(kindOf('C:\\work\\x.PNG'), 'image')
   assert.equal(kindOf('/work/x.png'), 'image')
+  assert.equal(kindOf('C:\\Projects\\Demo\\Dockerfile'), 'text')
+})
+
+test('cross-platform paths: Windows absolute links and relative links against a Windows or POSIX cwd (#906)', () => {
+  // Windows absolute links (either slash, UNC, file:/// or herdr-reveal:, Cyrillic/spaces/%) are
+  // never joined to cwd or process.cwd(), even when resolved on a POSIX master.
+  const winCwd = 'C:\\Projects\\Demo'
+  assert.deepEqual(resolvePath('C:/Projects/Demo/app/dist/popup.html', winCwd), {
+    path: win32.resolve('C:\\Projects\\Demo\\app\\dist\\popup.html'),
+    line: null,
+  })
+  assert.deepEqual(resolvePath('C:\\Projects\\Demo\\app\\dist\\popup.html:12:4', '/srv/master'), {
+    path: win32.resolve('C:\\Projects\\Demo\\app\\dist\\popup.html'),
+    line: 12,
+  })
+  assert.deepEqual(resolvePath('file:///C:/Projects/My%20App/popup.html', winCwd), {
+    path: win32.resolve('C:\\Projects\\My App\\popup.html'),
+    line: null,
+  })
+  assert.deepEqual(resolvePath('herdr-reveal:C:/Projects/Отчёт 100%/файл.txt:8', winCwd), {
+    path: win32.resolve('C:\\Projects\\Отчёт 100%\\файл.txt'),
+    line: 8,
+  })
+  assert.deepEqual(resolvePath('\\\\fileserver\\share\\proj\\a.txt', winCwd), {
+    path: win32.resolve('\\\\fileserver\\share\\proj\\a.txt'),
+    line: null,
+  })
+
+  // Relative links resolve against cwd using that machine's path rules.
+  assert.deepEqual(resolvePath('app/dist/popup.html:7', winCwd), {
+    path: win32.resolve(winCwd, 'app/dist/popup.html'),
+    line: 7,
+  })
+  assert.deepEqual(resolvePath('..\\shared\\index.ts', 'C:/Projects/Demo/app'), {
+    path: win32.resolve('C:\\Projects\\Demo\\shared\\index.ts'),
+    line: null,
+  })
+  assert.deepEqual(resolvePath('src/app.ts:9', '/srv/demo'), {
+    path: posix.resolve('/srv/demo', 'src/app.ts'),
+    line: 9,
+  })
+  // POSIX absolute links stay POSIX absolute and never join to cwd.
+  assert.deepEqual(resolvePath('/srv/demo/src/app.ts:3', winCwd), {
+    path: posix.resolve('/srv/demo/src/app.ts'),
+    line: 3,
+  })
+
+  if (process.platform !== 'win32') {
+    const missingWin = 'C:\\Projects\\Demo\\package.json'
+    assert.deepEqual(describe(missingWin), { path: missingWin, name: 'package.json', exists: false })
+    assert.deepEqual(preview(missingWin), {
+      path: missingWin,
+      name: 'package.json',
+      exists: false,
+      error: 'missing',
+    })
+  }
 })
 
 test('previews: folders first, text cut to size, JSON pretty, CSV rows, binary and missing files', () => {

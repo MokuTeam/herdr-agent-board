@@ -5,6 +5,7 @@
 // its keys too. What it shows step by step is models/quick-look.ts; components/files/QuickLook.tsx
 // draws it.
 import { createRef, type RefObject, useEffect, useState } from 'react'
+import { parseNodeKey } from '../../../src/core/node-key.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import { type FilesApi, filesApi } from '../api/files.ts'
 import { type ImageZoom, zoomImage } from '../components/files/zoom.ts'
@@ -57,7 +58,7 @@ export interface QuickLookEngine {
    */
   act(how: 'open' | 'reveal' | 'copy' | 'local'): void
   /** Paths in what it shows become chips (hooks/useFileChips.ts). */
-  upgrade(root: HTMLElement, cwd: string): void
+  upgrade(root: HTMLElement, cwd: string, key?: string | null): void
   /**
    * The zoom of the image on show, for the footer, and the one it showed last: drawn again only
    * when what the bar shows changes.
@@ -103,7 +104,10 @@ export interface QuickLook {
   open: boolean
   isOpen(): boolean
   /** A file or folder at `line`, grown from `from`. */
-  look(target: { path: string; line?: number | null | undefined }, from?: Element | null): void
+  look(
+    target: { path: string; line?: number | null | undefined; key?: string | undefined },
+    from?: Element | null,
+  ): void
   /** The checkout changes of a session's folder. */
   lookChanges(key: string, from?: Element | null): void
   /** The past sessions of a session's project. */
@@ -121,7 +125,7 @@ interface EngineDeps {
   t(): Translator
   canEdit(): boolean
   toast(text: string, error?: boolean): void
-  upgrade(root: HTMLElement, cwd: string): void
+  upgrade(root: HTMLElement, cwd: string, key?: string | null): void
 }
 
 interface From {
@@ -149,7 +153,7 @@ export function quickLookEngine(deps: EngineDeps): QuickLook {
   const { refs, api } = deps
   const nav = quickLookNav({
     t: deps.t,
-    preview: path => api.preview(path),
+    preview: (path, key) => api.preview(path, key),
     changes: key => api.changes(key),
     history: (key, query) => api.history(key, query),
     changed(next) {
@@ -234,11 +238,16 @@ export function quickLookEngine(deps: EngineDeps): QuickLook {
     nav.back()
   }
 
-  async function system(path: string | undefined, how: 'open' | 'reveal'): Promise<void> {
+  async function system(path: string | undefined, how: 'open' | 'reveal', key?: string): Promise<void> {
     const t = deps.t()
     if (!deps.canEdit()) return deps.toast(t('mobile.readOnly'), true)
-    const error = await api.open(path ?? '', how)
+    const error = await (key ? api.open(path ?? '', how, key) : api.open(path ?? '', how))
     if (error) deps.toast(error, true)
+  }
+
+  const topKey = (): string | undefined => {
+    const k = nav.view().top?.key
+    return k && parseNodeKey(k) ? k : undefined
   }
 
   async function copy(path: string, done = 'ql.copied'): Promise<void> {
@@ -268,7 +277,8 @@ export function quickLookEngine(deps: EngineDeps): QuickLook {
     close,
     go(path) {
       dropZoom()
-      nav.push({ kind: 'file', path, line: null })
+      const key = topKey()
+      nav.push({ kind: 'file', path, line: null, ...(key && { key }) })
     },
     setMode(mode) {
       dropZoom()
@@ -281,11 +291,11 @@ export function quickLookEngine(deps: EngineDeps): QuickLook {
         const local = localPath(path ?? '', localPaths().get())
         return void (local && copy(local, 'ql.localCopied'))
       }
-      if (how !== 'copy') return void system(path, how)
+      if (how !== 'copy') return void system(path, how, topKey())
       const line = data && 'line' in data ? data.line : null
       void copy(line ? `${path}:${line}` : String(path))
     },
-    upgrade: (root, cwd) => deps.upgrade(root, cwd),
+    upgrade: (root, cwd, key) => deps.upgrade(root, cwd, key),
     zoom: zoomNow,
     imageLoaded(img, data) {
       // Walked away before it loaded: the footer is someone else's by now.
@@ -342,7 +352,11 @@ export function quickLookEngine(deps: EngineDeps): QuickLook {
     open: false,
     isOpen,
     look(target, el) {
-      if (target.path) lookAt({ kind: 'file', path: target.path, line: target.line ?? null }, el)
+      if (target.path)
+        lookAt(
+          { kind: 'file', path: target.path, line: target.line ?? null, ...(target.key && { key: target.key }) },
+          el,
+        )
     },
     lookChanges(key, el) {
       if (key) lookAt({ kind: 'changes', key }, el)
@@ -357,7 +371,7 @@ export function quickLookEngine(deps: EngineDeps): QuickLook {
 }
 
 /** The page's quick look; `upgrade` makes chips of the paths it shows. */
-export function useQuickLook(upgrade: (root: HTMLElement, cwd: string) => void): QuickLook {
+export function useQuickLook(upgrade: (root: HTMLElement, cwd: string, key?: string | null) => void): QuickLook {
   const t = useT()
   const board = useBoardContext()
   const latest = useLatest({ t, board, upgrade })
@@ -378,7 +392,7 @@ export function useQuickLook(upgrade: (root: HTMLElement, cwd: string) => void):
       // The files are the board's own: they need only the board, not fresh herdr data.
       canEdit: () => latest.current.board.canEdit,
       toast: (text, error) => latest.current.board.toast(text, error),
-      upgrade: (root, cwd) => latest.current.upgrade(root, cwd),
+      upgrade: (root, cwd, key) => latest.current.upgrade(root, cwd, key),
     }),
   )
   useEffect(() => () => look.engine.stop(), [look])

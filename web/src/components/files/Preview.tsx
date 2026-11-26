@@ -60,6 +60,8 @@ export interface PreviewProps {
   mode: LookMode
   /** The run's token for the raw bytes. */
   token: string | null
+  /** Node session key (`@<device>:<key>`) when the file lives on a node. */
+  sessionKey?: string | undefined
   /** A folder's entry: the quick look goes there. */
   onGo?: ((path: string) => void) | undefined
   /** Open it with the system. */
@@ -80,6 +82,7 @@ export function Preview({
   data: d,
   mode,
   token,
+  sessionKey,
   onGo,
   onOpen,
   onImage,
@@ -92,7 +95,7 @@ export function Preview({
   if (d.error === 'missing') return <LookEmpty icon="missing" text={t('ql.missing', { path: d.path ?? '' })} />
   if (d.error) return <LookEmpty icon="file" text={d.error === 'denied' ? t('ql.denied') : d.error} />
   if (d.dir) return <Folder path={d.path ?? ''} entries={d.entries ?? []} onGo={onGo} />
-  const src = rawUrl(d.path ?? '', token)
+  const src = rawUrl(d.path ?? '', token, sessionKey)
   if (d.kind === 'image') return <LookImage src={src} alt={d.name ?? ''} onLoad={onImage} onGone={onImageGone} />
   if (d.kind === 'pdf')
     return (
