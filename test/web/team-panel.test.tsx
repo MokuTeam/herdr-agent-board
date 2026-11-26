@@ -406,7 +406,10 @@ describe('a thread on show', () => {
       buttons(render(props(on(`${ANA}/general`, { topic: { title }, draft: 'hi' }))), 'Start the topic')[0]
     expect(start('')?.attrs.has('disabled')).toBe(true)
     expect(start('Release')?.attrs.has('disabled')).toBe(false)
-    const inputs = findAll(render(props(on(`${ANA}/general`, { topic: { title: '' } }))), el => el.tag === 'input')
+    const topicBox = findAll(render(props(on(`${ANA}/general`, { topic: { title: '' } }))), el =>
+      hasClass(el, 'team-topic'),
+    )
+    const inputs = findAll(topicBox, el => el.tag === 'input')
     expect(inputs.map(i => i.attrs.get('aria-label'))).toEqual(['Topic', 'Link (optional, http or https)'])
   })
 
