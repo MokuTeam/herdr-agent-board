@@ -9,8 +9,12 @@
 //   `<state>/node/launches/` for the 10 minutes a retry can come in, so a restart of this board in
 //   between does not start a second session.
 // - `source.kind: "repo"`: the address is checked here again by the board's own rule
-//   (core/portable.ts repoAddress), never taken from the master's word as a folder name. The
-//   checkout is `<workRoot>/<host>/<path>`, cloned when missing (`https://<address>.git`, or the
+//   (core/portable.ts repoAddress), never taken from the master's word as a folder name. A
+//   checkout of it this computer already has goes first (#816: `node.repos`, else the main checkout
+//   of a folder its sessions or Claude ran in): fetched only, used as it is when clean on the branch
+//   asked for, else the start gets a worktree of its own under `node.worktreeRoot` (default
+//   `<workRoot>/worktree`), and the master's author is not written there. Else the checkout is
+//   `<workRoot>/<host>/<path>`, cloned when missing (`https://<address>.git`, or the
 //   URL the master sent when it is https or ssh for the same address), fetched, and moved to the
 //   branch asked for only when nothing of the node's own would be lost: else 409 `repo`. The
 //   author the master's checkout gives (`source.identity`, #611) is set in the checkout's own config
@@ -87,6 +91,8 @@ export interface NodeLaunchDeps {
   workspaces: () => Promise<{ id: string; label: string | undefined }[]>
   memAvailableMb?: () => Promise<number | null>
   repo?: RepoOps
+  /** Folders this computer already works in, most telling first (#816; services/node/checkout.ts). */
+  known?: () => string[]
   /** Where the accepted ids are kept; `<state>/node/launches` by default. */
   dir?: string
   now?: () => number
@@ -166,7 +172,11 @@ export interface NodeLaunch {
 export function createNodeLaunch(d: NodeLaunchDeps): NodeLaunch {
   const now = d.now ?? Date.now
   const dir = d.dir ?? join(nodeDir(), 'launches')
-  const checkouts = createCheckouts({ ...(d.repo && { repo: d.repo }), ...(d.home !== undefined && { home: d.home }) })
+  const checkouts = createCheckouts({
+    ...(d.repo && { repo: d.repo }),
+    ...(d.home !== undefined && { home: d.home }),
+    ...(d.known && { known: d.known }),
+  })
   const platform = d.platform ?? process.platform
   /** Starts being made, by id: a second request for one waits for the first's answer. */
   const making = new Map<string, Promise<NodeLaunchAnswer>>()
@@ -219,11 +229,18 @@ export function createNodeLaunch(d: NodeLaunchDeps): NodeLaunch {
     if (loggedIn(profile.dir, platform, d.exists ?? existsSync) === false) return turn('profile', 'login')
     let cwd: string
     let label: string
+    let worktree = r.source.worktree
     if (r.source.kind === 'repo') {
-      const got = await checkouts.folderOf(node.workRoot, r.source)
+      const got = await checkouts.folderOf(node.workRoot, r.source, {
+        ...(node.repos && { repos: node.repos }),
+        ...(node.worktreeRoot && { worktreeRoot: node.worktreeRoot }),
+        name: r.name || r.id.slice(0, 8),
+      })
       if (!got.ok) return turn('repo', got.why)
       cwd = got.cwd
       label = got.label
+      // Made in the owner's checkout already (#816): the session runs in it, the pipeline makes none.
+      if (got.worktreeDone) worktree = null
     } else {
       cwd = r.source.cwd
       label = basename(cwd)
@@ -240,7 +257,7 @@ export function createNodeLaunch(d: NodeLaunchDeps): NodeLaunch {
           category: r.category,
           workspace,
           message: r.message,
-          worktree: r.source.worktree,
+          worktree,
           profile: r.profile,
           ...(r.agent && !r.exactSession && { agent: r.agent }),
           model: r.model,

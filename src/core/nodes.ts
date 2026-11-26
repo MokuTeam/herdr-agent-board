@@ -6,12 +6,14 @@
 // Roles are keys. A board without either key sees nothing of this anywhere; one board may hold both:
 //   "nodes": { "id": "laptop", "order": ["server-1", "local"], "devices": { "server-1": { ... } } }
 //   "node": { "id": "server-1", "port": 12430, "workRoot": "~/work" }
+//   optional on a node: "repos": { "<host>/<path>": "<folder>" }, "worktreeRoot": "<folder>" (#816)
 import { type BoardAgyLimits, boardAgyLimitsOf } from './agy-limits.ts'
 import { normalizeDeviceColor } from './device-color.ts'
 import { type DeviceMarker, deviceMarkerOf, markerConfigOf } from './device-marker.ts'
 import { type GitFacts, gitFactsOf } from './git-access.ts'
 import { isRoutableNodeAddress, plainAddress } from './mokupilot-mode.ts'
 import { DEVICE_ID, isDevice, LOCAL, parseNodeKey, validMasterUrl } from './node-key.ts'
+import { repoAddress } from './portable.ts'
 import { hasUnprintable } from './team.ts'
 
 // The device id and the prefixed keys live in a leaf module the page can import (core/node-key.ts).
@@ -127,6 +129,18 @@ export interface NodeConfig {
    * its status. Set by the handover on the old master; absent, it takes bundles as before.
    */
   ownProfiles?: true
+  /**
+   * Checkouts of this computer by a repository's address (#816), e.g.
+   * `{ "github.com/acme/atlas": "~/Projects/atlas" }`: a start for that repository runs there
+   * before any checkout the node finds by itself, and never in a clone under `workRoot`.
+   * Addresses as core/portable.ts repoAddress gives them, compared in lower case.
+   */
+  repos?: Record<string, string>
+  /**
+   * Where a start that cannot run in an owner's own checkout as it is gets its worktree (#816):
+   * `<worktreeRoot>/<checkout's folder name>/<branch>`. Absent: `<workRoot>/worktree`.
+   */
+  worktreeRoot?: string
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -174,7 +188,30 @@ const LINK_KEYS: Record<LinkConfig['kind'], string[]> = {
   direct: ['kind', 'url'],
 }
 const RELAY_KEYS = ['host', 'sshPort', 'user']
-const NODE_KEYS = ['id', 'port', 'workRoot', 'listen', 'tls', 'relay', 'pilotBridge', 'ownProfiles']
+const NODE_KEYS = [
+  'id',
+  'port',
+  'workRoot',
+  'listen',
+  'tls',
+  'relay',
+  'pilotBridge',
+  'ownProfiles',
+  'repos',
+  'worktreeRoot',
+]
+
+/** `node.repos` (#816) as given, or null when it does not check out: an address each key, a folder each value. */
+function reposOf(raw: unknown): Record<string, string> | null {
+  if (!isObject(raw)) return null
+  const out = bare<string>()
+  for (const [address, folder] of Object.entries(raw)) {
+    if (repoAddress(`https://${address}`) !== address.replace(/^[^/]+/, h => h.toLowerCase())) return null
+    if (!isText(folder, 1024)) return null
+    out[address] = folder
+  }
+  return out
+}
 
 type Flag = (key: string, why: string) => void
 
@@ -528,6 +565,9 @@ function readNode(raw: unknown): { config: NodeConfig | null; problems: NodesPro
   if (given(raw.tls) && typeof raw.tls !== 'boolean') flag('tls', 'type')
   if (given(raw.pilotBridge) && typeof raw.pilotBridge !== 'boolean') flag('pilotBridge', 'type')
   if (given(raw.ownProfiles) && typeof raw.ownProfiles !== 'boolean') flag('ownProfiles', 'type')
+  const repos = given(raw.repos) ? reposOf(raw.repos) : null
+  if (given(raw.repos) && !repos) flag('repos', 'type')
+  if (given(raw.worktreeRoot) && !isText(raw.worktreeRoot, 1024)) flag('worktreeRoot', 'type')
   const relay = given(raw.relay)
     ? (relayOf(raw.relay, [...RELAY_KEYS, 'socket'], problems) as NodeConfig['relay'])
     : null
@@ -543,6 +583,8 @@ function readNode(raw: unknown): { config: NodeConfig | null; problems: NodesPro
       relay,
       ...(raw.pilotBridge === false && { pilotBridge: false as const }),
       ...(raw.ownProfiles === true && { ownProfiles: true as const }),
+      ...(repos && Object.keys(repos).length > 0 && { repos }),
+      ...(typeof raw.worktreeRoot === 'string' && { worktreeRoot: raw.worktreeRoot }),
     },
     problems,
   }
