@@ -661,9 +661,11 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
     paste(e.clipboardData?.getData('text/plain') ?? '')
   }
 
+  const sideHasFocus = () => side && (refs.win.current?.contains(document.activeElement) ?? false)
+
   // The window's own keys while the screen does not have them: Esc closes, Ctrl+` too.
   const onWindowKey = (e: KeyboardEvent) => {
-    const ownsKeys = deps.focus().isTop() || (side && refs.win.current?.contains(document.activeElement))
+    const ownsKeys = deps.focus().isTop() || sideHasFocus()
     if (!isOpen() || !ownsKeys || e.target === refs.input.current) return
     // A paste that asks first: Esc says no to it, the window stays.
     if (s.paste && e.key === 'Escape') {
@@ -795,7 +797,7 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
       if (!side || refs.layer.current?.inert) deps.focus().open(origin ?? active)
       if (active instanceof HTMLElement && refs.win.current?.contains(active)) active.focus({ preventScroll: true })
     },
-    blocksBoardKeys: () => isOpen() && (!side || deps.focus().isTop()),
+    blocksBoardKeys: () => isOpen() && (!side || deps.focus().isTop() || sideHasFocus()),
     mount,
     boardChanged() {
       if (!isOpen()) return

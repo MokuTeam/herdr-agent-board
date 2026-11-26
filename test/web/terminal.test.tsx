@@ -492,3 +492,26 @@ describe('the window’s parts', () => {
     expect(normal(ours)).toBe(normal(theirs))
   })
 })
+
+test('a side terminal blocks board shortcuts while a terminal control has focus', async () => {
+  const side = await newTerminal(scene())
+  const { engine, world } = side
+  try {
+    engine.setSide(true)
+    await side.open('s1')
+    const close = engine.refs.win.current?.querySelector<HTMLElement>('.term-x')
+    if (!close) throw new Error('no close button')
+    close.focus()
+    expect(engine.blocksBoardKeys()).toBe(true)
+    world.document.body.focus()
+    expect(engine.blocksBoardKeys()).toBe(false)
+    await side.windowKey({ key: 'Escape' })
+    expect(engine.isOpen()).toBe(true)
+    close.focus()
+    await side.windowKey({ key: 'Escape' })
+    expect(engine.isOpen()).toBe(false)
+    expect(engine.blocksBoardKeys()).toBe(false)
+  } finally {
+    await side.dispose()
+  }
+})

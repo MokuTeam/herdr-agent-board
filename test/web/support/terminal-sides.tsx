@@ -342,7 +342,10 @@ export async function oldTerminal(scene: TermScene, { phone = false } = {}): Pro
 }
 
 /** The React window: the engine on fake elements, drawn by <TerminalView> from its view. */
-export async function newTerminal(scene: TermScene, { phone = false } = {}): Promise<TermSide> {
+export async function newTerminal(
+  scene: TermScene,
+  { phone = false } = {},
+): Promise<TermSide & { engine: TerminalEngine }> {
   const base = baseSide(scene, phone)
   const { world, server, toasts, log, t } = base
   let engine: TerminalEngine | null = null
@@ -416,7 +419,7 @@ export async function newTerminal(scene: TermScene, { phone = false } = {}): Pro
     'paste-yes': () => made.settlePaste(true),
     'paste-no': () => made.settlePaste(false),
   }
-  return sideOf({
+  const side = sideOf({
     world,
     server,
     scene,
@@ -463,6 +466,7 @@ export async function newTerminal(scene: TermScene, { phone = false } = {}): Pro
       return readOut(root)
     },
   })
+  return { ...side, engine: made }
 }
 
 const stateDoOf = (what: string | undefined): 'start' | 'retry' | 'wake' =>

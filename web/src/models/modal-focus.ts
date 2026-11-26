@@ -60,7 +60,7 @@ export function modalFocusManager(doc: FocusDocument): (layer: FocusElement, win
     node !== null &&
     'closest' in node &&
     typeof node.closest === 'function' &&
-    !!node.closest('.menu, .rename, .toasts, .card-window-scrim')
+    !!node.closest('.menu, .rename, .toasts, .card-window-scrim, .fork-pop')
   const ownKeys = (node: unknown) =>
     typeof node === 'object' &&
     node !== null &&
