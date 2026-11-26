@@ -71,6 +71,7 @@ export interface NsPublish {
   cookies: NsCookie[]
   origin: NsWhere
   login_at: number | null
+  seen_at?: number | null
   auto_renew?: boolean | null
 }
 
@@ -83,8 +84,10 @@ export interface NsMeta {
   fp: string
   state: NsState
   generation: number
-  login_at: number
+  login_at: number | null
+  first_seen: number
   abs_expiry: number
+  abs_expiry_estimated: boolean
   idle_expiry: number
   last_activity: number
   last_where: NsWhere
@@ -108,7 +111,8 @@ interface Entry {
   fp: string
   generation: number
   origin: NsWhere
-  loginAt: number
+  loginAt: number | null
+  firstSeen: number
   lastActivity: number
   lastWhere: NsWhere
   deadAt: number | null
@@ -148,7 +152,7 @@ export interface NsTaken {
   fp: string
   generation: number
   state: NsState
-  login_at: number
+  login_at: number | null
   last_activity: number
   cookies: NsCookie[]
 }
@@ -249,7 +253,8 @@ export function nsPublishOf(raw: unknown): NsPublish {
   if (!origin) throw new NsBodyError('origin')
   const loginAt = time(raw.login_at)
   if (loginAt === undefined) throw new NsBodyError('login_at')
-  if (time(raw.seen_at) === undefined) throw new NsBodyError('seen_at')
+  const seenAt = time(raw.seen_at)
+  if (seenAt === undefined) throw new NsBodyError('seen_at')
   let autoRenew: boolean | null = null
   if (raw.auto_renew !== undefined && raw.auto_renew !== null) {
     if (typeof raw.auto_renew !== 'boolean') throw new NsBodyError('auto_renew')
@@ -273,6 +278,7 @@ export function nsPublishOf(raw: unknown): NsPublish {
     cookies,
     origin,
     login_at: loginAt,
+    seen_at: seenAt,
     auto_renew: autoRenew,
   }
 }
@@ -354,6 +360,7 @@ export function createNsStore(o: NsStoreOptions = {}): NsStore {
   const newId = o.newId ?? randomUUID
   const entries = new Map<string, Entry>()
   const locks = new Map<string, Lock>()
+  const firstSeenByFp = new Map<string, number>()
   const listeners = new Set<() => void>()
 
   const emit = (): void => {
@@ -364,8 +371,21 @@ export function createNsStore(o: NsStoreOptions = {}): NsStore {
     }
   }
 
-  const absOf = (e: Entry): number => e.loginAt + absMs
+  const absOf = (e: Entry): number => (e.loginAt ?? e.firstSeen) + absMs
   const idleOf = (e: Entry): number => e.lastActivity + idleMs
+
+  function recordFirstSeen(account: string, fp: string, seenAt: number | null | undefined, t: number): number {
+    const seen = seenAt !== undefined && seenAt !== null && seenAt <= t ? seenAt : t
+    const fk = keyOf(account, fp)
+    const prev = firstSeenByFp.get(fk)
+    const earliest = prev !== undefined ? Math.min(prev, seen) : seen
+    if (!firstSeenByFp.has(fk) && firstSeenByFp.size >= Math.max(max * 4, 2000)) {
+      const oldest = firstSeenByFp.keys().next().value
+      if (oldest !== undefined) firstSeenByFp.delete(oldest)
+    }
+    firstSeenByFp.set(fk, earliest)
+    return earliest
+  }
 
   function kill(e: Entry, reason: NsDeadReason, at: number, where: NsWhere | null = null): void {
     if (e.deadAt !== null) return
@@ -422,8 +442,16 @@ export function createNsStore(o: NsStoreOptions = {}): NsStore {
     return false
   }
 
-  function merge(e: Entry, p: NsPublish): boolean {
+  function merge(e: Entry, p: NsPublish, firstSeen: number, realLoginAt: number | null): boolean {
     let changed = false
+    if (firstSeen < e.firstSeen) {
+      e.firstSeen = firstSeen
+      changed = true
+    }
+    if (e.loginAt === null && realLoginAt !== null) {
+      e.loginAt = realLoginAt
+      changed = true
+    }
     if (e.role === null && p.role !== null) {
       e.role = p.role
       changed = true
@@ -447,12 +475,14 @@ export function createNsStore(o: NsStoreOptions = {}): NsStore {
     publish(p) {
       const t = now()
       prune(t)
+      const realLoginAt = p.login_at !== null && p.login_at <= t ? p.login_at : null
       // No user known (no loaded tab): the entry with this session, else one kept as unknown.
       if (p.user === null) {
         const same = byFp(p.account, p.fp)
         if (same) {
           if (stateOf(same, t) === 'dead') return { ok: false, code: 'dead_fp' }
-          const changed = merge(same, p)
+          const firstSeen = recordFirstSeen(p.account, p.fp, p.seen_at, t)
+          const changed = merge(same, p, firstSeen, realLoginAt)
           const unlocked = releaseBy(p.account, same.user, p.origin)
           if (changed || unlocked) emit()
           return { ok: true, stored: false, generation: same.generation, state: stateOf(same, t) }
@@ -463,17 +493,18 @@ export function createNsStore(o: NsStoreOptions = {}): NsStore {
       if (cur?.deadFps.includes(p.fp)) return { ok: false, code: 'dead_fp' }
       if (cur && cur.fp === p.fp) {
         if (stateOf(cur, t) === 'dead') return { ok: false, code: 'dead_fp' }
-        const changed = merge(cur, p)
+        const firstSeen = recordFirstSeen(p.account, p.fp, p.seen_at, t)
+        const changed = merge(cur, p, firstSeen, realLoginAt)
         const unlocked = releaseBy(p.account, p.user, p.origin)
         if (changed || unlocked) emit()
         return { ok: true, stored: false, generation: cur.generation, state: stateOf(cur, t) }
       }
       // The same session kept as unknown gets its user now.
-      if (p.user !== null) {
-        const unknown = entries.get(keyOf(p.account, null))
-        if (unknown?.fp === p.fp) entries.delete(keyOf(p.account, null))
-      }
+      const unknown = p.user !== null ? entries.get(keyOf(p.account, null)) : undefined
+      const inheritedLoginAt = unknown?.fp === p.fp ? unknown.loginAt : null
       if (!cur && !makeRoom()) return { ok: false, code: 'store_full' }
+      if (unknown?.fp === p.fp) entries.delete(keyOf(p.account, null))
+      const firstSeen = recordFirstSeen(p.account, p.fp, p.seen_at, t)
       const e: Entry = {
         account: p.account,
         user: p.user,
@@ -484,7 +515,8 @@ export function createNsStore(o: NsStoreOptions = {}): NsStore {
         fp: p.fp,
         generation: (cur?.generation ?? 0) + 1,
         origin: p.origin,
-        loginAt: p.login_at !== null && p.login_at <= t ? p.login_at : t,
+        loginAt: realLoginAt ?? inheritedLoginAt,
+        firstSeen,
         lastActivity: t,
         lastWhere: p.origin,
         deadAt: null,
@@ -592,7 +624,10 @@ export function createNsStore(o: NsStoreOptions = {}): NsStore {
     forget(account, user) {
       const k = keyOf(account, user)
       const e = entries.get(k)
-      if (e) e.cookies = null
+      if (e) {
+        e.cookies = null
+        firstSeenByFp.delete(keyOf(account, e.fp))
+      }
       const hadEntry = entries.delete(k)
       const hadLock = locks.delete(k)
       if (hadEntry || hadLock) emit()
@@ -620,7 +655,9 @@ export function createNsStore(o: NsStoreOptions = {}): NsStore {
             state,
             generation: e.generation,
             login_at: e.loginAt,
+            first_seen: e.firstSeen,
             abs_expiry: absOf(e),
+            abs_expiry_estimated: e.loginAt === null,
             idle_expiry: idleOf(e),
             last_activity: e.lastActivity,
             last_where: { ...e.lastWhere },
@@ -666,6 +703,7 @@ export function createNsStore(o: NsStoreOptions = {}): NsStore {
       for (const e of entries.values()) e.cookies = null
       entries.clear()
       locks.clear()
+      firstSeenByFp.clear()
       if (had) emit()
     },
   }
@@ -679,14 +717,16 @@ export function nsListLine(m: NsMeta, t: number): string {
   }
   const ago = (at: number): string => span(t - at)
   const left = (at: number): string => (at <= t ? 'now' : `in ${span(at - t)}`)
+  const endsAt = Math.min(m.abs_expiry, m.idle_expiry)
+  const endsLabel = m.abs_expiry_estimated && m.abs_expiry <= m.idle_expiry ? 'ends about' : 'ends'
   const parts = [
     m.account,
     m.user ?? '(user unknown)',
     m.state + (m.dead_reason ? ` (${m.dead_reason})` : ''),
     `fp ${m.fp}`,
     `gen ${m.generation}`,
-    `login ${ago(m.login_at)} ago`,
-    ...(m.state === 'dead' ? [] : [`ends ${left(Math.min(m.abs_expiry, m.idle_expiry))}`]),
+    m.login_at !== null ? `login ${ago(m.login_at)} ago` : `login unknown (seen ${ago(m.first_seen)} ago)`,
+    ...(m.state === 'dead' ? [] : [`${endsLabel} ${left(endsAt)}`]),
     `active ${ago(m.last_activity)} ago on ${m.last_where.machine}/${m.last_where.profile}`,
     ...(m.lock ? [`locked by ${m.lock.holder.machine}/${m.lock.holder.profile}`] : []),
   ]

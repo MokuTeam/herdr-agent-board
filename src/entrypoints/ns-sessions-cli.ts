@@ -35,6 +35,11 @@ function metaOf(raw: unknown): NsMeta | null {
   const lock = isRecord(raw.lock) ? raw.lock : null
   const state = raw.state === 'live' || raw.state === 'dying' || raw.state === 'dead' ? raw.state : null
   if (!state || !s(raw.account)) return null
+  const loginAt = typeof raw.login_at === 'number' && Number.isFinite(raw.login_at) ? raw.login_at : null
+  const firstSeen =
+    typeof raw.first_seen === 'number' && Number.isFinite(raw.first_seen)
+      ? raw.first_seen
+      : (loginAt ?? n(raw.last_activity))
   return {
     account: s(raw.account),
     user: typeof raw.user === 'string' ? raw.user : null,
@@ -43,8 +48,10 @@ function metaOf(raw: unknown): NsMeta | null {
     fp: /^[0-9a-f]{8}$/.test(s(raw.fp)) ? s(raw.fp) : '',
     state,
     generation: n(raw.generation),
-    login_at: n(raw.login_at),
+    login_at: loginAt,
+    first_seen: firstSeen,
     abs_expiry: n(raw.abs_expiry),
+    abs_expiry_estimated: typeof raw.abs_expiry_estimated === 'boolean' ? raw.abs_expiry_estimated : loginAt === null,
     idle_expiry: n(raw.idle_expiry),
     last_activity: n(raw.last_activity),
     last_where: whereOf(raw.last_where),

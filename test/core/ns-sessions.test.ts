@@ -197,13 +197,70 @@ describe('the store', () => {
     expect(s.list()).toEqual([])
   })
 
-  test('login_at is a hint, never in the future', () => {
+  test('login_at is a hint, never in the future; unknown login_at uses earliest first_seen and is replaced when known', () => {
     const c = clock()
     const s = createNsStore({ now: c.now })
+    // Past login_at is authoritative (not estimated).
     s.publish(nsPublishOf(body(SECRET, { login_at: c.now() - 3_600_000 })))
-    expect(s.list()[0]?.abs_expiry).toBe(c.now() - 3_600_000 + NS_ABS_MS)
-    s.publish(nsPublishOf(body(OTHER, { login_at: c.now() + 3_600_000 })))
-    expect(s.list()[0]?.login_at).toBe(c.now())
+    expect(s.list()[0]).toMatchObject({
+      login_at: c.now() - 3_600_000,
+      abs_expiry: c.now() - 3_600_000 + NS_ABS_MS,
+      abs_expiry_estimated: false,
+    })
+
+    // Future or null login_at stays null (unknown) and estimates abs_expiry from earliest first_seen.
+    const t0 = c.now()
+    const events: (number | null)[] = []
+    s.subscribe(() => events.push(s.list()[0]?.abs_expiry ?? null))
+    s.publish(nsPublishOf(body(OTHER, { login_at: t0 + 3_600_000, seen_at: t0 - 2 * 3_600_000, origin: LAPTOP })))
+    expect(s.list()[0]).toMatchObject({
+      login_at: null,
+      first_seen: t0 - 2 * 3_600_000,
+      abs_expiry: t0 - 2 * 3_600_000 + NS_ABS_MS,
+      abs_expiry_estimated: true,
+    })
+
+    // Another machine saw the same fp later -> first_seen does not move forward.
+    c.go(60_000)
+    s.publish(nsPublishOf(body(OTHER, { login_at: null, seen_at: c.now(), origin: SERVER })))
+    expect(s.list()[0]).toMatchObject({
+      login_at: null,
+      first_seen: t0 - 2 * 3_600_000,
+      abs_expiry: t0 - 2 * 3_600_000 + NS_ABS_MS,
+      abs_expiry_estimated: true,
+    })
+
+    // Another machine saw the same fp earlier (e.g. 10h ago) -> first_seen tightens and abs_expiry leads idle -> "ends about".
+    s.publish(
+      nsPublishOf(
+        body(OTHER, {
+          login_at: null,
+          seen_at: c.now() - 10 * 3_600_000,
+          origin: { machine: 'server-3', profile: 'alt' },
+        }),
+      ),
+    )
+    const estMeta = s.list()[0]
+    expect(estMeta).toMatchObject({
+      login_at: null,
+      first_seen: c.now() - 10 * 3_600_000,
+      abs_expiry: c.now() - 10 * 3_600_000 + NS_ABS_MS,
+      abs_expiry_estimated: true,
+    })
+    expect(nsListLine(estMeta as NonNullable<typeof estMeta>, c.now())).toContain('login unknown (seen 10h00 ago)')
+    expect(nsListLine(estMeta as NonNullable<typeof estMeta>, c.now())).toContain('ends about in 2h00')
+
+    // A later publish with a real login_at replaces the estimate and marks abs_expiry_estimated: false.
+    const realLogin = c.now() - 11 * 3_600_000
+    s.publish(nsPublishOf(body(OTHER, { login_at: realLogin, seen_at: c.now(), origin: SERVER })))
+    const knownMeta = s.list()[0]
+    expect(knownMeta).toMatchObject({
+      login_at: realLogin,
+      first_seen: c.now() - 10 * 3_600_000,
+      abs_expiry: realLogin + NS_ABS_MS,
+      abs_expiry_estimated: false,
+    })
+    expect(events).toContain(realLogin + NS_ABS_MS)
   })
 
   test('lock: one holder, extended by it, at most 120 s, released by its holder or a publish from its origin', () => {
@@ -269,7 +326,7 @@ describe('the store', () => {
   test('the list and its CLI line hold metadata only', () => {
     const c = clock()
     const s = createNsStore({ now: c.now })
-    s.publish(nsPublishOf(body()))
+    s.publish(nsPublishOf(body(SECRET, { login_at: c.now() })))
     s.touch(A, nsFingerprint(SECRET), SERVER)
     s.lock(A, U, { ...SERVER, run_id: 'run-1' }, 60)
     const list = s.list()

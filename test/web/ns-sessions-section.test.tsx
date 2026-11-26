@@ -33,7 +33,9 @@ const ENTRY_LIVE: NsSessionEntry = {
   state: 'live',
   generation: 2,
   login_at: NOW - 90 * MIN,
+  first_seen: NOW - 90 * MIN,
   abs_expiry: NOW + 630 * MIN,
+  abs_expiry_estimated: false,
   idle_expiry: NOW + 150 * MIN,
   last_activity: NOW - 5 * MIN,
   last_where: { machine: 'server-2', profile: 'main' },
@@ -55,7 +57,9 @@ const ENTRY_DYING_NO_TOTP: NsSessionEntry = {
   state: 'dying',
   generation: 1,
   login_at: NOW - 705 * MIN,
+  first_seen: NOW - 705 * MIN,
   abs_expiry: NOW + 15 * MIN,
+  abs_expiry_estimated: false,
   idle_expiry: NOW + 90 * MIN,
   last_activity: NOW - 30 * MIN,
   last_where: { machine: 'laptop', profile: 'work' },
@@ -77,7 +81,9 @@ const ENTRY_DEAD: NsSessionEntry = {
   state: 'dead',
   generation: 3,
   login_at: NOW - 400 * MIN,
+  first_seen: NOW - 400 * MIN,
   abs_expiry: NOW + 320 * MIN,
+  abs_expiry_estimated: false,
   idle_expiry: NOW - 20 * MIN,
   last_activity: NOW - 200 * MIN,
   last_where: { machine: 'server-2', profile: 'main' },
@@ -138,6 +144,27 @@ describe('NsSessionsSection (#897)', () => {
     expect(rendered).toContain('9876543')
     expect(rendered).toContain('User unknown')
     expect(rendered).toContain('Ended · login redirect')
+  })
+
+  test('renders unknown login_at and marks estimated abs_expiry with about', () => {
+    const unknownLogin: NsSessionEntry = {
+      ...ENTRY_DYING_NO_TOTP,
+      login_at: null,
+      first_seen: NOW - 120 * MIN,
+      abs_expiry_estimated: true,
+    }
+    const clean = sanitizeNsSessionsSnapshot({ ok: true, entries: [unknownLogin], notify: {} })
+    expect(clean.entries[0]?.login_at).toBeNull()
+    expect(clean.entries[0]?.abs_expiry_estimated).toBe(true)
+    const nodes = renderInBoard(
+      <PanelProvider viewport={() => VP}>
+        <DevicesPanel open onClose={() => {}} nsSessions={clean} />
+      </PanelProvider>,
+      board({ data: payload({}), canEdit: true, now: NOW }),
+    )
+    const rendered = serializeNodes(findAll(nodes, el => hasClass(el, 'ns-sessions')))
+    expect(rendered).toContain('Unknown (seen')
+    expect(rendered).toContain('about ')
   })
 
   describe('interactive DOM behavior (fetch, SSE, notify toggle, forget, read-only)', () => {

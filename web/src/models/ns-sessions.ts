@@ -24,8 +24,10 @@ export interface NsSessionEntry {
   fp: string
   state: NsState
   generation: number
-  login_at: number
+  login_at: number | null
+  first_seen: number
   abs_expiry: number
+  abs_expiry_estimated: boolean
   idle_expiry: number
   last_activity: number
   last_where: NsSessionWhere
@@ -106,11 +108,12 @@ export function parseNsSessionEntry(raw: unknown): NsSessionEntry | null {
   const fpRaw = typeof raw.fp === 'string' ? raw.fp.slice(0, 8) : ''
   if (!FP_RE.test(fpRaw)) return null
   const loginAt = num(raw.login_at)
+  const firstSeen = num(raw.first_seen) ?? loginAt ?? num(raw.last_activity)
   const absExpiry = num(raw.abs_expiry)
   const idleExpiry = num(raw.idle_expiry)
   const lastActivity = num(raw.last_activity)
   const generation = num(raw.generation)
-  if (loginAt === null || absExpiry === null || idleExpiry === null || lastActivity === null || generation === null)
+  if (firstSeen === null || absExpiry === null || idleExpiry === null || lastActivity === null || generation === null)
     return null
   const lastWhere = parseWhere(raw.last_where) ?? { machine: '', profile: '' }
   const origin = parseWhere(raw.origin) ?? { machine: '', profile: '' }
@@ -135,7 +138,9 @@ export function parseNsSessionEntry(raw: unknown): NsSessionEntry | null {
     state: raw.state as NsState,
     generation,
     login_at: loginAt,
+    first_seen: firstSeen,
     abs_expiry: absExpiry,
+    abs_expiry_estimated: typeof raw.abs_expiry_estimated === 'boolean' ? raw.abs_expiry_estimated : loginAt === null,
     idle_expiry: idleExpiry,
     last_activity: lastActivity,
     last_where: lastWhere,
@@ -222,6 +227,10 @@ export function nsSessionRow(
   const notifyOn = hasPref ? notifyPrefs[entry.account] === true : entry.auto_renew === false
   const deadReason = entry.dead_reason ? t(`ns.dead.${entry.dead_reason}`) : null
   const where = entry.last_where.machine ? `${entry.last_where.machine}/${entry.last_where.profile}` : '—'
+  const absClock =
+    entry.state === 'dead'
+      ? formatClock(entry.dead_at ?? entry.abs_expiry, t.lang)
+      : `${formatClock(entry.abs_expiry, t.lang)} (${formatLeft(entry.abs_expiry, now, t)})`
   return {
     key: `${entry.account}\u0000${entry.user ?? ''}`,
     account: entry.account,
@@ -237,11 +246,17 @@ export function nsSessionRow(
       entry.lock && entry.lock.until > now
         ? t('ns.lockedBy', { machine: entry.lock.holder.machine, profile: entry.lock.holder.profile })
         : null,
-    loginText: `${formatClock(entry.login_at, t.lang)} (${formatAgo(entry.login_at, now, t)})`,
+    loginText:
+      entry.login_at !== null
+        ? `${formatClock(entry.login_at, t.lang)} (${formatAgo(entry.login_at, now, t)})`
+        : t('ns.loginUnknown', {
+            time: formatClock(entry.first_seen, t.lang),
+            ago: formatAgo(entry.first_seen, now, t),
+          }),
     absExpiryText:
-      entry.state === 'dead'
-        ? formatClock(entry.dead_at ?? entry.abs_expiry, t.lang)
-        : `${formatClock(entry.abs_expiry, t.lang)} (${formatLeft(entry.abs_expiry, now, t)})`,
+      entry.abs_expiry_estimated && (entry.state !== 'dead' || entry.dead_at === null)
+        ? t('ns.absExpiryAbout', { value: absClock })
+        : absClock,
     idleLeftText: entry.state === 'dead' ? '—' : formatLeft(entry.idle_expiry, now, t),
     idleLow: entry.state === 'dying',
     lastActivityText: `${formatAgo(entry.last_activity, now, t)} · ${where}`,

@@ -60,7 +60,7 @@ export const nsNoticeKey = (e: Pick<NsMeta, 'account' | 'user' | 'fp'>): string 
 
 /** Formats the title and body for a dying or dead NetSuite session notice. */
 export function formatNsNotice(
-  e: Pick<NsMeta, 'account' | 'user' | 'state' | 'abs_expiry' | 'idle_expiry' | 'dead_at'>,
+  e: Pick<NsMeta, 'account' | 'user' | 'state' | 'abs_expiry' | 'idle_expiry' | 'dead_at' | 'abs_expiry_estimated'>,
   zone: string,
   t: Translator,
 ): { title: string; body: string; endsAt: number } {
@@ -72,10 +72,11 @@ export function formatNsNotice(
     timeZone: zone,
   }).format(endsAt)
   const title = t('ns.notice.title', { account: e.account })
+  const dyingAbout = e.state === 'dying' && e.abs_expiry_estimated && e.abs_expiry <= e.idle_expiry
   const body =
     e.state === 'dead'
       ? t('ns.notice.dead', { account: e.account, time })
-      : t('ns.notice.dying', { account: e.account, time })
+      : t(dyingAbout ? 'ns.notice.dyingAbout' : 'ns.notice.dying', { account: e.account, time })
   return { title, body, endsAt }
 }
 

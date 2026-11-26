@@ -259,10 +259,12 @@ describe('routes', () => {
     expect(Object.keys((list.json.entries as Record<string, unknown>[])[0] ?? {}).sort()).toEqual(
       [
         'abs_expiry',
+        'abs_expiry_estimated',
         'account',
         'auto_renew',
         'dead_at',
         'dead_reason',
+        'first_seen',
         'fp',
         'generation',
         'holders',

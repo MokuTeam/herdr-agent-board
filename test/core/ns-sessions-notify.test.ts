@@ -26,7 +26,9 @@ function meta(overrides: Partial<NsMeta> = {}): NsMeta {
     state: 'live',
     generation: 1,
     login_at: T - 10 * 3_600_000,
+    first_seen: T - 10 * 3_600_000,
     abs_expiry: T + 2 * 3_600_000 + 5 * 60_000,
+    abs_expiry_estimated: false,
     idle_expiry: T + 3 * 3_600_000,
     last_activity: T,
     last_where: { machine: 'laptop', profile: 'work' },
@@ -65,6 +67,19 @@ describe('ns-sessions notify prefs & planning', () => {
     const dying = formatNsNotice(meta({ state: 'dying', abs_expiry: ends, idle_expiry: ends + 3_600_000 }), 'UTC', tEn)
     expect(dying.title).toBe('NetSuite · 1234567')
     expect(dying.body).toBe('1234567 ends at 20:05; log in when convenient, the login will be shared')
+
+    const dyingEstimated = formatNsNotice(
+      meta({
+        state: 'dying',
+        login_at: null,
+        abs_expiry: ends,
+        abs_expiry_estimated: true,
+        idle_expiry: ends + 3_600_000,
+      }),
+      'UTC',
+      tEn,
+    )
+    expect(dyingEstimated.body).toBe('1234567 ends about 20:05; log in when convenient, the login will be shared')
 
     const dead = formatNsNotice(meta({ state: 'dead', dead_at: ends }), 'UTC', tEn)
     expect(dead.body).toBe('1234567 session ended at 20:05; log in when convenient, the login will be shared')
