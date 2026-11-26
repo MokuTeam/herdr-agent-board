@@ -5,6 +5,7 @@
 // the peer its post reaches them as the owner's agent under its name; a service in a lane not shared
 // is held; it waits for what comes in on its thread and reads it.
 import { afterAll, beforeAll, expect, setDefaultTimeout, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { generateKey, type KeyPair } from '../../src/core/team.ts'
@@ -12,6 +13,7 @@ import { teamAgents } from '../../src/entrypoints/team-agents-cli.ts'
 import { teamWait, waitFlags } from '../../src/entrypoints/team-inbox-cli.ts'
 import { type Harness, msgOf, question, startHarness } from '../hub/harness.ts'
 import { serveBoard } from '../support/board-server.ts'
+import { tool } from '../support/mcp-client.ts'
 import { type Sandbox, sandbox } from '../support/sandbox.ts'
 import { softAuthenticator } from '../support/soft-authenticator.ts'
 
@@ -224,6 +226,7 @@ async function teamBoard(box: Sandbox, me: KeyPair, name = 'owner2'): Promise<st
   writeFileSync(file, JSON.stringify(cfg))
   box.state({ 'api snapshot': { result: { snapshot: { panes: [], tabs: [], workspaces: [] } } } })
   const { url } = await serveBoard(box, cfg, { TEST_LIVE_CONFIG: '1' })
+  writeFileSync(file, JSON.stringify({ ...cfg, port: Number(new URL(url).port) }))
   await waitFor(
     async () => ((await (await fetch(`${url}/api/team`)).json()) as { state?: string }).state,
     v => v === 'online',
@@ -379,5 +382,53 @@ test('a published alias reaches the exposed service over the hub and is withdraw
     ).toBe(200)
   } finally {
     outsider.close()
+  }
+})
+
+test('an owner service uses each peer’s shared lanes even when its card is in another lane', async () => {
+  const box = await sandbox()
+  const me = await generateKey()
+  const peer = await generateKey()
+  ;(await hub.join(me, 'owner3', undefined, ['threads'])).close()
+  const client = await hub.join(peer, 'atlas', undefined, ['threads'])
+  try {
+    const url = await teamBoard(box, me, 'owner3')
+    const service = { key: 'owner-service-985b4a6a-ab52-4d30-a3c8-ad2df482c212', name: 'Inventory %' }
+    const token = `bos_${'A'.repeat(43)}`
+    const hash = createHash('sha256').update(token).digest('base64url')
+    const state = join(box.env.LOCALAPPDATA as string, 'herdr/plugins/agent-board')
+    writeFileSync(join(state, 'owner-services.json'), JSON.stringify([{ ...service, hash }]))
+    const headers = { 'x-board-owner-service': token }
+    expect((await post(url, '/api/team/agents', { peer: peer.pub, on: true, lanes: ['home'] })).status).toBe(200)
+    const sent = await tool(
+      url,
+      'team',
+      {
+        op: 'post',
+        to: peer.pub,
+        title: 'Inventory',
+        text: 'An inventory update',
+      },
+      headers,
+    )
+    expect(sent, sent.text).toMatchObject({ error: false })
+    expect(sent.text).toContain('sent')
+    const got = msgOf((await client.take('deliver', 5000)).env)
+    expect(got.body).toMatchObject({ via: 'agent', agent: service.name, text: 'An inventory update' })
+
+    const inbox = await tool(url, 'team', { op: 'inbox', json: true }, headers)
+    const { threads } = JSON.parse(inbox.text) as { threads: { ref: string }[] }
+    const thread = threads[0]?.ref
+    expect(thread).toBeString()
+    expect((await tool(url, 'team', { op: 'thread', thread }, headers)).text).toContain('An inventory update')
+
+    expect((await post(url, '/api/team/agents', { peer: peer.pub, on: true, lanes: [] })).status).toBe(200)
+    expect((await tool(url, 'team', { op: 'thread', thread, read: true }, headers)).error).toBe(true)
+    expect(JSON.parse((await tool(url, 'team', { op: 'inbox', json: true }, headers)).text).threads).toEqual([])
+    const held = await tool(url, 'team', { op: 'post', to: peer.pub, text: 'Held update' }, headers)
+    expect(held.text).toContain('draft')
+    expect(held.text).toContain('lane')
+  } finally {
+    client.close()
   }
 })

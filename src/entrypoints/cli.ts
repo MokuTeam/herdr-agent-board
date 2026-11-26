@@ -143,6 +143,7 @@
 //                            keys in board.db, schedule, watches and legacy move marks when the master
 //                            changes devices (#696)
 // --session <id|name|pane> targets another session's card (for coordinating sessions).
+
 import { randomUUID } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { homedir, userInfo } from 'node:os'
@@ -172,6 +173,7 @@ import { cygpath, takeGitBashArgs } from '../adapters/git-bash.ts'
 import { asSnapshot, type HerdrPane, herdr, snapshot } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { readMasterFlags } from '../adapters/master-flags-store.ts'
+import { ownerServices } from '../adapters/owner-services.ts'
 import { findPiSession } from '../adapters/pi-home.ts'
 import { currentPresence, setPresence } from '../adapters/presence-store.ts'
 import { runHere } from '../adapters/process.ts'
@@ -202,6 +204,7 @@ import { withMasterFlags } from '../core/master-flags.ts'
 import { parseMoveAny } from '../core/move-device.ts'
 import { isKeptCall, UPLINK_REFUSED } from '../core/node-uplink.ts'
 import { isNodeOnly, nodeConfig } from '../core/nodes.ts'
+import { isOwnerServiceKey } from '../core/owner-services.ts'
 import { isPiSessionFile, piSessionId } from '../core/pi.ts'
 import { isPresenceState, type PresenceState, presenceConfig, presenceLine } from '../core/presence.ts'
 import { type ProfileSet, profileSet, resolveProfileDir, sessionProfile } from '../core/profiles.ts'
@@ -411,6 +414,11 @@ async function resolveSession({ archived = false }: { archived?: boolean } = {})
     if (agy) return agy
   }
   const own = process.env.CLAUDE_CODE_SESSION_ID
+  if (isOwnerServiceKey(own)) {
+    const service = ownerServices().find(s => s.key === own)
+    if (!service) throw new Error('Owner service was revoked')
+    return { ...service, cwd: process.cwd() }
+  }
   if (own) {
     return {
       key: own,
@@ -1200,9 +1208,29 @@ async function team(): Promise<void> {
           ? 'the board does not run: open it first (herdr plugin action invoke agent-board.open)'
           : 'the board does not run the team: restart it'),
     )
+  const serviceKey = process.env.CLAUDE_CODE_SESSION_ID
+  const serviceReads = isOwnerServiceKey(serviceKey)
+    ? await (async () => {
+        const [{ sharesAnyLane }, { switchesKey }] = await Promise.all([
+          import('../core/team-agents.ts'),
+          import('../services/team-router.ts'),
+        ])
+        return (scope: string, thread: string | null = null) => {
+          if (!ownerServices().some(service => service.key === serviceKey)) return false
+          const switches = store.readAgents()
+          const peer = switches.peers[switchesKey(scope, thread)]
+          return (
+            !switches.off &&
+            (!isRecord(cfg.team) || cfg.team.agents !== false) &&
+            peer?.on === true &&
+            sharesAnyLane(peer, cfg.categories)
+          )
+        }
+      })()
+    : undefined
   if (inboxOp) {
     const I = await import('./team-inbox-cli.ts')
-    const ctx = { webPort, roster: view.roster }
+    const ctx = { webPort, roster: view.roster, ...(serviceReads && { canRead: serviceReads }) }
     if (op === 'inbox') return console.log(await I.teamInbox(more, ctx))
     if (op === 'wait') {
       // A session with no pane to type a notice into (#819): it asks for its threads instead.
@@ -1219,6 +1247,7 @@ async function team(): Promise<void> {
     const line = await A.teamAgents(op ?? '', more, {
       webPort,
       roster: view.roster,
+      ...(serviceReads && { canRead: serviceReads, hideFilePaths: true }),
       self: async () => {
         const s = await resolveSession()
         return { key: s.key, ...(s.name && { name: s.name }), ...(target && { claimed: true }) }
@@ -1245,7 +1274,10 @@ async function team(): Promise<void> {
     return console.log(await A.teamChannel(more, { webPort, roster: view.roster }))
   }
   const A = await import('./team-agents-cli.ts')
-  for (const l of A.teamRosterLines(view)) console.log(l)
+  const visible = serviceReads
+    ? { ...view, roster: view.roster.filter(p => isRecord(p) && serviceReads(String(p.peer))) }
+    : view
+  for (const l of A.teamRosterLines(visible)) console.log(l)
 }
 
 async function main(): Promise<void> {
@@ -1527,7 +1559,10 @@ async function main(): Promise<void> {
       if (!id) throw new Error(`usage: board cat <id> ["<Title>"]; known: ${cfg.categories.map(c => c.id).join(', ')}`)
       // A new id with a title becomes a real category (config.json), not just a lane named by its id.
       const title = words.slice(1).join(' ').trim()
-      if (title && !cfg.categories.some(c => c.id === id)) {
+      const known = cfg.categories.some(c => c.id === id)
+      if (isOwnerServiceKey(s.key) && !known && id !== 'other')
+        throw new Error('Owner services can select an existing lane only')
+      if (title && !known) {
         const r = editCategories({ op: 'create', id, title })
         if (!r.ok) throw new Error(r.error)
         // As editCategories saved it: no color given is blue, no folders.

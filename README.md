@@ -161,6 +161,23 @@ commands in their brief; Codex and agy sessions are told about the tools as well
 To take the entries out of every harness and keep them out: `bun src/entrypoints/install.ts
 --no-mcp` (it writes `"boardMcp": false` into config.json); `--mcp` puts them back.
 
+### Owner services
+
+On the master board computer (or a standalone board), open **Settings → Integrations → Owner services**. Name the service and
+confirm with a passkey. The token is shown once. Configure the service's HTTP MCP client to send
+`X-Board-Owner-Service: <token>` to this board's local `/mcp` on every request. Revoke access from
+the same list. Additions, revocations, and spawn attempts are recorded in the Team audit log.
+
+The service has its own card, schedule and thread identity. It can list and message sessions
+across lanes, manage threads, start agents within the usual spawn limits, and read calendars.
+Team checks each peer's existing Agent switches and shared lanes. The service counts as present in
+each lane. Its card and the sessions it starts show `by: service <name>`.
+
+Settings and other owner administration stay in the owner's interface. The service selects lanes by
+id and attaches files from board uploads. Folder trust and shell probes require the owner. The MCP
+token applies at the issuing board's local endpoint. On a master, the normal board commands can
+reach sessions on its nodes.
+
 ## Codex
 
 For panes herdr reports as `codex`, the board reads the rollout in

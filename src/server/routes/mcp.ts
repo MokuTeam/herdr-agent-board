@@ -7,6 +7,8 @@
 // lists it (core/node-door.ts). A browser's Origin must be the board's own, and the body must say it
 // is JSON, which a page of another site cannot send without a CORS preflight this server never
 // grants. Who calls comes from X-Board-Pane or X-Board-Session, read on every request.
+import { authenticateOwnerService } from '../../adapters/owner-services.ts'
+import { isOwnerServiceKey, OWNER_SERVICE_HEADER } from '../../core/owner-services.ts'
 import type { Caller, HttpMcp } from '../../entrypoints/mcp-http.ts'
 import { json, type Route } from '../http.ts'
 
@@ -19,7 +21,7 @@ const PANE = /^[A-Za-z0-9][A-Za-z0-9:_.@-]{0,127}$/
 // biome-ignore lint/suspicious/noControlCharactersInRegex: a key is one line of printable characters
 const SESSION = /^(?!-)[^\x00-\x1f\x7f]{1,512}$/
 
-const LOOPBACK = (peer: string): boolean =>
+export const isLoopback = (peer: string): boolean =>
   peer === '' || peer === '::1' || peer.startsWith('127.') || peer.startsWith('::ffff:127.')
 
 const rpcError = (status: number, message: string): Response =>
@@ -65,14 +67,14 @@ async function bodyText(req: Request): Promise<string | null> {
   return text + decoder.decode()
 }
 
-export function mcpRoutes(o: { mcp: HttpMcp; find: FindCaller }): Route[] {
+export function mcpRoutes(o: { mcp: HttpMcp; find: FindCaller; ownerServicesEnabled?: () => boolean }): Route[] {
   return [
     {
       method: 'ANY',
       path: '/mcp',
       async handle(req, ctx) {
         // The network side never reaches it, nor names a caller.
-        if (ctx.remote || !LOOPBACK(ctx.peer())) return json(404, { error: 'not found' })
+        if (ctx.remote || !isLoopback(ctx.peer())) return json(404, { error: 'not found' })
         const foreign = ctx.refuse('origin')
         if (foreign) return foreign
         if (req.method !== 'POST') {
@@ -82,11 +84,21 @@ export function mcpRoutes(o: { mcp: HttpMcp; find: FindCaller }): Route[] {
         }
         if (!/^application\/json\b/i.test(req.headers.get('content-type') ?? ''))
           return rpcError(415, 'Content-Type must be application/json')
-        const caller = callerOf(req, o.find)
+        const token = req.headers.get(OWNER_SERVICE_HEADER)
+        if (token !== null && o.ownerServicesEnabled?.() === false)
+          return rpcError(404, 'Owner services use the master board')
+        const session = req.headers.get('x-board-session')
+        if (token === null && isOwnerServiceKey(session?.trim()))
+          return rpcError(401, 'An owner service token is required')
+        if (token !== null && (session !== null || req.headers.has('x-board-pane')))
+          return rpcError(400, 'The owner service token supplies the caller identity')
+        const caller = token === null ? callerOf(req, o.find) : null
         if (typeof caller === 'string') return rpcError(400, caller)
         const text = await bodyText(req)
         if (text === null) return rpcError(413, 'the message is too large')
-        const answer = await o.mcp.handle(text, caller)
+        const service = token === null ? null : authenticateOwnerService(token)
+        if (token !== null && !service) return rpcError(401, 'Invalid owner service token')
+        const answer = await o.mcp.handle(text, service ? { session: service.key, ownerService: service } : caller)
         if (answer === null) return new Response(null, { status: 202 })
         return new Response(answer, {
           status: 200,

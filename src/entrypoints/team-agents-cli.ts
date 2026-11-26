@@ -43,6 +43,7 @@ interface Ctx {
   webPort: number
   /** The roster as the running board has it. */
   roster: unknown[]
+  canRead?: (scope: string, key?: string) => boolean
   /** The session running this command (--session: the caller's word). */
   self: () => Promise<SessionWord>
   /** A session on the board by its name, pane or key. */
@@ -395,7 +396,10 @@ export async function teamAgents(op: string, args: string[], ctx: Ctx): Promise<
     if (only === TEAM) throw new Error(`usage: ${AGENT_USAGE}`)
     const { status, reply } = await call(ctx.webPort, '/api/team/directory')
     if (!isRecord(reply) || !Array.isArray(reply.peers)) throw new Error(`the board answered ${status}`)
-    return directoryLines(reply.peers.filter(isRecord), only)
+    return directoryLines(
+      reply.peers.filter(isRecord).filter(p => ctx.canRead?.(String(p.peer)) ?? true),
+      only,
+    )
   }
   if (op === 'loop') {
     // How many agent messages in a row, both ways, before the next one waits for the owner (#360).
@@ -493,6 +497,8 @@ export async function teamAgents(op: string, args: string[], ctx: Ctx): Promise<
     const words = [...flags.filter(a => a !== '--json' && a !== '--read'), ...after]
     if (words.length !== 1) throw new Error(`usage: ${AGENT_USAGE}`)
     const key = await threadKeyOf(ctx, words[0] ?? '')
+    if (ctx.canRead && !ctx.canRead(splitKey(key)?.scope ?? '', key))
+      throw new Error('This Team thread has no lane shared with the owner service')
     // Read up to when the lines were asked for: what lands after is not marked unseen.
     const asked = Date.now()
     const { status, reply } = await call(ctx.webPort, `/api/team/threads/${key}`)

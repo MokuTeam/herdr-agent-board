@@ -298,6 +298,7 @@ const secret = shape(
 
 /** A launch as the payload shows it (core/types.ts LaunchView). */
 const LAUNCH: Record<string, Check> = {
+  by: str(LEN.name),
   id: ref,
   resume: orNull(ref),
   fork: orNull(ref),
@@ -357,6 +358,7 @@ const launch = shape(LAUNCH, LAUNCH_REQUIRED)
 
 /** The optional fields of an item (core/types.ts Item). Server-only ones (transcript, pipe, ...) are not among them. */
 const ITEM: Record<string, Check> = {
+  by: str(LEN.name),
   sleeping: bool,
   movedTo: nonEmpty(LEN.id),
   movedAt: num,

@@ -6,7 +6,7 @@
 // person, every session in a lane shared with them is listed for them by its handle (its name,
 // lowercase, spaces to dashes; kept for the session), and nothing else is. On the wire a handle is
 // the directory entry's `code` and the addressed copy's `at`.
-import { sharesLane } from './team-agents.ts'
+import { sharesAnyLane, sharesLane } from './team-agents.ts'
 import { type DirectoryEntry, GENERAL, MAX_CODE, MAX_DIRECTORY, MAX_TITLE } from './team-wire.ts'
 
 const CODE = new RegExp(`^[a-z0-9][a-z0-9-]{0,${MAX_CODE - 1}}$`)
@@ -85,6 +85,7 @@ export const directoryMark = (list: DirectoryEntry[]): string =>
 
 /** A session as the directory sees it: its key, its name, its lane. */
 export interface HandleSession {
+  ownerServiceLanes?: readonly { id: string }[]
   key: string
   name: string
   lane: string
@@ -206,6 +207,9 @@ export interface ReachWorld {
   sessions: readonly HandleSession[]
 }
 
+export const sharesHandleLane = (switches: Parameters<typeof sharesLane>[0], session: HandleSession): boolean =>
+  session.ownerServiceLanes ? sharesAnyLane(switches, session.ownerServiceLanes) : sharesLane(switches, session.lane)
+
 /**
  * The session a handle reaches for a message from `peer`, or null (#832): exposure follows the
  * lanes shared with that person. Agents on for them, the session on the board (not archived or
@@ -216,7 +220,7 @@ export function reach(code: string, peer: string, w: ReachWorld): HandleSession 
   if (w.off || !sw?.on) return null
   const key = Object.keys(w.handles).find(k => w.handles[k] === code)
   const s = key === undefined ? undefined : w.sessions.find(x => x.key === key)
-  return s && sharesLane(sw, s.lane) ? s : null
+  return s && sharesHandleLane(sw, s) ? s : null
 }
 
 /**

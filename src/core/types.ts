@@ -44,6 +44,8 @@ export interface TurnMark {
 export interface Card {
   /** The owner marked this session as a master of its lane or project (#867). */
   teamMaster?: true
+  /** Attribution of a start made by an owner service, kept across status updates. */
+  serviceStartBy?: string
   key?: string
   category?: string
   doing?: string
@@ -181,6 +183,7 @@ export type LaunchFailure = FailureKind | 'message'
 
 /** A launch as the board payload shows it. */
 export interface LaunchView {
+  by?: string
   id: string
   /** The id of the session it resumes (Return, from the archive), null for a new one; a board before the archive sent none. */
   resume?: string | null
@@ -342,6 +345,7 @@ export interface TranscriptInfo {
 /** A board item: one agent session, merged from herdr, its card and its transcript. */
 export interface Item {
   teamMaster?: true
+  by?: string
   key: string
   session: string | null
   pane: string | null

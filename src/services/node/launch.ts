@@ -34,6 +34,7 @@ import type { NodeConfig } from '../../core/nodes.ts'
 import type { NodeTurn } from '../../core/placement.ts'
 import { subdirTravels } from '../../core/portable.ts'
 import type { ProfileSet } from '../../core/profiles.ts'
+import { validName } from '../../core/team.ts'
 import type { LaunchView } from '../../core/types.ts'
 import type { StartResult } from '../launch/launches.ts'
 import { createCheckouts, type RepoOps } from './checkout.ts'
@@ -48,6 +49,7 @@ export const REMEMBER_MS = 10 * 60_000
 
 /** What a start from the master asks for (6.4), checked. */
 export interface NodeLaunchRequest {
+  by?: string
   id: string
   name: string
   category: string
@@ -83,7 +85,11 @@ export type NodeLaunchAnswer =
 export interface NodeLaunchDeps {
   node: () => NodeConfig | null
   /** The node's own launches.start, with the session id the master picked. */
-  start: (body: unknown, session: string, options?: { exactSession?: boolean; trust?: boolean }) => Promise<StartResult>
+  start: (
+    body: unknown,
+    session: string,
+    options?: { exactSession?: boolean; trust?: boolean; by?: string },
+  ) => Promise<StartResult>
   /** The node's launch by its id now, for the answer to an id it has. */
   launch: (id: string) => LaunchView | undefined
   profiles: () => ProfileSet
@@ -125,6 +131,9 @@ export function launchRequestOf(raw: unknown): NodeLaunchRequest | { field: stri
     ['workspace', 60],
   ] as const)
     if (b[key] !== undefined && b[key] !== null && !text(b[key], max)) return { field: key }
+  const by = b.by
+  if (by !== undefined && (typeof by !== 'string' || !by.startsWith('service ') || !validName(by.slice(8))))
+    return { field: 'by' }
   const s = b.source
   if (!isObject(s)) return { field: 'source' }
   if (b.exactSession !== undefined && typeof b.exactSession !== 'boolean') return { field: 'exactSession' }
@@ -159,6 +168,7 @@ export function launchRequestOf(raw: unknown): NodeLaunchRequest | { field: stri
     model: str(b.model),
     message: str(b.message),
     workspace: str(b.workspace).trim(),
+    ...(by && { by }),
     ...(b.exactSession === true && { exactSession: true }),
     ...(b.trust === true && { trust: true }),
     source,
@@ -263,8 +273,14 @@ export function createNodeLaunch(d: NodeLaunchDeps): NodeLaunch {
           model: r.model,
         },
         r.id,
-        ...(r.exactSession || r.trust
-          ? [{ ...(r.exactSession && { exactSession: true }), ...(r.trust && { trust: true }) }]
+        ...(r.exactSession || r.trust || r.by
+          ? [
+              {
+                ...(r.exactSession && { exactSession: true }),
+                ...(r.trust && { trust: true }),
+                ...(r.by && { by: r.by }),
+              },
+            ]
           : []),
       )
     } catch (err) {

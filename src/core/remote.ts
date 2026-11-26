@@ -121,7 +121,7 @@ export const DESK_REMOTE_OPS: ReadonlySet<unknown> = new Set(['approve', 'deny',
  * Refused on every remote listener, in both spellings of a path.
  */
 export const localOnly = (path: string): boolean =>
-  /^\/api\/(remote|access|wake|backup|time-settings|calendar-settings|links\/log|team|process|threads|threads-settings|feature-settings|self-update|mokupilot\/node-call|housekeeping)(\/|$)/.test(
+  /^\/api\/(remote|access|wake|backup|time-settings|calendar-settings|links\/log|team|owner-services|process|threads|threads-settings|feature-settings|self-update|mokupilot\/node-call|housekeeping)(\/|$)/.test(
     path,
   )
 

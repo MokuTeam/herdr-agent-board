@@ -37,6 +37,7 @@ interface Ctx {
   webPort: number
   /** The roster as the running board has it. */
   roster: unknown[]
+  canRead?: (scope: string, key: string) => boolean
 }
 
 /** The threads of the board with their unread counts, the latest first. */
@@ -54,6 +55,7 @@ export async function inboxOf(ctx: Ctx): Promise<InboxThread[]> {
   return threads.reply.threads
     .filter(isRecord)
     .filter(t => !(isRecord(t.archived) && t.archived.restored !== true))
+    .filter(t => ctx.canRead?.(String(t.scope), String(t.key)) ?? true)
     .map(
       (t): InboxThread => ({
         ref: threadRef(String(t.scope), String(t.id)),

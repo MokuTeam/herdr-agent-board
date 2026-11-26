@@ -16,6 +16,7 @@ import { isRecord } from '../../adapters/json-store.ts'
 import { readSpawns, reserveSpawn, settleSpawn } from '../../adapters/spawn-ledger.ts'
 import { t } from '../../core/lang.ts'
 import { MCP_CALLER, type SpawnOptions } from '../../core/launch/spawn-args.ts'
+import { isOwnerServiceKey } from '../../core/owner-services.ts'
 import {
   type Alive,
   childOfLine,
@@ -150,6 +151,7 @@ export async function gateSpawn(o: SpawnOptions, d: GateDeps): Promise<SpawnGate
     try {
       return reserveSpawn(caller, o.name, now, entries => spawnVerdict(limits, entries, caller, now, alive), d.file)
     } catch (err) {
+      if (isOwnerServiceKey(caller.session)) throw new Error('Could not check owner service spawn limits')
       // A ledger that cannot be read or written never stops a start: it goes ahead unchecked.
       d.log?.(`limits not checked: ${err instanceof Error ? err.message : String(err)}`)
       return null

@@ -32,6 +32,7 @@ export type NodeSource =
   | { kind: 'path'; cwd: string; worktree: { branch: string } | null }
 
 export interface QueueEntry {
+  by?: string
   /** The launch's id on the master's board. */
   id: string
   /** The session id it starts with, wherever it goes: a node's identity of the start. */
@@ -81,6 +82,7 @@ const isEntry = (v: unknown): v is QueueEntry =>
   optionalDevice(v.syncing) &&
   optionalDevice(v.sent) &&
   optionalAt(v.sentAt) &&
+  (v.by === undefined || typeof v.by === 'string') &&
   (v.trust === undefined || v.trust === true)
 const isQueueFile = (v: unknown): v is QueueFile => isRecord(v) && v.version === 1 && Array.isArray(v.entries)
 

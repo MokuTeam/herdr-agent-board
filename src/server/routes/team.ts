@@ -38,12 +38,14 @@
 // on, lanes, allLanes, channels } settles one, its body checked whole before anything changes.
 // Adding a channel's members, and a welcome that widens (Agents on, a lane, every lane: #386, a
 // channel), wait for the passkey as the switches do.
+
 import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { writeCard } from '../../adapters/cards.ts'
 import { editTeamServices } from '../../adapters/config-file.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { uploadsCheck } from '../../adapters/own-files.ts'
+import { addOwnerService } from '../../adapters/owner-services.ts'
 import { uploadsDir } from '../../adapters/paths.ts'
 import {
   audit,
@@ -343,6 +345,8 @@ export function teamRoutes(
   confirm?: TeamConfirm,
   /** Shared threads (#394): their owner actions, confirmed here, and the Team list's status pills. */
   work?: WorkHub,
+  ownerConfirmationOpen?: () => boolean,
+  ownerServicesChanged?: () => void,
 ): Route[] {
   const lanes = (): Pick<Config, 'categories' | 'team'> => cfg ?? { categories: [] }
 
@@ -474,6 +478,11 @@ export function teamRoutes(
       onAgents?.()
       return { status: 200, body: { ok: true } }
     }
+    if (a.kind === 'owner-service-add') {
+      const body = addOwnerService(a.name)
+      if (body.ok) ownerServicesChanged?.()
+      return { status: body.ok ? 200 : 400, body }
+    }
     if (a.kind === 'service-add') return editServices({ add: { name: a.name, lane: a.lane } })
     // A passkey added or removed: the confirmation did it.
     return { status: 200, body: { ok: true } }
@@ -570,6 +579,7 @@ export function teamRoutes(
         ...(members.length > 0 && { members }),
       }
     }
+    if (a.kind === 'owner-service-add') return { kind: a.kind, name: a.name }
     if (a.kind === 'service-add')
       return { kind: a.kind, name: a.name, lane: categoryInfo(lanes(), a.lane).title || a.lane }
     if (a.kind === 'passkey-remove')
@@ -1082,7 +1092,7 @@ export function teamRoutes(
         return json(r.status, r.body)
       },
     },
-    ...(confirm ? confirmRoutes(team, confirm, describe, perform) : []),
+    ...(confirm ? confirmRoutes(team, confirm, describe, perform, ownerConfirmationOpen) : []),
   ]
 }
 
@@ -1146,6 +1156,7 @@ function confirmRoutes(
   confirm: TeamConfirm,
   describe: (a: OwnerAction) => Record<string, unknown>,
   perform: (a: OwnerAction) => Promise<{ status: number; body: Record<string, unknown> }>,
+  ownerConfirmationOpen?: () => boolean,
 ): Route[] {
   const ID = /^[A-Za-z0-9_-]{22}$/
   return [
@@ -1203,7 +1214,7 @@ function confirmRoutes(
       method: 'GET',
       path: /^\/api\/team\/confirm\/([^/]+)$/,
       handle(_req, ctx) {
-        if (!team.view()) return undefined
+        if (!team.view() && !ownerConfirmationOpen?.()) return undefined
         const id = ctx.params[0] ?? ''
         if (!confirm.safe()) return json(503, { ok: false, error: 'loopback' })
         const v = ID.test(id) ? confirm.view(id) : null
@@ -1216,7 +1227,7 @@ function confirmRoutes(
       method: 'POST',
       path: /^\/api\/team\/confirm\/([^/]+)$/,
       async handle(req, ctx) {
-        if (!team.view()) return undefined
+        if (!team.view() && !ownerConfirmationOpen?.()) return undefined
         const refused = ctx.refuse('board-header')
         if (refused) return refused
         const id = ctx.params[0] ?? ''

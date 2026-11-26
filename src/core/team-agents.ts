@@ -131,6 +131,12 @@ export const sharesLane = (
   lane: string,
 ): boolean => lane !== '' && (allLanes(peer) || (peer?.lanes ?? []).includes(lane))
 
+/** An owner service is present in every lane. The caller still applies the Team switches. */
+export const sharesAnyLane = (
+  peer: { lanes?: readonly string[]; allLanes?: unknown } | undefined,
+  lanes: readonly { id: string }[],
+): boolean => sharesLane(peer, 'other') || lanes.some(lane => sharesLane(peer, lane.id))
+
 /** The highest loop pause a peer may have (#360); the lowest is 1. */
 export const MAX_LOOP = 100
 
