@@ -364,6 +364,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       const s = readAgents()
       // A new thread (a title, no id) has no key yet: nothing to loop in, nothing to echo.
       const key = thread?.title !== undefined && thread.id === undefined ? null : threadKey(to, thread?.id ?? GENERAL)
+      if (key && readThreads()[key]?.archived) return { ok: false, error: 'archived' }
       // A reply to one message (#373) names a line of this thread that may be answered: a message
       // either way, not a draft, not one held back. Refused at once, held or not, so a draft the owner
       // would send later does not fail then.
@@ -472,6 +473,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       if (!view) return { ok: false, error: 'off' }
       const parts = splitKey(thread)
       if (!parts) return { ok: false, error: 'thread' }
+      if (readThreads()[thread]?.archived) return { ok: false, error: 'archived' }
       if (!validEmoji(emoji)) return { ok: false, error: 'emoji' }
       if (!REACTION_OPS.some(o => o === op)) return { ok: false, error: 'body' }
       const line = team.threadLines(thread).find(l => l.id === message && l.dir !== 'draft' && !l.held)
@@ -512,7 +514,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       if (!s.peers[rules]?.on) return
       if (rules === TEAM && s.peers[TEAM]?.muted) return
       const rec = readThreads()[e.thread]
-      if (rec?.muted) return
+      if (rec?.muted || rec?.archived) return
       const t = now()
       if ((s.paused[e.from] ?? 0) > t) return
       const who = safeName(team.nameOf(e.from), e.from)
@@ -577,6 +579,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
     assign(key, session) {
       const parts = splitKey(key)
       if (!parts || !team.threads().some(t => t.key === key)) return { ok: false, error: 'thread' }
+      if (readThreads()[key]?.archived) return { ok: false, error: 'archived' }
       if (session) {
         const s = readAgents()
         const peer = s.peers[switchesKey(parts.scope, key)]

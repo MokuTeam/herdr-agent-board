@@ -53,3 +53,18 @@ export function markRead(thread: string, at: number): void {
     isReadsFile,
   )
 }
+
+/** Drops the read mark of `thread` when present (#854). Creates or writes nothing otherwise. */
+export function dropRead(thread: string): void {
+  const have = peekReads()
+  if (!have || !Object.hasOwn(have.threads, thread)) return
+  updateJson(
+    teamReadsFile(),
+    (cur: ReadsFile | null) => {
+      if (!cur || !Object.hasOwn(cur.threads, thread)) return cur ?? { v: 1 as const, since: Date.now(), threads: {} }
+      const { [thread]: _, ...rest } = cur.threads
+      return { ...cur, threads: rest }
+    },
+    isReadsFile,
+  )
+}

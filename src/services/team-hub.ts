@@ -12,13 +12,17 @@
 // whose board takes files, and sends the copies only once the hub has the blob (team-files.ts); the
 // others get the post's text with FILE_LINE. A file that came in is fetched and opened there too.
 import { readFileSync, statSync } from 'node:fs'
+import { dropRead } from '../adapters/team-reads.ts'
 import {
+  addChannelNotices,
   addDraft,
   addInbox,
   addOutbox,
   addReactionOutbox,
   applyReaction,
   audit,
+  type ChannelNoticeOutboxItem,
+  changeAgents,
   changeBlobs,
   changeDirectoryState,
   changePins,
@@ -26,6 +30,10 @@ import {
   type Draft,
   type DraftFile,
   dropDraftFile,
+  dropThreadDrafts,
+  dropThreadInbox,
+  dropThreadOutbox,
+  dropThreadReactions,
   ensureBoxKey,
   ensureKey,
   type InboxItem,
@@ -40,6 +48,7 @@ import {
   readAllInbox,
   readAllOutbox,
   readBlobs,
+  readChannelNotices,
   readDirectoryState,
   readDrafts,
   readInbox,
@@ -49,11 +58,13 @@ import {
   readReactionOutbox,
   readReactions,
   readThreads,
+  refuseChannelNotice,
   refuseOut,
   refuseReactionOut,
   releaseHeld,
   releaseHeldReactions,
   type SessionRef,
+  setChannelNoticeState,
   setOutState,
   setReactionOutState,
   type ThreadRecord,
@@ -64,6 +75,8 @@ import {
   authBytes,
   type BoxClaim,
   boxBytes,
+  CHANNEL_NOTICE_TEXT,
+  type ChannelOp,
   channelMembers,
   checkEnvelope,
   checkMessage,
@@ -444,6 +457,12 @@ export interface TeamService {
    * from the next one on, the list with them; what was said before stays with who was there.
    */
   addMembers(key: string, peers: string[]): { ok: true } | { ok: false; error: string }
+  /** Deletes a channel this board started (#854): removes it locally and archives it for members. */
+  deleteChannel(key: string): Promise<{ ok: true; copies: number; skipped: string[] } | { ok: false; error: string }>
+  /** Leaves a channel another board started (#854): removes it locally and tells active members. */
+  leaveChannel(key: string): Promise<{ ok: true; copies: number; skipped: string[] } | { ok: false; error: string }>
+  /** Restores an archived channel back into the channels list as read-only (#854). */
+  restoreChannel(key: string): { ok: true } | { ok: false; error: string }
   /** The agents' drafts that wait for the owner, oldest first (#415); empty while off. */
   drafts(): DraftLine[]
   /** Sends a draft as a question marked `via: "agent"`; the draft stays when the send is refused. */
@@ -778,7 +797,13 @@ export function createTeam({
         // A directory of ours (#832) the hub refused is not sent again until it changes.
         if (f.id && settleDirectory(f.id, 'error')) return
         // An error naming a message of ours settles it: it is not sent again on the next connect.
-        if (f.id && (refuseOut(f.id, f.code, clock.now()) || refuseReactionOut(f.id, f.code, clock.now()))) changed()
+        if (
+          f.id &&
+          (refuseOut(f.id, f.code, clock.now()) ||
+            refuseReactionOut(f.id, f.code, clock.now()) ||
+            refuseChannelNotice(f.id, f.code, clock.now()))
+        )
+          changed()
         return
       case 'ping':
         frame({ t: 'pong' })
@@ -801,6 +826,8 @@ export function createTeam({
           frame({ t: 'send', env: i.env })
     for (const r of readReactionOutbox())
       if (r.state === 'queued' || r.state === 'delivered') frame({ t: 'send', env: r.env })
+    for (const n of readChannelNotices())
+      if (n.state === 'queued' || n.state === 'delivered') frame({ t: 'send', env: n.env })
   }
 
   /**
@@ -870,6 +897,22 @@ export function createTeam({
     if (!item) {
       const rx = readReactionOutbox().find(r => r.id === f.id)
       if (!rx) {
+        const cn = readChannelNotices().find(n => n.id === f.id)
+        if (cn) {
+          if (f.state === 'acked') {
+            const a = f.ack
+            const ok =
+              !!a &&
+              a.by === cn.to &&
+              (await verify(a.by, ackBytes({ by: a.by, id: f.id, to: me.peer, ts: a.ts }), a.sig))
+            if (!ok) {
+              audit('drop', cn.to, { why: 'bad_ack', id: f.id })
+              setChannelNoticeState(f.id, 'delivered', f.at)
+            } else setChannelNoticeState(f.id, 'acked', f.at)
+          } else setChannelNoticeState(f.id, f.state, f.at)
+          changed()
+          return
+        }
         // A directory of ours (#832): acked counts only with the peer's own signature over it.
         let state: DeliveryState = f.state
         if (state === 'acked') {
@@ -935,6 +978,8 @@ export function createTeam({
     if (workMisfit) {
       audit('drop', msg.from, { why: 'work', id: msg.id })
       log('team: dropped a message (a shared thread this board does not keep, or one it does not fit)')
+    } else if (msg.body.channel) {
+      keepChannelNotice(msg, held)
     } else if (!channelFits(thread, msg.body.thread, msg.from, me.peer)) {
       // Acked all the same: the hub need not bring it again.
       audit('drop', msg.from, { why: 'channel', id: msg.id })
@@ -951,7 +996,7 @@ export function createTeam({
     const ts = new Date(clock.now()).toISOString()
     const sig = await sign(me.pkcs8, ackBytes({ by: me.peer, id: msg.id, to: msg.from, ts }))
     frame({ t: 'ack', id: msg.id, ts, sig })
-    if (!msg.body.react && !msg.body.agents) markAcked(msg.from, msg.id, clock.now())
+    if (!msg.body.react && !msg.body.agents && !msg.body.channel) markAcked(msg.from, msg.id, clock.now())
   }
 
   /**
@@ -1123,13 +1168,67 @@ export function createTeam({
   }
 
   /**
+   * Handles a signed channel notice (#854): `delete` (from the channel's creator only) archives the
+   * channel locally as read-only without erasing messages; `leave` (from an active non-creator
+   * member) removes the sender from the channel's membership list. Held or unauthorized notices are
+   * dropped and audited.
+   */
+  function keepChannelNotice(msg: Message, held: boolean): void {
+    const notice = msg.body.channel
+    if (!notice) return
+    const key = threadKey(TEAM, notice.id)
+    if (held) {
+      audit('drop', msg.from, { why: 'channel_held', id: msg.id, thread: key, op: notice.op })
+      return
+    }
+    const have = readThreads()[key]
+    if (!have?.members) {
+      audit('drop', msg.from, { why: 'channel', id: msg.id, thread: key, op: notice.op })
+      return
+    }
+    if (notice.op === 'delete') {
+      if (have.by !== msg.from) {
+        audit('drop', msg.from, { why: 'channel_auth', id: msg.id, thread: key, op: 'delete' })
+        log('team: dropped a channel delete notice (sender did not start the channel)')
+        return
+      }
+      const did = changeThreads(threads => {
+        const t = Object.hasOwn(threads, key) ? threads[key] : undefined
+        if (!t?.members || t.by !== msg.from || t.archived) return false
+        t.archived = { at: clock.now(), by: msg.from }
+        t.handler = null
+        return true
+      })
+      if (did) {
+        audit('channel_archived', msg.from, { id: msg.id, thread: key })
+        changed()
+      }
+      return
+    }
+    if (have.archived || have.by === msg.from || !have.members.includes(msg.from)) {
+      audit('drop', msg.from, { why: 'channel_auth', id: msg.id, thread: key, op: 'leave' })
+      return
+    }
+    const count = changeThreads(threads => {
+      const t = Object.hasOwn(threads, key) ? threads[key] : undefined
+      if (!t?.members || t.archived || t.by === msg.from || !t.members.includes(msg.from)) return -1
+      t.members = t.members.filter(m => m !== msg.from)
+      return t.members.length
+    })
+    if (count >= 0) {
+      audit('channel_left', msg.from, { id: msg.id, thread: key, members: count })
+      changed()
+    }
+  }
+
+  /**
    * A channel's copy (#355) fits when it names this board and its sender as members, and its thread
    * here is a channel too, or new. A plain team thread's copy never lands in a channel either: a
    * channel's words stay with its members, and the team's stay the team's. A channel kept here takes
    * copies only from its members as kept, or its creator (whose post brings a new member's name
    * before that member can answer: the hub hands each board its copies in order). A new channel is
    * not taken while the team's threads are at their cap: channels are never dropped to make room,
-   * so a full scope cannot be used to forget one.
+   * so a full scope cannot be used to forget one. An archived channel (#854) takes no new messages.
    */
   function channelFits(key: string, ref: ThreadRef | undefined, from: string, self: string): boolean {
     const all = readThreads()
@@ -1137,7 +1236,7 @@ export function createTeam({
     const members = ref?.members
     if (!members) return !have?.members
     if (!members.includes(self) || !members.includes(from)) return false
-    if (have) return !!have.members && (have.members.includes(from) || have.by === from)
+    if (have) return !!have.members && !have.archived && (have.members.includes(from) || have.by === from)
     return Object.values(all).filter(t => t.scope === TEAM).length < MAX_THREADS_PER_SCOPE
   }
 
@@ -1323,6 +1422,7 @@ export function createTeam({
     if (!th.ok) return { ok: false, error: 'thread' }
     const ref: ThreadRef | undefined = team ? { ...(th.ref ?? { id: GENERAL }), group: true } : th.ref
     const key = threadKey(scope, ref?.id ?? GENERAL)
+    if (readThreads()[key]?.archived) return { ok: false, error: 'archived' }
     const changedKey = (p: RosterPeer): boolean => pins[p.peer]?.status === 'changed'
     // A channel goes to its members only (#355); the team's other threads to everyone.
     const inThread = (p: RosterPeer): boolean => !ref?.members || ref.members.includes(p.peer)
@@ -1514,6 +1614,7 @@ export function createTeam({
     if (!team && !isPeerId(parts.scope)) return { ok: false, error: 'thread' }
     const rec = readThreads()[thread]
     if (parts.id !== GENERAL && !rec) return { ok: false, error: 'thread' }
+    if (rec?.archived) return { ok: false, error: 'archived' }
     const pins = readPins()
     if (!team) {
       if (!roster.some(p => p.peer === parts.scope)) return { ok: false, error: 'peer' }
@@ -1666,6 +1767,54 @@ export function createTeam({
       if (t) t.handler = handler
       return !!t
     })
+  }
+
+  /** Removes a channel and all its local messages, reactions, drafts, agent switches and read mark (#854). */
+  function purgeChannel(key: string): void {
+    changeThreads(threads => {
+      delete threads[key]
+    })
+    dropThreadInbox(key)
+    dropThreadOutbox(key)
+    dropThreadReactions(key)
+    dropThreadDrafts(key)
+    if (Object.hasOwn(readAgents().peers, key))
+      changeAgents(s => {
+        delete s.peers[key]
+      })
+    dropRead(key)
+  }
+
+  /** Builds and signs `body.channel` notices for `peers` (#854). */
+  async function buildChannelNotices(
+    id: string,
+    op: ChannelOp,
+    peers: string[],
+  ): Promise<{ ok: true; copies: ChannelNoticeOutboxItem[] } | { ok: false; error: ErrorCode }> {
+    if (!peers.length) return { ok: true, copies: [] }
+    const key = await ensureKey()
+    const ts = new Date(clock.now()).toISOString()
+    const copies: ChannelNoticeOutboxItem[] = []
+    for (const peer of peers) {
+      const msg: Message = {
+        v: TEAM_PROTOCOL,
+        id: crypto.randomUUID(),
+        from: key.pub,
+        to: peer,
+        kind: 'question',
+        reply_to: null,
+        ts,
+        ttl_s: MAX_TTL_S,
+        body: { text: CHANNEL_NOTICE_TEXT, channel: { id, op } },
+      }
+      const env = await sealEnvelope(key, msg)
+      const wire = checkEnvelope(env)
+      if (!wire.ok) return { ok: false, error: wire.code }
+      const checked = checkMessage(env.payload, env.from)
+      if (!checked.ok) return { ok: false, error: checked.code }
+      copies.push({ env, id: msg.id, to: peer, state: 'queued', at: clock.now() })
+    }
+    return { ok: true, copies }
   }
 
   const keyOf = (thread: string | undefined, peer: string): string => thread ?? threadKey(peer, GENERAL)
@@ -1927,6 +2076,8 @@ export function createTeam({
     draft(to, text, more = {}) {
       if (!config()) return { ok: false, error: 'off' }
       if (to !== TEAM && (!isPeerId(to) || !roster.some(p => p.peer === to))) return { ok: false, error: 'peer' }
+      if (more.thread?.id && readThreads()[threadKey(to, more.thread.id)]?.archived)
+        return { ok: false, error: 'archived' }
       const body = text.trim()
       const { file, ...rest } = more
       if ((!body && !file) || body.length > MAX_TEXT) return { ok: false, error: 'text' }
@@ -2023,7 +2174,7 @@ export function createTeam({
       if (!config()) return { ok: false, error: 'off' }
       const all = readThreads()
       const rec = Object.hasOwn(all, key) ? all[key] : undefined
-      if (!rec?.members || rec.by !== 'me') return { ok: false, error: 'thread' }
+      if (!rec?.members || rec.by !== 'me' || rec.archived) return { ok: false, error: 'thread' }
       if (!peers.length || !peers.every(p => roster.some(r => r.peer === p))) return { ok: false, error: 'peer' }
       const list = channelMembers([...new Set([...rec.members, ...peers])])
       if (!list) return { ok: false, error: 'members' }
@@ -2032,6 +2183,61 @@ export function createTeam({
         if (t) t.members = list
       })
       audit('members', null, { thread: key, added: peers.length, members: list.length })
+      changed()
+      return { ok: true }
+    },
+    async deleteChannel(key) {
+      if (!config()) return { ok: false, error: 'off' }
+      const rec = readThreads()[key]
+      if (!rec?.members) return { ok: false, error: 'thread' }
+      if (rec.by !== 'me') return { ok: false, error: 'not_creator' }
+      const self = await ensureKey()
+      const pins = readPins()
+      const others = rec.members.filter(m => m !== self.pub && isPeerId(m))
+      const targets = others.filter(m => pins[m]?.status !== 'changed')
+      const skipped = others.filter(m => pins[m]?.status === 'changed').map(m => nameOf(m))
+      const built = await buildChannelNotices(rec.id, 'delete', targets)
+      if (!built.ok) return built
+      purgeChannel(key)
+      if (built.copies.length) {
+        addChannelNotices(built.copies)
+        if (authed) for (const c of built.copies) frame({ t: 'send', env: c.env })
+      }
+      audit('channel_delete', null, { thread: key, copies: built.copies.length })
+      changed()
+      return { ok: true, copies: built.copies.length, skipped }
+    },
+    async leaveChannel(key) {
+      if (!config()) return { ok: false, error: 'off' }
+      const rec = readThreads()[key]
+      if (!rec?.members) return { ok: false, error: 'thread' }
+      if (rec.by === 'me') return { ok: false, error: 'creator' }
+      const self = await ensureKey()
+      const pins = readPins()
+      const others = rec.archived ? [] : rec.members.filter(m => m !== self.pub && isPeerId(m))
+      const targets = others.filter(m => pins[m]?.status !== 'changed')
+      const skipped = others.filter(m => pins[m]?.status === 'changed').map(m => nameOf(m))
+      const built = await buildChannelNotices(rec.id, 'leave', targets)
+      if (!built.ok) return built
+      purgeChannel(key)
+      if (built.copies.length) {
+        addChannelNotices(built.copies)
+        if (authed) for (const c of built.copies) frame({ t: 'send', env: c.env })
+      }
+      audit('channel_leave', null, { thread: key, copies: built.copies.length })
+      changed()
+      return { ok: true, copies: built.copies.length, skipped }
+    },
+    restoreChannel(key) {
+      if (!config()) return { ok: false, error: 'off' }
+      const ok = changeThreads(threads => {
+        const t = Object.hasOwn(threads, key) ? threads[key] : undefined
+        if (!t?.members || !t.archived) return false
+        t.archived = { ...t.archived, restored: true }
+        return true
+      })
+      if (!ok) return { ok: false, error: 'thread' }
+      audit('channel_restore', null, { thread: key })
       changed()
       return { ok: true }
     },

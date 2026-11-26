@@ -340,6 +340,13 @@ export function refusedWhy(error: string, detail?: string): string {
       return 'the hub takes no files: it needs an update'
     case 'files_nobody':
       return 'nobody in this thread can receive files yet: their boards need an update'
+    // Channels (#854).
+    case 'archived':
+      return 'this channel was archived by its creator and is read-only'
+    case 'not_creator':
+      return 'only the board that started this channel can delete it'
+    case 'creator':
+      return 'this board started this channel: delete it instead of leaving'
     default:
       return error
   }

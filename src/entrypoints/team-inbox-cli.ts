@@ -53,6 +53,7 @@ export async function inboxOf(ctx: Ctx): Promise<InboxThread[]> {
     Array.isArray(v) ? v.filter(m => names.has(String(m))).map(m => names.get(String(m)) ?? 'them') : null
   return threads.reply.threads
     .filter(isRecord)
+    .filter(t => !(isRecord(t.archived) && t.archived.restored !== true))
     .map(
       (t): InboxThread => ({
         ref: threadRef(String(t.scope), String(t.id)),

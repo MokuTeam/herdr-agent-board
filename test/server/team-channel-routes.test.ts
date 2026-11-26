@@ -204,5 +204,81 @@ test('a channel for some members, its switches, a member added, and a newcomer w
   expect(await confirmed(String(danPending.id))).toEqual([200, { ok: true, done: true }])
   const withDan = (await get('/api/team/agents')) as { peers: Record<string, unknown> }
   expect(withDan.peers[dan.pub]).toEqual({ on: false, lanes: [], allLanes: true })
+
+  // #854: creator deletes channel (passkey-gated) -> member receives delete notice.
+  const [delAsked, delAsk] = await post(`/api/team/threads/team/${id}/delete`, {})
+  expect(delAsked).toBe(428)
+  const shownDel = (await (await fetch(`${url}/api/team/confirm/${delAsk.id}`)).json()) as { action: unknown }
+  expect(shownDel.action).toMatchObject({ kind: 'channel-delete', channel: 'Deals' })
+  expect(await confirmed(String(delAsk.id))).toMatchObject([200, { ok: true, done: true, copies: 3 }])
+  expect((await get(`/api/team/threads/team/${id}`)).error).toBe('thread')
+  for (const client of [anaClient, benClient, cleoClient]) {
+    const f = await client.take('deliver', 5000)
+    expect(msgOf(f.env).body).toEqual({ text: 'channel notice', channel: { id, op: 'delete' } })
+  }
+
+  // #854: peer-started channel: creator delete refused (403 not_creator), member leave passkey-gated,
+  // and peer delete archives locally and restore brings it back as read-only.
+  const { question } = await import('../hub/harness.ts')
+  const id2 = crypto.randomUUID()
+  anaClient.send({
+    t: 'send',
+    env: await question(ana, me.pub, 'from ana', {
+      body: {
+        text: 'from ana',
+        thread: { id: id2, title: 'AnaCh', group: true, members: [me.pub, ana.pub, ben.pub].sort() },
+      },
+    }),
+  })
+  await waitFor(
+    () => get('/api/team/threads'),
+    v => Array.isArray(v.threads) && v.threads.some(t => (t as { id: string }).id === id2),
+    'ana channel arrived',
+  )
+  expect(await post(`/api/team/threads/team/${id2}/delete`, {})).toEqual([403, { ok: false, error: 'not_creator' }])
+  expect(await post(`/api/team/threads/team/${id2}/restore`, {})).toEqual([404, { ok: false, error: 'thread' }])
+  const [leaveAsked, leaveAsk] = await post(`/api/team/threads/team/${id2}/leave`, {})
+  expect(leaveAsked).toBe(428)
+  const shownLeave = (await (await fetch(`${url}/api/team/confirm/${leaveAsk.id}`)).json()) as { action: unknown }
+  expect(shownLeave.action).toMatchObject({ kind: 'channel-leave', channel: 'AnaCh' })
+  expect(await confirmed(String(leaveAsk.id))).toMatchObject([200, { ok: true, done: true, copies: 2 }])
+  expect((await get(`/api/team/threads/team/${id2}`)).error).toBe('thread')
+  expect(msgOf((await anaClient.take('deliver', 5000)).env).body).toEqual({
+    text: 'channel notice',
+    channel: { id: id2, op: 'leave' },
+  })
+  expect(msgOf((await benClient.take('deliver', 5000)).env).body).toEqual({
+    text: 'channel notice',
+    channel: { id: id2, op: 'leave' },
+  })
+
+  // Creator deletes another channel -> archived on me -> restore brings it back.
+  const id3 = crypto.randomUUID()
+  anaClient.send({
+    t: 'send',
+    env: await question(ana, me.pub, 'keep me', {
+      body: { text: 'keep me', thread: { id: id3, title: 'Keep', group: true, members: [me.pub, ana.pub].sort() } },
+    }),
+  })
+  await waitFor(
+    () => get('/api/team/threads'),
+    v => Array.isArray(v.threads) && v.threads.some(t => (t as { id: string }).id === id3),
+    'id3 arrived',
+  )
+  anaClient.send({
+    t: 'send',
+    env: await question(ana, me.pub, 'channel notice', {
+      body: { text: 'channel notice', channel: { id: id3, op: 'delete' } },
+    }),
+  })
+  await waitFor(
+    () => get(`/api/team/threads/team/${id3}`),
+    v => !!(v.thread as { archived?: unknown } | undefined)?.archived,
+    'id3 archived',
+  )
+  expect(await post(`/api/team/threads/team/${id3}/restore`, {})).toEqual([200, { ok: true }])
+  const restored = (await get(`/api/team/threads/team/${id3}`)) as { thread: { archived?: { restored?: boolean } } }
+  expect(restored.thread.archived?.restored).toBe(true)
+
   for (const c of [anaClient, benClient, cleoClient, danClient]) c.close()
 })

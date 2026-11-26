@@ -142,7 +142,7 @@ export function TeamPeople({
           <AgentSwitches
             view={view}
             agents={agents}
-            channels={channelsOf(threads)}
+            channels={channelsOf(threads).filter(c => !c.archived)}
             disabled={disabled}
             onAgents={onAgents}
           />

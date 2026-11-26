@@ -854,6 +854,7 @@ export async function startServer({
     log,
     version: PLUGIN_VERSION || 'dev',
     onChange: () => {
+      teamNotify?.changed()
       board.publish()
       directorySoon()
       // What waits for the hub goes once it is there; drafts and history files are followed up.

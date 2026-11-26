@@ -88,6 +88,12 @@ const isLast = (v: unknown): boolean =>
   typeof v.ts === 'string' &&
   (v.via === undefined || VIAS.some(x => x === v.via))
 
+const isArchived = (v: unknown): boolean =>
+  isObj(v) &&
+  typeof v.at === 'number' &&
+  typeof v.by === 'string' &&
+  (v.restored === undefined || typeof v.restored === 'boolean')
+
 const isThreadView = (v: unknown): v is ThreadView =>
   isObj(v) &&
   typeof v.key === 'string' &&
@@ -100,6 +106,7 @@ const isThreadView = (v: unknown): v is ThreadView =>
   typeof v.lastAt === 'number' &&
   (v.peerName === null || typeof v.peerName === 'string') &&
   (v.members === undefined || (Array.isArray(v.members) && v.members.every(m => typeof m === 'string'))) &&
+  (v.archived === undefined || isArchived(v.archived)) &&
   (v.last === undefined || isLast(v.last))
 
 const isDraftLine = (v: unknown): v is DraftLine =>
@@ -399,9 +406,22 @@ export const isWelcomeList = (v: unknown): v is { pending: string[] } =>
 /** A channel (#355): a team thread for some members only. */
 export const isChannel = (t: ThreadView | null | undefined): boolean => !!t?.members
 
-/** The channels, the latest first. */
+/** Whether a channel was archived by its creator (#854) and is read-only. */
+export const isArchivedChannel = (t: ThreadView | null | undefined): boolean => !!t?.members && !!t.archived
+
+/** Whether a channel sits in the panel's archive section (#854): archived and not restored to the active list. */
+export const inChannelArchive = (t: ThreadView | null | undefined): boolean =>
+  !!t?.members && !!t.archived && t.archived.restored !== true
+
+/** The channels, the latest first (excluding un-restored archived channels, #854). */
 export const channelsOf = (threads: readonly ThreadView[]): ThreadView[] =>
-  threads.filter(t => t.scope === 'team' && t.members).sort((a, b) => b.lastAt - a.lastAt)
+  threads.filter(t => t.scope === 'team' && t.members && !inChannelArchive(t)).sort((a, b) => b.lastAt - a.lastAt)
+
+/** Archived channels kept out of the main list (#854), newest archived first. */
+export const archivedChannelsOf = (threads: readonly ThreadView[]): ThreadView[] =>
+  threads
+    .filter(t => t.scope === 'team' && inChannelArchive(t))
+    .sort((a, b) => (b.archived?.at ?? b.lastAt) - (a.archived?.at ?? a.lastAt))
 
 /**
  * A scope's threads as the list shows them: its general first (there before anything was written
@@ -555,7 +575,10 @@ export const sendError = (code: unknown, t: Translator): string =>
           code === 'files_hub' ||
           code === 'files_nobody' ||
           code === 'emoji' ||
-          code === 'message'
+          code === 'message' ||
+          code === 'archived' ||
+          code === 'not_creator' ||
+          code === 'creator'
             ? t(`team.err.${code}`)
             : String(code ?? ''),
       })

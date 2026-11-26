@@ -13,6 +13,8 @@ import {
   BLOB_CHUNK,
   type BoxClaim,
   CAPS,
+  CHANNEL_OPS,
+  type ChannelNoticeBody,
   DELIVERY_STATES,
   type DeliveryState,
   type Envelope,
@@ -366,7 +368,20 @@ export function checkMessage(
   return { ok: true, msg }
 }
 
-const BODY_KEYS = ['text', 'via', 'agent', 'thread', 'replyTo', 'post', 'file', 'work', 'react', 'agents', 'at']
+const BODY_KEYS = [
+  'text',
+  'via',
+  'agent',
+  'thread',
+  'replyTo',
+  'post',
+  'file',
+  'work',
+  'react',
+  'agents',
+  'at',
+  'channel',
+]
 const THREAD_KEYS = ['id', 'title', 'link', 'group', 'members']
 
 /**
@@ -434,12 +449,35 @@ function readBodyExtras(body: Record<string, unknown>): {
     if (list && alone) extras.agents = list
     else ok = false
   }
+  // A channel lifecycle notice (#854): standalone, ignored by older boards as an unknown field.
+  if (Object.hasOwn(body, 'channel')) {
+    const c = readChannelNotice(body.channel)
+    const alone = Object.keys(body).every(k => k === 'text' || k === 'channel')
+    if (c && alone) extras.channel = c
+    else ok = false
+  }
   // The code name of the recipient's agent a copy is addressed to (#832): never with a reaction.
   if (Object.hasOwn(body, 'at')) {
-    if (validCode(body.at) && !Object.hasOwn(body, 'react') && !Object.hasOwn(body, 'agents')) extras.at = body.at
+    if (
+      validCode(body.at) &&
+      !Object.hasOwn(body, 'react') &&
+      !Object.hasOwn(body, 'agents') &&
+      !Object.hasOwn(body, 'channel')
+    )
+      extras.at = body.at
     else ok = false
   }
   return { ok, extras }
+}
+
+const CHANNEL_NOTICE_KEYS = ['id', 'op']
+
+/** A channel lifecycle notice as a board accepts it (#854): channel UUID and `delete` or `leave`. */
+export function readChannelNotice(v: unknown): ChannelNoticeBody | null {
+  if (!isRecord(v) || Object.keys(v).length !== CHANNEL_NOTICE_KEYS.length || !onlyKeys(v, CHANNEL_NOTICE_KEYS))
+    return null
+  if (!isMessageId(v.id) || !CHANNEL_OPS.some(o => o === v.op)) return null
+  return { id: v.id, op: v.op as ChannelNoticeBody['op'] }
 }
 
 const REACT_KEYS = ['to', 'emoji', 'op']

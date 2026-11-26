@@ -109,6 +109,12 @@ export interface TeamSource {
   setServices(change: ServicesChange): Promise<void>
   /** More members for a channel this board started (#355). */
   addMembers(key: string, peers: string[]): Promise<void>
+  /** Deletes a channel this board started (#854): removes locally and archives for members. */
+  deleteChannel(key: string): Promise<boolean>
+  /** Leaves a channel another board started (#854): removes locally and notifies active members. */
+  leaveChannel(key: string): Promise<boolean>
+  /** Restores an archived channel back into the channels list as read-only (#854). */
+  restoreChannel(key: string): Promise<void>
   /** A new member's welcome settled: their switches and the channels they join (#355). */
   welcome(w: Welcome): Promise<void>
   /** Opens the confirmation window of what the owner's phone asked (#377); the panel follows. */
@@ -320,6 +326,40 @@ export function teamSource(deps: TeamDeps): TeamSource {
       const id = keyParts(key)?.id ?? ''
       return change(`/api/team/threads/team/${encodeURIComponent(id)}/members`, { add: peers })
     },
+    async deleteChannel(key) {
+      const id = keyParts(key)?.id ?? ''
+      try {
+        await ownerPost(`/api/team/threads/team/${encodeURIComponent(id)}/delete`, {})
+      } catch (err) {
+        const code = err instanceof ApiError ? err.reply.error : undefined
+        if (code !== 'cancelled')
+          deps.toast(confirmError(err, deps.t()) ?? sendError(code, deps.t()), code !== 'confirm')
+        void load()
+        return false
+      }
+      if (now.get().selected === key) now.set({ ...now.get(), selected: null, thread: null, lines: [] })
+      void load()
+      return true
+    },
+    async leaveChannel(key) {
+      const id = keyParts(key)?.id ?? ''
+      try {
+        await ownerPost(`/api/team/threads/team/${encodeURIComponent(id)}/leave`, {})
+      } catch (err) {
+        const code = err instanceof ApiError ? err.reply.error : undefined
+        if (code !== 'cancelled')
+          deps.toast(confirmError(err, deps.t()) ?? sendError(code, deps.t()), code !== 'confirm')
+        void load()
+        return false
+      }
+      if (now.get().selected === key) now.set({ ...now.get(), selected: null, thread: null, lines: [] })
+      void load()
+      return true
+    },
+    restoreChannel(key) {
+      const id = keyParts(key)?.id ?? ''
+      return change(`/api/team/threads/team/${encodeURIComponent(id)}/restore`, {})
+    },
     welcome: w => change('/api/team/welcome', w),
     async confirmWaiting(id) {
       const w = now.get().waiting.find(x => x.id === id)
@@ -372,6 +412,9 @@ export function useTeam(open: boolean): TeamNow & Omit<TeamSource, 'now' | 'sync
     setAgents: source.setAgents,
     setServices: source.setServices,
     addMembers: source.addMembers,
+    deleteChannel: source.deleteChannel,
+    leaveChannel: source.leaveChannel,
+    restoreChannel: source.restoreChannel,
     welcome: source.welcome,
     confirmWaiting: source.confirmWaiting,
   }

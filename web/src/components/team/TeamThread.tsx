@@ -19,6 +19,7 @@ import { reducedMotion } from '../../models/spring.ts'
 import {
   type AgentsView,
   draftWhy,
+  isArchivedChannel,
   isChannel,
   keyParts,
   type MentionPerson,
@@ -82,6 +83,9 @@ export interface TeamThreadProps {
   onReply(id: string | null): void
   onReact?: ((id: string, emoji: string, remove: boolean) => void) | undefined
   onAddMembers?(key: string, peers: string[]): void
+  onDeleteChannel?(key: string): void
+  onLeaveChannel?(key: string): void
+  onRestoreChannel?(key: string): void
   /** The files that go with the next message (#371): uploading, ready or failed. */
   files?: readonly Attachment[]
   /** The teammates and their agents that may be addressed as `@Name.code` (#832, #842), for the box's list. */
@@ -105,16 +109,17 @@ export function TeamThread(props: TeamThreadProps) {
   const peer = team ? null : (view.roster.find(p => p.peer === scope) ?? null)
   const changed = peer?.pin === 'changed'
   const channel = isChannel(thread)
+  const archived = isArchivedChannel(thread)
   const messages = orderMessages(lines.filter(l => l.dir !== 'draft'))
   const drafts = lines.filter(l => l.dir === 'draft')
   const groups = chatDayGroups(chatItems(messages, { t, now, unreadFrom }))
   const scroll = useChatScroll(selected, messages)
   const reply = replyTo && !topic ? quoteOf(replyTo, messages, t) : null
   const named = team || channel
-  const canWrite = !disabled && !changed
+  const canWrite = !disabled && !changed && !archived
   // A message of files alone goes too (#371); not while one still uploads.
   const ready = files.filter(f => f.status === 'done')
-  const takesFiles = !!props.onAddFiles && !changed && view.files !== undefined
+  const takesFiles = !!props.onAddFiles && !changed && !archived && view.files !== undefined
   const sendable =
     (draft.trim() !== '' || ready.length > 0) &&
     !files.some(f => f.status === 'uploading') &&
@@ -212,32 +217,44 @@ export function TeamThread(props: TeamThreadProps) {
             ))}
           </div>
         )}
-        {changed && <p className="hint">{t('team.sendChanged')}</p>}
-        <TeamComposer
-          value={draft}
-          inputRef={box}
-          placeholder={
-            channel ? t('team.channelPlaceholder') : team ? t('team.chatPlaceholder') : t('team.placeholder', { name })
-          }
-          disabled={disabled}
-          canSend={sendable}
-          onChange={props.onDraft}
-          onSend={props.onSend}
-          reply={reply}
-          onCancelReply={() => props.onReply(null)}
-          sendTitle={t('team.sendHint')}
-          {...(props.mentions && { mentions: props.mentions })}
-          {...(files.length > 0 && {
-            attachments: <Attachments id="team-attachments" list={files} onRemove={id => props.onRemoveFile?.(id)} />,
-          })}
-          {...(takesFiles && {
-            actions: <AttachButton disabled={disabled} onFiles={given => props.onAddFiles?.(given)} />,
-          })}
-          {...(topic && {
-            sendLabel: topic.members ? t('team.startChannel') : t('team.startTopic'),
-            header: <TopicFields view={view} topic={topic} onTopic={props.onTopic} />,
-          })}
-        />
+        {archived ? (
+          <p className="hint team-readonly-note">{t('team.channelReadOnly')}</p>
+        ) : (
+          <>
+            {changed && <p className="hint">{t('team.sendChanged')}</p>}
+            <TeamComposer
+              value={draft}
+              inputRef={box}
+              placeholder={
+                channel
+                  ? t('team.channelPlaceholder')
+                  : team
+                    ? t('team.chatPlaceholder')
+                    : t('team.placeholder', { name })
+              }
+              disabled={disabled}
+              canSend={sendable}
+              onChange={props.onDraft}
+              onSend={props.onSend}
+              reply={reply}
+              onCancelReply={() => props.onReply(null)}
+              sendTitle={t('team.sendHint')}
+              {...(props.mentions && { mentions: props.mentions })}
+              {...(files.length > 0 && {
+                attachments: (
+                  <Attachments id="team-attachments" list={files} onRemove={id => props.onRemoveFile?.(id)} />
+                ),
+              })}
+              {...(takesFiles && {
+                actions: <AttachButton disabled={disabled} onFiles={given => props.onAddFiles?.(given)} />,
+              })}
+              {...(topic && {
+                sendLabel: topic.members ? t('team.startChannel') : t('team.startTopic'),
+                header: <TopicFields view={view} topic={topic} onTopic={props.onTopic} />,
+              })}
+            />
+          </>
+        )}
       </div>
     </section>
   )
@@ -260,18 +277,25 @@ function ThreadHead({
   onTopic,
   onMute,
   onAddMembers,
+  onDeleteChannel,
+  onLeaveChannel,
+  onRestoreChannel,
   work = null,
 }: TeamThreadProps & { name: string; peer: TeamRosterPeer | null; channel: boolean; general: boolean }) {
   const t = useT()
   const { now } = useBoardContext()
+  const [confirming, setConfirming] = useState<'delete' | 'leave' | null>(null)
   const team = keyParts(selected)?.scope === 'team'
   const changed = peer?.pin === 'changed'
+  const archived = isArchivedChannel(thread)
   // A channel's members by this board's names for them, this board left out (#355).
   const memberNames = (thread?.members ?? [])
     .filter(m => m !== view.me.peer)
     .map(m => view.roster.find(p => p.peer === m)?.name ?? t('team.formerOne'))
   const where = channel
-    ? t('team.channelOf', { names: memberNames.join(', ') })
+    ? memberNames.length
+      ? t('team.channelOf', { names: memberNames.join(', ') })
+      : t('team.channelAlone')
     : team
       ? general
         ? null
@@ -283,11 +307,14 @@ function ThreadHead({
   const link = safeLink(thread?.link)
   // The team chat's mute is its own threads', not a channel's.
   const chatMuted = team && !channel && agents?.peers.team?.muted === true
-  // Who may be added: in the roster, not a member yet; only in a channel this board started.
+  // Who may be added: in the roster, not a member yet; only in an active channel this board started.
   const addable =
-    channel && thread?.by === 'me' && onAddMembers && agents
+    channel && !archived && thread?.by === 'me' && onAddMembers && agents
       ? view.roster.filter(p => !(thread?.members ?? []).includes(p.peer))
       : []
+  const creatorName = thread?.archived
+    ? (view.roster.find(p => p.peer === thread.archived?.by)?.name ?? t('team.formerOne'))
+    : ''
   return (
     <header className="team-thread-head">
       <div className="team-thread-bar">
@@ -322,7 +349,29 @@ function ThreadHead({
             {t('team.newTopic')}
           </button>
         )}
-        {thread && (
+        {channel && !archived && thread?.by === 'me' && agents && onDeleteChannel && (
+          <button
+            type="button"
+            className="mini danger"
+            data-channel-delete
+            disabled={disabled}
+            onClick={() => setConfirming('delete')}
+          >
+            {t('team.deleteChannel')}
+          </button>
+        )}
+        {channel && !archived && thread?.by !== 'me' && agents && onLeaveChannel && (
+          <button
+            type="button"
+            className="mini danger"
+            data-channel-leave
+            disabled={disabled}
+            onClick={() => setConfirming('leave')}
+          >
+            {t('team.leaveChannel')}
+          </button>
+        )}
+        {thread && !archived && (
           <Switch
             name="mute"
             on={!thread.muted}
@@ -332,7 +381,80 @@ function ThreadHead({
           />
         )}
       </div>
-      {!general && thread && <TopicAsThread topic={selected} work={work} agents={agents} disabled={disabled} />}
+      {confirming && thread && (
+        <div className="team-channel-confirm" role="alertdialog" data-channel-confirm={confirming}>
+          <p>
+            {confirming === 'delete'
+              ? t('team.deleteChannelConfirm', { channel: title })
+              : archived
+                ? t('team.removeChannelConfirm', { channel: title })
+                : t('team.leaveChannelConfirm', { channel: title })}
+          </p>
+          <div className="team-channel-confirm-actions">
+            <button
+              type="button"
+              className="mini"
+              data-channel-cancel
+              disabled={disabled}
+              onClick={() => setConfirming(null)}
+            >
+              {t('team.cancel')}
+            </button>
+            <button
+              type="button"
+              className="mini danger-solid"
+              data-channel-confirm-go
+              disabled={disabled}
+              onClick={() => {
+                const op = confirming
+                setConfirming(null)
+                if (op === 'delete') onDeleteChannel?.(thread.key)
+                else onLeaveChannel?.(thread.key)
+              }}
+            >
+              {confirming === 'delete'
+                ? t('team.deleteChannel')
+                : archived
+                  ? t('team.removeChannel')
+                  : t('team.leaveChannel')}
+            </button>
+          </div>
+        </div>
+      )}
+      {archived && thread?.archived && (
+        <div className="team-archived-banner" data-channel-archived>
+          <p>{t('team.channelDeletedBy', { name: creatorName })}</p>
+          {agents && ((!thread.archived.restored && onRestoreChannel) || onLeaveChannel) && (
+            <div className="team-archived-actions">
+              {!thread.archived.restored && onRestoreChannel && (
+                <button
+                  type="button"
+                  className="mini"
+                  data-channel-restore
+                  disabled={disabled}
+                  onClick={() => onRestoreChannel(thread.key)}
+                >
+                  {t('team.restoreChannel')}
+                </button>
+              )}
+              {onLeaveChannel && (
+                <button
+                  type="button"
+                  className="mini danger"
+                  data-channel-leave
+                  disabled={disabled}
+                  onClick={() => setConfirming('leave')}
+                >
+                  {t('team.removeChannel')}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+      {!general && thread && (!archived || work) && (
+        <TopicAsThread topic={selected} work={work} agents={agents} disabled={disabled} />
+      )}
       {addable.length > 0 && thread && (
         <AddMember peers={addable} disabled={disabled} onAdd={id => onAddMembers?.(thread.key, [id])} />
       )}

@@ -77,11 +77,11 @@ import { describeThreadAction, performThreadAction } from './threads.ts'
 
 const isTarget = (v: unknown): v is string => v === TEAM || isPeerId(v)
 
-/** A channel's key (#355): a team thread kept here with a member list. */
+/** A channel's key (#355): a team thread kept here with a member list (not archived). */
 const isChannel = (v: unknown): v is string => {
   if (typeof v !== 'string' || !v.startsWith(`${TEAM}/`)) return false
   const all = readThreads()
-  return Object.hasOwn(all, v) && !!all[v]?.members
+  return Object.hasOwn(all, v) && !!all[v]?.members && !all[v]?.archived
 }
 
 /**
@@ -387,6 +387,16 @@ export function teamRoutes(
       const r = team.addMembers(a.key, a.add)
       return { status: r.ok ? 200 : r.error === 'thread' ? 404 : 400, body: { ...r } }
     }
+    if (a.kind === 'channel-delete') {
+      const r = await team.deleteChannel(a.key)
+      if (r.ok) onAgents?.()
+      return { status: r.ok ? 200 : r.error === 'thread' ? 404 : r.error === 'not_creator' ? 403 : 400, body: { ...r } }
+    }
+    if (a.kind === 'channel-leave') {
+      const r = await team.leaveChannel(a.key)
+      if (r.ok) onAgents?.()
+      return { status: r.ok ? 200 : r.error === 'thread' ? 404 : r.error === 'creator' ? 403 : 400, body: { ...r } }
+    }
     if (a.kind === 'react') {
       const r = await team.react(a.thread, a.message, a.emoji, a.op, { by: 'ui' })
       return { status: r.ok ? 200 : 400, body: { ...r } }
@@ -495,6 +505,16 @@ export function teamRoutes(
         kind: a.kind,
         channel: Object.hasOwn(all, a.key) ? (all[a.key]?.title ?? '') : '',
         members: a.add.map(m => team.nameOf(m)),
+      }
+    }
+    if (a.kind === 'channel-delete' || a.kind === 'channel-leave') {
+      const rec = readThreads()[a.key]
+      const me = team.view()?.me.peer
+      const members = (rec?.members ?? []).filter(m => m !== me).map(m => team.nameOf(m))
+      return {
+        kind: a.kind,
+        channel: rec?.title ?? '',
+        ...(members.length > 0 && { members }),
       }
     }
     if (a.kind === 'service-add')
@@ -882,6 +902,66 @@ export function teamRoutes(
       },
     },
     {
+      // Delete a channel this board started (#854): removes it locally and sends a signed notice so
+      // members archive their copy. Confirmed with the passkey when that switch is on.
+      method: 'POST',
+      path: /^\/api\/team\/threads\/team\/([^/]+)\/delete$/,
+      async handle(req, ctx) {
+        if (!team.view()) return undefined
+        const refused = ctx.refuse('board-header') ?? ctx.refuse('origin')
+        if (refused) return refused
+        const [id = ''] = ctx.params
+        if (!isMessageId(id)) return json(400, { ok: false, error: 'thread' })
+        const key = threadKey(TEAM, id)
+        const rec = readThreads()[key]
+        if (!rec?.members) return json(404, { ok: false, error: 'thread' })
+        if (rec.by !== 'me') return json(403, { ok: false, error: 'not_creator' })
+        const action: OwnerAction = { kind: 'channel-delete', key }
+        const wait = held(req, action)
+        if (wait) return wait
+        const r = await perform(action)
+        return json(r.status, r.body)
+      },
+    },
+    {
+      // Leave a channel another board started (#854): removes it locally and notifies active members.
+      // Confirmed with the passkey when that switch is on.
+      method: 'POST',
+      path: /^\/api\/team\/threads\/team\/([^/]+)\/leave$/,
+      async handle(req, ctx) {
+        if (!team.view()) return undefined
+        const refused = ctx.refuse('board-header') ?? ctx.refuse('origin')
+        if (refused) return refused
+        const [id = ''] = ctx.params
+        if (!isMessageId(id)) return json(400, { ok: false, error: 'thread' })
+        const key = threadKey(TEAM, id)
+        const rec = readThreads()[key]
+        if (!rec?.members) return json(404, { ok: false, error: 'thread' })
+        if (rec.by === 'me') return json(403, { ok: false, error: 'creator' })
+        const action: OwnerAction = { kind: 'channel-leave', key }
+        const wait = held(req, action)
+        if (wait) return wait
+        const r = await perform(action)
+        return json(r.status, r.body)
+      },
+    },
+    {
+      // Recover an archived channel back into the active list as read-only (#854).
+      method: 'POST',
+      path: /^\/api\/team\/threads\/team\/([^/]+)\/restore$/,
+      handle(_req, ctx) {
+        if (!team.view()) return undefined
+        const refused = ctx.refuse('board-header') ?? ctx.refuse('origin')
+        if (refused) return refused
+        const [id = ''] = ctx.params
+        if (!isMessageId(id)) return json(400, { ok: false, error: 'thread' })
+        const key = threadKey(TEAM, id)
+        const r = team.restoreChannel(key)
+        if (r.ok) onAgents?.()
+        return json(r.ok ? 200 : 404, r)
+      },
+    },
+    {
       // Who joined the team since this board began keeping welcomes, and is not welcomed yet (#355).
       method: 'GET',
       path: '/api/team/welcome',
@@ -964,7 +1044,9 @@ function welcomeFrom(
     !Array.isArray(channels) ||
     !channels.every(k => {
       const c = typeof k === 'string' && Object.hasOwn(all, k) ? all[k] : undefined
-      return !!c?.members && c.by === 'me' && (c.members.includes(peer) || c.members.length < MAX_MEMBERS)
+      return (
+        !!c?.members && !c.archived && c.by === 'me' && (c.members.includes(peer) || c.members.length < MAX_MEMBERS)
+      )
     })
   )
     return { ok: false, error: 'channels' }

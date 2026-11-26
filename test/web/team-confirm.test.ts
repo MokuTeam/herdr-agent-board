@@ -224,6 +224,15 @@ test('the window words a channel, a welcome and a channel’s new members (#355)
     title: 'team.confirm.members {"channel":"Deals"}',
     items: ['ben'],
   })
+  expect(confirmLines({ kind: 'channel-delete', channel: 'Deals', members: ['ana', 'ben'] }, t)).toEqual({
+    title: 'team.confirm.channelDelete {"channel":"Deals"}',
+    items: ['team.confirm.channelDeleteMembers {"names":"ana, ben"}'],
+    note: 'team.confirm.channelDeleteNote',
+  })
+  expect(confirmLines({ kind: 'channel-leave', channel: 'Theirs', members: ['ana'] }, t)).toEqual({
+    title: 'team.confirm.channelLeave {"channel":"Theirs"}',
+    note: 'team.confirm.channelLeaveNote',
+  })
 })
 
 test('#377 Confirm in the panel opens the window of what the phone asked, and gives back what the action answered', async () => {

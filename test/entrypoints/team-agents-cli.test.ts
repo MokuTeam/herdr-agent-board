@@ -2,7 +2,7 @@
 // they are not the owner's instructions, then each message quoted line by line, with nothing in a
 // peer's words able to move the cursor, reorder the text or pass for the board's own lines.
 import { expect, test } from 'bun:test'
-import { framedThread, teamAgents } from '../../src/entrypoints/team-agents-cli.ts'
+import { framedThread, teamAgents, teamChannel } from '../../src/entrypoints/team-agents-cli.ts'
 
 const P = 'A'.repeat(43)
 
@@ -509,6 +509,62 @@ test('#415: no drafts says so; a text over the limit is refused with its length 
     await expect(teamAgents('post', ['anna', 'x'.repeat(4062)], ctx)).rejects.toThrow(
       'not sent: the text is too long: 4062 of 4000 characters; send anything longer as a file (--file)',
     )
+  } finally {
+    server.stop(true)
+  }
+})
+
+test('#854 board team channel delete|leave: resolves channel ref, handles passkey 428 and creator/member errors', async () => {
+  const chId = '6f1c2a4e-8b3d-4c5e-9f7a-1b2c3d4e5f60'
+  const posted: string[] = []
+  let answer: (path: string) => Response = () => Response.json({ ok: true, copies: 2 })
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch(req) {
+      const path = new URL(req.url).pathname
+      if (path === '/api/team/threads')
+        return Response.json({
+          threads: [
+            {
+              key: `team/${chId}`,
+              scope: 'team',
+              id: chId,
+              title: 'Deals',
+              members: [P, 'B'.repeat(43)],
+              peerName: null,
+            },
+            { key: `${P}/general`, scope: P, id: 'general', title: null, peerName: 'anna' },
+          ],
+        })
+      posted.push(path)
+      return answer(path)
+    },
+  })
+  try {
+    const ctx = { webPort: server.port as number, roster: [{ peer: P, name: 'anna' }] }
+    expect(await teamChannel(['delete', chId.slice(0, 8)], ctx)).toBe(
+      `ok · deleted channel "Deals" (${chId.slice(0, 8)}); notified 2 members`,
+    )
+    expect(await teamChannel(['leave', chId.slice(0, 8)], ctx)).toBe(
+      `ok · left channel "Deals" (${chId.slice(0, 8)}); notified 2 members`,
+    )
+    expect(posted).toEqual([`/api/team/threads/team/${chId}/delete`, `/api/team/threads/team/${chId}/leave`])
+
+    await expect(teamChannel(['delete', 'anna'], ctx)).rejects.toThrow('that thread is not a channel')
+    await expect(teamChannel(['remove', chId.slice(0, 8)], ctx)).rejects.toThrow(/usage:/)
+
+    const url = 'http://localhost:12422/?confirm=AAAAAAAAAAAAAAAAAAAAAA'
+    answer = () =>
+      Response.json({ ok: false, error: 'confirm', id: 'AAAAAAAAAAAAAAAAAAAAAA', confirm: url }, { status: 428 })
+    expect(await teamChannel(['delete', chId.slice(0, 8)], ctx)).toBe(
+      `waits for the owner: open ${url} within 2 minutes and confirm it with a passkey`,
+    )
+
+    answer = () => Response.json({ ok: false, error: 'not_creator' }, { status: 403 })
+    await expect(teamChannel(['delete', chId.slice(0, 8)], ctx)).rejects.toThrow('only the board that started')
+    answer = () => Response.json({ ok: false, error: 'creator' }, { status: 403 })
+    await expect(teamChannel(['leave', chId.slice(0, 8)], ctx)).rejects.toThrow('this board started this channel')
   } finally {
     server.stop(true)
   }

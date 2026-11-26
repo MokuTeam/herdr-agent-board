@@ -63,7 +63,8 @@ export function storeMutes(): (thread: string) => boolean {
   return key => {
     const own = Object.hasOwn(threads, key) ? threads[key] : undefined
     // The team chat's mute is its own threads', not a channel's (#355): a channel has its own.
-    return own?.muted === true || (team && splitKey(key)?.scope === TEAM && !own?.members)
+    // An archived channel (#854) is read-only and quiet: never counts unread or raises notices.
+    return own?.muted === true || !!own?.archived || (team && splitKey(key)?.scope === TEAM && !own?.members)
   }
 }
 

@@ -230,6 +230,19 @@ export interface ReactBody {
   op: ReactionOp
 }
 
+/** Channel lifecycle operations carried in `body.channel` (#854). */
+export const CHANNEL_OPS = ['delete', 'leave'] as const
+export type ChannelOp = (typeof CHANNEL_OPS)[number]
+
+/** A signed channel notice (#854): the channel's UUID and whether the creator deleted it or a member left. */
+export interface ChannelNoticeBody {
+  id: string
+  op: ChannelOp
+}
+
+/** Plain text carried alongside `body.channel` so the hub relay accepts it (`text.length >= 1`). */
+export const CHANNEL_NOTICE_TEXT = 'channel notice'
+
 /** What a sender signs: a question, as the fields of the message. It travels as the JSON text of this object. */
 export interface Message {
   v: number
@@ -251,6 +264,8 @@ export interface Message {
    * only to a peer the owner exposed an agent to (an older board drops it as an unknown field).
    * `at` (#832): the code name of the recipient's agent this copy is addressed to; sent only to a
    * board whose directory this board holds.
+   * `channel` (#854): a signed channel lifecycle notice (`delete` or `leave`), standalone; ignored
+   * by older boards as an unknown body field.
    */
   body: {
     text: string
@@ -264,6 +279,7 @@ export interface Message {
     react?: ReactBody
     agents?: DirectoryEntry[]
     at?: string
+    channel?: ChannelNoticeBody
   }
 }
 

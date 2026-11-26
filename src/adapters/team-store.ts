@@ -23,6 +23,7 @@ import {
   type Envelope,
   type ErrorCode,
   type FileRef,
+  GENERAL,
   generateKey,
   isMessageId,
   type KeyPair,
@@ -343,6 +344,36 @@ export function refuseOut(id: string, code: ErrorCode, at: number): boolean {
   })
 }
 
+/** Removes all inbox messages of `thread`, returning how many went. Creates or writes nothing when none match. */
+export function dropThreadInbox(thread: string): number {
+  if (!Object.values(readAllInbox()).some(list => list.some(i => i.thread === thread))) return 0
+  return changeLists<InboxItem, number>(teamInboxFile(), peers => {
+    let n = 0
+    for (const [p, list] of Object.entries(peers)) {
+      const kept = list.filter(i => i.thread !== thread)
+      n += list.length - kept.length
+      if (kept.length) peers[p] = kept
+      else delete peers[p]
+    }
+    return n
+  })
+}
+
+/** Removes all outbox items of `thread`, returning how many went. Creates or writes nothing when none match. */
+export function dropThreadOutbox(thread: string): number {
+  if (!Object.values(readAllOutbox()).some(list => list.some(o => o.thread === thread))) return 0
+  return changeLists<OutboxItem, number>(teamOutboxFile(), peers => {
+    let n = 0
+    for (const [p, list] of Object.entries(peers)) {
+      const kept = list.filter(o => o.thread !== thread)
+      n += list.length - kept.length
+      if (kept.length) peers[p] = kept
+      else delete peers[p]
+    }
+    return n
+  })
+}
+
 // ---- Reactions (#687)
 
 /** One reactor's latest state on a message in a thread (`by` is `'me'` or a peer id). */
@@ -506,6 +537,16 @@ export function releaseHeldReactions(peer: string): number {
   })
 }
 
+/** Removes all reactions on `thread`, returning how many went. Creates or writes nothing when none match. */
+export function dropThreadReactions(thread: string): number {
+  if (!readReactions().some(e => e.thread === thread)) return 0
+  return changeReactions(f => {
+    const before = f.entries.length
+    f.entries = f.entries.filter(e => e.thread !== thread)
+    return before - f.entries.length
+  })
+}
+
 // ---- Drafts
 
 /** What an agent drafted for a person to send; nothing leaves the board until the person presses Send. */
@@ -572,7 +613,43 @@ export const takeDraft = (id: string): Draft | null =>
     return d ?? null
   })
 
+/** Removes all held drafts (and their attached draft files) for `thread`, returning how many went. */
+export function dropThreadDrafts(thread: string): number {
+  const matches = (d: Draft): boolean => `${d.to}/${d.thread?.id ?? GENERAL}` === thread
+  if (!readDrafts().some(matches)) return 0
+  const dropped = changeDrafts(drafts => {
+    const removed: Draft[] = []
+    for (const [id, d] of Object.entries(drafts)) {
+      if (!matches(d)) continue
+      removed.push(d)
+      delete drafts[id]
+    }
+    return removed
+  })
+  for (const d of dropped) if (d.file) dropDraftFile(d.file.path)
+  return dropped.length
+}
+
 // ---- Threads (#216)
+
+/** An archived channel (#854): deleted by its creator; read-only here and kept out of the active list unless restored. */
+export interface ChannelArchive {
+  at: number
+  by: string
+  restored?: boolean
+}
+
+/** An outgoing signed channel notice (#854) waiting to be delivered/acked through the hub. */
+export interface ChannelNoticeOutboxItem {
+  env: Envelope
+  id: string
+  to: string
+  state: OutState
+  at: number
+  code?: ErrorCode
+}
+
+export const KEEP_CHANNEL_NOTICES = 200
 
 /** A thread as this board keeps it: in a pair (scope: the peer's id) or the team (scope: `team`). */
 export interface ThreadRecord {
@@ -593,9 +670,12 @@ export interface ThreadRecord {
    * sent to them alone. Absent: the whole team's.
    */
   members?: string[]
+  /** Deleted by its creator (#854): kept locally as read-only archive until removed or restored. */
+  archived?: ChannelArchive
 }
-type ThreadsFile = { v: 1; threads: Record<string, ThreadRecord> }
-const isThreads = (v: unknown): v is ThreadsFile => isRecord(v) && v.v === 1 && isRecord(v.threads)
+type ThreadsFile = { v: 1; threads: Record<string, ThreadRecord>; notices?: ChannelNoticeOutboxItem[] }
+const isThreads = (v: unknown): v is ThreadsFile =>
+  isRecord(v) && v.v === 1 && isRecord(v.threads) && (v.notices === undefined || Array.isArray(v.notices))
 
 /** Every thread by its key. Creates nothing. */
 export const readThreads = (): Record<string, ThreadRecord> =>
@@ -610,12 +690,90 @@ export function changeThreads<R>(fn: (threads: Record<string, ThreadRecord>) => 
     (cur: ThreadsFile | null) => {
       const threads = bare(cur?.threads ?? {})
       result = fn(threads)
-      return { v: 1 as const, threads }
+      return {
+        v: 1 as const,
+        threads,
+        ...(cur?.notices?.length && { notices: cur.notices }),
+      }
     },
     isThreads,
     PRIVATE,
   )
   return result as R
+}
+
+/** Outgoing channel notices kept on this board (#854). Creates nothing. */
+export const readChannelNotices = (): ChannelNoticeOutboxItem[] => readJson(teamThreadsFile(), isThreads)?.notices ?? []
+
+function changeChannelNotices<R>(fn: (notices: ChannelNoticeOutboxItem[]) => R): R {
+  mkdirSync(stateDir(), { recursive: true })
+  let result: R | undefined
+  updateJson(
+    teamThreadsFile(),
+    (cur: ThreadsFile | null) => {
+      const threads = bare(cur?.threads ?? {})
+      const notices = [...(cur?.notices ?? [])]
+      result = fn(notices)
+      if (notices.length > KEEP_CHANNEL_NOTICES) {
+        const settled = notices
+          .map((n, i) => ({ n, i }))
+          .filter(x => x.n.state !== 'queued' && x.n.state !== 'delivered')
+          .sort((a, b) => a.n.at - b.n.at)
+        const excess = notices.length - KEEP_CHANNEL_NOTICES
+        const drop = new Set(settled.slice(0, excess).map(x => x.i))
+        const trimmed = notices.filter((_, i) => !drop.has(i))
+        return { v: 1 as const, threads, ...(trimmed.length && { notices: trimmed }) }
+      }
+      return { v: 1 as const, threads, ...(notices.length && { notices }) }
+    },
+    isThreads,
+    PRIVATE,
+  )
+  return result as R
+}
+
+/** Saves outgoing signed channel notices (once per id). */
+export function addChannelNotices(items: ChannelNoticeOutboxItem[]): void {
+  if (!items.length) return
+  changeChannelNotices(notices => {
+    const ids = new Set(notices.map(n => n.id))
+    for (const item of items) {
+      if (ids.has(item.id)) continue
+      ids.add(item.id)
+      notices.push(item)
+    }
+  })
+}
+
+/** Updates an outgoing channel notice's delivery state; false when no such notice exists (writes nothing). */
+export function setChannelNoticeState(id: string, state: DeliveryState, at: number): boolean {
+  if (!readChannelNotices().some(n => n.id === id)) return false
+  return changeChannelNotices(notices => {
+    let hit = false
+    for (const n of notices)
+      if (n.id === id && RANK[state] > RANK[n.state]) {
+        n.state = state
+        n.at = at
+        hit = true
+      }
+    return hit
+  })
+}
+
+/** Refuses an outgoing channel notice; false when no queued notice matches (writes nothing). */
+export function refuseChannelNotice(id: string, code: ErrorCode, at: number): boolean {
+  if (!readChannelNotices().some(n => n.id === id && n.state === 'queued')) return false
+  return changeChannelNotices(notices => {
+    let hit = false
+    for (const n of notices)
+      if (n.id === id && n.state === 'queued') {
+        n.state = 'refused'
+        n.code = code
+        n.at = at
+        hit = true
+      }
+    return hit
+  })
 }
 
 // ---- What agents may do (#216)
