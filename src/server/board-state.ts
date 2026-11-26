@@ -76,6 +76,8 @@ export interface BoardState {
   slices(): BoardSlices
   /** The latest payload's decisions (#487), for a node's page (#784, cut to its sessions); null while off. */
   decisions(): DecisionsPayload | null
+  /** The latest payload's sessions: this computer's and, on a master, its nodes' (#904, for a node's page). */
+  shownItems(): readonly Item[]
   items(): Item[]
   observation(): BoardObservation | null
   find(key: string): Item | undefined
@@ -475,6 +477,7 @@ export function createBoardState({
     const remoteAgy = others?.devices.filter(d => d.id !== LOCAL && !d.revoked).map(d => d.status?.agyLimits) ?? []
     const agyLimits = pickAgyLimits([localAgy, ...remoteAgy])
     const held = others ? heldByDevice(schedules) : null
+    const { items: relayedItems, ...fromSlices } = masterSlices?.() ?? {}
     const devices = others
       ? others.devices.map(d => {
           const n = d.id !== LOCAL ? (held?.[d.id] ?? 0) : 0
@@ -577,7 +580,9 @@ export function createBoardState({
         return f ? { masterFlags: f } : {}
       })(),
       // The master's time, calendar, journal and presence: only on a node whose master gave them (#780).
-      ...(masterSlices?.() ?? {}),
+      ...fromSlices,
+      // The other machines' sessions beside this computer's (#904): only on a node whose master gave them.
+      ...(relayedItems?.length ? { items: [...combined, ...relayedItems] } : {}),
     }
   }
 
@@ -585,12 +590,14 @@ export function createBoardState({
   // changed (stale included): a refresh time that moves every few seconds alone is no news.
   let sent = ''
   let lastSlices: BoardSlices = {}
+  let lastItems: readonly Item[] = []
   let lastDecisions: DecisionsPayload | null = null
   function publish(): void {
     // Turned off in config.json: no pane stays on show.
     if (!terminalOn(cfg)) terminals?.stopAll()
     const next = board()
     lastSlices = slicesOf(next)
+    lastItems = next.items
     lastDecisions = next.decisions ?? null
     const key = JSON.stringify(next)
     payload = JSON.stringify({ ...next, lastSuccessfulRefreshAt })
@@ -739,6 +746,7 @@ export function createBoardState({
   return {
     payload: () => payload,
     slices: () => lastSlices,
+    shownItems: () => lastItems,
     decisions: () => lastDecisions,
     items: () => items,
     observation: () => (lastSuccessfulRefreshAt && !isStale() ? { items, observedAt: lastSuccessfulRefreshAt } : null),

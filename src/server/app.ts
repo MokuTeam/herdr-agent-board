@@ -91,7 +91,7 @@ import {
 } from '../adapters/ssh.ts'
 import { rekeySession } from '../adapters/work-thread-store.ts'
 import { connectWorkdeskEvents } from '../adapters/workdesk-events.ts'
-import { nodeSlicesView, nodesAnswerForNode, withNodeDecisions } from '../core/board-slices.ts'
+import { nodeSlicesView, nodesAnswerForNode, withNodeDecisions, withNodeItems } from '../core/board-slices.ts'
 import { NODE_PROGRAMS } from '../core/bundle.ts'
 import { answerText, decisionsConfig } from '../core/decisions.ts'
 import { journalConfig } from '../core/journal.ts'
@@ -118,6 +118,7 @@ import { masterHeldIds, withMasterDecisions } from '../core/node-decisions.ts'
 import { dropMovedCards } from '../core/node-items.ts'
 import { JOIN_TTL_MS } from '../core/node-join.ts'
 import { pageWithNodeMaster } from '../core/node-master-page.ts'
+import { keyedPath, nodePath } from '../core/node-proxy.ts'
 import {
   configuredNodeAddresses,
   deviceIdFromHost,
@@ -1804,12 +1805,23 @@ export async function startServer({
     if (path === null) return json(400, { error: 'path' })
     if (handoverFrozen && req.method !== 'GET' && req.method !== 'HEAD')
       return json(503, { error: 'handover-frozen', message: 'master handover in progress; writes are frozen' })
+    // One of this board's own sessions, as a node's page names it beside its own (#904,
+    // core/board-slices.ts itemsForNode): answered here by its own key.
+    const keyed = from ? keyedPath(raw) : null
+    if (keyed && keyed.device === (nodesConfig(cfg.nodes, hostname())?.id ?? '')) {
+      const own = new URL(url)
+      own.pathname = nodePath(keyed)
+      return replayRelayed(new Request(own, req), from)
+    }
     // For a node only (#780): the payload's master-run parts, and a sessionless terminal's command as the owner's.
     if (req.method === 'GET' && raw === BOARD_SLICES_PATH) {
       // The node's own page asks as the owner; a node session reads its panels by their own paths.
       if (from?.who.kind !== 'owner') return json(403, { ok: false, error: 'owner' })
-      // Since #784 with the master's decisions for that node's sessions.
-      return json(200, { ok: true, slices: withNodeDecisions(board.slices(), board.decisions(), from.device) })
+      // Since #784 with the master's decisions for that node's sessions; since #904 with the other
+      // machines' sessions, this board's own under its id.
+      const selfId = nodesConfig(cfg.nodes, hostname())?.id ?? ''
+      const slices = withNodeDecisions(board.slices(), board.decisions(), from.device)
+      return json(200, { ok: true, slices: withNodeItems(slices, board.shownItems(), from.device, selfId) })
     }
     if (req.method === 'POST' && raw === NODE_CLI_PATH) {
       if (from?.who.kind !== 'owner') return json(403, { ok: false, error: 'owner' })
