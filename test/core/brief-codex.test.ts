@@ -20,6 +20,14 @@ async function before(): Promise<typeof brief> {
   }
 }
 
+const legacyBrief = (text: string) =>
+  text
+    .replace(/^- For a long-running external process,.*\n/m, '')
+    .replace(
+      "  Claude's CronCreate and ScheduleWakeup reminders disappear when the Claude session sleeps or restarts. Board reminders survive both. Use Board reminders for anything due later than a few minutes.",
+      "  More reliable than CronCreate or ScheduleWakeup: those live in this Claude process and die when the idle session is put to sleep; the board's entries survive sleep and restarts. Use it for anything due later than a few minutes.",
+    )
+
 test('the brief for Claude is byte for byte what it was, with and without threads, state and herdr', async () => {
   const old = await before()
   const card = { category: 'acme', doing: 'x', wait: 'CI', ask: 'ok?' }
@@ -28,7 +36,7 @@ test('the brief for Claude is byte for byte what it was, with and without thread
     for (const c of [null, card])
       for (const t of [null, threads, { agents: false, gapSec: 60, share: true }])
         for (const sinks of [[], ['bw']])
-          expect(brief(cfg, c, 'C:\\X', e, 'Claude', presence, null, sinks, true, t)).toBe(
+          expect(legacyBrief(brief(cfg, c, 'C:\\X', e, 'Claude', presence, null, sinks, true, t))).toBe(
             old(cfg, c, 'C:\\X', e, 'Claude', presence, null, sinks, true, t),
           )
   expect(BRIEF_VERSION).toBe(7)

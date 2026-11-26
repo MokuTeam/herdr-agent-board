@@ -101,6 +101,14 @@ test("malformed hook structures are rejected without replacing someone else's co
 })
 
 // The one line of the brief #321 changed since, for every agent alike.
+const legacyBrief = (text: string) =>
+  text
+    .replace(/^- For a long-running external process,.*\n/m, '')
+    .replace(
+      "  Claude's CronCreate and ScheduleWakeup reminders disappear when the Claude session sleeps or restarts. Board reminders survive both. Use Board reminders for anything due later than a few minutes.",
+      "  More reliable than CronCreate or ScheduleWakeup: those live in this Claude process and die when the idle session is put to sleep; the board's entries survive sleep and restarts. Use it for anything due later than a few minutes.",
+    )
+
 const DOING_THEN = '- board doing "<3-8 words>": when you start a distinct task.'
 const DOING_NOW =
   '- board doing "<3-8 words>": when you start a distinct task, and again when you move to its next step.'
@@ -133,7 +141,10 @@ test('the shared brief stays byte-identical for Claude and pi bridge sessions', 
     expect(herdrLine(env)).toBe(old.herdrLine(env))
     const then = old.brief(cfg, card, 'C:\\Work\\Имя %', env)
     expect(then).toContain(DOING_THEN)
-    expect(brief(cfg, card, 'C:\\Work\\Имя %', env)).toBe(then.replace(DOING_THEN, DOING_NOW))
+    const current = brief(cfg, card, 'C:\\Work\\Имя %', env)
+    expect(env.HERDR_ENV && !env.PI_CODING_AGENT ? legacyBrief(current) : current).toBe(
+      then.replace(DOING_THEN, DOING_NOW),
+    )
   }
   const codex = brief(cfg, card, 'C:\\Work\\Имя %', {}, 'Codex')
   expect(codex).toContain('every Codex session')

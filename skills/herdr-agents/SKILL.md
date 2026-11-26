@@ -86,6 +86,11 @@ board unschedule <id>
 
 At that time the board types `[board reminder] <text>` into this session as a prompt, waking it if it sleeps. Write the text as an instruction to yourself. By default it arrives on time, queued into a running turn; `--idle` waits until the session is free.
 
+For a long-running external process, give the card a specific waiting reason with `card`
+(`op: "wait"`, fallback `board wait`) and end your turn. Skip shell `sleep` and PowerShell
+`Start-Sleep` polling loops. Resume on an existing event or one authorized Board reminder.
+Mark the card as doing when work resumes.
+
 Prefer it to `CronCreate` and `ScheduleWakeup` for anything due later than a few minutes: those live in this Claude process and die when the session is put to sleep or restarted; the board's entries survive both.
 
 ## Run something the user should see or answer

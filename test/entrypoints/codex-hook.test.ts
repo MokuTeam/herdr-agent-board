@@ -49,6 +49,23 @@ test('Codex SessionStart gives the card brief, without Claude profile metadata o
   expect(readCard(box)?.profileDir).toBeUndefined()
 })
 
+test('native Codex hook refreshes post-#918 sessions and gates Workdesk guidance', async () => {
+  const box = await sandbox()
+  configure(box)
+  const file = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json')
+  const env = { HERDR_ENV: '1' }
+  const setWorkers = (workerBriefSessions: string[]) =>
+    writeFileSync(file, JSON.stringify({ language: 'en', port: 9, workdesk: { workerBriefSessions } }))
+  setWorkers(['another-id'])
+  putCard(box, { briefV: CODEX_BRIEF_VERSION })
+  const other = await hook(box, 'UserPromptSubmit', 'next step', env)
+  expect(other).not.toContain('Workdesk rule 8')
+  expect(other).toContain('board ask')
+  expect(readCard(box)?.briefV).toBe(CODEX_BRIEF_VERSION + 1)
+  setWorkers([ID])
+  expect(await hook(box, 'SessionStart', '', env)).toContain('Workdesk rule 8')
+})
+
 test('first prompt briefs an already running Codex session; subsequent prompts clear ask/pin without another brief', async () => {
   const box = await sandbox()
   configure(box)

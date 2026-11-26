@@ -19,6 +19,8 @@ export const CODEX_BRIEF_VERSION = 10
 export interface BriefOptions {
   /** Whether the `agent-board` MCP server is registered for this session's harness. */
   mcp?: boolean
+  /** Session ID to match against the local Workdesk executor allowlist. */
+  workdeskSession?: string
   /** Whether Team is enabled on this board (or its master, on a node). */
   team?: boolean
   /** Session id for the CLI fallback line (`board --session <id> <command>`), when the shell may lack pane env. */
@@ -26,6 +28,27 @@ export interface BriefOptions {
 }
 
 type Env = Record<string, string | undefined>
+
+function nativeExecutor(env: Env): boolean {
+  return env.HERDR_ENV === '1' && !!env.HERDR_PANE_ID && !env.PI_CODING_AGENT
+}
+
+export function briefVersionFor(agent: 'Claude' | 'Codex', env: Env = process.env): number {
+  const base = agent === 'Claude' ? BRIEF_VERSION : CODEX_BRIEF_VERSION
+  return nativeExecutor(env) ? base + 1 : base
+}
+
+/** An explicit per-host allowlist of Workdesk executor session IDs. */
+function workdeskExecutor(raw: unknown, session: string | undefined): boolean {
+  const workers = (raw as { workerBriefSessions?: unknown } | null | undefined)?.workerBriefSessions
+  return !!session && Array.isArray(workers) && workers.includes(session)
+}
+
+const workdeskQuestion =
+  '- Workdesk rule 8: ask the owner only on the Workdesk task card via report_task with status "waiting" and 2–4 options. Notify the Orchestrator that the question is on the card. Keep the question out of Board cards, threads and notifications.'
+
+const claudeReminder =
+  "  Claude's CronCreate and ScheduleWakeup reminders disappear when the Claude session sleeps or restarts. Board reminders survive both."
 
 /**
  * Where the session runs, when herdr is its host (herdr puts the pane's ids into its environment),
@@ -47,7 +70,7 @@ export function herdrLine(env: Env = process.env, agent: 'Claude' | 'Codex' | 'A
 }
 
 export function brief(
-  cfg: Pick<Config, 'categories'>,
+  cfg: Pick<Config, 'categories' | 'workdesk'>,
   card: Card | null | undefined,
   cwd: string,
   env: Env = process.env,
@@ -69,6 +92,20 @@ export function brief(
   /** MCP-first mode (#911), when `agent-board` is registered for this session's harness. */
   opts: BriefOptions = {},
 ): string {
+  const executor = agent !== 'Antigravity' && nativeExecutor(env)
+  const workdesk = executor && workdeskExecutor(cfg.workdesk, opts.workdeskSession ?? opts.session)
+  const wait = opts.mcp ? 'the card tool (op: "wait")' : 'board wait'
+  const remind = opts.mcp ? 'schedule (op: "remind", idle: true)' : 'board remind with --idle'
+  const longWait =
+    executor &&
+    `- For a long-running external process, set a specific reason with ${wait}, then end your turn. Skip sleep / Start-Sleep polling loops and blocking waits. Resume on an existing event or one authorized reminder via ${remind}${workdesk ? ' (Workdesk rule 10)' : ''}. Mark the card as doing when work resumes.`
+  const reminder =
+    agent === 'Claude' &&
+    (workdesk
+      ? claudeReminder
+      : executor
+        ? `${claudeReminder} Use Board reminders for anything due later than a few minutes.`
+        : "  More reliable than CronCreate or ScheduleWakeup: those live in this Claude process and die when the idle session is put to sleep; the board's entries survive sleep and restarts. Use it for anything due later than a few minutes.")
   const full = agent === 'Claude' || agent === 'Antigravity'
   const cat = card?.category
   const guess = categoryFor(cfg, cwd)
@@ -93,12 +130,13 @@ export function brief(
     return [
       `[agent-board] The user watches every ${agent} session on a kanban board in herdr: lanes by category; columns working, needs the user, waiting on someone else, done, idle.`,
       "Working, done and terminal dialogs are detected automatically. Use the `agent-board` MCP server's tools (as this session; no need to tell the user):",
-      `- card: op \`cat\` (lane; Now: ${now}; Known: ${known}; text creates a new lane), \`doing\` (3-8 words at each task/step), \`ask\` (short question -> "needs the user"; cleared on reply), \`wait\` (blocked outside this chat; cleared by doing/done), \`done\` (finished; optional text).`,
-      full && decisions && decisionsBrief(decisions, true),
+      `- card: op \`cat\` (lane; Now: ${now}; Known: ${known}; text creates a new lane), \`doing\` (3-8 words at each task/step), ${workdesk ? '' : '`ask` (short question -> "needs the user"; cleared on reply), '}\`wait\` (blocked outside this chat; cleared by doing/done), \`done\` (finished; optional text).`,
+      workdesk && workdeskQuestion,
+      longWait,
+      !workdesk && full && decisions && decisionsBrief(decisions, true),
       full && watches && watchesBrief(true),
       `- schedule: op \`remind\` (when: in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00; text: instruction to yourself; idle: true to wait until free), \`every\` (5-field cron, >=5m), \`list\`, \`unschedule\` (id). Fires as "[board reminder] <text>"${agent === 'Claude' ? ', waking if asleep' : ''}.`,
-      agent === 'Claude' &&
-        "  More reliable than CronCreate or ScheduleWakeup: those live in this Claude process and die when the idle session is put to sleep; the board's entries survive sleep and restarts. Use it for anything due later than a few minutes.",
+      reminder,
       '- agents: op `list` (all sessions across harnesses and devices), `send` (to, message; wakes if asleep, reply comes as a board reminder).',
       '- spawn: start another session in a new herdr tab (name, cwd, brief, profile, device, lane, agent, trust).',
       full && todos?.agents && todosBrief(true),
@@ -124,14 +162,16 @@ export function brief(
     // script around it (Get-Location; …, cd …; …) is no such command: inside, herdr refuses it (#916).
     agent === 'Codex' &&
       '  Run each board command as a shell call of its own that starts with board, nothing before or after it (no cd, Get-Location, ; or script around it): only that call is let out of the sandbox to herdr.',
-    '- board ask "<the question, short>": before ending a turn that needs the user\'s answer or decision (approve a draft, pick an option, give data). Puts the card under "needs the user"; cleared by itself when the user replies.',
-    full && decisions && decisionsBrief(decisions),
+    !workdesk &&
+      '- board ask "<the question, short>": before ending a turn that needs the user\'s answer or decision (approve a draft, pick an option, give data). Puts the card under "needs the user"; cleared by itself when the user replies.',
+    workdesk && workdeskQuestion,
+    !workdesk && full && decisions && decisionsBrief(decisions),
     '- board wait "<who/what>": before ending a turn blocked on something outside this chat (client reply, CI, another session, a date). The card stays in "waiting" until you run doing or done.',
+    longWait,
     full && watches && watchesBrief(),
     '- board done ["<result>"]: task finished; clears doing, wait and ask.',
     `- board remind <when> "<text>": at that time the board types "[board reminder] <text>" into this session as a prompt${agent === 'Claude' ? ', waking it if it sleeps' : ''}; on time, so a working session gets it queued into its turn (add --idle to wait until it is free, for work that needs a fresh turn rather than a time). when: in 30m, in 2h, at 15:30, tomorrow 9:00, fri 17:00, 2026-10-20 14:00 (local time). board every "<cron, 5 fields>" "<text>" repeats it (runs at least 5 minutes apart); board schedule lists this session's entries, board unschedule <id> removes one. Write the text as an instruction to yourself.`,
-    agent === 'Claude' &&
-      "  More reliable than CronCreate or ScheduleWakeup: those live in this Claude process and die when the idle session is put to sleep; the board's entries survive sleep and restarts. Use it for anything due later than a few minutes.",
+    reminder,
     full && todos?.agents && todosBrief(),
     full && sinks.length > 0 && secretsBrief(sinks),
     full && calendar && calendarBrief(),

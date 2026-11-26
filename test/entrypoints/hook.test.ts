@@ -66,6 +66,19 @@ const sessionStart = (box: Sandbox, sid: string) => ({ hook_event_name: 'Session
 const briefIn = (box: Sandbox, card: Card | null): string =>
   brief(normalizeConfig({ language: 'en' }), card, box.dir, { ...box.env, HERDR_PANE_ID: 'p1' })
 
+test('native Claude hook gates Workdesk owner guidance by exact local configuration', async () => {
+  const box = await sandbox()
+  englishConfig(box)
+  writeFileSync(configFile(box), JSON.stringify({ language: 'en', workdesk: { workerBriefSessions: ['worker'] } }))
+  const env = { HERDR_ENV: '1' }
+  const worker = await runHook(box, sessionStart(box, 'worker'), 'p1', env)
+  const other = await runHook(box, sessionStart(box, 'another-worker'), 'p1', env)
+  expect(worker).toContain('Workdesk rule 8')
+  expect(worker).toContain('CronCreate and ScheduleWakeup')
+  expect(other).not.toContain('Workdesk rule 8')
+  expect(other).toContain('board ask')
+})
+
 test('SessionStart in a herdr pane: the full brief, and the card remembers it was briefed', async () => {
   const box = await sandbox()
   englishConfig(box)

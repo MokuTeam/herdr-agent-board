@@ -89,6 +89,11 @@ board --session <sid> unschedule <id>
 
 At that time the board types `[board reminder] <text>` into this session as a prompt. Write the text as an instruction to yourself. By default it arrives on time, queued behind a running turn; `idle: true` (`--idle`) waits until the session is free.
 
+For a long-running external process, give the card a specific waiting reason with `card`
+(`op: "wait"`, fallback `board wait`) and end your turn. Skip shell `sleep` and PowerShell
+`Start-Sleep` polling loops. Resume on an existing event or one authorized Board reminder.
+Mark the card as doing when work resumes.
+
 ## Sleep and restart
 
 - With the board’s own wake enabled, `board sleep` can put an idle Codex session to sleep. A message or reminder wakes the same conversation. If its pane is gone, wake opens a tab in its workspace.
