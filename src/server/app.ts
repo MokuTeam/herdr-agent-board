@@ -2138,7 +2138,10 @@ export async function startServer({
           ? teamConfig(cfg.team) !== null
           : entry.group === 'launch' && /^\/api\/launch\/[\w-]+\//.test(raw)
             ? launches.list().some(l => l.id === raw.split('/')[3])
-            : false,
+            : entry.group === 'launch' &&
+              process.platform === 'win32' &&
+              nodeConfig(cfg.node)?.id === 'win-laptop' &&
+              /^\/api\/launch(?:\/options)?$/.test(raw),
     })
     const upFlags = createNodeMasterFlags({ cfg, log, changed: () => void runRefresh() })
     nodeFlags = upFlags
