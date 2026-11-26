@@ -56,6 +56,8 @@ export interface StatusSources {
   addresses?: () => readonly string[]
   /** How this board takes an update (#793): by git in a checkout, else from an archive. No `updates` without it. */
   updates?: () => 'git' | 'archive'
+  /** The MokuTab functions folder's stamp (#864, services/node/fn-sync.ts); undefined without the folder. */
+  functions?: () => string | undefined
   platform?: string
   arch?: string
   home?: string
@@ -126,6 +128,7 @@ export function createNodeStatus(src: StatusSources): { answer(): Promise<NodeSt
       const awake = items.filter(i => !i.sleeping)
       const [load, sha, git] = await Promise.all([(src.load ?? sysLoad)(), commitOnce(), src.git?.()])
       const agyLimits = src.agyLimits?.()
+      const functions = src.functions?.()
       return {
         api: NODE_API,
         id: node.id,
@@ -155,6 +158,7 @@ export function createNodeStatus(src: StatusSources): { answer(): Promise<NodeSt
         ...(src.updates && { updates: src.updates() }),
         // Its own profiles (#802): the master starts here without a bundle. Absent: as before.
         ...(node.ownProfiles && { ownProfiles: true as const }),
+        ...(functions && { functions }),
         at: (src.now ?? Date.now)(),
       }
     },

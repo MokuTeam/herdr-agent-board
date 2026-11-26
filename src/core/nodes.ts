@@ -712,6 +712,11 @@ export interface NodeStatus {
   updates?: 'git' | 'archive'
   /** The node keeps its own profiles and takes no bundle (#802, `node.ownProfiles`); absent: it takes them. */
   ownProfiles?: true
+  /**
+   * A stamp of its MokuTab functions folder (#864, services/node/fn-sync.ts): another one than at the
+   * last sync asks the master for one. Absent without the folder, and from a node of an older board.
+   */
+  functions?: string
   at: number
 }
 
@@ -803,6 +808,7 @@ export function nodeStatusOf(raw: unknown): NodeStatus | null {
       }),
     ...((s.updates === 'git' || s.updates === 'archive') && { updates: s.updates }),
     ...(s.ownProfiles === true && { ownProfiles: true as const }),
+    ...(typeof s.functions === 'string' && /^[0-9a-f]{64}$/.test(s.functions) && { functions: s.functions }),
     at: s.at as number,
   }
 }
