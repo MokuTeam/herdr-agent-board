@@ -6,12 +6,17 @@
 // - revealRoute / threadUp with a stubbed master: the master's ok and "no such thread" are the
 //   answer; no answer, a refusal, a throw or a slow master go to the node's own threads as before;
 //   the session's local answer never waits for the master.
+// - web-open on the node (a notification clicked, `board thread open`): the board's window open,
+//   it is raised and the master's page in it opens the session or the thread, no second window;
+//   none open, one window opens on the node's address with the session (#839 takes it on).
 // - A master and a node, each a real board with a fake herdr: with the master's board URL (the
 //   node's page goes there) the master's page hears the session and the thread; the node's own
 //   answer is as before. Without that URL the node's page stays local and nothing goes up.
 import { describe, expect, test } from 'bun:test'
 import { nodeRevealOf, RELAY_TABLE, relayMatch } from '../../src/core/master-relay.ts'
+import type { BoardWindow } from '../../src/integrations/edge-window.ts'
 import { nodeRevealAnswer, revealRoute, threadUp } from '../../src/server/routes/reveal.ts'
+import { openWeb } from '../../src/services/web-open.ts'
 import { nodePair, type PairNode } from '../support/node-pair.ts'
 
 const S = '0f3c2a1e-5b7d-4e8f-9a0b-1c2d3e4f5a6b'
@@ -299,5 +304,54 @@ test('a slow master: the node gives up on it in time and answers from its own th
     expect(res.ok).toBe(false)
   } finally {
     node.proxy.intercept = null
+  }
+}, 60_000)
+
+/** The board's window as web-open sees it: open (`raised`) or not, and what it was asked. */
+function fakeWindow(raised: boolean) {
+  const did: string[] = []
+  const win: BoardWindow = {
+    async open(url) {
+      did.push(`open ${url}`)
+    },
+    async raise() {
+      did.push('raise')
+      return raised
+    },
+    launch(url) {
+      did.push(`launch ${url}`)
+    },
+  }
+  return { win, did }
+}
+
+test("a click on the node with the board's window open on the master: that window, the session and the thread in it", async () => {
+  const { pair, node, remote } = await meshWith(true)
+  const made = await post(`${pair.master.url}/api/threads`, { op: 'new', lane: 'atlas', title: 'Window check' })
+  const thread = ((await made.json()) as { key: string }).key
+  const cfg = { port: Number(new URL(node.url).port) }
+  const onMaster = await listen(pair.master.url)
+  try {
+    const clicked = fakeWindow(true)
+    const r = await openWeb(cfg, { pane: 'p1', window: clicked.win })
+    expect(r).toEqual({ ok: true, url: `${node.url}/`, key: S })
+    expect(clicked.did).toEqual(['raise'])
+    await until("the master's page in it opens the session", async () =>
+      onMaster.heard().includes(told('reveal', { key: remote })),
+    )
+
+    const opened = fakeWindow(true)
+    expect(await openWeb(cfg, { thread, window: opened.win })).toEqual({ ok: true, url: `${node.url}/`, key: thread })
+    expect(opened.did).toEqual(['raise'])
+    await until("the master's page in it opens the thread", async () =>
+      onMaster.heard().includes(told('thread-open', { key: thread })),
+    )
+
+    // No board window anywhere: one opens, on the node's address with the session.
+    const none = fakeWindow(false)
+    expect(await openWeb(cfg, { pane: 'p1', window: none.win })).toEqual({ ok: true, url: `${node.url}/` })
+    expect(none.did).toEqual(['raise', `launch ${node.url}/#session=${encodeURIComponent(S)}`])
+  } finally {
+    onMaster.close()
   }
 }, 60_000)

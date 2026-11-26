@@ -3,7 +3,8 @@ import { execFile } from 'node:child_process'
 import { hostname } from 'node:os'
 import type { Config } from '../core/types.ts'
 
-// Finds a visible top-level window by title (-like pattern) and brings it to the front. Every
+// Finds a visible top-level window by title (a -like pattern, or a case-sensitive regex that a
+// second one rules out) and brings it to the front. Every
 // window is enumerated because a browser keeps all its windows in one process. Windows only
 // lets the foreground app hand focus over; a tapped Alt key lifts that lock.
 const RAISE_PS = `
@@ -30,7 +31,10 @@ public static class BoardWin {
   }
 }
 '@
-$w = [BoardWin]::List() | Where-Object { $_.Value -like $env:BOARD_TITLE } | Select-Object -First 1
+$re = $env:BOARD_TITLE_RE; $not = $env:BOARD_TITLE_NOT_RE
+$w = [BoardWin]::List() | Where-Object {
+  if ($re) { ($_.Value -cmatch $re) -and -not ($not -and ($_.Value -cmatch $not)) } else { $_.Value -like $env:BOARD_TITLE }
+} | Select-Object -First 1
 if (-not $w) { 'none'; exit }
 $h = $w.Key
 if ([BoardWin]::IsIconic($h)) { [BoardWin]::ShowWindow($h, 9) | Out-Null }
@@ -49,7 +53,33 @@ export async function raiseWindow(pattern: string): Promise<boolean> {
     execFile(
       'powershell',
       ['-NoProfile', '-NonInteractive', '-Command', RAISE_PS],
-      { encoding: 'utf8', timeout: 15_000, windowsHide: true, env: { ...process.env, BOARD_TITLE: pattern } },
+      {
+        encoding: 'utf8',
+        timeout: 15_000,
+        windowsHide: true,
+        env: { ...process.env, BOARD_TITLE: pattern, BOARD_TITLE_RE: '' },
+      },
+      (err, stdout) => res(!err && String(stdout).trim().endsWith('ok')),
+    ),
+  )
+}
+
+/**
+ * Bring the first window whose title matches `match` and not `not` (regexes, case-sensitive, read
+ * by .NET as JavaScript reads them: keep to the syntax both share) to the front. As raiseWindow.
+ */
+export async function raiseWindowMatching(match: string, not = ''): Promise<boolean> {
+  if (process.platform !== 'win32') return false
+  return new Promise(res =>
+    execFile(
+      'powershell',
+      ['-NoProfile', '-NonInteractive', '-Command', RAISE_PS],
+      {
+        encoding: 'utf8',
+        timeout: 15_000,
+        windowsHide: true,
+        env: { ...process.env, BOARD_TITLE_RE: match, BOARD_TITLE_NOT_RE: not },
+      },
       (err, stdout) => res(!err && String(stdout).trim().endsWith('ok')),
     ),
   )
