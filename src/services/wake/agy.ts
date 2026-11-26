@@ -26,8 +26,9 @@ import {
   agySleepLabel,
   agyWakeLine,
 } from '../../core/wake/agy.ts'
+import type { FreedPlace, FreeRules } from '../../core/wake/freed.ts'
 import { CANNOT_WAKE, clearKeyFor } from '../../core/wake/rules.ts'
-import { atPrompt, type Timing, type WakeOutcome, withPane } from './pane-ops.ts'
+import { atPrompt, freePane, type Timing, type WakeOutcome, waitPrompt, withPane } from './pane-ops.ts'
 import { defaultTabOps, openTab, type TabOps } from './tabs.ts'
 
 interface ShellAgentOps extends TabOps {
@@ -59,6 +60,10 @@ export interface AgySleepMarks {
   going(sleeper: AgySleeper): void
   /** It stays up (`agy` did not exit, or herdr failed on the way): forget it. */
   stayed(): void
+  /** Its pane is about to be closed (#204, #888): keep where it comes back. */
+  freeing?(place: FreedPlace): void
+  /** Its pane stayed after the close: drop its freed place. */
+  kept?(): void
 }
 
 /** How long `agy` has to leave after `/exit` (and `Ctrl+D Ctrl+D` fallback). */
@@ -153,7 +158,12 @@ export async function putAgyToSleep(
   ops: SleeperOps,
   target: { pane: string; session: string; name: string; workspaceLabel?: string },
   marks: AgySleepMarks,
-  t: Timing & { boardOnPath: boolean },
+  t: Timing & {
+    boardOnPath: boolean
+    free?: FreeRules | false
+    platform?: string
+    alone?: (shellPid: number) => Promise<boolean | null>
+  },
 ): Promise<AgySleepOutcome> {
   const c = clock(t)
   const { pane, session, name } = target
@@ -201,9 +211,30 @@ export async function putAgyToSleep(
       c.log(`${name} (${kind}) in ${pane} did not exit`)
       return no(`${name} did not go to sleep (${ops.codex ? 'Codex' : 'Antigravity'} did not exit)`)
     }
+    const platform = t.platform ?? ops.platform
+    if (t.free) {
+      const free = { freeing: marks.freeing ?? (() => {}), kept: marks.kept ?? (() => {}) }
+      const place = await freePane(ops.herdr, { pane, session }, free, {
+        ...t.free,
+        now: c.now(),
+        clockNow: c.now,
+        log: c.log,
+        sleep: c.sleep,
+        ...(platform !== undefined && { platform }),
+        waitSettle: true,
+        ...(t.alone !== undefined && { alone: t.alone }),
+      }).catch(err => {
+        c.log(`${name}: its pane ${pane} could not be closed: ${err instanceof Error ? err.message : String(err)}`)
+        return null
+      })
+      if (place) {
+        c.log(`put ${name} (${kind}) to sleep, its pane ${pane} closed`)
+        return { ok: true, sleeper: { ...sleeper, freed: place } }
+      }
+    }
     await ops.herdr.rename(pane, agySleepLabel(sleeper)).catch(() => {})
     await c.sleep(TYPE_AFTER_RENAME_MS)
-    const prompt = await atPrompt(ops.herdr, pane).catch(() => null)
+    const prompt = await waitPrompt(ops.herdr, pane, c, platform)
     if (prompt) await ops.herdr.sendText(pane, line).catch(() => {})
     c.log(`put ${name} (${kind}) to sleep in ${pane}`)
     return { ok: true, sleeper }
@@ -280,13 +311,18 @@ export async function wakeAgy(
     })
   }
   if (!pane) {
+    const was = sleeper.freed
+    const workspace = was?.workspace ?? sleeper.workspace
+    const workspaceLabel = was?.workspaceLabel ?? sleeper.workspaceLabel
     const fresh = await openTab(
       ops,
       {
-        ...(sleeper.workspace !== undefined && { workspace: sleeper.workspace }),
-        ...(sleeper.workspaceLabel !== undefined && { workspaceLabel: sleeper.workspaceLabel }),
+        ...(workspace !== undefined && { workspace }),
+        ...(workspaceLabel !== undefined && { workspaceLabel }),
         cwd: sleeper.cwd,
         label,
+        ...(was?.tabLabel !== undefined && { tabLabel: was.tabLabel }),
+        ...(was?.worktree && { worktree: was.worktree }),
       },
       snap,
     )

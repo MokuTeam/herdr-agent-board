@@ -142,3 +142,47 @@ test.each(['claude', 'agy', 'pi', undefined])('skips Codex reaper calls for pane
   await engine.reapRound()
   expect(w.io.calls.filter(a => a[0] !== 'api')).toEqual([])
 })
+
+test('closes Codex tab on sleep on win32 when beside only Sidebar and leaves pane open on linux (#888)', async () => {
+  // Linux keeps original main behavior (pane stays open, no tab close).
+  const wLinux = world()
+  wLinux.pane.tab_id = 't2'
+  wLinux.io.tabs.push(
+    { tab_id: 't1', workspace_id: 'w5', label: '1', number: 1 },
+    { tab_id: 't2', workspace_id: 'w5', label: 'Codex Work', number: 2 },
+  )
+  wLinux.io.panes.push(
+    { pane_id: 'w5:p1', tab_id: 't1', workspace_id: 'w5', cwd, agent: 'claude' },
+    { pane_id: 'w5:s2', tab_id: 't2', workspace_id: 'w5', cwd, label: 'Sidebar' },
+  )
+  wLinux.io.screens[PANE] = `PS ${cwd}> `
+  const linuxEngine = createWakeEngine({ ...wLinux.deps, platform: 'linux' })
+  expect(await linuxEngine.sleep(ID)).toEqual({ ok: true, pane: PANE, name: label })
+  expect(wLinux.io.calls.some(c => c[1] === 'close')).toBe(false)
+
+  // Windows closes the tab when only Sidebar sits beside it and preserves tabLabel on wake.
+  const w = world()
+  w.pane.tab_id = 't2'
+  w.io.tabs.push(
+    { tab_id: 't1', workspace_id: 'w5', label: '1', number: 1 },
+    { tab_id: 't2', workspace_id: 'w5', label: 'Codex Work', number: 2 },
+  )
+  w.io.panes.push(
+    { pane_id: 'w5:p1', tab_id: 't1', workspace_id: 'w5', cwd, agent: 'claude' },
+    { pane_id: 'w5:s2', tab_id: 't2', workspace_id: 'w5', cwd, label: 'Sidebar' },
+  )
+  w.io.screens[PANE] = `PS ${cwd}> `
+  const engine = createWakeEngine({
+    ...w.deps,
+    platform: 'win32',
+    processTable: async () => [{ pid: 4000, ppid: 1, bytes: 1024, name: 'pwsh' }],
+  })
+  expect(await engine.sleep(ID)).toEqual({ ok: true, pane: PANE, name: label })
+  expect(w.io.calls).toContainEqual(['tab', 'close', 't2'])
+  expect(await engine.sleepingAll()).toMatchObject([{ agent: 'codex', session: ID, pane: '' }])
+
+  // Reopen via engine with tabLabel preserved in freed metadata.
+  const reopened = createWakeEngine({ ...w.deps, platform: 'win32', processTable: async () => [] })
+  expect(await reopened.wake(ID)).toEqual({ ok: true, pane: 'w5:p10', name: label })
+  expect(JSON.parse(readFileSync(w.file, 'utf8'))).toEqual({})
+})

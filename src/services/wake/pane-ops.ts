@@ -49,6 +49,9 @@ const CONFIRM_GAP_MS = 5000
 /** How long Claude has to leave after /exit, looked at each second. */
 const EXIT_WAIT_MS = 30_000
 const EXIT_POLL_MS = 1000
+/** On Windows, pwsh may still be reaping the agent's wrapper or drawing its prompt right after /exit. */
+const WIN_SETTLE_MS = 5000
+const WIN_SETTLE_POLL_MS = 300
 /** The 💤 label before the wake line is typed at the prompt. */
 const TYPE_AFTER_RENAME_MS = 500
 /** herdr may answer for a pane it has just closed: asked this many times more, this far apart. */
@@ -300,6 +303,49 @@ export interface SleepMarks {
 export type FreeMarks = Required<Pick<SleepMarks, 'freeing' | 'kept'>>
 
 /**
+ * Freezes/settles a shell pane check right after an agent exits on Windows: pwsh may still be
+ * unwinding its wrapper or drawing the prompt (`promptIdle`), and child processes are verified via
+ * `alone` (herdr omits them on Windows). Non-Windows returns `atPrompt` + `promptIdle` immediately.
+ */
+async function readyToFree(io: WakeHerdr, target: { pane: string; session: string }, o: FreeOptions): Promise<boolean> {
+  const win = (o.platform ?? process.platform) === 'win32'
+  const check = async (): Promise<boolean> => {
+    const prompt = await atPrompt(io, target.pane)
+    if (!prompt || !promptIdle(await io.screen(target.pane), target.session)) return false
+    if (win && o.alone) return (await o.alone(prompt.pid)) === true
+    return true
+  }
+  if (!win || !o.waitSettle) return check()
+  const getNow = o.clockNow ?? (() => o.now)
+  if (!freePlan(await io.snapshot(), target.pane, getNow(), o)) return false
+  for (const deadline = getNow() + WIN_SETTLE_MS; ; ) {
+    if (await check()) return true
+    if (getNow() >= deadline) return false
+    await o.sleep(WIN_SETTLE_POLL_MS)
+  }
+}
+
+/**
+ * Wait until the pane is at its shell's prompt: one immediate check outside Windows; on Windows,
+ * polls briefly so a slow `pwsh` prompt still receives the wake line (#888).
+ */
+export async function waitPrompt(
+  io: WakeHerdr,
+  pane: string,
+  c: Required<Timing>,
+  platform: string = process.platform,
+): Promise<{ shell: string | null; pid: number } | null> {
+  const first = await atPrompt(io, pane).catch(() => null)
+  if (first || platform !== 'win32') return first
+  for (const deadline = c.now() + WIN_SETTLE_MS; c.now() < deadline; ) {
+    await c.sleep(WIN_SETTLE_POLL_MS)
+    const next = await atPrompt(io, pane).catch(() => null)
+    if (next) return next
+  }
+  return null
+}
+
+/**
  * Closes a sleeper's pane, or its tab when only herdr-sidebar's panes are beside it, where
  * core/wake/freed.ts freePlan allows on a snapshot taken right before the close: only while the
  * pane is at its shell's prompt with nothing started in it, and its screen shows an empty prompt or
@@ -315,12 +361,19 @@ export async function freePane(
   marks: FreeMarks,
   o: FreeOptions,
 ): Promise<FreedPlace | null> {
-  const { pane } = target
-  if (!(await atPrompt(io, pane)) || !promptIdle(await io.screen(pane), target.session)) return null
-  return closeFreed(io, pane, marks, o)
+  if (!(await readyToFree(io, target, o))) return null
+  return closeFreed(io, target.pane, marks, { ...o, now: o.clockNow ? o.clockNow() : o.now })
 }
 
-type FreeOptions = FreeRules & { now: number; log(text: string): void; sleep(ms: number): Promise<void> }
+export type FreeOptions = FreeRules & {
+  now: number
+  log(text: string): void
+  sleep(ms: number): Promise<void>
+  platform?: string
+  waitSettle?: boolean
+  alone?: (shellPid: number) => Promise<boolean | null>
+  clockNow?: () => number
+}
 
 /** freePane once its shell is judged: the close where freePlan allows it, on a snapshot taken now. */
 async function closeFreed(io: WakeHerdr, pane: string, marks: FreeMarks, o: FreeOptions): Promise<FreedPlace | null> {
@@ -432,7 +485,11 @@ export async function putToSleep(
   io: WakeHerdr,
   target: { pane: string; session: string; name: string; profile?: string | null },
   marks: SleepMarks,
-  t?: Timing & { free?: FreeRules | false },
+  t?: Timing & {
+    free?: FreeRules | false
+    platform?: string
+    alone?: (shellPid: number) => Promise<boolean | null>
+  },
 ): Promise<boolean> {
   const found = lineFor(target.session, target.profile)
   if ('error' in found) return false
@@ -466,8 +523,12 @@ export async function putToSleep(
       const place = await freePane(io, { pane, session: target.session }, free, {
         ...t.free,
         now: c.now(),
+        clockNow: c.now,
         log: c.log,
         sleep: c.sleep,
+        ...(t.platform !== undefined && { platform: t.platform }),
+        waitSettle: true,
+        ...(t.alone !== undefined && { alone: t.alone }),
       }).catch(err => {
         c.log(`${name}: its pane ${pane} could not be closed: ${err instanceof Error ? err.message : String(err)}`)
         return null
@@ -480,7 +541,7 @@ export async function putToSleep(
     await io.rename(pane, `💤 ${name}`).catch(() => {})
     await c.sleep(TYPE_AFTER_RENAME_MS)
     // Typed for the user to run, only at the shell's prompt (nothing else took the pane meanwhile).
-    const prompt = await atPrompt(io, pane).catch(() => null)
+    const prompt = await waitPrompt(io, pane, c, t?.platform)
     if (prompt) await io.sendText(pane, found.line).catch(() => {})
     c.log(`put ${name} to sleep in ${pane}`)
     return true

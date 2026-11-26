@@ -300,6 +300,26 @@ test('a leftover closes with its tab when only herdr-sidebar’s panes are besid
     'close',
     'old-tab',
   ])
+  // Expired herdr-sidebar pane (no tokens left after restart, identified by label: 'Sidebar') is win32-only.
+  const expiredSidebar = [
+    { pane_id: 'wZ:p5', tab_id: 'old-tab', label },
+    { pane_id: 'wZ:s5', tab_id: 'old-tab', label: 'Sidebar' },
+  ]
+  assert.deepEqual(closeOfLeftover(expiredSidebar, 'wZ:p5', 'win32'), ['tab', 'close', 'old-tab'])
+  assert.deepEqual(closeOfLeftover(expiredSidebar, 'wZ:p5', 'linux'), ['pane', 'close', 'wZ:p5'])
+  assert.deepEqual(closeOfLeftover(expiredSidebar, 'wZ:p5', 'darwin'), ['pane', 'close', 'wZ:p5'])
+  // Never closes a tab when a pane with label 'Sidebar' actually runs an agent.
+  assert.deepEqual(
+    closeOfLeftover(
+      [
+        { pane_id: 'wZ:p5', tab_id: 'old-tab', label },
+        { pane_id: 'wZ:s5', tab_id: 'old-tab', label: 'Sidebar', agent: 'claude' },
+      ],
+      'wZ:p5',
+      'win32',
+    ),
+    ['pane', 'close', 'wZ:p5'],
+  )
   assert.deepEqual(closeOfLeftover(many, 'w1:p7'), ['pane', 'close', 'w1:p7'])
   assert.deepEqual(closeOfLeftover(many, 'w1:pd'), ['pane', 'close', 'w1:pd'])
 })

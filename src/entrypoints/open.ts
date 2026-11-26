@@ -49,8 +49,10 @@ if (background && placement !== 'workspace') process.exit(0)
 const last = await lastBoardChecked(saved, snap.panes, isAlive, paneProcesses)
 if (last?.stale) {
   // herdr brought the board's pane back (after a restart) with a shell in it, not the board: it is
-  // no plugin pane any more. Close it and open a board as if there were none.
-  await herdr(['pane', 'close', last.pane]).catch(() => {})
+  // no plugin pane any more. Close it (on Windows with its tab if only sidebars remain) and open a board.
+  await herdr(
+    process.platform === 'win32' ? closeOfLeftover(snap.panes, last.pane) : ['pane', 'close', last.pane],
+  ).catch(() => {})
 }
 // Other panes herdr brought back from earlier boards (the board's label, an idle shell in them):
 // herdr is asked only of panes with that label, so with none there is no call.
@@ -131,7 +133,7 @@ function orphanTabs(workspace: string): string[] {
     .map(tab => tab.tab_id)
     .filter(id => {
       const panes = snap.panes.filter(p => p.tab_id === id)
-      return panes.length > 0 && panes.every(isSidebarPane)
+      return panes.length > 0 && panes.every(p => isSidebarPane(p))
     })
 }
 

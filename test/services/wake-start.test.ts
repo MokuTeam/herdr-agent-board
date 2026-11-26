@@ -50,6 +50,8 @@ async function start(o: {
   duringOpen?: (status: { file: WakeStatusFile | null }) => void
   /** The board's pane (board.json's); none by default. */
   boardPane?: string
+  /** Override host platform (tests). */
+  platform?: string
 }): Promise<{ result: string; calls: string[][]; written: WakeStatusFile[]; file: WakeStatusFile | null }> {
   const snap = o.snap ?? wakeTab()
   const status = { file: o.status }
@@ -89,6 +91,7 @@ async function start(o: {
     now: () => NOW,
     bootedAt: BOOTED_AT,
     root: ROOT,
+    ...(o.platform !== undefined && { platform: o.platform }),
   }
   const result = await startWake(deps, {
     on: true,
@@ -279,4 +282,33 @@ test('leftover tabs: a shell in the plugin’s folder however herdr spells it (c
   })
   expect(out.result).toBe('opened')
   expect(out.calls.filter(c => c[0] === 'tab')).toEqual(spellings.map((_, i) => ['tab', 'close', `same-${i}`]))
+})
+
+test('stale wake pane beside expired Sidebar (label Sidebar, no tokens): closes tab on win32, only pane off Windows (#888)', async () => {
+  const expiredSnap = (): Snap => ({
+    workspaces: [
+      { workspace_id: 'wW', label: 'Wake' },
+      { workspace_id: 'w1', label: 'Main' },
+    ],
+    tabs: [
+      { tab_id: 'wake-tab', workspace_id: 'wW' },
+      { tab_id: 't1', workspace_id: 'w1' },
+    ],
+    panes: [
+      { pane_id: 'wW:p1', tab_id: 'wake-tab', workspace_id: 'wW', cwd: ROOT },
+      { pane_id: 'wW:p2', tab_id: 'wake-tab', workspace_id: 'wW', label: 'Sidebar' },
+      { pane_id: 'w1:p1', tab_id: 't1', workspace_id: 'w1', agent: 'claude', agent_status: 'idle' },
+    ],
+  })
+  const status = { state: 'running', at: BOOTED_AT - 1, pane: 'wW:p1', pid: LIVE, port: 40000 } as const
+
+  const win = await start({ status, snap: expiredSnap(), platform: 'win32' })
+  expect(win.result).toBe('opened')
+  expect(win.calls).toContainEqual(['tab', 'close', 'wake-tab'])
+  expect(win.calls.some(c => c[0] === 'pane' && c[1] === 'close')).toBe(false)
+
+  const unix = await start({ status, snap: expiredSnap(), platform: 'linux' })
+  expect(unix.result).toBe('opened')
+  expect(unix.calls).toContainEqual(['pane', 'close', 'wW:p1'])
+  expect(unix.calls.some(c => c[0] === 'tab' && c[1] === 'close')).toBe(false)
 })

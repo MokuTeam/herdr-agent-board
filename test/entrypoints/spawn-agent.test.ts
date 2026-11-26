@@ -1857,3 +1857,141 @@ test('spawn-agent --thread: an agent herdr named once and gone by the failure ge
   const shown = JSON.parse((await boardCli(box, ['thread', 'show', 'atlas-1', '--json'])).stdout)
   assert.equal(shown.thread.assignee.key, OLD)
 }, 60_000)
+
+test('spawn-agent on win32 closes empty created tab on failure with last 10 screen lines in error; linux leaves it (#888)', async () => {
+  const emptyPane = { pane_id: 'wA:p9', tab_id: 'wA:t9', workspace_id: 'wA', terminal_id: 'term-9', agent: null }
+  const sidebarPane = { pane_id: 'wA:s9', tab_id: 'wA:t9', workspace_id: 'wA', label: 'Sidebar' }
+  const runInBox = async (state: Record<string, unknown>, opts: { platform: string; rows?: string; name: string }) => {
+    const box = await sandbox()
+    box.state(state)
+    const src = join(root, 'src').replaceAll('\\', '/')
+    const script = join(box.dir, 'spawn-case.ts')
+    writeFileSync(
+      script,
+      `
+import { spawnAgent } from '${src}/services/launch/spawn-agent.ts'
+try {
+  await spawnAgent(
+    { name: ${JSON.stringify(opts.name)}, cwd: ${JSON.stringify(box.dir)}, workspace: 'wA', timeoutSec: 1 },
+    {
+      platform: ${JSON.stringify(opts.platform)},
+      ${opts.rows ? `processTable: async () => ${opts.rows},` : ''}
+    },
+  )
+  console.log(JSON.stringify({ ok: true }))
+} catch (err) {
+  console.log(JSON.stringify({ ok: false, error: err instanceof Error ? err.message : String(err) }))
+}
+`,
+    )
+    const proc = Bun.spawn([process.execPath, script], {
+      cwd: root,
+      env: { ...box.env, ...PACED },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+    assert.equal(await proc.exited, 0, err)
+    const res = JSON.parse(out.trim().split('\n').at(-1) ?? '{}') as { ok: boolean; error: string }
+    return { res, calls: box.calls() }
+  }
+
+  // Linux control: exact main behavior (zero process-info/close calls).
+  const linux = await runInBox(
+    {
+      ...STATE,
+      'pane get': { result: { pane: emptyPane } },
+      'pane read': { text: 'claude: command not found\nPS>' },
+    },
+    { platform: 'linux', name: 'LinuxFail' },
+  )
+  assert.equal(linux.res.ok, false)
+  assert.equal(
+    linux.calls.some(c => c[1] === 'close' || c[1] === 'process-info'),
+    false,
+  )
+  assert.equal(linux.res.error.includes('Last terminal output:'), false)
+
+  // win32 timeout before agent starts: closes tab AND appends last 10 non-empty screen lines.
+  const screen12 = Array.from({ length: 12 }, (_, i) => `line-${i + 1}`).join('\n')
+  const idleRows = JSON.stringify([{ pid: 4000, ppid: 1, bytes: 1024, name: 'pwsh' }])
+  const timedOut = await runInBox(
+    {
+      ...STATE,
+      'pane get': { result: { pane: emptyPane } },
+      'pane process-info': { result: { process_info: { shell_pid: 4000, foreground_processes: [{ pid: 4000 }] } } },
+      'pane read': { text: screen12 },
+      'pane list': { result: { panes: [emptyPane, sidebarPane] } },
+      'tab close': { result: null },
+    },
+    { platform: 'win32', rows: idleRows, name: 'NeverUp' },
+  )
+  assert.equal(timedOut.res.ok, false)
+  assert.ok(timedOut.calls.some(c => c.join(' ') === 'tab close wA:t9'))
+  assert.ok(timedOut.res.error.includes('Last terminal output:\nline-3\n'))
+  assert.ok(timedOut.res.error.includes('line-12'))
+  assert.equal(timedOut.res.error.includes('line-2\n'), false)
+
+  // win32 shared tab with user pane -> closes only the spawn pane and keeps tail.
+  const shared = await runInBox(
+    {
+      ...STATE,
+      'pane run': { error: 'exec failed', code: 'exec_failed' },
+      'pane get': { result: { pane: emptyPane } },
+      'pane process-info': { result: { process_info: { shell_pid: 4000, foreground_processes: [{ pid: 4000 }] } } },
+      'pane read': { text: 'pwsh error: boom' },
+      'pane list': {
+        result: { panes: [emptyPane, { pane_id: 'wA:u1', tab_id: 'wA:t9', workspace_id: 'wA', label: 'user' }] },
+      },
+      'pane close': { result: null },
+    },
+    { platform: 'win32', rows: idleRows, name: 'RunFail' },
+  )
+  assert.equal(shared.res.ok, false)
+  assert.ok(shared.calls.some(c => c.join(' ') === 'pane close wA:p9'))
+  assert.equal(
+    shared.calls.some(c => c[0] === 'tab' && c[1] === 'close'),
+    false,
+  )
+  assert.ok(shared.res.error.includes('Last terminal output:\npwsh error: boom'))
+
+  // win32 child process under pwsh in processTable -> leaves pane open and does not append output.
+  const childBusy = await runInBox(
+    {
+      ...STATE,
+      'pane get': { result: { pane: emptyPane } },
+      'pane process-info': { result: { process_info: { shell_pid: 4000, foreground_processes: [{ pid: 4000 }] } } },
+      'tab close': { result: null },
+      'pane close': { result: null },
+    },
+    {
+      platform: 'win32',
+      rows: JSON.stringify([
+        { pid: 4000, ppid: 1, bytes: 1024, name: 'pwsh' },
+        { pid: 4001, ppid: 4000, bytes: 1024, name: 'node' },
+      ]),
+      name: 'ChildBusy',
+    },
+  )
+  assert.equal(childBusy.res.ok, false)
+  assert.equal(
+    childBusy.calls.some(c => c[1] === 'close'),
+    false,
+  )
+
+  // Once an agent was seen (blocked dialog), never closes the tab even on win32.
+  const seenBlocked = await runInBox(
+    {
+      ...STATE,
+      'pane get': { result: { pane: { ...emptyPane, agent: 'claude', agent_status: 'blocked' } } },
+      'tab close': { result: null },
+      'pane close': { result: null },
+    },
+    { platform: 'win32', rows: idleRows, name: 'Blocked' },
+  )
+  assert.equal(seenBlocked.res.ok, false)
+  assert.equal(
+    seenBlocked.calls.some(c => c[1] === 'close'),
+    false,
+  )
+}, 60_000)

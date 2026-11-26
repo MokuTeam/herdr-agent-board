@@ -18,7 +18,8 @@ import {
 } from '../../adapters/pi-processes.ts'
 import { cliWakeHerdr, type WakeHerdr } from '../../adapters/wake-herdr.ts'
 import { piDraft } from '../../core/dialogs/pi-dialogs.ts'
-import { piProvider, piSessionName, piTurnOver } from '../../core/pi.ts'
+import { piProvider, piSessionId, piSessionName, piTurnOver } from '../../core/pi.ts'
+import type { FreedPlace, FreeRules } from '../../core/wake/freed.ts'
 import {
   accountOf,
   type PiSleeper,
@@ -29,7 +30,7 @@ import {
   sleepLabel,
 } from '../../core/wake/pi.ts'
 import { CANNOT_WAKE, clearKeyFor } from '../../core/wake/rules.ts'
-import { atPrompt, type Timing, type WakeOutcome, withPane } from './pane-ops.ts'
+import { atPrompt, freePane, type Timing, type WakeOutcome, waitPrompt, withPane } from './pane-ops.ts'
 import { defaultTabOps, openTab, type TabOps } from './tabs.ts'
 
 /** What putting pi to sleep and waking it need besides herdr: its process, its session file, new tabs. */
@@ -55,6 +56,10 @@ export interface PiSleepMarks {
   going(sleeper: PiSleeper): void
   /** It stays up (pi did not stop, or herdr failed on the way): forget it. */
   stayed(): void
+  /** Its pane is about to be closed (#204, #888): keep where it comes back. */
+  freeing?(place: FreedPlace): void
+  /** Its pane stayed after the close: drop its freed place. */
+  kept?(): void
 }
 
 /** How long after its session file was last written pi counts as free. */
@@ -93,7 +98,12 @@ export async function putPiToSleep(
   ops: PiOps,
   target: { pane: string; session: string; name: string; workspaceLabel?: string; account?: string },
   marks: PiSleepMarks,
-  t: Timing & { boardOnPath: boolean },
+  t: Timing & {
+    boardOnPath: boolean
+    free?: FreeRules | false
+    platform?: string
+    alone?: (shellPid: number) => Promise<boolean | null>
+  },
 ): Promise<PiSleepOutcome> {
   const c = clock(t)
   const { pane, session, name } = target
@@ -153,10 +163,31 @@ export async function putPiToSleep(
       c.log(`${name} (pi) in ${pane} did not stop`)
       return no(`${name} did not go to sleep (pi did not stop)`)
     }
+    const platform = t.platform ?? ops.platform
+    if (t.free) {
+      const free = { freeing: marks.freeing ?? (() => {}), kept: marks.kept ?? (() => {}) }
+      const place = await freePane(ops.herdr, { pane, session: piSessionId(session) }, free, {
+        ...t.free,
+        now: c.now(),
+        clockNow: c.now,
+        log: c.log,
+        sleep: c.sleep,
+        ...(platform !== undefined && { platform }),
+        waitSettle: true,
+        ...(t.alone !== undefined && { alone: t.alone }),
+      }).catch(err => {
+        c.log(`${name}: its pane ${pane} could not be closed: ${err instanceof Error ? err.message : String(err)}`)
+        return null
+      })
+      if (place) {
+        c.log(`put ${name} (pi) to sleep, its pane ${pane} closed`)
+        return { ok: true, sleeper: { ...sleeper, freed: place } }
+      }
+    }
     await ops.herdr.rename(pane, sleepLabel(sleeper)).catch(() => {})
     await c.sleep(TYPE_AFTER_RENAME_MS)
     // Typed for the user to run, only at the shell's prompt (nothing else took the pane meanwhile).
-    const prompt = await atPrompt(ops.herdr, pane).catch(() => null)
+    const prompt = await waitPrompt(ops.herdr, pane, c, platform)
     if (prompt) await ops.herdr.sendText(pane, line).catch(() => {})
     c.log(`put ${name} (pi) to sleep in ${pane}${sleeper.account ? `, account ${sleeper.account}` : ''}`)
     return { ok: true, sleeper }
@@ -217,13 +248,18 @@ export async function wakePi(
     })
   }
   if (!pane) {
+    const was = sleeper.freed
+    const workspace = was?.workspace ?? sleeper.workspace
+    const workspaceLabel = was?.workspaceLabel ?? sleeper.workspaceLabel
     const fresh = await openTab(
       ops,
       {
-        ...(sleeper.workspace !== undefined && { workspace: sleeper.workspace }),
-        ...(sleeper.workspaceLabel !== undefined && { workspaceLabel: sleeper.workspaceLabel }),
+        ...(workspace !== undefined && { workspace }),
+        ...(workspaceLabel !== undefined && { workspaceLabel }),
         cwd: sleeper.cwd,
         label,
+        ...(was?.tabLabel !== undefined && { tabLabel: was.tabLabel }),
+        ...(was?.worktree && { worktree: was.worktree }),
       },
       snap,
     )

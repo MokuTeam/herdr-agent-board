@@ -483,3 +483,50 @@ test('plain Claude setup never calls AgyOps, and same-shape Claude + agy UUIDs s
   expect(await mixed.sleeping()).toEqual([])
   expect((await mixed.sleepingAll()).map(s => s.session)).toEqual([ID])
 })
+
+test('closes agy tab on sleep on win32 when closePanes is on, leaves pane open on linux, and restores tabLabel (#888)', async () => {
+  const wLinux = world()
+  wLinux.io.tabs.push(
+    { tab_id: 't1', workspace_id: 'w5', label: '1', number: 1 },
+    { tab_id: 't9', workspace_id: 'w5', label: 'Agy Tab', number: 2 },
+  )
+  wLinux.io.panes.push(
+    { pane_id: 'w5:p1', tab_id: 't1', workspace_id: 'w5', cwd: wLinux.project, agent: 'claude' },
+    { pane_id: 'w5:s9', tab_id: 't9', workspace_id: 'w5', cwd: wLinux.project, label: 'Sidebar' },
+  )
+  wLinux.io.screens['w5:p9'] = `PS ${wLinux.project}> `
+  expect(await createWakeEngine({ ...wLinux.deps, platform: 'linux' }).sleep(ID)).toEqual({
+    ok: true,
+    pane: 'w5:p9',
+    name: 'Gemini Dev',
+  })
+  expect(wLinux.io.calls.some(c => c[1] === 'close')).toBe(false)
+
+  const w = world()
+  w.io.tabs.push(
+    { tab_id: 't1', workspace_id: 'w5', label: '1', number: 1 },
+    { tab_id: 't9', workspace_id: 'w5', label: 'Agy Tab', number: 2 },
+  )
+  w.io.panes.push({ pane_id: 'w5:p1', tab_id: 't1', workspace_id: 'w5', cwd: w.project, agent: 'claude' }, {
+    pane_id: 'w5:s9',
+    tab_id: 't9',
+    workspace_id: 'w5',
+    cwd: w.project,
+    label: 'Sidebar',
+    tokens: { 'herdr-sidebar-git': '1' },
+  } as FakePane)
+  w.io.screens['w5:p9'] = `PS ${w.project}> `
+  const engine = createWakeEngine({
+    ...w.deps,
+    platform: 'win32',
+    processTable: async () => [{ pid: 4000, ppid: 1, bytes: 1024, name: 'pwsh' }],
+  })
+  expect(await engine.sleep(ID)).toEqual({ ok: true, pane: 'w5:p9', name: 'Gemini Dev' })
+  expect(w.io.calls).toContainEqual(['tab', 'close', 't9'])
+  expect(await engine.sleepingAll()).toMatchObject([{ agent: 'agy', session: ID, pane: '' }])
+
+  const woke = await engine.wake(ID)
+  expect(woke).toEqual({ ok: true, pane: 'w5:p20', name: 'Gemini Dev' })
+  expect(w.tabs).toEqual([['tab', 'w5', w.project, 'Agy Tab']])
+  expect(await engine.sleepingAll()).toEqual([])
+})

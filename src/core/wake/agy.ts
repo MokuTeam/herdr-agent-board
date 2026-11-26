@@ -9,6 +9,7 @@
 // Pure: the wake process reads herdr, the processes and the files, and hands them in.
 import { AGY_AGENT, isAgySession } from '../agy.ts'
 import { sameDir } from '../launch/names.ts'
+import { asFreedPlace, type FreedPlace } from './freed.ts'
 
 /** An Antigravity CLI session put to sleep. */
 export interface AgySleeper {
@@ -25,6 +26,11 @@ export interface AgySleeper {
   /** `agy`'s command line as herdr showed it; [] when not known (`launch.agy` is used on resume). */
   argv: string[]
   slept_at: number
+  /** Where it comes back when wake closed its pane (#204, #888). */
+  freed?: FreedPlace
+  /** The terminal and shell pid when kept in its pane (#243, #888). */
+  terminal?: string
+  shellPid?: number
   [extra: string]: unknown
 }
 
@@ -36,11 +42,13 @@ const record = (v: unknown): Record<string, unknown> | null =>
 const time = (v: unknown): v is number => typeof v === 'number' && Math.abs(v) <= 8.64e15
 const text = (v: unknown): v is string => typeof v === 'string'
 const filled = (v: unknown): v is string => typeof v === 'string' && v !== ''
+const pidNum = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0
 
 function asSleeper(key: string, value: unknown): AgySleeper | null {
   const e = record(value)
   if (!e || e.session !== key || !isAgySession(key) || !filled(e.pane) || !text(e.cwd) || !time(e.slept_at)) return null
   if (!Array.isArray(e.argv) || !e.argv.every(text)) return null
+  const freed = asFreedPlace(e.freed)
   return {
     ...e,
     session: key,
@@ -49,6 +57,9 @@ function asSleeper(key: string, value: unknown): AgySleeper | null {
     cwd: e.cwd,
     argv: e.argv,
     slept_at: e.slept_at,
+    ...(freed ? { freed } : {}),
+    ...(filled(e.terminal) ? { terminal: e.terminal } : {}),
+    ...(pidNum(e.shellPid) ? { shellPid: e.shellPid } : {}),
   }
 }
 
@@ -191,8 +202,9 @@ export const agySleepLabel = (s: Pick<AgySleeper, 'name'>): string => `💤 ${s.
  */
 export function agySleeperPane(
   snap: Pick<AgySnapshot, 'panes'>,
-  s: Pick<AgySleeper, 'pane' | 'name' | 'cwd'>,
+  s: Pick<AgySleeper, 'pane' | 'name' | 'cwd' | 'freed'>,
 ): AgyPane | undefined {
+  if (s.freed) return undefined
   const p = snap.panes.find(x => x.pane_id === s.pane)
   if (!p || p.agent) return undefined
   return p.label === agySleepLabel(s) || sameDir(p.cwd, s.cwd) ? p : undefined

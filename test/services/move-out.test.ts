@@ -103,7 +103,11 @@ test("a session moved here before packs the folder it runs in here, not the one 
   expect(r2.ok && r2.pack.cwd).toBe(fresh)
 })
 
-async function runFinishInSandbox(herdrState: Record<string, unknown>, itemPane: string | null = 'w1:p5') {
+async function runFinishInSandbox(
+  herdrState: Record<string, unknown>,
+  opts: { itemPane?: string | null; processTableRows?: string; platform?: string } = {},
+) {
+  const { itemPane = 'w1:p5', processTableRows, platform = 'linux' } = opts
   const box = await sandbox()
   const dir = join(box.env.HOME as string, '.claude')
   const here = join(box.dir, 'atlas')
@@ -114,6 +118,7 @@ async function runFinishInSandbox(herdrState: Record<string, unknown>, itemPane:
   box.state(herdrState)
   const src = join(root, 'src').replaceAll('\\', '/')
   const script = join(box.dir, 'finish-case.ts')
+  const processTableLine = processTableRows !== undefined ? `processTable: async () => ${processTableRows},` : ''
   writeFileSync(
     script,
     `
@@ -137,6 +142,8 @@ const out = createMoveOut({
   }] as never,
   log: () => {},
   home: ${JSON.stringify(box.env.HOME)},
+  platform: ${JSON.stringify(platform)},
+  ${processTableLine}
   git: {
     checkout: async cwd => ({
       root: cwd,
@@ -164,23 +171,96 @@ process.exit(0)
   return { result, calls: box.calls(), card }
 }
 
-test('finish() checks pane get and pane process-info with --pane, closing an idle shell pane (#642)', async () => {
+test('finish() checks pane get and pane process-info with --pane, preserving main on linux and closing tab on win32 (#642, #888)', async () => {
   const samePane = { pane_id: 'w1:p5', terminal_id: 'term-5', label: '💤 Atlas', tab_id: 'w1:t5', workspace_id: 'w1' }
-  const idle = await runFinishInSandbox({
-    'pane get': { result: { pane: samePane } },
-    'pane process-info --pane w1:p5': {
-      result: { process_info: { shell_pid: 101, foreground_processes: [{ pid: 101 }] } },
+  const sidebarPane = { pane_id: 'w1:s5', tab_id: 'w1:t5', workspace_id: 'w1', label: 'Sidebar' }
+  const userPane = { pane_id: 'w1:p6', tab_id: 'w1:t5', workspace_id: 'w1', label: 'user shell' }
+  const procOk = { result: { process_info: { shell_pid: 101, foreground_processes: [{ pid: 101 }] } } }
+  const pwshIdle = JSON.stringify([{ pid: 101, ppid: 1, bytes: 1024, name: 'pwsh' }])
+
+  // Linux keeps exact main behavior: closes pane directly without pane list or processTable.
+  const linuxIdle = await runFinishInSandbox(
+    {
+      'pane get': { result: { pane: samePane } },
+      'pane process-info --pane w1:p5': procOk,
+      'pane close': { result: null },
     },
-    'pane close': { result: null },
-  })
-  expect(idle.result).toEqual({ ok: true, notes: ['its pane closed'] })
-  expect(idle.card.moved?.to).toBe('server-2')
-  expect(idle.calls).toEqual([
+    { platform: 'linux' },
+  )
+  expect(linuxIdle.result).toEqual({ ok: true, notes: ['its pane closed'] })
+  expect(linuxIdle.card.moved?.to).toBe('server-2')
+  expect(linuxIdle.calls).toEqual([
     ['pane', 'get', 'w1:p5'],
     ['pane', 'get', 'w1:p5'],
     ['pane', 'process-info', '--pane', 'w1:p5'],
     ['pane', 'close', 'w1:p5'],
   ])
+
+  // win32 alone beside an expired Sidebar pane -> closes the whole tab so no empty sidebar shell stays.
+  const alone = await runFinishInSandbox(
+    {
+      'pane get': { result: { pane: samePane } },
+      'pane process-info --pane w1:p5': procOk,
+      'pane list --workspace w1': { result: { panes: [samePane, sidebarPane] } },
+      'tab close': { result: null },
+    },
+    { platform: 'win32', processTableRows: pwshIdle },
+  )
+  expect(alone.result).toEqual({ ok: true, notes: ['its pane closed'] })
+  expect(alone.card.moved?.to).toBe('server-2')
+  expect(alone.calls).toEqual([
+    ['pane', 'get', 'w1:p5'],
+    ['pane', 'get', 'w1:p5'],
+    ['pane', 'process-info', '--pane', 'w1:p5'],
+    ['pane', 'list', '--workspace', 'w1'],
+    ['tab', 'close', 'w1:t5'],
+  ])
+
+  // win32 shared tab with a user shell -> closes only the sleeper's pane.
+  const shared = await runFinishInSandbox(
+    {
+      'pane get': { result: { pane: samePane } },
+      'pane process-info --pane w1:p5': procOk,
+      'pane list --workspace w1': { result: { panes: [samePane, sidebarPane, userPane] } },
+      'pane close': { result: null },
+    },
+    { platform: 'win32', processTableRows: pwshIdle },
+  )
+  expect(shared.result).toEqual({ ok: true, notes: ['its pane closed'] })
+  expect(shared.calls).toContainEqual(['pane', 'close', 'w1:p5'])
+  expect(shared.calls.some(c => c[0] === 'tab' && c[1] === 'close')).toBe(false)
+
+  // win32 pane list failing falls back to pane close.
+  const fallback = await runFinishInSandbox(
+    {
+      'pane get': { result: { pane: samePane } },
+      'pane process-info --pane w1:p5': procOk,
+      'pane list --workspace w1': { error: 'pane list failed', code: 'exec_failed' },
+      'pane close': { result: null },
+    },
+    { platform: 'win32', processTableRows: pwshIdle },
+  )
+  expect(fallback.result).toEqual({ ok: true, notes: ['its pane closed'] })
+  expect(fallback.calls).toContainEqual(['pane', 'close', 'w1:p5'])
+
+  // win32 process table gate: child process under shell pid prevents close.
+  const winBusy = await runFinishInSandbox(
+    {
+      'pane get': { result: { pane: samePane } },
+      'pane process-info --pane w1:p5': procOk,
+      'pane list --workspace w1': { result: { panes: [samePane, sidebarPane] } },
+      'tab close': { result: null },
+    },
+    {
+      platform: 'win32',
+      processTableRows: JSON.stringify([
+        { pid: 101, ppid: 1, bytes: 1024, name: 'pwsh' },
+        { pid: 202, ppid: 101, bytes: 1024, name: 'node' },
+      ]),
+    },
+  )
+  expect(winBusy.result).toEqual({ ok: true, notes: [] })
+  expect(winBusy.calls.some(c => c[1] === 'close')).toBe(false)
 
   const busy = await runFinishInSandbox({
     'pane get': { result: { pane: samePane } },

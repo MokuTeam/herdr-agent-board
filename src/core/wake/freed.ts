@@ -141,18 +141,27 @@ function lastPrompt(screen: string): { typed?: string } | null {
   return null
 }
 
+const SESSION_ID = /^[0-9a-f-]+$/i
+const PI_ID = /^[0-9A-Za-z][0-9A-Za-z-]{7,63}$/
+
 /**
  * The session's wake line, without its spaces: wake's `board resume <id>` (with `--profile <id>`),
- * or the old plugin's `<command> [options] --resume <id>` (`claude-tg --dangerously-skip-permissions
- * --resume <id>`, `cldt --resume <id>`): a program and options only, nothing else on the line.
+ * `board resume --agy <id>`, `board resume --codex <id>`, `board resume --pi <id>`, or the old
+ * plugin's `<command> [options] --resume <id>` (`claude-tg --dangerously-skip-permissions --resume
+ * <id>`, `cldt --resume <id>`): a program and options only, nothing else on the line.
  */
 function isWakeLine(typed: string, session: string): boolean {
-  if (typed === `boardresume${session}` || new RegExp(`^boardresume${session}--profile[\\w.-]+$`).test(typed))
+  if (PI_ID.test(session) && typed === `boardresume--pi${session}`) return true
+  if (!SESSION_ID.test(session)) return false
+  if (
+    typed === `boardresume${session}` ||
+    typed === `boardresume--agy${session}` ||
+    typed === `boardresume--codex${session}` ||
+    new RegExp(`^boardresume${session}--profile[\\w.-]+$`).test(typed)
+  )
     return true
   return typed.endsWith(`--resume${session}`) && /^[\w.:\\/-]+$/.test(typed.slice(0, -`--resume${session}`.length))
 }
-
-const SESSION_ID = /^[0-9a-f-]+$/i
 
 /**
  * Whether a shell's visible screen (`herdr pane read`) shows it as a sleep leaves it: at its last
@@ -177,7 +186,7 @@ export function promptShows(screen: string, session: string): 'none' | 'line' | 
   const { typed } = last
   if (typed === undefined) return 'other'
   if (typed === '') return 'empty'
-  return SESSION_ID.test(session) && isWakeLine(typed, session) ? 'line' : 'other'
+  return isWakeLine(typed, session) ? 'line' : 'other'
 }
 
 /**

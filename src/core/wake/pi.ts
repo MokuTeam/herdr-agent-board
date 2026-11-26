@@ -12,6 +12,7 @@ import { posix, win32 } from 'node:path'
 import { sameDir } from '../launch/names.ts'
 import { isPiSessionFile, piSessionId } from '../pi.ts'
 import { defaultProfileDir, resolveProfileDir } from '../profiles.ts'
+import { asFreedPlace, type FreedPlace } from './freed.ts'
 
 /** A pi session put to sleep. */
 export interface PiSleeper {
@@ -37,6 +38,11 @@ export interface PiSleeper {
   slept_at: number
   /** Taken over from a pane where pi was stopped by hand (`board sleep <pane> --pi-session <file>`). */
   adopted?: true
+  /** Where it comes back when wake closed its pane (#204, #888). */
+  freed?: FreedPlace
+  /** The terminal and shell pid when kept in its pane (#243, #888). */
+  terminal?: string
+  shellPid?: number
   [extra: string]: unknown
 }
 
@@ -48,6 +54,7 @@ const record = (v: unknown): Record<string, unknown> | null =>
 const time = (v: unknown): v is number => typeof v === 'number' && Math.abs(v) <= 8.64e15
 const text = (v: unknown): v is string => typeof v === 'string'
 const filled = (v: unknown): v is string => typeof v === 'string' && v !== ''
+const pidNum = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0
 
 function asSleeper(key: string, value: unknown): PiSleeper | null {
   const e = record(value)
@@ -55,6 +62,7 @@ function asSleeper(key: string, value: unknown): PiSleeper | null {
     return null
   if (!Array.isArray(e.argv) || !e.argv.every(text)) return null
   if (e.account !== undefined && !filled(e.account)) return null
+  const freed = asFreedPlace(e.freed)
   return {
     ...e,
     session: key,
@@ -63,6 +71,9 @@ function asSleeper(key: string, value: unknown): PiSleeper | null {
     cwd: e.cwd,
     argv: e.argv,
     slept_at: e.slept_at,
+    ...(freed ? { freed } : {}),
+    ...(filled(e.terminal) ? { terminal: e.terminal } : {}),
+    ...(pidNum(e.shellPid) ? { shellPid: e.shellPid } : {}),
   }
 }
 
@@ -263,8 +274,9 @@ export interface PiSnapshot {
  */
 export function piSleeperPane(
   snap: Pick<PiSnapshot, 'panes'>,
-  s: Pick<PiSleeper, 'pane' | 'name' | 'cwd'>,
+  s: Pick<PiSleeper, 'pane' | 'name' | 'cwd' | 'freed'>,
 ): PiPane | undefined {
+  if (s.freed) return undefined
   const p = snap.panes.find(x => x.pane_id === s.pane)
   if (!p || p.agent) return undefined
   return p.label === sleepLabel(s) || sameDir(p.cwd, s.cwd) ? p : undefined

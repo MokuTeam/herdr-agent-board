@@ -20,7 +20,7 @@ import { sameDir } from '../../src/core/launch/names.ts'
 import { defaultProfileDir, mergeProfiles, profileSet } from '../../src/core/profiles.ts'
 import type { Item } from '../../src/core/types.ts'
 import { checkRequest } from '../../src/services/launch/request.ts'
-import { worktreeSubdir } from '../../src/services/launch/run.ts'
+import { spareWorktreeRootTab, worktreeSubdir } from '../../src/services/launch/run.ts'
 import { type Sandbox, sandbox, until } from '../support/sandbox.ts'
 import { trustScreen } from '../support/trust-screen.ts'
 
@@ -840,7 +840,55 @@ test('a launch into a checkout links its workspace with worktree open, and reuse
     box.calls().some(a => a[0] === 'tab' && (a[1] === 'rename' || a[1] === 'close') && a[2] === 'w61:t1'),
     false,
   )
-}, 30_000)
+
+  // Brand-new linked workspace (already_open: false) whose launch opens a second tab (work profile)
+  // closes the empty first tab on Windows (#888), while Linux/macOS keep origin/main behavior.
+  assert.equal(spareWorktreeRootTab('win32'), true)
+  assert.equal(spareWorktreeRootTab('linux'), false)
+  assert.equal(spareWorktreeRootTab('darwin'), false)
+  const b2 = await boardServer(
+    box2 => ({
+      launch: { agent: 'claude', linkedWorkspaces: true },
+      ...PROFILES(box2),
+    }),
+    { PATH: process.env.PATH ?? '' },
+  )
+  const repo2 = join(b2.box.dir, 'FreshWt')
+  mkdirSync(repo2, { recursive: true })
+  writeFileSync(join(repo2, 'a.txt'), 'a')
+  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'init', '-q', '-b', 'main'], {
+    cwd: repo2,
+    stdio: 'pipe',
+  })
+  execFileSync('git', ['add', '.'], { cwd: repo2, stdio: 'pipe' })
+  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '-q', '-m', 'init'], {
+    cwd: repo2,
+    stdio: 'pipe',
+  })
+  b2.box.state({
+    ...HERDR,
+    'worktree open': {
+      result: {
+        already_open: false,
+        workspace: { workspace_id: 'w62', label: '14313' },
+        tab: { tab_id: 'w62:t1' },
+        root_pane: { pane_id: 'w62:p1', terminal_id: 'term-init' },
+      },
+    },
+    'pane list': {
+      result: { panes: [{ pane_id: 'w62:p1', agent: null, tab_id: 'w62:t1', terminal_id: 'term-init' }] },
+    },
+  })
+  const l2 = await b2.launched(
+    await b2.started({ name: '14313', cwd: repo2, category: 'acme', profile: 'work', workspace: { create: '14313' } }),
+  )
+  assert.equal(l2.state, 'done', l2.error)
+  assert.equal(
+    b2.box.calls().some(a => a[0] === 'tab' && a[1] === 'close' && a[2] === 'w62:t1'),
+    process.platform === 'win32',
+    JSON.stringify(b2.box.calls()),
+  )
+}, 60_000)
 
 for (const [mode, config, made] of [
   ['as before', { launch: { agent: 'claude' } }, 'repo-feature-x'],

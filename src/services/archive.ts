@@ -42,10 +42,12 @@ import { transcriptCwd } from '../adapters/claude-home.ts'
 import { agentGet, herdr, workspaceList } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { pause } from '../adapters/pacing.ts'
+import { type MemRow, memoryTable, nothingUnder } from '../adapters/pane-facts.ts'
 import { listEntries, removeEntry, restoreEntry } from '../adapters/schedule-store.ts'
 import { AGY_AGENT } from '../core/agy.ts'
 import { type ArchiveRecord, type ArchiveReturning, archiveBlock } from '../core/archive.ts'
 import { noteOf } from '../core/board.ts'
+import { isSidebarPane } from '../core/board-pane.ts'
 import { categoryInfo } from '../core/categories.ts'
 import { CODEX_AGENT } from '../core/codex.ts'
 import { parentProfile } from '../core/item-profile.ts'
@@ -202,7 +204,14 @@ export type FreeToClose = { ok: true; pane: PaneFacts | null } | { ok: false; wh
  * exited by itself, or a program started in its place, keeps the pane. The profile's detail is in
  * `tr`'s language (profileDoubt).
  */
-export async function freeToClose(deps: Deps, item: ArchiveSubject, tr: Translator = t): Promise<FreeToClose> {
+export async function freeToClose(
+  deps: Deps,
+  item: ArchiveSubject,
+  tr: Translator = t,
+  processTable?: (() => Promise<readonly MemRow[] | null>) | null,
+  platform: string = process.platform,
+): Promise<FreeToClose> {
+  const table = processTable === undefined ? (platform === 'win32' ? memoryTable : null) : processTable
   const isAgy = item.agent === AGY_AGENT
   const isCodex = item.agent === CODEX_AGENT
   if (!isAgy && !isCodex) {
@@ -223,13 +232,20 @@ export async function freeToClose(deps: Deps, item: ArchiveSubject, tr: Translat
   }
   if (!pane) return { ok: true, pane: null }
   if (!pane.agent) {
-    if (!(isCodex && pane.label === `💤 ${item.name}`) && !sleeperLabel(pane.label, item))
-      return { ok: false, why: 'archive.why.exited' }
+    const namedSleeper =
+      (isCodex || (platform === 'win32' && (isAgy || item.agent === 'pi'))) && pane.label === `💤 ${item.name}`
+    if (!namedSleeper && !sleeperLabel(pane.label, item)) return { ok: false, why: 'archive.why.exited' }
     try {
       const answer = await herdr(['pane', 'process-info', '--pane', target])
       const info = isRecord(answer) && isRecord(answer.process_info) ? answer.process_info : null
       const procs = Array.isArray(info?.foreground_processes) ? info.foreground_processes : []
       if (procs.some(p => isRecord(p) && p.pid !== info?.shell_pid)) return { ok: false, why: 'archive.why.shellBusy' }
+      // Windows herdr process-info omits child processes started under pwsh (#888).
+      if (table && typeof info?.shell_pid === 'number') {
+        const rows = await table().catch(() => null)
+        if (!rows) return { ok: false, why: 'archive.why.herdr', detail: 'could not read process table' }
+        if (nothingUnder(rows, info.shell_pid) !== true) return { ok: false, why: 'archive.why.shellBusy' }
+      }
     } catch (err) {
       return { ok: false, why: 'archive.why.herdr', detail: messageOf(err) }
     }
@@ -367,15 +383,29 @@ function claim(key: string, now: number): ArchiveRecord | null | undefined {
   })
 }
 
-/** The panes of a tab: their ids, whether an agent runs in each, and whether a plugin made it (its tokens). */
-async function tabPanes(workspace: string, tab: string): Promise<{ pane: string; agent: boolean; plugin: boolean }[]> {
+/** The panes of a tab: their ids, whether an agent runs in each, and whether a plugin made it (its tokens, or Sidebar on Windows). */
+export async function tabPanes(
+  workspace: string,
+  tab: string,
+  platform: string = process.platform,
+): Promise<{ pane: string; agent: boolean; plugin: boolean }[]> {
   const answer = await herdr(['pane', 'list', '--workspace', workspace])
   const panes = isRecord(answer) && Array.isArray(answer.panes) ? answer.panes : []
-  return panes.flatMap(p =>
-    isRecord(p) && p.tab_id === tab
-      ? [{ pane: text(p.pane_id), agent: !!p.agent, plugin: isRecord(p.tokens) && Object.keys(p.tokens).length > 0 }]
-      : [],
-  )
+  return panes.flatMap(p => {
+    if (!isRecord(p) || p.tab_id !== tab) return []
+    const tokens = isRecord(p.tokens) ? p.tokens : undefined
+    const hasTokens = !!tokens && Object.keys(tokens).length > 0
+    const sidebar = isSidebarPane(
+      {
+        pane_id: text(p.pane_id),
+        ...(typeof p.agent === 'string' && { agent: p.agent }),
+        ...(typeof p.label === 'string' && { label: p.label }),
+        ...(tokens && { tokens }),
+      },
+      platform,
+    )
+    return [{ pane: text(p.pane_id), agent: !!p.agent, plugin: hasTokens || sidebar }]
+  })
 }
 
 /** 'closed', 'kept' (called off), or null (not now: claimed elsewhere, or herdr is tried again). */

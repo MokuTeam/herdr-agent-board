@@ -130,18 +130,25 @@ export async function leftoverBoards(
   return leftovers
 }
 
-/** herdr-sidebar's pane, which that plugin adds to every tab. */
-export const isSidebarPane = (p: SnapPane): boolean =>
-  !p.agent && Object.keys(p.tokens ?? {}).some(k => k.startsWith('herdr-sidebar'))
+/** herdr-sidebar's pane (by its metadata tokens, or on Windows its label with no agent once tokens expire). */
+export const isSidebarPane = (p: SnapPane, platform: string = process.platform): boolean =>
+  !p.agent &&
+  (Object.keys(p.tokens ?? {}).some(k => k.startsWith('herdr-sidebar')) ||
+    (platform === 'win32' && p.label === 'Sidebar'))
 
 /**
  * What closes a leftover board pane: its whole tab when nothing but herdr-sidebar's panes is beside
  * it, as that plugin adds its pane to every tab; else the pane alone (something of the user's is in
  * that tab).
  */
-export function closeOfLeftover(panes: readonly SnapPane[], pane: string): string[] {
+export function closeOfLeftover(
+  panes: readonly SnapPane[],
+  pane: string,
+  platform: string = process.platform,
+): string[] {
   const tab = panes.find(p => p.pane_id === pane)?.tab_id
   const alone =
-    tab !== undefined && panes.filter(p => p.tab_id === tab).every(p => p.pane_id === pane || isSidebarPane(p))
+    tab !== undefined &&
+    panes.filter(p => p.tab_id === tab).every(p => p.pane_id === pane || isSidebarPane(p, platform))
   return alone ? ['tab', 'close', tab] : ['pane', 'close', pane]
 }
