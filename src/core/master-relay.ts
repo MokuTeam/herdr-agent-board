@@ -261,6 +261,8 @@ export const OWNER_CLI_COMMANDS: ReadonlySet<string> = new Set([
   'away',
   'decisions',
   'cats',
+  'agents',
+  'list',
 ])
 
 /**

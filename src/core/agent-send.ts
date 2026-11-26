@@ -351,7 +351,9 @@ export interface SendAsk {
 
 /** `board send`'s entry and the line it prints, or why it sends nothing. */
 export function planSend(a: SendAsk): { error: string } | { entry: ReturnType<typeof messageEntry>; line: string } {
-  const fits = matching(a.targets, a.to)
+  const at = parseNodeKey(a.to.trim())
+  const targetRef = at && a.own && at.device === a.own ? at.key : a.to
+  const fits = matching(a.targets, targetRef)
   const others = fits.filter(t => t.key !== a.from.key)
   if (!others.length)
     return {

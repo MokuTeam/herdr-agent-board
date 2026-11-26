@@ -29,8 +29,8 @@ async function forward(o: { cmd: NodeCall['cmd']; argv?: string[]; session: stri
   return { code, out, err, calls, owners }
 }
 
-test('no session: presence, away, journal, decisions, cats and cal go up as the owner', async () => {
-  for (const cmd of ['presence', 'away', 'journal', 'decisions', 'cats', 'cal'] as const) {
+test('no session: presence, away, journal, decisions, cats, cal, agents and list go up as the owner', async () => {
+  for (const cmd of ['presence', 'away', 'journal', 'decisions', 'cats', 'cal', 'agents', 'list'] as const) {
     const r = await forward({ cmd, argv: ['x ünï 100%'], session: null })
     expect(r).toMatchObject({ code: 0, out: ['as the owner'], calls: [] })
     expect(r.owners).toEqual([{ cmd, argv: ['x ünï 100%'] }])

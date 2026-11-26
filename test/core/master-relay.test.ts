@@ -369,3 +369,13 @@ describe('Settings → The whole board (#887): the master scope reaches its decl
     }
   })
 })
+
+test('ownerCliOf accepts agents (with --json) and list from a sessionless terminal, never send (#912)', () => {
+  expect(ownerCliCommand('agents', [])).toBe(true)
+  expect(ownerCliCommand('agents', ['--json'])).toBe(true)
+  expect(ownerCliCommand('list', [])).toBe(true)
+  expect(ownerCliOf({ cmd: 'agents', argv: ['--json'] })).toEqual({ cmd: 'agents', argv: ['--json'] })
+  expect(ownerCliOf({ cmd: 'list', argv: [] })).toEqual({ cmd: 'list', argv: [] })
+  expect(ownerCliCommand('send', ['Monitor', 'hi'])).toBe(false)
+  expect(ownerCliOf({ cmd: 'send', argv: ['Monitor', 'hi'] })).toBeNull()
+})

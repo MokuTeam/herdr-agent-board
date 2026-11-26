@@ -620,7 +620,7 @@ describe("the master's side", () => {
       links: link.links,
       find: key => items.find(i => i.key === key),
       items: () => items,
-      cfg: { nodes: { id: 'laptop' } } as never,
+      cfg: { nodes: { id: 'laptop' }, categories: [] } as never,
       log: () => {},
       store,
     })
@@ -1513,5 +1513,67 @@ describe("the master's side", () => {
         .map(e => e.id)
         .sort(),
     ).toEqual([theirs.id, own.id].sort())
+  })
+
+  test('#912 ownerCall runs agents (plain and --json) and list across all machines without marking (this session)', async () => {
+    const dir = isolatedHome()
+    const store = createDeviceStore({ dir: join(dir, 'nodes') })
+    const OTHER = '8c9d0e1f-2a3b-4c4d-9e5f-6a7b8c9d0e1f'
+    const items = [
+      {
+        key: N1,
+        session: N1,
+        agent: 'claude',
+        name: 'Master One',
+        category: 'atlas',
+        column: 'working',
+        pane: 'w1:p1',
+        status: 'working',
+      },
+      {
+        key: `@server-1:${OTHER}`,
+        session: OTHER,
+        agent: 'agy',
+        name: 'Node One',
+        category: 'atlas',
+        column: 'idle',
+        device: 'server-1',
+        pane: 'w2:p1',
+        status: 'idle',
+      },
+    ] as Item[]
+    const link = standIn(() => new Response('{}'))
+    const runner = createUplinkRunner({
+      links: link.links,
+      find: key => items.find(i => i.key === key),
+      items: () => items,
+      cfg: { nodes: { id: 'laptop' }, categories: [] } as never,
+      log: () => {},
+      store,
+    })
+    link.changed('online')
+
+    const plain = await runner.ownerCall('server-1', { cmd: 'agents', argv: [] })
+    expect(plain).toEqual({
+      code: 0,
+      out: [
+        'Master One [7b8c9d0e]  ·  claude  ·  laptop  ·  working',
+        'Node One [8c9d0e1f]  ·  agy  ·  node server-1  ·  idle',
+      ],
+      err: [],
+    })
+
+    const asJson = await runner.ownerCall('server-1', { cmd: 'agents', argv: ['--json'] })
+    expect(asJson.code).toBe(0)
+    expect(JSON.parse(asJson.out.join('\n'))).toMatchObject([
+      { key: N1, agent: 'claude', self: false, offline: false },
+      { key: `@server-1:${OTHER}`, agent: 'agy', device: 'server-1', self: false, offline: false },
+    ])
+
+    const listed = await runner.ownerCall('server-1', { cmd: 'list', argv: [] })
+    expect(listed.code).toBe(0)
+    expect(listed.out.join('\n')).toContain('Master One')
+    expect(listed.out.join('\n')).toContain('Node One')
+    await runner.close()
   })
 })

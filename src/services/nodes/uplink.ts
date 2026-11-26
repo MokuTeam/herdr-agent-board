@@ -703,6 +703,25 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
   }
 
   /**
+   * `board agents [--json]` on the master (#628, core/agent-send.ts): every machine's sessions of
+   * the board (#772), a device whose link is not online now marked as such.
+   */
+  async function agentsRun(argv: readonly string[], selfKey?: string): Promise<UplinkResult> {
+    const { agentViewsOf, formatAgentLines, targetsOf } = await import('../../core/agent-send.ts')
+    const own = nodesConfig(o.cfg.nodes, hostname())?.id ?? ''
+    const targets = targetsOf(visibleItems(), own)
+    const offline = offlineOf(targets)
+    // One view a line (#639): a result's line is cut at RESULT_LINE_MAX, which one array of a
+    // few hundred cards would pass; the lines joined are the same JSON array.
+    if (argv.includes('--json')) {
+      const views = agentViewsOf(targets, { ...(selfKey && { selfKey }), offline }).map(v => JSON.stringify(v))
+      return { code: 0, out: ['[', ...views.map((v, i) => (i < views.length - 1 ? `${v},` : v)), ']'], err: [] }
+    }
+    const lines = formatAgentLines(targets, { ...(selfKey && { selfKey }), own, offline, now: Date.now() })
+    return { code: 0, out: lines.length ? lines : ['no sessions on the board'], err: [] }
+  }
+
+  /**
    * `board agents [--json]` in a session of the node (#628, core/agent-send.ts): every machine's
    * sessions of the board (#772), a device whose link is not online now marked as such.
    */
@@ -713,18 +732,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     } catch {
       return refused('not a session of the node')
     }
-    const { agentViewsOf, formatAgentLines, targetsOf } = await import('../../core/agent-send.ts')
-    const own = nodesConfig(o.cfg.nodes, hostname())?.id ?? ''
-    const targets = targetsOf(visibleItems(), own)
-    const offline = offlineOf(targets)
-    // One view a line (#639): a result's line is cut at RESULT_LINE_MAX, which one array of a
-    // few hundred cards would pass; the lines joined are the same JSON array.
-    if (call.argv.includes('--json')) {
-      const views = agentViewsOf(targets, { selfKey: key, offline }).map(v => JSON.stringify(v))
-      return { code: 0, out: ['[', ...views.map((v, i) => (i < views.length - 1 ? `${v},` : v)), ']'], err: [] }
-    }
-    const lines = formatAgentLines(targets, { selfKey: key, own, offline, now: Date.now() })
-    return { code: 0, out: lines.length ? lines : ['no sessions on the board'], err: [] }
+    return agentsRun(call.argv, key)
   }
 
   /**
@@ -990,10 +998,14 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     return { code: 0, out: [`${known}. A new id makes a new lane.`], err: [] }
   }
 
+  function listRun(): UplinkResult {
+    return { code: 0, out: formatListLines(visibleItems(), o.cfg, { now: Date.now(), includeNote: false }), err: [] }
+  }
+
   /** `board list` in a session of the node (#698): every machine's sessions (#772), without free-text notes. */
   function listFrom(id: string, call: UplinkCall): UplinkResult {
     if (!sessionOf(id, call.session)) return refused('not a session of the node')
-    return { code: 0, out: formatListLines(visibleItems(), o.cfg, { now: Date.now(), includeNote: false }), err: [] }
+    return listRun()
   }
 
   /** `board remind` / `board every` aimed at another session from a node (#698). */
@@ -1258,6 +1270,10 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
           return presenceRun(call.cmd, argv, 'cli')
         case 'cats':
           return catsRun()
+        case 'agents':
+          return fit(await agentsRun(argv))
+        case 'list':
+          return fit(listRun())
       }
       return refused(`board ${said(call.cmd)} is not taken from a node's terminal: run it in a session`)
     } catch (e) {
