@@ -151,13 +151,13 @@ function exposedView(team: TeamService, router: TeamRouter | undefined) {
 }
 
 /** The owner's agent switches as the panel shows them, with the lanes there are to share. */
-function agentsView(cfg: Pick<Config, 'categories' | 'team'>, exposed?: unknown[]): unknown {
+function agentsView(cfg: Pick<Config, 'categories' | 'team'>, exposed?: unknown[], router?: TeamRouter): unknown {
   const s = readAgents()
   const team = typeof cfg.team === 'object' && cfg.team !== null ? (cfg.team as Record<string, unknown>) : {}
   return {
     off: s.off,
     ...(s.mastersOnly && { mastersOnly: true }),
-    listener: s.listener,
+    listener: s.listener && router ? router.resolveSession(s.listener) : s.listener,
     peers: s.peers,
     paused: s.paused,
     // The loop pause of a peer without its own (#360).
@@ -215,8 +215,9 @@ function agentsChange(
     }
   }
   if (body.listener !== undefined) {
-    const listener = body.listener === null ? null : sessionFrom(body.listener)
-    if (body.listener !== null && !listener) return { ok: false, error: 'body' }
+    const raw = body.listener === null ? null : sessionFrom(body.listener)
+    if (body.listener !== null && !raw) return { ok: false, error: 'body' }
+    const listener = raw && router ? router.resolveSession(raw) : raw
     return {
       ok: true,
       apply() {
@@ -812,13 +813,16 @@ export function teamRoutes(
         if (refused) return refused
         const raw = await ctx.rawBody()
         const given = isRecord(raw) ? raw.session : undefined
-        const session = given === null ? null : sessionFrom(given)
-        if (given !== null && !session) return json(400, { ok: false, error: 'body' })
-        const caller = sessionFrom(isRecord(raw) ? raw.caller : undefined) ?? undefined
+        const parsedSession = given === null ? null : sessionFrom(given)
+        if (given !== null && !parsedSession) return json(400, { ok: false, error: 'body' })
+        const session = parsedSession && router ? router.resolveSession(parsedSession) : parsedSession
+        const rawCaller = sessionFrom(isRecord(raw) ? raw.caller : undefined)
+        const caller = (rawCaller && router ? router.resolveSession(rawCaller) : rawCaller) ?? undefined
         // A session making itself the listener gets notices of every thread nobody handles and may
         // post outside its lanes: it widens what agents may do, so the owner confirms it (#224).
         // Taking another listener's place stays refused; stepping down is free.
-        const now = readAgents().listener
+        const storedNow = readAgents().listener
+        const now = storedNow && router ? router.resolveSession(storedNow) : storedNow
         if (session && now && now.key !== session.key) return json(409, { ok: false, error: 'taken' })
         if (session && now?.key !== session.key) {
           const wait = held(req, { kind: 'agents', change: { listener: session } })
@@ -833,7 +837,7 @@ export function teamRoutes(
       path: '/api/team/agents',
       handle() {
         if (!team.view()) return undefined
-        return json(200, agentsView(lanes(), exposedView(team, router)))
+        return json(200, agentsView(lanes(), exposedView(team, router), router))
       },
     },
     {
@@ -853,7 +857,7 @@ export function teamRoutes(
         const refused = ctx.refuse('board-header') ?? ctx.refuse('origin')
         if (refused) return refused
         const raw = await ctx.rawBody()
-        const change = isRecord(raw) ? raw : {}
+        let change = isRecord(raw) ? raw : {}
         if (Object.hasOwn(change, 'publishAlias')) {
           const alias = change.publishAlias
           if (!isRecord(alias) || typeof alias.key !== 'string' || (alias.name !== null && !validAlias(alias.name)))
@@ -872,6 +876,10 @@ export function teamRoutes(
         }
         const c = agentsChange(lanes(), change, router)
         if (!c.ok) return json(400, c)
+        if (isRecord(change.listener) && router) {
+          const parsed = sessionFrom(change.listener)
+          if (parsed) change = { ...change, listener: router.resolveSession(parsed) }
+        }
         // Narrowing is never held back; widening waits for the owner's passkey.
         if (widens(readAgents(), change)) {
           const wait = held(req, { kind: 'agents', change })

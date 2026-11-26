@@ -24,6 +24,29 @@ export function parseNodeKey(key: string): { device: string; key: string } | nul
   return isDevice(device) && rest ? { device, key: rest } : null
 }
 
+/**
+ * Matches a bare session key to the unique `@<device>:<key>` item in `items` when no exact
+ * match exists. Returns null when `key` is empty, already prefixed, a machine-local `pane-*`
+ * key, an owner service key, directly present in `items`, or matches zero or more than one
+ * node item.
+ */
+export function matchNodeKey(key: string, items: readonly { key: string }[]): string | null {
+  if (!key || parseNodeKey(key) || key.startsWith('pane-') || key.startsWith('owner-service-')) return null
+  if (items.some(i => i.key === key)) return null
+  let hit: string | null = null
+  for (const item of items) {
+    if (parseNodeKey(item.key)?.key !== key) continue
+    if (hit !== null && hit !== item.key) return null
+    hit = item.key
+  }
+  return hit
+}
+
+/** The session's full key as the board knows it (`@<device>:<key>` when uniquely matched), else `key`. */
+export function resolveBoardKey(key: string, items: readonly { key: string }[]): string {
+  return matchNodeKey(key, items) ?? key
+}
+
 const UNPRINTABLE = /[\p{Cc}\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/u
 
 /**

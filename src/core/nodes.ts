@@ -12,12 +12,12 @@ import { normalizeDeviceColor } from './device-color.ts'
 import { type DeviceMarker, deviceMarkerOf, markerConfigOf } from './device-marker.ts'
 import { type GitFacts, gitFactsOf } from './git-access.ts'
 import { isRoutableNodeAddress, plainAddress } from './mokupilot-mode.ts'
-import { DEVICE_ID, isDevice, LOCAL, parseNodeKey, validMasterUrl } from './node-key.ts'
+import { DEVICE_ID, isDevice, LOCAL, matchNodeKey, parseNodeKey, resolveBoardKey, validMasterUrl } from './node-key.ts'
 import { repoAddress } from './portable.ts'
 import { hasUnprintable } from './team.ts'
 
 // The device id and the prefixed keys live in a leaf module the page can import (core/node-key.ts).
-export { DEVICE_ID, LOCAL, parseNodeKey, validMasterUrl }
+export { DEVICE_ID, LOCAL, matchNodeKey, parseNodeKey, resolveBoardKey, validMasterUrl }
 
 /** The node's door, on 127.0.0.1, when `node.port` and a link's `port` do not say. */
 export const NODE_PORT = 12430

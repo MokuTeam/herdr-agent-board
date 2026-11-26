@@ -143,6 +143,8 @@ export interface ThreadsCtx {
    * written by the `board` command outside a session, which any program could run as the owner.
    */
   ownerHolds?: boolean
+  /** Resolves a session key to the full board key (`@<node>:<key>` for node sessions) when scheduling. */
+  resolveKey?: (key: string) => string
 }
 
 /** One write done: the thread's head after it and the entry, and the entries the board added (a parent's close). */
@@ -704,11 +706,13 @@ export function carryWatches(
       const ws = watchesOf(ctx.db, old).filter(w => w.target !== OWNER)
       if (!ws.length) continue
       tellOne(ctx, schedule, old, tx)
-      const pending = pendingOf(schedule, old)
+      const oldKey = ctx.resolveKey ? ctx.resolveKey(old) : old
+      const toKey = ctx.resolveKey ? ctx.resolveKey(to.key) : to.key
+      const pending = pendingOf(schedule, oldKey) ?? (oldKey !== old ? pendingOf(schedule, old) : undefined)
       if (pending) {
         const { id, created, claim, key, name, by, ...line } = pending
         // Added before it is taken back: a refused add leaves the old line where it was.
-        schedule.add({ ...line, key: to.key, ...((to.name || name) && { name: to.name || name }), by: CARRIED_BY })
+        schedule.add({ ...line, key: toKey, ...((to.name || name) && { name: to.name || name }), by: CARRIED_BY })
         schedule.takeBack(id)
       }
       const cursor = cursorOf(ctx.db, old)
@@ -972,7 +976,8 @@ function tellOne(
     at: 0,
     asked: direct ? Math.max(0, direct.seq - 1) : rev,
   }
-  const pending = pendingOf(schedule, session)
+  const targetKey = ctx.resolveKey ? ctx.resolveKey(session) : session
+  const pending = pendingOf(schedule, targetKey) ?? (targetKey !== session ? pendingOf(schedule, session) : undefined)
   const directSeqs = new Set<number>()
   if (direct) directSeqs.add(direct.seq)
   for (const o of Array.isArray(pending?.ownerPosts) ? pending.ownerPosts : []) {
@@ -1010,7 +1015,7 @@ function tellOne(
   const name =
     heard.matched.find(w => w.name)?.name || heard.ownerPosts.find(o => o.target.name)?.target.name || direct?.name
   schedule.add({
-    key: session,
+    key: targetKey,
     ...(name && { name }),
     text,
     at: next,

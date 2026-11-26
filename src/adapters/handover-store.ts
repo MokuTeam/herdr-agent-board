@@ -20,7 +20,7 @@ import {
 import { dirname, join } from 'node:path'
 import { backupConfig, isTarget, targetWhere } from '../core/backup.ts'
 import { type BackupKey, isBackupKey, seal, unseal } from '../core/backup-file.ts'
-import { rekeyKey } from '../core/db-rekey.ts'
+import { rekeyKey, rekeyTeamAgents, rekeyTeamThreads } from '../core/db-rekey.ts'
 import {
   type HandoverCategory,
   type HandoverFileEntry,
@@ -1225,7 +1225,28 @@ export async function applyHandoverFiles(
     if (entry.path === 'backup/backup-key.json' && opts.keepTargetBackupKey && existsSync(keyFile())) {
       continue
     }
-    await writeStateBytes(entry.path, body, entry.mode)
+    let outBody = body
+    if (entry.path === 'team-agents.json' || entry.path === 'team-threads.json') {
+      try {
+        const parsed: unknown = JSON.parse(Buffer.from(body).toString('utf8'))
+        if (isRecord(parsed)) {
+          if (entry.path === 'team-agents.json') {
+            const r = rekeyTeamAgents(parsed, manifest.from, manifest.to)
+            if (r.changed) {
+              outBody = Buffer.from(JSON.stringify(r.state), 'utf8')
+              rekeyTotal++
+            }
+          } else {
+            const r = rekeyTeamThreads(parsed, manifest.from, manifest.to)
+            if (r.changed) {
+              outBody = Buffer.from(JSON.stringify(r.state), 'utf8')
+              rekeyTotal += r.handlers
+            }
+          }
+        }
+      } catch {}
+    }
+    await writeStateBytes(entry.path, outBody, entry.mode)
   }
 
   // Install fresh device tokens and certificates (for old master + any re-paired nodes).

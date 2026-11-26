@@ -137,6 +137,31 @@ describe('adapters/handover-store (#697)', () => {
       { mode: 0o600 },
     )
     writeFileSync(join(env.stateDir, 'team-key.json'), JSON.stringify({ v: 1, pkcs8: 'p', pub: 'u' }), { mode: 0o600 })
+    writeFileSync(
+      join(env.stateDir, 'team-agents.json'),
+      JSON.stringify({ v: 1, off: false, listener: { key: '@server-1:node-1', name: 'ben' }, peers: {}, paused: {} }),
+      { mode: 0o600 },
+    )
+    writeFileSync(
+      join(env.stateDir, 'team-threads.json'),
+      JSON.stringify({
+        v: 1,
+        threads: {
+          'peerA/t1': {
+            scope: 'peerA',
+            id: 't1',
+            title: 'T1',
+            link: null,
+            handler: { key: 'local-1', name: 'anna' },
+            muted: false,
+            by: 'me',
+            createdAt: 1000,
+            lastAt: 1000,
+          },
+        },
+      }),
+      { mode: 0o600 },
+    )
     mkdirSync(join(env.stateDir, 'calendar', 'secret'), { recursive: true, mode: 0o700 })
     writeFileSync(
       join(env.stateDir, 'calendar', 'secret', 'work.json'),
@@ -219,6 +244,14 @@ describe('adapters/handover-store (#697)', () => {
       key: string
     }
     expect(sched.key).toBe('node-1')
+    const teamAgents = JSON.parse(readFileSync(join(targetEnv.stateDir, 'team-agents.json'), 'utf8')) as {
+      listener: { key: string }
+    }
+    expect(teamAgents.listener.key).toBe('node-1')
+    const teamThreads = JSON.parse(readFileSync(join(targetEnv.stateDir, 'team-threads.json'), 'utf8')) as {
+      threads: Record<string, { handler: { key: string } }>
+    }
+    expect(teamThreads.threads['peerA/t1']?.handler.key).toBe('@laptop:local-1')
     expect(readFileSync(join(targetEnv.stateDir, 'thread-files', 't1', 'note.txt'), 'utf8')).toBe('attached note')
 
     // Rollback on target removes applied files and restores original node config + masters.json

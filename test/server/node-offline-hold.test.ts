@@ -470,3 +470,107 @@ describe('offline node hold (#695)', () => {
     expect('devices' in b).toBe(false)
   }, 30_000)
 })
+
+describe('one-time recovery of bare node keys held as gone (#869)', () => {
+  test('retargets a gone bare node key once and delivers via node (or holds offline), never re-matching pane-*/ambiguous/non-remote kinds', async () => {
+    const box = await sandbox()
+    showPanes(box, [])
+    const savedEnv = { ...process.env }
+    Object.assign(process.env, box.env)
+    const cfg = {
+      language: 'en',
+      categories: [{ id: 'other', title: 'Other', color: 'gray' }],
+      scheduleTickSec: 0.2,
+      scheduleWaitMin: 60,
+      nodes: { id: 'master', devices: { 'server-1': { link: { kind: 'direct', url: 'http://127.0.0.1:1' } } } },
+    }
+    const BARE_OK = '66666666-7777-4888-8999-000000000001'
+    const BARE_GONE_ON_NODE = '66666666-7777-4888-8999-000000000002'
+    const BARE_DUP = '66666666-7777-4888-8999-000000000003'
+    const remoteList = [
+      { key: `@server-1:${BARE_OK}`, session: BARE_OK, name: 'ok-node', status: 'idle' },
+      { key: `@server-1:${BARE_GONE_ON_NODE}`, session: BARE_GONE_ON_NODE, name: 'gone-node', status: 'idle' },
+      { key: `@server-1:${BARE_DUP}`, session: BARE_DUP, name: 'dup-1', status: 'idle' },
+      { key: `@server-2:${BARE_DUP}`, session: BARE_DUP, name: 'dup-2', status: 'idle' },
+      { key: '@server-1:pane-w1:p1', session: null, name: 'pane-node', status: 'idle' },
+    ]
+    const sent: { key: string; text: string }[] = []
+    let goneAfterRetargetCalls = 0
+    const proxy = {
+      deviceState: () => 'online' as const,
+      async send(key: string, text: string) {
+        if (key === `@server-1:${BARE_GONE_ON_NODE}`) {
+          goneAfterRetargetCalls++
+          return { ok: false as const, error: 'gone', gone: true }
+        }
+        sent.push({ key, text })
+        return { ok: true as const }
+      },
+    }
+    const now = Date.now()
+    // 1. Bare UUID held as gone -> retargeted once and delivered to @server-1:<uuid>
+    putEntry(box, { id: 'a86901', key: BARE_OK, text: 'team notice', why: 'gone', next: now - 1000 })
+    // 2. Bare UUID retargeted once; if node reports r.gone it stays @server-1:<uuid> and is not retargeted again
+    putEntry(box, { id: 'a86902', key: BARE_GONE_ON_NODE, text: 'gone on node', why: 'gone', next: now - 1000 })
+    // 3. Ambiguous bare key on two nodes -> stays bare
+    putEntry(box, { id: 'a86903', key: BARE_DUP, text: 'ambiguous', why: 'gone', next: now - 1000 })
+    // 4. Machine-local pane-* key -> stays bare
+    putEntry(box, { id: 'a86904', key: 'pane-w1:p1', text: 'pane local', why: 'gone', next: now - 1000 })
+    // 5. Local-only kind (restart) -> stays bare
+    putEntry(box, { id: 'a86905', key: BARE_OK, kind: 'restart', text: 'restart', why: 'gone', next: now - 1000 })
+
+    const sched = startScheduler({
+      deps: defaultDeps(cfg as never),
+      remote: () => proxy,
+      remoteItems: () => remoteList as never,
+    })
+    try {
+      await until(() => sent.length === 1 && goneAfterRetargetCalls >= 1, 10_000)
+      expect(sent).toEqual([{ key: `@server-1:${BARE_OK}`, text: '[board reminder] team notice' }])
+      expect(readEntry(box, 'a86901')).toBeNull()
+      // a86902 was retargeted to @server-1:<BARE_GONE_ON_NODE> and kept that prefixed key.
+      const r2 = readEntry(box, 'a86902')
+      expect(r2?.key).toBe(`@server-1:${BARE_GONE_ON_NODE}`)
+      expect(r2?.why).toBe('gone')
+      // Non-eligible entries were not retargeted.
+      expect(readEntry(box, 'a86903')?.key).toBe(BARE_DUP)
+      expect(readEntry(box, 'a86904')?.key).toBe('pane-w1:p1')
+      expect(readEntry(box, 'a86905')?.key).toBe(BARE_OK)
+    } finally {
+      sched.stop()
+      for (const k of Object.keys(process.env)) if (!(k in savedEnv)) delete process.env[k]
+      Object.assign(process.env, savedEnv)
+    }
+  })
+
+  test('non-nodes board parity: bare gone entry without remote/remoteItems expires as before', async () => {
+    const box = await sandbox()
+    showPanes(box, [])
+    const savedEnv = { ...process.env }
+    Object.assign(process.env, box.env)
+    const cfg = {
+      language: 'en',
+      categories: [{ id: 'other', title: 'Other', color: 'gray' }],
+      scheduleTickSec: 0.2,
+      scheduleWaitMin: 0.001,
+    }
+    putEntry(box, {
+      id: 'a86906',
+      key: '66666666-7777-4888-8999-000000000009',
+      text: 'missing local',
+      why: 'gone',
+      tried: Date.now() - 1000,
+      next: Date.now() - 1000,
+    })
+    const sched = startScheduler({ deps: defaultDeps(cfg as never) })
+    try {
+      await until(() => readRuns(box).length === 1, 10_000)
+      expect(readEntry(box, 'a86906')).toBeNull()
+      expect(readRuns(box)[0]).toMatchObject({ id: 'a86906', result: 'missed', why: 'gone' })
+    } finally {
+      sched.stop()
+      for (const k of Object.keys(process.env)) if (!(k in savedEnv)) delete process.env[k]
+      Object.assign(process.env, savedEnv)
+    }
+  })
+})

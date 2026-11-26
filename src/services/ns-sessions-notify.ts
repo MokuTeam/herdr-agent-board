@@ -5,6 +5,7 @@
 // the store has no live/dying entries.
 import { addEntry } from '../adapters/schedule-store.ts'
 import { t as boardT } from '../core/lang.ts'
+import { parseNodeKey } from '../core/nodes.ts'
 import type { NsStore } from '../core/ns-sessions.ts'
 import { type NsNotifyPrefs, planNsNotices } from '../core/ns-sessions-notify.ts'
 import { localZone } from '../core/time.ts'
@@ -38,11 +39,12 @@ export function createNsSessionsNotify(o: NsSessionsNotifyOptions): NsSessionsNo
   const deliverToDay =
     o.deliverToDay ??
     ((day, text, at) => {
+      const local = !parseNodeKey(day.key)
       addEntry({
         key: day.key,
         name: day.name || day.autoName || day.key.slice(0, 8),
-        ...(day.pane && { pane: day.pane }),
-        ...(day.cwd && { cwd: day.cwd }),
+        ...(local && day.pane && { pane: day.pane }),
+        ...(local && day.cwd && { cwd: day.cwd }),
         text,
         at,
         next: at,

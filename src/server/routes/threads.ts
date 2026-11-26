@@ -143,6 +143,8 @@ export interface ThreadsApp {
   caseLive?(keys: readonly string[]): Map<string, SessionLive>
   /** A session's lane by its key (#903), for `new` (`to`) and `set` (`assignee`). */
   sessionLane?(key: string): string | null
+  /** Resolves a session key to the full board key (`@<node>:<key>` for node sessions). */
+  resolveSessionKey?(key: string): string
 }
 
 /** The revision's own stream: made on its first client, so a board with threads off keeps no timer for it. */
@@ -244,6 +246,7 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
       now: now(),
       ...(app.schedule && { schedule: app.schedule }),
       ...(app.state && { state: app.state }),
+      ...(app.resolveSessionKey && { resolveKey: app.resolveSessionKey }),
     }
   }
 
@@ -346,7 +349,8 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
       return { kind: 'peer', peer: v.peer, name: typeof v.name === 'string' ? v.name.slice(0, 40) : v.peer.slice(0, 8) }
     }
     if (!isRecord(v) || typeof v.key !== 'string' || !v.key) throw new ThreadError('assignee', t('thread.err.bad'))
-    return { kind: 'session', key: v.key, name: typeof v.name === 'string' ? v.name.slice(0, 80) : v.key.slice(0, 8) }
+    const key = app.resolveSessionKey ? app.resolveSessionKey(v.key) : v.key
+    return { kind: 'session', key, name: typeof v.name === 'string' ? v.name.slice(0, 80) : key.slice(0, 8) }
   }
 
   const gate = (req: Request, action: OwnerAction): Response | null => confirmGate(app.confirm, req, action)

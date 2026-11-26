@@ -59,7 +59,7 @@ import { archiveDir, scheduleDir } from '../adapters/paths.ts'
 import { getEntry, listEntries, listWatches, logRun, removeEntry, updateEntry } from '../adapters/schedule-store.ts'
 import { itemProfile } from '../core/item-profile.ts'
 import { t } from '../core/lang.ts'
-import { parseNodeKey } from '../core/nodes.ts'
+import { matchNodeKey, parseNodeKey } from '../core/nodes.ts'
 import { callTitle } from '../core/notices.ts'
 import { profileLabel, sessionProfile } from '../core/profiles.ts'
 import { cleanText, NODE_OFFLINE_WHY, promptOf, type ScheduleEntry, targetOf } from '../core/schedule-rules.ts'
@@ -262,6 +262,40 @@ export function startScheduler({
         items.find(i => i.key === key) ?? sessionProfile(readCard(key), set.list)
       const profileIdOf = (key: string): string | undefined => itemProfile(profileOf(key), set.list)?.id
       let changed = false
+      const dispatchRemote = (entry: ScheduleEntry, via: RemoteDelivery, device: string): void => {
+        if (flying.has(entry.key)) return
+        if ((!entry.kind || entry.kind === 'telegram') && !entry.receipt) {
+          const devState = via.deviceState?.(device)
+          if (devState === 'revoked' || devState === 'forgotten') {
+            if (claim(entry.id, now)) {
+              endRemote(entry, now, devState === 'revoked' ? 'node-revoked' : 'node-forgotten')
+              changed = true
+            }
+            return
+          }
+          if (devState === 'offline') {
+            if (holdNode(entry, now)) changed = true
+            heldDevices.add(device)
+            return
+          }
+        }
+        if (headBlocked(entry)) return
+        flying.add(entry.key)
+        let settled = false
+        viaNode(entry, via, device)
+          .then(done => {
+            settled = done
+          })
+          .catch(err => log(`schedule ${entry.id}: ${messageOf(err)}`))
+          .finally(() => {
+            flying.delete(entry.key)
+            onChange()
+            if (settled && !stopped) {
+              wokenDevices.add(device)
+              plan(0)
+            }
+          })
+      }
       for (const entry of due) {
         if (!workdeskDue(entry)) continue
         if (delivered.get(entry.id) === entry.next) {
@@ -281,10 +315,12 @@ export function startScheduler({
             })
           continue
         }
+        const at = parseNodeKey(entry.key)
+        const via = at || (entry.why === 'gone' && remoteItems) ? (remote?.() ?? null) : null
         // A decision's default (#487, services/decisions.ts): only while its question is still open.
-        if (entry.decision !== undefined) {
+        if (entry.decision !== undefined && !(entry.why === 'gone' && !at && via && remoteItems)) {
           // A node session's (#781): against its card as the master sees it, only while there are nodes.
-          const theirs = parseNodeKey(entry.key) && remoteItems ? remoteItems() : null
+          const theirs = at && remoteItems ? remoteItems() : null
           const open = defaultDue(entry, cfg, Date.now(), theirs ? { item: k => theirs.find(i => i.key === k) } : {})
           if (open === 'wait') continue
           if (open === 'drop') {
@@ -294,44 +330,42 @@ export function startScheduler({
           }
         }
         // Another device's session (#501): through its node, never this computer's herdr.
-        const at = parseNodeKey(entry.key)
-        const via = at ? (remote?.() ?? null) : null
         if (via && at) {
-          if (flying.has(entry.key)) continue
-          if ((!entry.kind || entry.kind === 'telegram') && !entry.receipt) {
-            const devState = via.deviceState?.(at.device)
-            if (devState === 'revoked' || devState === 'forgotten') {
-              if (claim(entry.id, now)) {
-                endRemote(entry, now, devState === 'revoked' ? 'node-revoked' : 'node-forgotten')
-                changed = true
-              }
-              continue
-            }
-            if (devState === 'offline') {
-              if (holdNode(entry, now)) changed = true
-              heldDevices.add(at.device)
-              continue
-            }
-          }
-          if (headBlocked(entry)) continue
-          flying.add(entry.key)
-          let settled = false
-          viaNode(entry, via, at.device)
-            .then(done => {
-              settled = done
-            })
-            .catch(err => log(`schedule ${entry.id}: ${messageOf(err)}`))
-            .finally(() => {
-              flying.delete(entry.key)
-              onChange()
-              if (settled && !stopped) {
-                wokenDevices.add(at.device)
-                plan(0)
-              }
-            })
+          dispatchRemote(entry, via, at.device)
           continue
         }
         const { item, other } = targetOf(entry, items, profileIdOf)
+        // One-time recovery (#869): an entry held as "gone" under a node session's bare key is
+        // retargeted to its full `@<node>:<key>` once, when uniquely matched on the aggregate.
+        if (
+          !item &&
+          !other &&
+          via &&
+          remoteItems &&
+          entry.why === 'gone' &&
+          (!entry.kind || entry.kind === 'telegram') &&
+          !entry.receipt
+        ) {
+          const matched = matchNodeKey(entry.key, [...items, ...remoteItems()])
+          if (matched) {
+            const retargeted = updateEntry(entry.id, e => {
+              if (e.key !== entry.key || e.why !== 'gone' || e.claim) return undefined
+              const { why: _w, tried: _t, waited: _wa, gone: _g, ...rest } = e
+              return { ...rest, key: matched }
+            })
+            if (retargeted) {
+              log(`schedule ${entry.id}: retargeted bare key ${entry.key} -> ${matched}`)
+              changed = true
+              if (retargeted.decision !== undefined) {
+                plan(0)
+                continue
+              }
+              const nextAt = parseNodeKey(retargeted.key)
+              if (nextAt) dispatchRemote(retargeted, via, nextAt.device)
+              continue
+            }
+          }
+        }
         // An entry that does not wake (`noWake`, a thread's event, services/work-threads.ts): a
         // sleeping session gets it once it is awake again, however long that takes. It waits
         // without taking the session's turn, so another entry of it (a reminder that wakes it)

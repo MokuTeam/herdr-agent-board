@@ -19,6 +19,7 @@ import {
   LOCAL,
   laneMayLeave,
   markRevoked,
+  matchNodeKey,
   NODE_PORT,
   type NodesConfig,
   nodeConfig,
@@ -26,6 +27,7 @@ import {
   nodeProblems,
   nodesConfig,
   parseNodeKey,
+  resolveBoardKey,
 } from '../../src/core/nodes.ts'
 
 const ssh = { kind: 'ssh', host: '203.0.113.10', user: 'agent-board-link' }
@@ -729,5 +731,33 @@ describe('device colors (#758)', () => {
     assert.equal(flipped.get('local')?.id, forward.get('server-1')?.id)
     assert.equal(flipped.get('laptop')?.id, forward.get('local')?.id)
     assert.ok(DEVICE_COLORS.length >= 6)
+  })
+})
+
+describe('matchNodeKey and resolveBoardKey (#869)', () => {
+  const UUID = '11111111-2222-4333-8444-555555555555'
+  const WIN_PI = 'C:\\Users\\anna\\.pi\\sessions\\my session 50% тест.jsonl'
+
+  test('matches a bare key to a unique node item and preserves local/ambiguous/special keys', () => {
+    const items = [{ key: `@laptop:${UUID}` }, { key: `@laptop:${WIN_PI}` }]
+    assert.equal(matchNodeKey(UUID, items), `@laptop:${UUID}`)
+    assert.equal(resolveBoardKey(UUID, items), `@laptop:${UUID}`)
+    assert.equal(matchNodeKey(WIN_PI, items), `@laptop:${WIN_PI}`)
+    assert.equal(resolveBoardKey(WIN_PI, items), `@laptop:${WIN_PI}`)
+
+    // Already prefixed, empty, pane-*, or owner-service-* never match.
+    assert.equal(matchNodeKey(`@laptop:${UUID}`, items), null)
+    assert.equal(matchNodeKey('', items), null)
+    assert.equal(matchNodeKey('pane-w1:p1', [{ key: '@laptop:pane-w1:p1' }]), null)
+    assert.equal(matchNodeKey(`owner-service-${UUID}`, [{ key: `@laptop:owner-service-${UUID}` }]), null)
+
+    // Exact local match wins over a remote node item with the same bare key.
+    assert.equal(matchNodeKey(UUID, [{ key: UUID }, ...items]), null)
+    assert.equal(resolveBoardKey(UUID, [{ key: UUID }, ...items]), UUID)
+
+    // Ambiguous bare key present on two nodes returns null / keeps bare key.
+    const twoNodes = [{ key: `@laptop:${UUID}` }, { key: `@server-1:${UUID}` }]
+    assert.equal(matchNodeKey(UUID, twoNodes), null)
+    assert.equal(resolveBoardKey(UUID, twoNodes), UUID)
   })
 })
