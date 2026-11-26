@@ -224,13 +224,24 @@ test('the ledger on disk is JSON with the entries only', async () => {
   }
 })
 
-test("the board's MCP: a caller it names is a session to the gate; no caller is the owner, whatever the board's own env", () => {
+test("the board's MCP: a caller named by its pane alone is a session, refused by agents off; no caller is the owner", async () => {
   const noCard = () => null
   // The board runs in a pane of its own, maybe started from a session: none of that is the caller.
   const board = { PATH: '/bin', HERDR_PANE_ID: 'w0:p0', CLAUDE_CODE_SESSION_ID: 'board-own', CODEX_THREAD_ID: 'cx-own' }
   expect(callerParty(callerEnv(board, null), noCard)).toBeNull()
+  // Claude Code and Codex send X-Board-Pane only: the child gets the pane and the MCP's mark.
+  const paneOnly = callerEnv(board, { pane: 'w1:p1', cwd: '/work/anna' })
+  expect(callerParty(paneOnly, noCard)).toEqual({ pane: 'w1:p1' })
   expect(callerParty(callerEnv(board, { session: SID, pane: 'w1:p1' }), noCard)).toEqual({
     session: SID,
     pane: 'w1:p1',
   })
+  const b = box({ spawnLimits: { agents: false } }, paneOnly)
+  try {
+    await expect(gateSpawn(opts(), b.deps())).rejects.toThrow('may not start sessions')
+    expect(b.asks).toHaveLength(1)
+    expect(b.herdrCalls).toEqual([])
+  } finally {
+    b.done()
+  }
 })

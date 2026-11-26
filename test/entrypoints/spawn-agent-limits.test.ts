@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { LAUNCHER_CHILD, OWNER_START } from '../../src/core/launch/spawn-args.ts'
+import { LAUNCHER_CHILD, MCP_CALLER, OWNER_START } from '../../src/core/launch/spawn-args.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
 
 // spawn-agent's limits on a session's starts (#815) end to end, against the sandbox's fake herdr:
@@ -160,4 +160,12 @@ test('a start that stops at a dialog after the tab opened still counts: the sess
   const again = await runSpawn(box, args(cwd), env)
   expect(again.code).toBe(1)
   expect(again.stderr).toContain('the limit is 1')
+}, 30_000)
+
+test("the board's MCP for a caller named by its pane alone: gated, refused with agents off, nothing started", async () => {
+  const { box, cwd } = await limitBox({ agents: false })
+  const r = await runSpawn(box, args(cwd), { HERDR_PANE_ID: 'w1:p1', [MCP_CALLER]: '1' })
+  expect(r.code).toBe(1)
+  expect(r.stderr).toContain('sessions on this computer may not start sessions')
+  expect(box.calls().some(c => c[0] === 'tab')).toBe(false)
 }, 30_000)

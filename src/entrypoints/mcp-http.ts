@@ -15,6 +15,7 @@
 //
 // The tool list is fixed and short: it is part of every session's cached prefix.
 import { join } from 'node:path'
+import { MCP_CALLER } from '../core/launch/spawn-args.ts'
 import {
   Bad,
   jsonRpcServer,
@@ -339,6 +340,7 @@ const CALLER_ENV = [
   'CLAUDE_CONFIG_DIR',
   'AGENT_BOARD_PATHCONV',
   'MSYS2_ARG_CONV_EXCL',
+  MCP_CALLER,
 ] as const
 
 /** The child's environment for `caller`. */
@@ -353,6 +355,8 @@ export function callerEnv(
   if (caller?.session) env.CLAUDE_CODE_SESSION_ID = caller.session
   if (caller?.configDir) env.CLAUDE_CONFIG_DIR = caller.configDir
   if (caller?.workspace) env.HERDR_WORKSPACE_ID = caller.workspace
+  // A caller named by its pane alone is still a session: spawn-agent's limits hold for it (#815).
+  if (caller?.pane || caller?.session) env[MCP_CALLER] = '1'
   return env
 }
 

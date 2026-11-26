@@ -1045,7 +1045,9 @@ many sessions one session started may run at once (10), how many levels of agent
 below a session the owner started (3, counted over parents that still run), and how many starts
 one session makes in an hour (30); 0 is no limit. They hold for spawn-agent run in a session's
 pane (a Claude, Codex or Antigravity session by its id, pi by its pane), and for the board's MCP
-when it runs the command for a session it names. A refused start exits 1 with the reason on stderr
+when it runs the command for a caller it names, by its pane alone too (`BOARD_MCP_CALLER`). They
+are written on the computer itself only: Settings from another device does not show them, and
+`POST /api/settings` through a remote listener refuses an edit that names them. A refused start exits 1 with the reason on stderr
 and puts the question on the session's card; a start that fails after its tab opened still counts.
 The owner's starts are never counted: the page, a terminal with no session in it, every launcher
 the board runs (`BOARD_OWNER_START`). A resume, a start in a pane (`--pane`) and a Workdesk worker

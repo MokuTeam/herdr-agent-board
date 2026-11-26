@@ -234,7 +234,8 @@ export function SettingsPanel({
       : null
   const compact = data?.compactDefault
   // Agent starts (#815): this computer's own limits; a board before them sends none.
-  const spawnLimits = canAdmin ? data?.spawnLimits : undefined
+  // Written on the computer itself only (#815): not shown on another device's page.
+  const spawnLimits = canAdmin && !isRemote ? data?.spawnLimits : undefined
   const turnResumeOn = data?.turnResume !== false
   const compactChoices =
     compact && !COMPACT_CHOICES.includes(compact as (typeof COMPACT_CHOICES)[number])

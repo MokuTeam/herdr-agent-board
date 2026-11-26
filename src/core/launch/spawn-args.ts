@@ -42,6 +42,12 @@ export const LAUNCHER_CHILD = 'BOARD_SPAWN_CHILD'
 export const OWNER_START = 'BOARD_OWNER_START'
 
 /**
+ * Set by the board's MCP on the command it runs for a caller it names (entrypoints/mcp-http.ts,
+ * #815): that caller is a session even when only its pane is known, so its starts are gated.
+ */
+export const MCP_CALLER = 'BOARD_MCP_CALLER'
+
+/**
  * What spawn-agent prints when the session runs on this computer, which the board and agents read:
  * `pane=<id> name=<Name> agent=<herdr name>`, with ` kind=<agent>` when it is not Claude.
  */

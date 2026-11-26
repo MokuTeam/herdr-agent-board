@@ -209,6 +209,7 @@ describe('the caller in the env', () => {
     ANTIGRAVITY_CONVERSATION_ID: 'agy-own',
     CLAUDE_CONFIG_DIR: '/home/anna/.claude-work',
     AGENT_BOARD_PATHCONV: '1',
+    BOARD_MCP_CALLER: '1',
     HERDR_ENV: '1',
     APPDATA: '/cfg',
     EMPTY: undefined,
@@ -219,17 +220,20 @@ describe('the caller in the env', () => {
   })
 
   test('a pane, a session, both', () => {
+    // BOARD_MCP_CALLER (#815): a named caller is a session to spawn-agent's limits, a pane alone too.
     expect(callerEnv(board, { pane: 'w2:p7' })).toEqual({
       PATH: '/bin',
       HERDR_ENV: '1',
       APPDATA: '/cfg',
       HERDR_PANE_ID: 'w2:p7',
+      BOARD_MCP_CALLER: '1',
     })
     expect(callerEnv(board, { session: 'pane-w2:p7', cwd: '/x' })).toEqual({
       PATH: '/bin',
       HERDR_ENV: '1',
       APPDATA: '/cfg',
       CLAUDE_CODE_SESSION_ID: 'pane-w2:p7',
+      BOARD_MCP_CALLER: '1',
     })
     expect(callerEnv(board, { pane: '3', session: 'ünïcødé 100%' })).toMatchObject({
       HERDR_PANE_ID: '3',
@@ -243,6 +247,7 @@ describe('the caller in the env', () => {
       HERDR_ENV: '1',
       APPDATA: '/cfg',
       HERDR_PANE_ID: 'w2:p7',
+      BOARD_MCP_CALLER: '1',
       CLAUDE_CONFIG_DIR: 'C:\\Users\\anna\\.claude-work',
       HERDR_WORKSPACE_ID: 'w2',
     })

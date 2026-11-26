@@ -67,6 +67,7 @@ import {
   claudeCommand,
   HELP,
   LAUNCHER_CHILD,
+  MCP_CALLER,
   OWNER_START,
   parseArgs,
   type SpawnOptions,
@@ -161,7 +162,8 @@ let opened: string | null = null
 async function gateOf(o: SpawnOptions, cfg: Config): Promise<SpawnGate | null> {
   if (launcherChild || ownerStart) return null
   const env = process.env
-  const pi = !!env.PI_CODING_AGENT && !!env.HERDR_PANE_ID
+  // A pane alone: pi in it, or the board's MCP running this for a caller it named by its pane.
+  const pi = !!(env.PI_CODING_AGENT || env[MCP_CALLER]) && !!env.HERDR_PANE_ID
   if (!env.CLAUDE_CODE_SESSION_ID && !env.ANTIGRAVITY_CONVERSATION_ID && !env.CODEX_THREAD_ID && !pi) return null
   const { gateSpawn } = await import('../services/launch/spawn-gate.ts')
   return gateSpawn(o, { env, cfg, log: line => console.error(`spawn-agent: ${line}`) })

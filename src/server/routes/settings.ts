@@ -2,6 +2,7 @@
 // switches the language and pushes the new board. And Install into one profile's settings.json.
 import { type EditResult, editCategories, editFeatures, editSettings } from '../../adapters/config-file.ts'
 import { isRecord } from '../../adapters/json-store.ts'
+import { t } from '../../core/lang.ts'
 import { type Guard, json, type Route } from '../http.ts'
 
 // The edits take any body (main's read it with ?.), a null one included.
@@ -19,8 +20,23 @@ const edit = (
   },
 })
 
-/** Before and after the schedule's route, as main had them. */
-export const settingsRoute = (): Route => edit('/api/settings', editSettings)
+/**
+ * Before and after the schedule's route, as main had them. The limits on agent starts (#815) are
+ * written on this computer only: through a remote listener (a paired device, the owner's login) an
+ * edit that names them is refused, the rest of the body with it.
+ */
+export const settingsRoute = (): Route => ({
+  method: 'POST',
+  path: '/api/settings',
+  guard: ['board-header'],
+  async handle(_req, ctx) {
+    const body = await ctx.rawBody()
+    if (ctx.remote && isRecord(body) && body.spawnLimits !== undefined)
+      return json(403, { ok: false, error: t('err.spawnLimitsLocal') })
+    const r = editSettings(body)
+    return json(r.ok ? 200 : 409, r)
+  },
+})
 export const categoriesRoute = (): Route => edit('/api/categories', editCategories)
 /**
  * Settings → Watches, Decisions and Away journal (#596), { watches?, decisions?, decisionsDefaults?,

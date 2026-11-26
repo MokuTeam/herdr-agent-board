@@ -15,7 +15,7 @@ import { type HerdrPane, snapshot } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { readSpawns, reserveSpawn, settleSpawn } from '../../adapters/spawn-ledger.ts'
 import { t } from '../../core/lang.ts'
-import type { SpawnOptions } from '../../core/launch/spawn-args.ts'
+import { MCP_CALLER, type SpawnOptions } from '../../core/launch/spawn-args.ts'
 import {
   type Alive,
   childOfLine,
@@ -38,15 +38,15 @@ export const gated = (o: SpawnOptions): boolean => o.resume === undefined && o.p
 /**
  * The session spawn-agent runs for, as its env names it: a root Codex or Antigravity session by its
  * own id, as the board command reads it (services/own-session.ts), else a Claude session by its id;
- * a pane alone only while pi runs in it (PI_CODING_AGENT). Null outside any: the owner, a plain
- * terminal included.
+ * a pane alone only while pi runs in it (PI_CODING_AGENT) or the board's MCP runs the command for
+ * the caller in it (BOARD_MCP_CALLER). Null outside any: the owner, a plain terminal included.
  */
 export function callerParty(env: Env, card: typeof readCard = readCard): SpawnParty | null {
   const codex = codexCallerOf(env, card) ? env.CODEX_THREAD_ID : ''
   const agy = !codex && agyCallerOf(env, card) ? env.ANTIGRAVITY_CONVERSATION_ID : ''
   const session = codex || agy || env.CLAUDE_CODE_SESSION_ID || ''
   const pane = env.HERDR_PANE_ID || ''
-  if (!session && !(pane && env.PI_CODING_AGENT)) return null
+  if (!session && !(pane && (env.PI_CODING_AGENT || env[MCP_CALLER]))) return null
   return { ...(session && { session }), ...(pane && { pane }) }
 }
 

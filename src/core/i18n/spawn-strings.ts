@@ -24,6 +24,7 @@ export const SPAWN_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'Wants to start "{name}": it started {n} session in the last hour, the limit is {limit} (Settings → Board & Agents)',
       'Wants to start "{name}": it started {n} sessions in the last hour, the limit is {limit} (Settings → Board & Agents)',
     ],
+    'err.spawnLimitsLocal': 'Agent starts are set on the computer itself, not from another device',
     'err.spawnLimits': 'Agent starts: a limit is a whole number from 0 (no limit) to 1000, and "agents" is on or off',
   },
   ru: {
@@ -48,6 +49,7 @@ export const SPAWN_STRINGS: Record<Lang, Record<string, string | string[]>> = {
       'Хочет запустить «{name}»: за последний час она запустила {n} сессии, лимит {limit} (Настройки → Доска и агенты)',
       'Хочет запустить «{name}»: за последний час она запустила {n} сессий, лимит {limit} (Настройки → Доска и агенты)',
     ],
+    'err.spawnLimitsLocal': 'Запуски агентов настраиваются на самом компьютере, не с другого устройства',
     'err.spawnLimits':
       'Запуски агентов: лимит это целое число от 0 (без лимита) до 1000, а "agents" включено или выключено',
   },
