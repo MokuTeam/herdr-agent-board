@@ -633,6 +633,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
             audit('assigned', isTeam ? null : e.from, { thread: e.thread, session: session.key, why: 'addressed' })
           }
           // A service agent (#819) finds the thread through the MCP's wait: nothing in the schedule.
+          // Not yet a team thread or a channel it does not handle (#880).
           if (!known.some(i => i.key === session.key && i.service))
             notify(session, e.thread, (count: number) => addressedText({ ...addr, count }), t, true)
           return
