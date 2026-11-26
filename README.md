@@ -3182,6 +3182,14 @@ one. A teammate can only message that agent: never start a session or reach anyt
 board ignores the list (it drops a message with a field it does not know; the next one goes only
 after a day, then longer).
 
+**Published aliases (#866).** In People and agents, open **Agents teammates can address** and save
+an alias next to an exposed session. Use up to 40 letters (A–Z), digits and dashes, starting with
+a letter or digit. Clear the field and save to withdraw it. Teammates who can already reach the
+session can pick the alias after `@` or start a message with it. Their board expands it to
+`@YourName.handle`. It suppresses an alias when it matches a roster name or another published alias,
+ignoring case. The canonical address remains available and the owner's board still signs the
+agent's messages.
+
 `inbox` and `watch` never print a message's text, only a thread's ref (what `thread` takes) and who
 it is with. `inbox` adds a topic's title in quotes under a header (with `--json`, a note) that says
 it is the words of whoever started it; `watch`, whose lines go straight to a monitor, gives no

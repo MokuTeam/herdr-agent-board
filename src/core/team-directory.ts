@@ -12,6 +12,9 @@ import { type DirectoryEntry, GENERAL, MAX_CODE, MAX_DIRECTORY, MAX_TITLE } from
 const CODE = new RegExp(`^[a-z0-9][a-z0-9-]{0,${MAX_CODE - 1}}$`)
 const UNPRINTABLE = /[\p{Cc}\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/u
 
+const ALIAS = new RegExp(`^[a-z0-9][a-z0-9-]{0,${MAX_CODE - 1}}$`, 'i')
+export const validAlias = (v: unknown): v is string => typeof v === 'string' && ALIAS.test(v)
+
 /** A handle (a code on the wire): lowercase letters, digits and `-`, starting with a letter or digit, MAX_CODE at most. */
 export const validCode = (v: unknown): v is string => typeof v === 'string' && CODE.test(v)
 
@@ -22,22 +25,56 @@ export const validAbout = (v: unknown): v is string =>
 /** The text a directory message carries, which a board without #832 never shows (it drops the message). */
 export const DIRECTORY_TEXT = 'agent directory'
 
+// The signed directory text was reserved for metadata. Keep the agent entries on the wire in
+// the #832 format so older boards still read and acknowledge the same canonical handles.
+const ALIAS_PREFIX = `${DIRECTORY_TEXT} aliases/1 `
+
+export function directoryBody(list: DirectoryEntry[]) {
+  const agents = list.map(({ alias: _alias, ...entry }) => entry)
+  const aliases = list.map(entry => entry.alias ?? null)
+  return {
+    text: aliases.some(Boolean) ? ALIAS_PREFIX + JSON.stringify(aliases) : DIRECTORY_TEXT,
+    agents,
+  }
+}
+
+export function directoryAliases(text: string, list: DirectoryEntry[]): DirectoryEntry[] {
+  if (!text.startsWith(ALIAS_PREFIX)) return list
+  let aliases: unknown
+  try {
+    aliases = JSON.parse(text.slice(ALIAS_PREFIX.length))
+  } catch {
+    return list
+  }
+  if (!Array.isArray(aliases) || aliases.length !== list.length || !aliases.every(a => a === null || validAlias(a)))
+    return list
+  return list.map((entry, i) => {
+    const alias: unknown = aliases[i]
+    return validAlias(alias) ? { ...entry, alias } : entry
+  })
+}
+
 /**
  * A directory as a board accepts it from a peer: a list of at most MAX_DIRECTORY entries, each
  * exactly `code` and an optional `about`, every code once. Null for anything else.
  */
-export function readDirectory(v: unknown): DirectoryEntry[] | null {
+export function readDirectory(v: unknown, stored = false): DirectoryEntry[] | null {
   if (!Array.isArray(v) || v.length > MAX_DIRECTORY) return null
   const out: DirectoryEntry[] = []
   const seen = new Set<string>()
   for (const e of v) {
     if (typeof e !== 'object' || e === null || Array.isArray(e)) return null
     const r = e as Record<string, unknown>
-    if (!Object.keys(r).every(k => k === 'code' || k === 'about')) return null
+    if (!Object.keys(r).every(k => k === 'code' || k === 'about' || (stored && k === 'alias'))) return null
     if (!validCode(r.code) || seen.has(r.code)) return null
     if (Object.hasOwn(r, 'about') && !validAbout(r.about)) return null
+    if (Object.hasOwn(r, 'alias') && !validAlias(r.alias)) return null
     seen.add(r.code)
-    out.push({ code: r.code, ...(typeof r.about === 'string' && { about: r.about }) })
+    out.push({
+      code: r.code,
+      ...(typeof r.about === 'string' && { about: r.about }),
+      ...(validAlias(r.alias) && { alias: r.alias }),
+    })
   }
   return out
 }
@@ -160,6 +197,7 @@ export function assignHandles(
 export interface ReachWorld {
   /** Each session's handle, by its key. */
   handles: Record<string, string>
+  aliases?: Record<string, string>
   /** The owner's global off. */
   off: boolean
   /** The switches by key: a peer's, the team's, a channel's. */
@@ -187,11 +225,13 @@ export function reach(code: string, peer: string, w: ReachWorld): HandleSession 
  */
 export function directoryFor(peer: string, w: ReachWorld): DirectoryEntry[] {
   return w.sessions
-    .map(s => w.handles[s.key])
-    .filter((code): code is string => typeof code === 'string' && reach(code, peer, w) !== null)
-    .sort()
+    .flatMap(s => {
+      const code = w.handles[s.key]
+      const alias = w.aliases?.[s.key]
+      return code && reach(code, peer, w) ? [{ code, ...(alias && { alias }) }] : []
+    })
+    .sort((a, b) => (a.code < b.code ? -1 : a.code > b.code ? 1 : 0))
     .slice(0, MAX_DIRECTORY)
-    .map(code => ({ code }))
 }
 
 /** A peer's name as written after `@`: without its spaces, dots and `@`, which a mention cannot hold. */
@@ -213,6 +253,41 @@ export function peerOfWord<T extends { peer: string; name: string }>(word: strin
   const w = word.toLowerCase()
   const hits = roster.filter(p => mentionWord(p.name).toLowerCase() === w)
   return hits.length === 1 ? (hits[0] as T) : null
+}
+
+type MentionPeer = { peer: string; name: string }
+type AliasDirectory = { peer: string; agents: readonly DirectoryEntry[] }
+
+/** Only aliases unique across the roster and all visible directories can be offered or expanded. */
+export function publishedAliases(roster: readonly MentionPeer[], directories: readonly AliasDirectory[]) {
+  const names = new Set(roster.flatMap(p => [mentionWord(p.name).toLowerCase(), p.peer.toLowerCase()]))
+  const aliases = new Map<string, { alias: string; canonical: string; peer: string; code: string }>()
+  const seen = new Set<string>()
+  for (const d of directories) {
+    const owner = roster.find(p => p.peer === d.peer)
+    if (!owner) continue
+    const word = mentionWord(owner.name)
+    const who = word && peerOfWord(word, roster)?.peer === owner.peer ? word : owner.peer
+    for (const e of d.agents) {
+      if (!validAlias(e.alias)) continue
+      const key = e.alias.toLowerCase()
+      if (names.has(key) || seen.has(key)) {
+        aliases.delete(key)
+      } else {
+        aliases.set(key, { alias: e.alias, canonical: `@${who}.${e.code}`, peer: d.peer, code: e.code })
+      }
+      seen.add(key)
+    }
+  }
+  return aliases
+}
+
+const ALIAS_MENTION = new RegExp(`^(\\s*)@([a-z0-9][a-z0-9-]{0,${MAX_CODE - 1}})(?=$|[\\s,:;!?])`, 'i')
+
+export function expandAlias(text: string, aliases: () => ReadonlyMap<string, { canonical: string }>): string {
+  const m = ALIAS_MENTION.exec(text)
+  const hit = m?.[2] && aliases().get(m[2].toLowerCase())
+  return m && hit ? `${m[1]}${hit.canonical}${text.slice(m[0].length)}` : text
 }
 
 /**

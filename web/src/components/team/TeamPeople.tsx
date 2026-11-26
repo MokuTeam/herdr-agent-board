@@ -149,7 +149,7 @@ export function TeamPeople({
         )}
         {agents && onServices && <ServiceAgents agents={agents} disabled={disabled} onServices={onServices} />}
         {/* The agents teammates may address as @Name.code (#832). */}
-        {agents && <TeamExposed view={view} agents={agents} />}
+        {agents && <TeamExposed view={view} agents={agents} disabled={disabled} onAgents={onAgents} />}
       </div>
     </section>
   )

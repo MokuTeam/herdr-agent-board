@@ -210,7 +210,9 @@ export interface TeamRouter {
    * What the owner's panel shows (#832): each session with a handle that someone of `peers` can
    * reach now, its lane, and whom. Empty without a peer whose Agents are on: nothing is read then.
    */
-  exposed(peers: string[]): { code: string; session: { key: string; name: string }; lane: string; reaches: string[] }[]
+  exposed(
+    peers: string[],
+  ): { code: string; alias?: string; session: { key: string; name: string }; lane: string; reaches: string[] }[]
   /**
    * Sends each peer its directory where it changed (#832): to every peer with a session it can
    * reach, and once more to one that had a list before (an empty list takes it back). Nothing is
@@ -278,7 +280,8 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
     const sessions = items()
       .filter(i => !isArchived(archived, i.key))
       .map(i => ({ key: i.key, name: i.name || i.autoName || '', lane: i.category }))
-    let handles = readDirectoryState().handles
+    const state = readDirectoryState()
+    let handles = state.handles
     if (assign && !globalOff(s.off)) {
       const open = Object.entries(s.peers).filter(([p, sw]) => isPeerId(p) && sw?.on)
       // Every session on the board counts as there: one in a lane shared with nobody now keeps its handle.
@@ -294,7 +297,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
         handles = next
       }
     }
-    return { handles, off: globalOff(s.off), peers: s.peers, sessions }
+    return { handles, aliases: state.aliases, off: globalOff(s.off), peers: s.peers, sessions }
   }
 
   function nameOf(key: string): string | null {
@@ -619,7 +622,10 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       return w.sessions.flatMap(x => {
         const code = w.handles[x.key]
         const reaches = code ? peers.filter(p => reach(code, p, w)) : []
-        return code && reaches.length ? [{ code, session: { key: x.key, name: x.name }, lane: x.lane, reaches }] : []
+        const alias = w.aliases?.[x.key]
+        return code && reaches.length
+          ? [{ code, ...(alias && { alias }), session: { key: x.key, name: x.name }, lane: x.lane, reaches }]
+          : []
       })
     },
 
