@@ -243,36 +243,81 @@ export const isDirectoryList = (v: unknown): v is { peers: PeerDirectory[] } =>
       ),
   )
 
+/**
+ * Why a teammate has no agents to address (#842): `key` their key changed and waits for trust;
+ * `lane` their board sent a directory once and lists nobody now; `unknown` it never sent one, which
+ * a current board with nothing shared never does either, so it may or may not be an older board.
+ */
+export type MentionNone = 'key' | 'lane' | 'unknown'
+
 /** One agent the composer offers after `@` (#832): how it is written, and whose it is. */
 export interface MentionChoice {
-  /** `Name.code`, what goes after the `@`. */
+  /** `Name.code`, what goes after the `@`; a teammate without agents (#842): `Name` alone. */
   word: string
+  /** Whose it is: the peer's id. */
+  peer: string
   name: string
   code: string
   about?: string
+  /** A teammate with no agents to address (#842): why. Picked, it puts nothing in. */
+  none?: MentionNone
 }
 
-/** The composer's choices from the peers' directories (#832), by name then code name. */
-export function mentionChoices(directory: readonly PeerDirectory[]): MentionChoice[] {
-  return directory
-    .flatMap(p =>
-      p.agents.map(a => ({
-        word: `${mentionWord(p.name)}.${a.code}`,
+/**
+ * The composer's choices (#832), by name then code name: the agents of the peers' directories, and
+ * after them each other teammate in the roster as one line that says why there is none to address
+ * (#842), so a bare `@` starts on an agent and no such line pushes one out of the list. An
+ * assistant's bridge without a directory is left out (it is no board), and so is a peer whose
+ * directory lists agents the page could not fetch.
+ */
+export function mentionChoices(
+  directory: readonly PeerDirectory[],
+  roster: readonly TeamRosterPeer[] = [],
+): MentionChoice[] {
+  const listed = new Set(directory.filter(p => p.agents.length).map(p => p.peer))
+  const agents = directory.flatMap(p =>
+    p.agents.map(a => ({
+      word: `${mentionWord(p.name)}.${a.code}`,
+      peer: p.peer,
+      name: p.name,
+      code: a.code,
+      ...(a.about && { about: a.about }),
+    })),
+  )
+  const people = roster
+    .filter(p => !listed.has(p.peer) && !p.agents && !(p.assistant && !p.directory) && mentionWord(p.name))
+    .map(
+      (p): MentionChoice => ({
+        word: mentionWord(p.name),
+        peer: p.peer,
         name: p.name,
-        code: a.code,
-        ...(a.about && { about: a.about }),
-      })),
+        code: '',
+        none: p.pin === 'changed' ? 'key' : p.directory ? 'lane' : 'unknown',
+      }),
     )
-    .sort((a, b) => a.word.localeCompare(b.word))
+  const byWord = (a: MentionChoice, b: MentionChoice): number => a.word.localeCompare(b.word)
+  return [...agents.sort(byWord), ...people.sort(byWord)]
 }
 
-/** The choices that fit what is written after `@` (the name, then a dot and the start of a code). */
+/**
+ * The choices that fit what is written after `@` (the name, then a dot and the start of a code). A
+ * teammate without agents fits the start of the name, and the whole name with a dot after it: the
+ * line says why nothing else comes.
+ */
 export function fitMentions(choices: readonly MentionChoice[], who: string, code: string | null): MentionChoice[] {
   const w = who.toLowerCase()
   return choices.filter(c => {
     const [name = '', own = ''] = c.word.toLowerCase().split('.')
+    if (c.none) return code === null ? name.startsWith(w) : name === w
     return code === null ? name.startsWith(w) : name === w && own.startsWith(code)
   })
+}
+
+/** The words of a teammate's line without agents (#842). */
+export const MENTION_NONE_KEY: Record<MentionNone, string> = {
+  key: 'team.mentionNoneKey',
+  lane: 'team.mentionNoneLane',
+  unknown: 'team.mentionNone',
 }
 
 export interface ServiceAgentView {

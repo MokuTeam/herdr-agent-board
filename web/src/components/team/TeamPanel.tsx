@@ -310,7 +310,7 @@ export function TeamBody(props: TeamBodyProps) {
             {...(props.files && { files: props.files })}
             {...(props.onAddFiles && { onAddFiles: props.onAddFiles })}
             {...(props.onRemoveFile && { onRemoveFile: props.onRemoveFile })}
-            {...(props.directory?.length && { mentions: mentionChoices(props.directory) })}
+            {...(view.roster.length > 0 && { mentions: mentionChoices(props.directory ?? [], view.roster) })}
             work={topicWork(props.threads.find(x => x.key === selected))}
           />
         ) : people ? (

@@ -7,7 +7,7 @@ import { type ReactNode, type Ref, useId, useImperativeHandle, useLayoutEffect, 
 import { mentionAt } from '../../../../src/core/team-directory.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { sendsOnKey } from '../../models/composer.ts'
-import { fitMentions, type MentionChoice } from '../../models/team.ts'
+import { fitMentions, MENTION_NONE_KEY, type MentionChoice } from '../../models/team.ts'
 import type { Quote } from '../../models/team-chat.ts'
 
 /** The composer's list after `@` shows this many agents at most (#832). */
@@ -40,7 +40,8 @@ export interface TeamComposerProps {
   inputRef?: Ref<HTMLTextAreaElement>
   /**
    * The peers' agents that may be addressed (#832): after `@` the box lists the ones that fit what
-   * is written, and Enter or Tab puts `@Name.code ` in. None: no list, the box as before.
+   * is written, and Enter or Tab puts `@Name.code ` in. A teammate without agents (#842) is one line
+   * that says why, and picking it puts nothing in. None: no list, the box as before.
    */
   mentions?: readonly MentionChoice[]
 }
@@ -72,8 +73,12 @@ export function TeamComposer({
   const [closed, setClosed] = useState<string | null>(null)
   const at = mentions.length ? mentionAt(value, caret) : null
   const fits = at && closed !== value ? fitMentions(mentions, at.who, at.code).slice(0, MAX_CHOICES) : []
+  // The keys go to the list only while it holds something to put in (#842): a list of teammates
+  // without agents only says why, and Enter, Tab and the arrows do as before.
+  const pickable = fits.some(c => !c.none)
+  const current = pickable ? Math.min(active, fits.length - 1) : -1
   const pick = (c: MentionChoice): void => {
-    if (!at) return
+    if (!at || c.none) return
     const word = `@${c.word} `
     const next = value.slice(0, at.start) + word + value.slice(caret)
     const end = at.start + word.length
@@ -88,6 +93,10 @@ export function TeamComposer({
     if (mentions.length) setCaret(el.selectionStart ?? el.value.length)
   }
   useImperativeHandle(inputRef, () => box.current as HTMLTextAreaElement, [])
+  // The choice under the keys stays in sight: lines that say why wrap, and the list scrolls.
+  useLayoutEffect(() => {
+    if (current >= 0) document.getElementById(`${listId}-${current}`)?.scrollIntoView?.({ block: 'nearest' })
+  }, [current, listId])
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new text is when to measure
   useLayoutEffect(() => {
     const el = box.current
@@ -127,13 +136,14 @@ export function TeamComposer({
         <div className="team-mentions" id={listId} role="listbox" aria-label={t('team.mentions')} data-mentions>
           {fits.map((c, i) => (
             <button
-              key={c.word}
+              key={`${c.peer}:${c.code}`}
               id={`${listId}-${i}`}
               type="button"
               role="option"
               tabIndex={-1}
-              aria-selected={i === Math.min(active, fits.length - 1)}
-              className="team-mention"
+              aria-selected={i === current}
+              {...(c.none && { 'aria-disabled': true, 'data-none': c.none })}
+              className={c.none ? 'team-mention none' : 'team-mention'}
               data-mention={c.word}
               // Picked on the press: the box keeps its focus and its caret.
               onPointerDown={e => {
@@ -142,7 +152,11 @@ export function TeamComposer({
               }}
             >
               <span className="team-mention-word">@{c.word}</span>
-              {c.about && <span className="team-mention-about">{c.about}</span>}
+              {c.none ? (
+                <span className="team-mention-about">{t(MENTION_NONE_KEY[c.none])}</span>
+              ) : (
+                c.about && <span className="team-mention-about">{c.about}</span>
+              )}
             </button>
           ))}
         </div>
@@ -156,11 +170,8 @@ export function TeamComposer({
           placeholder={placeholder}
           aria-label={placeholder}
           {...(mentions.length > 0 && { 'aria-autocomplete': 'list' as const })}
-          {...(fits.length > 0 && {
-            'aria-controls': listId,
-            'aria-expanded': true,
-            'aria-activedescendant': `${listId}-${Math.min(active, fits.length - 1)}`,
-          })}
+          {...(fits.length > 0 && { 'aria-controls': listId, 'aria-expanded': true })}
+          {...(current >= 0 && { 'aria-activedescendant': `${listId}-${current}` })}
           onChange={e => {
             onChange(e.target.value)
             follow(e.target)
@@ -170,14 +181,14 @@ export function TeamComposer({
           onKeyDown={e => {
             // The list after `@` (#832) takes the arrows, Enter, Tab and Esc while it shows.
             if (fits.length > 0 && !e.nativeEvent.isComposing) {
-              const i = Math.min(active, fits.length - 1)
-              if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+              const i = current
+              if (pickable && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
                 e.preventDefault()
                 setActive((i + (e.key === 'ArrowDown' ? 1 : fits.length - 1)) % fits.length)
                 return
               }
               const plain = !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey
-              if ((e.key === 'Enter' && plain) || (e.key === 'Tab' && plain)) {
+              if (pickable && ((e.key === 'Enter' && plain) || (e.key === 'Tab' && plain))) {
                 e.preventDefault()
                 const c = fits[i]
                 if (c) pick(c)
