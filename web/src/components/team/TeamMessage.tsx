@@ -89,6 +89,7 @@ export function TeamMessage({
         line.dir,
         first && 'first',
         last && 'last',
+        (!first || !last) && 'grouped',
         (agent || mark !== undefined) && 'agent',
         line.held && 'held',
         flash && 'flash',
@@ -102,7 +103,7 @@ export function TeamMessage({
       )}
       <div className="team-msg-row">
         <div className="team-bubble" {...press.handlers}>
-          {agent && (
+          {agent && (first || line.pressed) && (
             <div className="team-agent-mark" title={t('team.agentMark')}>
               <AgentGlyph />
               <code>{agent.session}</code>
