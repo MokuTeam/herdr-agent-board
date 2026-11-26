@@ -15,7 +15,7 @@ import { NODE_API } from '../../core/node-door.ts'
 import type { NodeConfig, NodeStatus } from '../../core/nodes.ts'
 import type { Profile } from '../../core/profiles.ts'
 import type { Item, LaunchSpec, LaunchView } from '../../core/types.ts'
-import { piOnPath } from '../launch/launches.ts'
+import { agyOnPath, piOnPath } from '../launch/launches.ts'
 
 export type { NodeStatus }
 
@@ -37,6 +37,8 @@ export interface StatusSources {
   exists?: (file: string) => boolean
   /** Whether `pi` is on this board's PATH (services/launch/launches.ts). */
   piFound?: () => boolean
+  /** Whether `agy` is on this board's PATH (services/launch/launches.ts). */
+  agyFound?: () => boolean
   /**
    * The programs of core/bundle.ts NODE_PROGRAMS on this node's PATH (#603), asked once: the
    * master's bundle runs a hook's program only where it is. No `programs` in the status without it.
@@ -96,13 +98,17 @@ export function loggedIn(dir: string, platform: string, exists: (file: string) =
 }
 
 /**
- * What a start may name on this node: what its new-session window offers (Claude Code, and pi when
- * config.json says how to start it or it is on PATH). With the config's own launcher
+ * What a start may name on this node: what its new-session window offers (Claude Code, and pi or
+ * agy when config.json says how to start it or it is on PATH). With the config's own launcher
  * (`launch.command`, `launch.agent`) the window offers none and every start is that launcher's,
  * which starts Claude Code: `claude`.
  */
-export function agentsOf(launch: LaunchSpec | undefined, piFound: () => boolean): string[] {
-  const offered = launchAgents(launch, piFound).map(a => a.id)
+export function agentsOf(
+  launch: LaunchSpec | undefined,
+  piFound: () => boolean,
+  agyFound: () => boolean = () => false,
+): string[] {
+  const offered = launchAgents(launch, piFound, agyFound).map(a => a.id)
   return offered.length ? offered : [CLAUDE_AGENT]
 }
 
@@ -150,7 +156,7 @@ export function createNodeStatus(src: StatusSources): { answer(): Promise<NodeSt
         profiles: src
           .profiles()
           .map(p => ({ id: p.id, loggedIn: loggedIn(p.dir, platform, exists), bundle: src.bundle?.(p.id) ?? null })),
-        agents: agentsOf(src.launch(), src.piFound ?? piOnPath),
+        agents: agentsOf(src.launch(), src.piFound ?? piOnPath, src.agyFound ?? agyOnPath),
         ...(src.programs && { programs: programsOnce(src.programs) }),
         ...(git && { git }),
         ...(agyLimits !== undefined && { agyLimits }),

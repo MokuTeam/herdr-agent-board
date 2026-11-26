@@ -116,6 +116,8 @@ export interface LaunchContext {
    * under that id or refuses before it opens anything. A node's start (#504) keeps today's way.
    */
   readonly exactSession?: boolean
+  /** spawn-agent --trust (#798, #898): answer the folder-trust dialog for this folder. */
+  readonly trust?: boolean
 }
 
 /** What a launcher tells the board while it works, so the card can show it and go to it. */
@@ -472,6 +474,7 @@ export function spawnAgentLauncher(spec: LaunchSpec, mark = false): Launcher {
       // Codex has no Claude profile: it gets neither (spawn-agent refuses them).
       if (!codex) args.push(...(l.configDir === null ? ['--keep-env'] : ['--config-dir', l.configDir]))
       if (other) args.push('--agent', l.agent)
+      if (l.trust && isAgy) args.push('--trust')
       args.push(...modelArgs(l.model))
       if (codex && l.effort) args.push('--effort', l.effort)
       return runLauncher(l, on, {
@@ -564,7 +567,7 @@ async function runLauncher(l: LaunchContext, on: LaunchEvents, run: RunSpec): Pr
     return {
       pane,
       sessionId: run.sessionId,
-      agent: 'claude',
+      agent: run.builtin ? l.agent : 'claude',
       dialog: true,
       failure: waits ? null : error,
       named: false,

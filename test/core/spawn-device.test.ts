@@ -1,7 +1,7 @@
 // spawn-agent --device (#760), the logic without the network: the option, the device the board's
 // payload must list, and the call a node's spawn-agent sends its master, read back field by field.
 import { describe, expect, test } from 'bun:test'
-import { parseArgs, type SpawnOptions } from '../../src/core/launch/spawn-args.ts'
+import { parseArgs, promptHint, type SpawnOptions } from '../../src/core/launch/spawn-args.ts'
 import { launchBody, pinnedDevice } from '../../src/core/launch/spawn-board.ts'
 import { nodeSideLine, type SpawnCall, spawnCallArgv, spawnCallOf } from '../../src/core/launch/spawn-node.ts'
 import { isRememberedCall, UPLINK_COMMANDS } from '../../src/core/node-uplink.ts'
@@ -39,10 +39,33 @@ describe('--device on the command line', () => {
       )
   })
 
-  test('--trust goes with a placed Claude start (#798); with another agent it is refused', () => {
+  test('--trust goes with a placed Claude or Antigravity start (#798, #898); with pi or codex it is refused', () => {
     expect(parsed('--device', 'server-2', '--trust').trust).toBe(true)
+    expect(parsed('--device', 'server-2', '--trust', '--agent', 'agy')).toMatchObject({
+      device: 'server-2',
+      agent: 'agy',
+      trust: true,
+    })
     expect(() => parsed('--device', 'server-2', '--trust', '--agent', 'pi')).toThrow(
       /--device places a new session: give it no --trust/,
+    )
+    expect(() => parsed('--device', 'server-2', '--trust', '--agent', 'codex')).toThrow(
+      /--agent codex starts a new Codex session: give it no --trust/,
+    )
+  })
+
+  test('promptHint prefixes MSYS_NO_PATHCONV=1 only on Windows under Git Bash (MSYSTEM) (#898)', () => {
+    expect(promptHint('w1:p2', '/rename Demo', { platform: 'win32', env: { MSYSTEM: 'MINGW64' } })).toBe(
+      'MSYS_NO_PATHCONV=1 herdr agent prompt w1:p2 "/rename Demo"',
+    )
+    expect(promptHint('w1:p2', '/rename Demo', { platform: 'win32', env: {} })).toBe(
+      'herdr agent prompt w1:p2 "/rename Demo"',
+    )
+    expect(promptHint('w1:p2', '/rename Demo', { platform: 'linux', env: { MSYSTEM: 'MINGW64' } })).toBe(
+      'herdr agent prompt w1:p2 "/rename Demo"',
+    )
+    expect(promptHint('w1:p2', '/rename Demo', { platform: 'darwin', env: {} })).toBe(
+      'herdr agent prompt w1:p2 "/rename Demo"',
     )
   })
 

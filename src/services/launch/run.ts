@@ -33,7 +33,7 @@ import { knobMs, pause } from '../../adapters/pacing.ts'
 import { run } from '../../adapters/process.ts'
 import { AGY_AGENT } from '../../core/agy.ts'
 import { CODEX_AGENT, isCodexSession } from '../../core/codex.ts'
-import { keyTowardYes, sameFolder, type TrustDialog, trustDialog } from '../../core/dialogs/trust.ts'
+import { agyTrustDialog, keyTowardYes, sameFolder, type TrustDialog, trustDialog } from '../../core/dialogs/trust.ts'
 import { t } from '../../core/lang.ts'
 import { launcherError } from '../../core/launch/launcher-command.ts'
 import {
@@ -286,6 +286,7 @@ export function launchRunner({
     // The agent herdr says came up once a dialog was answered: the board's spawn-agent stops at
     // one before it can say whether its start command started Claude or pi.
     let kind = r.agent
+    if (kind === AGY_AGENT) l.agent = AGY_AGENT
     if (r.dialog && (await trustShown(l, 3))) {
       // Claude asks to trust the folder: the card asks the user, and the board goes on once it is.
       kind = (await holdForTrust(l))?.kind || kind
@@ -549,7 +550,7 @@ export function launchRunner({
     for (let i = 0; i < tries; i++) {
       if (i) await pause(700)
       const screen = await herdrText(['pane', 'read', l.pane, '--source', 'visible'], 5000).catch(() => '')
-      const d = trustDialog(screen)
+      const d = l.agent === AGY_AGENT ? agyTrustDialog(screen) : trustDialog(screen)
       if (d && sameFolder(d.folder, l.cwd, homedir())) return d
     }
     return null
@@ -635,7 +636,9 @@ export function launchRunner({
     } else if (kind === AGY_AGENT && !l.resume) {
       step(l, 'rename')
       try {
-        if ((await agyRename(pane, l.name)) && nameAgent) {
+        let renamed = await agyRename(pane, l.name)
+        if (!renamed) renamed = await agyRename(pane, l.name)
+        if (renamed && nameAgent) {
           const taken = await takenNames()
           await herdr(['agent', 'rename', pane, uniqueSlug(agentSlug(l), taken)])
         }

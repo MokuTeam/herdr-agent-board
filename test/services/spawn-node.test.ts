@@ -195,6 +195,10 @@ describe('a node’s spawn-agent asks its master (#760)', () => {
     const pinned = deps(answered(0, [line]))
     await askMaster(opts(cwd, '--trust', '--device', 'server-2'), node, pinned.d)
     expect(spawnCallOf((pinned.calls[0] as NodeCall).argv)).toMatchObject({ device: 'server-2', trust: true })
+    // With --agent agy --trust: both agent and trust ride up the uplink (#898).
+    const agyTrusted = deps(answered(0, [line]))
+    await askMaster(opts(cwd, '--agent', 'agy', '--trust'), node, agyTrusted.d)
+    expect(spawnCallOf((agyTrusted.calls[0] as NodeCall).argv)).toMatchObject({ agent: 'agy', trust: true })
     // Without it the call is the one it was before: no trust key in what goes up the uplink.
     const plain = deps(answered(0, [line]))
     await askMaster(opts(cwd), node, plain.d)

@@ -7,6 +7,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { delimiter, dirname, join } from 'node:path'
 import { planShims } from '../../src/core/install-plan.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
+import { agyTrustScreen } from '../support/trust-screen.ts'
 
 const SH = process.platform === 'win32' ? Bun.which('sh') : null
 const READY = { result: { pane: { pane_id: 'wA:p9', tab_id: 'wA:t9', agent: 'claude', agent_status: 'idle' } } }
@@ -128,6 +129,78 @@ test.skipIf(!SH)(
       .find(c => c.startsWith('agent prompt wA:p9') && c.endsWith('review this'))
     expect(prompt).toBeDefined()
     expect(prompt).not.toBe('agent prompt wA:p9 /review this')
+  },
+  30_000,
+)
+
+test.skipIf(!SH)(
+  'spawn-agent --agent agy in Git Bash: hints carry MSYS_NO_PATHCONV=1 when blocked, and --trust sends /rename + brief (#898)',
+  async () => {
+    const AGY_ID = '18fb0773-7c19-4e3d-8e9b-ceadaef29211'
+    const AGY_READY = {
+      result: {
+        pane: {
+          pane_id: 'wA:p9',
+          tab_id: 'wA:t9',
+          agent: 'agy',
+          agent_status: 'idle',
+          agent_session: { value: AGY_ID },
+        },
+      },
+    }
+    const AGY_BLOCKED = {
+      result: {
+        pane: {
+          pane_id: 'wA:p9',
+          tab_id: 'wA:t9',
+          agent: 'agy',
+          agent_status: 'blocked',
+          agent_session: { value: AGY_ID },
+        },
+      },
+    }
+    const box1 = await sandbox()
+    box1.state({
+      ...STATE,
+      'pane get': AGY_BLOCKED,
+      'pane read': { text: agyTrustScreen(box1.dir) },
+    })
+    const blocked = await viaGitBash(box1, [
+      '--agent',
+      'agy',
+      '--name',
+      'Anna',
+      '--cwd',
+      msys(box1.dir),
+      '--workspace',
+      'wA',
+    ])
+    expect(blocked.code).toBe(1)
+    expect(blocked.stderr).toContain('MSYS_NO_PATHCONV=1 herdr agent prompt wA:p9 "/rename Anna"')
+
+    const box2 = await sandbox()
+    box2.state({
+      ...STATE,
+      'pane get': { seq: [AGY_BLOCKED, AGY_READY] },
+      'pane read': { seq: [{ text: agyTrustScreen(box2.dir) }, { text: 'Conversation renamed to: Anna\n' }] },
+    })
+    const trusted = await viaGitBash(box2, [
+      '--agent',
+      'agy',
+      '--trust',
+      '--name',
+      'Anna',
+      '--cwd',
+      msys(box2.dir),
+      '--workspace',
+      'wA',
+      '--brief',
+      '/review this',
+    ])
+    expect([trusted.code, trusted.stderr]).toEqual([0, ''])
+    const calls = box2.calls().map(a => a.join(' '))
+    expect(calls).toContain('agent prompt wA:p9 /rename Anna')
+    expect(calls).toContain('agent prompt wA:p9 /review this')
   },
   30_000,
 )

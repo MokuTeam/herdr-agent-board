@@ -3,6 +3,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { findCommand } from '../../src/adapters/setup-facts.ts'
 import { type NodeConfig, nodeStatusOf } from '../../src/core/nodes.ts'
 import type { Profile } from '../../src/core/profiles.ts'
 import { bytesToMb, loadOf, meminfoAvailableMb, vmStatAvailableMb } from '../../src/core/sysload.ts'
@@ -46,6 +47,7 @@ function sources(over: Partial<StatusSources> = {}): StatusSources {
     exists: file => file.replaceAll('\\', '/') === '/home/owner/.claude/.credentials.json',
     launch: () => undefined,
     piFound: () => false,
+    agyFound: () => false,
     platform: 'linux',
     arch: 'x64',
     home: '/home/owner',
@@ -163,11 +165,45 @@ describe('the status', () => {
 describe('its helpers', () => {
   test("the agents: what the node's new-session window offers, by the board's own rule", () => {
     const none = (): boolean => false
-    expect(agentsOf(undefined, none)).toEqual(['claude'])
-    expect(agentsOf(undefined, () => true)).toEqual(['claude', 'pi'])
-    expect(agentsOf({ pi: 'pi --model x' } as never, none)).toEqual(['claude', 'pi'])
+    expect(agentsOf(undefined, none, none)).toEqual(['claude'])
+    expect(agentsOf(undefined, () => true, none)).toEqual(['claude', 'pi'])
+    expect(agentsOf(undefined, none, () => true)).toEqual(['claude', 'agy'])
+    expect(
+      agentsOf(
+        undefined,
+        () => true,
+        () => true,
+      ),
+    ).toEqual(['claude', 'pi', 'agy'])
+    expect(agentsOf({ pi: 'pi --model x' } as never, none, none)).toEqual(['claude', 'pi'])
+    expect(agentsOf({ agy: ['agy', '--dangerously-skip-permissions'] } as never, none, none)).toEqual(['claude', 'agy'])
     // The config's own launcher starts every session: Claude Code.
-    expect(agentsOf({ command: 'my-launcher {cwd}' } as never, () => true)).toEqual(['claude'])
+    expect(
+      agentsOf(
+        { command: 'my-launcher {cwd}' } as never,
+        () => true,
+        () => true,
+      ),
+    ).toEqual(['claude'])
+  })
+
+  test('createNodeStatus reports agy on PATH (including Windows .exe/.cmd/.ps1) and launch.agy (#898)', async () => {
+    const withAgy = await createNodeStatus(sources({ agyFound: () => true })).answer()
+    expect(withAgy?.agents).toEqual(['claude', 'agy'])
+    const withConfig = await createNodeStatus(
+      sources({ launch: () => ({ agy: ['agy', '--dangerously-skip-permissions'] }) }),
+    ).answer()
+    expect(withConfig?.agents).toEqual(['claude', 'agy'])
+    for (const ext of ['.exe', '.cmd', '.ps1']) {
+      const hit = findCommand('agy', {
+        platform: 'win32',
+        env: { PATH: 'C:\\Tools\\bin', PATHEXT: '.COM;.EXE;.BAT;.CMD' },
+        exists: f => f === `C:\\Tools\\bin\\agy${ext}`,
+        read: () => null,
+        size: () => 0,
+      })
+      expect(Boolean(hit.ps ?? hit.sh)).toBe(true)
+    }
   })
 
   test('the work root under the home folder', () => {

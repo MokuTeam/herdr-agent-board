@@ -72,6 +72,7 @@ import { sameDir, slugName, ticketSlugName, uniqueSlug } from '../../core/launch
 import {
   choosesSession,
   profileCommand,
+  promptHint,
   type SpawnOptions,
   shellLine,
   stillTyped,
@@ -400,11 +401,11 @@ export async function spawnAgent(
     callerCwd,
     launcherChild = false,
     env = process.env,
+    platform = process.platform,
     home = homedir(),
     ticketNames = false,
     nodeEnv,
     onAgent,
-    platform,
     processTable,
   }: {
     claude?: string[]
@@ -526,7 +527,8 @@ export async function spawnAgent(
       : sessionId && !choosesSession(program)
         ? [...line, '--session-id', sessionId]
         : line
-  const command = shellLine(argv, process.platform === 'win32')
+  const hint = (p: string, arg: string): string => promptHint(p, arg, { platform: winPlatform, env })
+  const command = shellLine(argv, winPlatform === 'win32')
 
   // The tab is labelled before Claude runs: a launcher may name things after it (a Telegram topic).
   let pane = o.pane
@@ -618,7 +620,9 @@ export async function spawnAgent(
         p = await paneInfo(pane, 10_000)
       } catch (err) {
         if (/not.?found|no such/i.test(messageOf(err)))
-          throw new Error(`The tab of ${pane} was closed before ${isCodex ? 'Codex' : 'Claude'} got ready`)
+          throw new Error(
+            `The tab of ${pane} was closed before ${isCodex ? 'Codex' : isAgy ? 'Antigravity' : 'Claude'} got ready`,
+          )
         continue
       }
       const own = isCodex ? (p.agent === CODEX_AGENT ? CODEX_NAMING : null) : namingOf(p.agent)
@@ -635,7 +639,7 @@ export async function spawnAgent(
       const shown = isCodex ? await screen(pane) : ''
       if (isCodex && codexHooksReview(shown))
         throw new Error(
-          `Codex in ${pane} waits for its hooks to be trusted. Trust them in that tab (t, then esc), then: herdr agent prompt ${pane} "${naming.command(o.name)}" and send the brief.`,
+          `Codex in ${pane} waits for its hooks to be trusted. Trust them in that tab (t, then esc), then: ${hint(pane, naming.command(o.name))} and send the brief.`,
         )
       if ((p.status === 'idle' || p.status === 'done') && (!isCodex || codexInputReady(shown))) {
         ready = true
@@ -648,10 +652,10 @@ export async function spawnAgent(
         }
         throw new Error(
           isCodex
-            ? `Codex in ${pane} waits for a dialog (folder trust?). Answer it in that tab, then: herdr agent prompt ${pane} "${naming.command(o.name)}" and send the brief.`
+            ? `Codex in ${pane} waits for a dialog (folder trust?). Answer it in that tab, then: ${hint(pane, naming.command(o.name))} and send the brief.`
             : kind === PI_AGENT || kind === AGY_AGENT
-              ? `${naming.title} in ${pane} waits for a dialog. Answer it in that tab, then: herdr agent prompt ${pane} "${naming.command(o.name)}" and send the brief.`
-              : `Claude in ${pane} waits for a dialog (folder trust?). Answer it in that tab, then: herdr agent prompt ${pane} "/rename ${o.name}" and send the brief.`,
+              ? `${naming.title} in ${pane} waits for a dialog. Answer it in that tab, then: ${hint(pane, naming.command(o.name))} and send the brief.`
+              : `Claude in ${pane} waits for a dialog (folder trust?). Answer it in that tab, then: ${hint(pane, `/rename ${o.name}`)} and send the brief.`,
         )
       }
     }
@@ -728,7 +732,7 @@ export async function spawnAgent(
     }
     if (isCodex && !renamed)
       throw new Error(
-        `The name did not reach Codex in ${pane} (it runs). Send it by hand: herdr agent prompt ${pane} "${line}", then the brief: herdr agent prompt ${pane} "<brief>"`,
+        `The name did not reach Codex in ${pane} (it runs). Send it by hand: ${hint(pane, line)}, then the brief: ${hint(pane, '<brief>')}`,
       )
   }
 
@@ -741,20 +745,18 @@ export async function spawnAgent(
   if (text && !o.resume && !renamed && kind === 'claude') {
     const shown = await screenNow(pane)
     if (shown?.kind === 'dialog')
-      throw new Error(
-        `Claude in ${pane} waits for a dialog. Answer it in that tab, then: herdr agent prompt ${pane} "<brief>"`,
-      )
+      throw new Error(`Claude in ${pane} waits for a dialog. Answer it in that tab, then: ${hint(pane, '<brief>')}`)
     const left = shown?.draft
     if (left)
       throw new Error(
-        `The brief did not reach Claude in ${pane}: its input box still holds "${left.length > 60 ? `${left.slice(0, 59)}…` : left}". Clear it there, then: herdr agent prompt ${pane} "<brief>"`,
+        `The brief did not reach Claude in ${pane}: its input box still holds "${left.length > 60 ? `${left.slice(0, 59)}…` : left}". Clear it there, then: ${hint(pane, '<brief>')}`,
       )
   }
 
   // Right after a slash command Claude can drop typed text, and a short turn can end before herdr
   // sees it working: both read as "agent_prompt_stalled". Text still on screen (or a pasted-text
   // chip) gets an Enter; text that vanished is typed again.
-  if (text && isCodex) await codexBrief(pane, text)
+  if (text && isCodex) await codexBrief(pane, text, hint)
   else if (text) {
     let sent = false
     for (let i = 1; i <= 3 && !sent; i++) {
@@ -766,7 +768,7 @@ export async function spawnAgent(
         // "brief did not reach" tells the board the session runs: no retry that starts another.
         if (!stalled(err))
           throw new Error(
-            `The brief did not reach ${naming.title} in ${pane}: ${messageOf(err)}. Send it by hand: herdr agent prompt ${pane} "<brief>"`,
+            `The brief did not reach ${naming.title} in ${pane}: ${messageOf(err)}. Send it by hand: ${hint(pane, '<brief>')}`,
           )
         if (stillTyped(await screen(pane), text)) {
           await herdr(['pane', 'send-keys', pane, 'enter']).catch(() => {})
@@ -775,9 +777,7 @@ export async function spawnAgent(
       }
     }
     if (!sent)
-      throw new Error(
-        `The brief did not reach ${naming.title} in ${pane}. Send it by hand: herdr agent prompt ${pane} "<brief>"`,
-      )
+      throw new Error(`The brief did not reach ${naming.title} in ${pane}. Send it by hand: ${hint(pane, '<brief>')}`)
   }
   if (isCodex && (o.model || cardCategory) && text) await cardCodex(pane, o.model, cardCategory, !!o.lane)
   return { pane, name: o.name, agent, kind, session }
@@ -788,7 +788,7 @@ export async function spawnAgent(
  * Codex at work. Typed but not taken gets Enter; dropped gets typed again (twice at most). Nothing
  * that shows it arrived is ever sent a second time.
  */
-async function codexBrief(pane: string, text: string): Promise<void> {
+async function codexBrief(pane: string, text: string, hint: (p: string, arg: string) => string): Promise<void> {
   const where = async (): Promise<'typed' | 'sent' | 'missing'> => {
     const p = await paneInfo(pane, 5000).catch(() => null)
     if (p && (p.status === 'working' || p.status === 'blocked')) return 'sent'
@@ -802,7 +802,7 @@ async function codexBrief(pane: string, text: string): Promise<void> {
     } catch (err) {
       if (!stalled(err))
         throw new Error(
-          `The brief did not reach Codex in ${pane}: ${messageOf(err)}. Send it by hand: herdr agent prompt ${pane} "<brief>"`,
+          `The brief did not reach Codex in ${pane}: ${messageOf(err)}. Send it by hand: ${hint(pane, '<brief>')}`,
         )
     }
     for (let i = 0; i < 10; i++) {
@@ -820,7 +820,7 @@ async function codexBrief(pane: string, text: string): Promise<void> {
       break
     }
   }
-  throw new Error(`The brief did not reach Codex in ${pane}. Send it by hand: herdr agent prompt ${pane} "<brief>"`)
+  throw new Error(`The brief did not reach Codex in ${pane}. Send it by hand: ${hint(pane, '<brief>')}`)
 }
 
 /** Codex's own options for a start: --effort, --approval and --sandbox as its `-c`, `-a` and `-s`. */
