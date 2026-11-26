@@ -139,6 +139,9 @@ export const RELAY_TABLE: readonly RelayEntry[] = [
  */
 export const MASTER_SCOPE_PREFIX = '/api/master'
 
+/** The passkey's window for the master on a node's page (#887): the node holds it while [::1] is not its own. */
+export const MASTER_CONFIRM_PATH = /^\/api\/master\/team\/confirm\//
+
 /**
  * The master's paths the prefix reaches (#887), by method: its payload (the values Settings shows),
  * its Board settings and Tasks, Owner services, and the passkey's window for a node's page. Held to
@@ -161,6 +164,20 @@ export function masterScopePath(method: string, path: string): string | null {
   const inner = `/api${raw.slice(MASTER_SCOPE_PREFIX.length)}`
   if (!MASTER_SCOPE.some(e => e.method === method && e.path.test(inner))) return null
   return `${inner}${path.slice(raw.length)}`
+}
+
+/**
+ * Whether a body may go with the master's own path (#887): Tasks only as Settings sets them (the
+ * board-wide mode, `op: 'settings'`), never a card's tasks; the other paths take theirs as they are.
+ */
+export function masterScopeBody(innerPath: string, body: string): boolean {
+  if (innerPath !== '/api/todos') return true
+  try {
+    const parsed: unknown = JSON.parse(body)
+    return !!parsed && typeof parsed === 'object' && (parsed as { op?: unknown }).op === 'settings'
+  } catch {
+    return false
+  }
 }
 
 /** The decisions' path (#781), whose session keys the master reads as the node's own (relayedDecisions). */

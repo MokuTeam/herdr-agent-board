@@ -4,6 +4,7 @@ import { boardSlicesOf, slicesOf } from '../../src/core/board-slices.ts'
 import {
   BOARD_SLICES_PATH,
   masterPath,
+  masterScopeBody,
   masterScopePath,
   NODE_CLI_PATH,
   OWNER_CLI_COMMANDS,
@@ -329,6 +330,22 @@ describe('Settings → The whole board (#887): the master scope reaches its decl
       expect(m?.kind === 'table' && m.entry.group).toBe('master')
       expect(m?.kind === 'table' && m.entry.relayOnly).toBe(true)
     }
+  })
+
+  test("Tasks go up as Settings sets them only, the board-wide mode; the other paths' bodies as they are", () => {
+    expect(masterScopeBody('/api/todos', JSON.stringify({ op: 'settings', mode: 'mine' }))).toBe(true)
+    for (const body of [
+      JSON.stringify({ op: 'add', key: 'p1' }),
+      JSON.stringify({ key: 'p1' }),
+      'null',
+      '"settings"',
+      '{',
+    ])
+      expect(masterScopeBody('/api/todos', body)).toBe(false)
+    expect(masterScopeBody('/api/settings', JSON.stringify({ compactAt: '300k' }))).toBe(true)
+    expect(masterScopeBody('/api/owner-services', JSON.stringify({ op: 'add', name: 'Atlas 100% · Сервис' }))).toBe(
+      true,
+    )
   })
 
   test('anything else stays here: another method, a path off the list, another spelling', () => {

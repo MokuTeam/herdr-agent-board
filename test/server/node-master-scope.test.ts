@@ -79,6 +79,19 @@ test("a node's page manages the master's own settings, owner services and passke
   expect((await post(`${node.url}/api/master/settings`, { compactAt: '300k' })).status).toBe(200)
   expect(configOf(pair.master.box).compact).toMatchObject({ at: '300k' })
   expect(configOf(node.box).compact).toBeUndefined()
+  // Tasks as Settings sets them (the board-wide mode), never a card's tasks.
+  expect((await post(`${node.url}/api/master/todos`, { op: 'settings', mode: 'agents' })).status).toBe(200)
+  expect(configOf(pair.master.box).todos).toBe(true)
+  expect(configOf(node.box).todos).toBeUndefined()
+  for (const body of [{ op: 'add', key: 'p1', text: 'x' }, { key: 'p1' }, 'not json']) {
+    const res = await fetch(`${node.url}/api/master/todos`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-board': '1' },
+      body: typeof body === 'string' ? body : JSON.stringify(body),
+    })
+    expect(res.status).toBe(403)
+    expect(((await res.json()) as { error: string }).error).toBe('master-scope-op')
+  }
   // Start limits stay on the master's own computer (#815).
   expect((await post(`${node.url}/api/master/settings`, { spawnLimits: { perHour: 1 } })).status).toBe(403)
   const log = (await (await fetch(`${master}/api/links/log`)).json()) as { edges?: Record<string, unknown>[] }
@@ -172,6 +185,39 @@ test("a node's page manages the master's own settings, owner services and passke
   }
   // The master itself has no `/api/master/` route of its own.
   expect([404, 405]).toContain((await fetch(`${master}/api/master/board`)).status)
+}, 60_000)
+
+test("the passkey's window on a node waits while another program holds [::1] at its port, as one of its own does", async () => {
+  const pair = await nodePair({ count: 1, masterCfg: { language: 'en' }, masterPanes: () => [] })
+  const node = pair.nodes[0] as PairNode
+  await pair.waitDevice(node.id, d => d.link?.state === 'online', 10_000)
+  const port = Number(new URL(node.url).port)
+  let holder: { stop(closeActive?: boolean): void }
+  try {
+    holder = Bun.listen({ hostname: '::1', port, socket: { data() {} } })
+  } catch {
+    // No IPv6 loopback on this computer: no browser reaches [::1] either.
+    return
+  }
+  const ask = async (): Promise<string> => {
+    const res = await until('the master holds the passkey', async () => {
+      const r = await post(`${node.url}/api/master/owner-services`, { op: 'passkey' })
+      return r.status === 428 ? r : null
+    })
+    return ((await res.json()) as { id: string }).id
+  }
+  const held = await ask()
+  for (const res of [
+    await fetch(`${node.url}/api/master/team/confirm/${held}`),
+    await post(`${node.url}/api/master/team/confirm/${held}`, { type: 'public-key' }),
+  ]) {
+    expect(res.status).toBe(503)
+    expect(await res.json()).toEqual({ ok: false, error: 'loopback' })
+  }
+  // Gone again: the next ask holds [::1] for the node, and its window opens.
+  holder.stop(true)
+  const free = await ask()
+  expect((await fetch(`${node.url}/api/master/team/confirm/${free}`)).status).toBe(200)
 }, 60_000)
 
 test('a board without nodes has no /api/master/ path, as before', async () => {

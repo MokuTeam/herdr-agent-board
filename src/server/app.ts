@@ -101,9 +101,11 @@ import {
   BOARD_SLICES_PATH,
   BULK_FIELD,
   DECISIONS_PATH,
+  MASTER_CONFIRM_PATH,
   MASTER_SCOPE_PREFIX,
   masterBulkBody,
   masterNodesBody,
+  masterScopeBody,
   masterScopePath,
   NODE_CLI_PATH,
   NODE_REVEAL_PATH,
@@ -1833,6 +1835,8 @@ export async function startServer({
       if (inner === null || innerPath === null) return json(404, { ok: false, error: 'not found' })
       const innerUrl = new URL(`${inner}${url.search}`, url)
       const body = req.method === 'POST' ? await req.arrayBuffer() : undefined
+      if (body && !masterScopeBody(innerPath, new TextDecoder().decode(body)))
+        return json(403, { ok: false, error: 'master-scope-op' })
       const innerReq = new Request(innerUrl, { method: req.method, headers: req.headers, ...(body && { body }) })
       // None of them acts on this computer's screen; the check stays for any path added later.
       const refused = remoteRefusal(inner, innerPath, false, false, true, true)
@@ -2183,13 +2187,21 @@ export async function startServer({
     masterRelayFirst = masterRelayRoute(upRelay, (method, rawPath, status) => {
       if (method === 'POST' && rawPath === DECISIONS_PATH && status === 200) upSlices.poke()
       // The master waits for the passkey (#887): its window opens on this board's localhost, which
-      // [::1] must reach here, as for a confirmation of this board's own.
-      if (status === 428 && rawPath.startsWith(`${MASTER_SCOPE_PREFIX}/`) && !ownerConfirmationOpen) {
+      // [::1] must reach here, as for a confirmation of this board's own; held [::1] is asked again.
+      if (status === 428 && rawPath.startsWith(`${MASTER_SCOPE_PREFIX}/`)) {
         ownerConfirmationOpen = true
         holdLoopback6()
       }
     })
     routes.unshift(masterRelayFirst)
+    // The passkey's window for the master (#887) is on this board's localhost: while another program
+    // holds [::1] here it could show a window of its own with the master's challenge, so the window
+    // waits, as a confirmation of this board's own does (teamConfirm.safe).
+    routes.unshift({
+      method: 'ANY',
+      path: MASTER_CONFIRM_PATH,
+      handle: () => (loopbackTaken ? json(503, { ok: false, error: 'loopback' }) : undefined),
+    })
     // Before the relay (#860): the bridge's store token is checked here, where it was written.
     routes.unshift(nsNodeRoute(upRelay, given => nsTokens.check(given)))
     const nodeTelegram = createNodeTelegram({ cfg, profiles: () => deps.profiles(), log, refresh })
