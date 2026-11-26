@@ -69,9 +69,13 @@ export interface FnRefused {
   why: string
 }
 
+/** The stop reasons with words of their own (`fnSync.stop.*`); any other (a node's HTTP status) is shown as it is. */
+const STOP_SAID = new Set(['not-repo', 'branch', 'dirty', 'diverged', 'refused', 'git', 'not-ff', 'too-big'])
+
 /**
  * `board doctor` on a master, from its sync's record (`<state>/fn-sync/state.json`): the machines
- * the sync stopped at and why, the files it refused; null before the first sync. Never a file's
+ * the sync stopped at and why, the files it refused; null while there is nothing to say (no registry
+ * yet, no machine stopped: a master with nodes but no MokuTab folder anywhere). Never a file's
  * contents: the record holds none.
  */
 export function fnSyncCheck(raw: unknown, t: Translator): SetupCheck | null {
@@ -83,7 +87,8 @@ export function fnSyncCheck(raw: unknown, t: Translator): SetupCheck | null {
   for (const [id, m] of Object.entries(machines as Record<string, unknown>)) {
     if (typeof m !== 'object' || m === null) continue
     const r = m as { stop?: unknown; refused?: unknown }
-    if (typeof r.stop === 'string') stopped.push(`${id} (${t(`fnSync.stop.${r.stop}`)})`)
+    if (typeof r.stop === 'string')
+      stopped.push(`${id} (${STOP_SAID.has(r.stop) ? t(`fnSync.stop.${r.stop}`) : r.stop.slice(0, 40)})`)
     if (Array.isArray(r.refused))
       for (const x of r.refused)
         if (typeof x === 'object' && x !== null)
@@ -94,6 +99,7 @@ export function fnSyncCheck(raw: unknown, t: Translator): SetupCheck | null {
     refused.length ? t('fnSync.doctor.refused', { list: refused.join(', ') }) : '',
   ].filter(Boolean)
   const head = (raw as { head?: unknown }).head
+  if (!said.length && typeof head !== 'string') return null
   return {
     id: 'fn-sync',
     level: said.length ? 'warn' : 'ok',

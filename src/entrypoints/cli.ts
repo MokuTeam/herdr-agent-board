@@ -3311,6 +3311,8 @@ async function nodesSyncFunctions(webPort: number, dryRun: boolean): Promise<voi
     refused: 'its commits bring files the board does not carry',
     changed: 'it changed while the sync ran: next time',
     busy: 'MokuTab is saving a function there: next time',
+    'not-ff': 'its branch cannot fast-forward to the registry: nothing written',
+    'too-big': 'its new commits are over 24 MB, more than the node link carries',
     git: 'git failed there',
   }
   for (const round of r.rounds.filter(isRecord)) {

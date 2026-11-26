@@ -97,13 +97,16 @@ export async function withFnSaveLock<T>(
   }
 }
 
+/** The most a bundle of a machine's commits may be: base64 of it stays under the door's 32 MB body. */
+export const FN_MAX_BUNDLE_BYTES = 24 * 1024 * 1024
+
 export type FnTaken = { ok: true; head: string } | { ok: false; why: string }
 
 export interface NodeFunctions {
   readonly dir: string
   look(): Promise<FnLook>
-  /** A bundle of its branch without the commits `have` names (those it knows); null when there is none. */
-  bundle(have: readonly string[]): Promise<Uint8Array | null>
+  /** A bundle of its branch without the commits `have` names (those it knows); null when there is none, `too-big` over FN_MAX_BUNDLE_BYTES. */
+  bundle(have: readonly string[]): Promise<Uint8Array | null | 'too-big'>
   /** The master's commits: a fast-forward from `expect` (an empty folder: a checkout of them). */
   take(bytes: Uint8Array, branch: string, expect: string | null): Promise<FnTaken>
   /** A stamp of the folder's branch and commit for the node's status, read with no git run; undefined without the folder. */
@@ -140,7 +143,8 @@ export function createNodeFunctions(d: NodeFunctionsDeps): NodeFunctions {
     },
     async bundle(have) {
       const r = await repoLook(d.dir)
-      return r ? bundleOf(d.dir, r.branch, have) : null
+      const bytes = r ? await bundleOf(d.dir, r.branch, have) : null
+      return bytes && bytes.length > FN_MAX_BUNDLE_BYTES ? 'too-big' : bytes
     },
     async take(bytes, branch, expect) {
       if (folderState(d.dir) === 'none') return { ok: false, why: 'changed' }

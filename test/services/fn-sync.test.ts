@@ -638,3 +638,142 @@ describe('a machine left for next time', () => {
     runner.close()
   })
 })
+
+describe('review fixes', () => {
+  test('a clone that fails leaves the empty folder empty, not a repository forever', async () => {
+    const dir = scratch()
+    writeFileSync(join(dir, FN_SAVE_LOCK), 'x')
+    const lockAge = new Date(Date.now() - 120_000)
+    utimesSync(join(dir, FN_SAVE_LOCK), lockAge, lockAge)
+    const fns = createNodeFunctions({ dir })
+    const got = await fns.take(new TextEncoder().encode('not a bundle'), 'master', null)
+    expect(got).toEqual({ ok: false, why: 'git' })
+    expect(existsSync(join(dir, '.git'))).toBe(false)
+    expect(await fns.look()).toEqual({ state: 'empty' })
+  })
+
+  test('a master with nodes and no MokuTab folder anywhere writes no record, and doctor says nothing', async () => {
+    const root = scratch()
+    const fns = createNodeFunctions({ dir: join(root, 'none', 'functions') })
+    const dir = join(root, 'state', 'fn-sync')
+    const sync = createFnSync({ dir, replicas: () => [localReplica('server-2', fns)], log: () => {} })
+    const r = await sync.syncAll()
+    expect(r.rounds).toMatchObject([{ device: 'server-2', did: 'skip', why: 'no-folder' }])
+    expect(existsSync(join(dir, 'state.json'))).toBe(false)
+    const t = ((k: string, v?: Record<string, unknown>) => (v ? `${k} ${JSON.stringify(v)}` : k)) as never
+    expect(fnSyncCheck({ branch: null, head: null, machines: {}, stamps: {} }, t)).toBeNull()
+    // A first machine that stops before there is a registry is still said.
+    expect(fnSyncCheck({ head: null, machines: { laptop: { at: 1, stop: 'not-repo' } } }, t)?.level).toBe('warn')
+    // A reason without words of its own (a node's HTTP status) is shown as it is.
+    expect(fnSyncCheck({ head: null, machines: { laptop: { at: 1, stop: 'node 502' } } }, t)?.detail).toContain(
+      'laptop (node 502)',
+    )
+  })
+
+  test("a node's bundle over 24 MB is refused at its door with 413, and the master stops that machine", async () => {
+    const fns = {
+      dir: '/x',
+      look: async () => ({ state: 'repo' as const, branch: 'master', head: 'a'.repeat(40), dirty: [] }),
+      bundle: async () => 'too-big' as const,
+      take: async () => ({ ok: false as const, why: 'git' }),
+      stamp: () => undefined,
+    }
+    const link = doorLink(nodeDoorRoutes({ functions: fns } as never))
+    const res = await link.fetch('/api/node/functions/bundle', { method: 'POST', body: JSON.stringify({ have: [] }) })
+    expect(res.status).toBe(413)
+    const root = scratch()
+    const sync = createFnSync({
+      dir: join(root, 'fn-sync'),
+      replicas: () => [linkReplica('laptop', link)],
+      log: () => {},
+    })
+    const r = await sync.syncAll()
+    expect(r.rounds).toMatchObject([{ device: 'laptop', did: 'stop', why: 'too-big' }])
+  })
+})
+
+describe('a stopped machine and the ticks', () => {
+  test('gets its stamp, so the 15 s tick does not start a sync again and again; a moved head does', async () => {
+    let t = 0
+    let next = 1
+    const timers = new Map<number, { at: number; fn: () => void; every?: number }>()
+    const clock = {
+      now: () => t,
+      setTimeout: (fn: () => void, ms: number) => {
+        timers.set(next, { at: t + ms, fn })
+        return next++
+      },
+      clearTimeout: (h: unknown) => timers.delete(h as number),
+      setInterval: (fn: () => void, ms: number) => {
+        timers.set(next, { at: t + ms, fn, every: ms })
+        return next++
+      },
+      clearInterval: (h: unknown) => timers.delete(h as number),
+    }
+    const advance = async (ms: number): Promise<void> => {
+      const end = t + ms
+      for (;;) {
+        const due = [...timers.entries()].filter(([, x]) => x.at <= end).sort((a, b) => a[1].at - b[1].at)[0]
+        if (!due) break
+        const [id, x] = due
+        t = x.at
+        if (x.every) x.at += x.every
+        else timers.delete(id)
+        x.fn()
+        for (let i = 0; i < 5; i++) await Promise.resolve()
+      }
+      t = end
+    }
+    let calls = 0
+    const stamps: Record<string, string> = {}
+    const sync = {
+      syncAll: async () => {
+        calls++
+        return {
+          ok: false,
+          dryRun: false,
+          branch: 'master',
+          head: null,
+          rounds: [{ device: 'laptop', did: 'stop', why: 'dirty', refused: [] }],
+          at: 0,
+        }
+      },
+      stamp: (d: string) => stamps[d],
+      setStamp: (d: string, s: string) => {
+        stamps[d] = s
+      },
+    }
+    let functions = 'b'.repeat(64)
+    const links = {
+      link: () => ({ state: () => ({ state: 'online' }), view: () => ({ status: { functions } }) }) as never,
+      onChange: () => () => {},
+    }
+    const nodes = {
+      id: 'server-2',
+      order: ['laptop'],
+      devices: { laptop: { id: 'laptop', link: { kind: 'ssh' } } },
+    } as never
+    const { createFnSyncRunner } = await import('../../src/services/nodes/fn-sync.ts')
+    const runner = createFnSyncRunner({
+      sync,
+      local: { stamp: () => undefined } as never,
+      nodes: () => nodes,
+      links,
+      log: () => {},
+      clock,
+      tickMs: 15_000,
+      settleMs: 100,
+    })
+    await advance(10 * 60_000)
+    // The start, and the tick that first saw laptop online; then nothing for the rest of 10 minutes.
+    expect(calls).toBeLessThanOrEqual(2)
+    const quiet = calls
+    await advance(5 * 60_000)
+    expect(calls).toBe(quiet)
+    // The owner commits there: its head moves, and so does the stamp.
+    functions = 'c'.repeat(64)
+    await advance(16_000)
+    expect(calls).toBe(quiet + 1)
+    runner.close()
+  })
+})

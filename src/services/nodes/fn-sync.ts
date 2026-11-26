@@ -47,7 +47,8 @@ export interface FnReplica {
   id: string
   /** `older`: its board has no such routes. */
   look(): Promise<FnLook | 'older'>
-  bundle(have: readonly string[]): Promise<Uint8Array | null>
+  /** `too-big`: over FN_MAX_BUNDLE_BYTES, which the door would not carry. */
+  bundle(have: readonly string[]): Promise<Uint8Array | null | 'too-big'>
   take(bytes: Uint8Array, branch: string, expect: string | null): Promise<FnTaken>
 }
 
@@ -207,6 +208,7 @@ export function createFnSync(o: FnSyncOptions): FnSync {
       if (action.do === 'fetch' || action.do === 'seed') {
         await hubInit(hub)
         const bytes = await r.bundle(hubHead ? [hubHead.head] : [])
+        if (bytes === 'too-big') return stop('too-big')
         if (!bytes || look.state !== 'repo') return { ...out, why: 'changed' }
         const got = await fetchBundle(hub, bytes, look.branch, `refs/machines/${refId(r.id)}`)
         if (got !== look.head) return { ...out, why: 'changed' }
@@ -254,6 +256,7 @@ export function createFnSync(o: FnSyncOptions): FnSync {
     const s: FnState = dryRun ? structuredClone(state) : state
     const rounds: FnRound[] = []
     const replicas = o.replicas()
+    const before = JSON.stringify(state)
     // A dry run moves nothing, so a second pass would say nothing new.
     for (let pass = 0; pass < (dryRun ? 1 : 2); pass++)
       for (const r of replicas) {
@@ -266,7 +269,8 @@ export function createFnSync(o: FnSyncOptions): FnSync {
           rounds[at] = { ...got, ...(from && { from }) }
         }
       }
-    if (!dryRun) save()
+    // Nothing to keep (no machine has the folder, every one as it was): no write, no record for doctor.
+    if (!dryRun && JSON.stringify(state) !== before) save()
     return {
       ok: rounds.every(r => r.did !== 'stop' && !AGAIN.has(r.why ?? '') && r.why !== 'offline'),
       dryRun,
@@ -340,6 +344,7 @@ export function linkReplica(id: string, link: Pick<Link, 'fetch'>, requestMs = 6
     },
     async bundle(have) {
       const r = await ask('/api/node/functions/bundle', { have })
+      if (r.status === 413) return 'too-big'
       return r.status === 200 && typeof r.body.b64 === 'string' ? unb64(r.body.b64) : null
     },
     async take(bytes, branch, expect) {
@@ -408,9 +413,12 @@ export function createFnSyncRunner(o: FnSyncRunnerOptions): { kick(): void; clos
         .then(r => {
           localStamp = o.local.stamp()
           // Each device's stamp as its folder is now, so the status after our own writes asks nothing.
+          // A stopped one too: it is asked again when its commit moves, or in 30 minutes, not every tick.
+          // One left for next time is not: its retry is below.
           for (const round of r.rounds) {
             const st = o.links.link(round.device)?.view().status as { functions?: string } | null | undefined
-            if (round.did !== 'stop' && st?.functions) o.sync.setStamp(round.device, st.functions)
+            if (!AGAIN.has(round.why ?? '') && round.why !== 'offline' && st?.functions)
+              o.sync.setStamp(round.device, st.functions)
           }
           // A machine left for next time (MokuTab saving there) is asked again soon, not in 30 minutes.
           if (!again && r.rounds.some(x => AGAIN.has(x.why ?? '')))

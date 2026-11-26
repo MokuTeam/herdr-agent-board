@@ -19,6 +19,8 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'fnSync.stop.diverged': 'its commits went another way; kept in the hub as refs/conflicts/<machine>',
     'fnSync.stop.refused': 'its commits bring files the board does not carry',
     'fnSync.stop.git': 'git failed there',
+    'fnSync.stop.not-ff': 'its branch cannot fast-forward to the registry',
+    'fnSync.stop.too-big': 'its new commits are over 24 MB, more than the node link carries',
     'fnSync.doctor.fix':
       'On that machine: commit or drop the changes, or bring the branch back onto the others (git pull from a machine that has them, or reset to it); a refused file needs its secret taken out or to be under 256 KB. board nodes sync-functions shows it all.',
     'node.step.check': 'Check the server',
@@ -548,6 +550,8 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'fnSync.stop.diverged': 'коммиты разошлись с остальными; сохранены в хабе как refs/conflicts/<машина>',
     'fnSync.stop.refused': 'коммиты приносят файлы, которые доска не переносит',
     'fnSync.stop.git': 'git там завершился с ошибкой',
+    'fnSync.stop.not-ff': 'её ветку нельзя перемотать вперёд до реестра',
+    'fnSync.stop.too-big': 'новые коммиты больше 24 МБ, столько линк ноды не переносит',
     'fnSync.doctor.fix':
       'На той машине: закоммитьте или отбросьте изменения, либо верните ветку к остальным (git pull с машины, где они есть, или reset на неё); из отказанного файла уберите секрет или сделайте его меньше 256 КБ. Всё видно в board nodes sync-functions.',
     'node.step.check': 'Проверить сервер',

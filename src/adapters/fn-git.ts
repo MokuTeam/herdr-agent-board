@@ -2,7 +2,7 @@
 // chrome_fn_save is a commit), and the master keeps a bare hub of it in the board's state. Commits
 // travel between them as git bundles over the board's node link. Nothing here commits, rebases or
 // resets a branch that has work on it: a machine only ever fast-forwards, with its tracked files clean.
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -22,7 +22,19 @@ export const isBranch = (v: unknown): v is string =>
 /** git in `cwd` with no hooks, pager or prompt; `input` on stdin. Never throws for an exit code. */
 export async function git(cwd: string, args: string[], input?: Uint8Array, timeoutMs = 60_000): Promise<GitRun> {
   const proc = Bun.spawn(
-    ['git', '--no-pager', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-C', cwd, ...args],
+    // --no-optional-locks: a status here never takes index.lock from under a MokuTab commit.
+    [
+      'git',
+      '--no-pager',
+      '--no-optional-locks',
+      '-c',
+      'core.hooksPath=/dev/null',
+      '-c',
+      'core.fsmonitor=false',
+      '-C',
+      cwd,
+      ...args,
+    ],
     {
       stdin: input ?? 'ignore',
       stdout: 'pipe',
@@ -232,7 +244,7 @@ export async function fastForward(
   }
 }
 
-/** An empty folder becomes a checkout of the bundle's branch. */
+/** An empty folder becomes a checkout of the bundle's branch; when that fails, it is left empty again. */
 export async function cloneInto(
   dir: string,
   bytes: Uint8Array,
@@ -245,6 +257,10 @@ export async function cloneInto(
     await dropRef(dir, 'refs/board/incoming')
     return { ok: true }
   } catch {
+    // The folder was empty before (the caller checked, under MokuTab's lock): only our .git and
+    // what a checkout began to write go, never MokuTab's lock.
+    for (const name of readdirSync(dir))
+      if (name !== '.fn-save.lock') rmSync(join(dir, name), { recursive: true, force: true })
     return { ok: false, why: 'git' }
   }
 }

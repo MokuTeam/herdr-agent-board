@@ -110,6 +110,7 @@ function functionsDoorRoutes(fns: NodeFunctions): Route[] {
         const have = isRecord(body) && Array.isArray(body.have) ? body.have.filter(isSha).slice(0, 50) : null
         if (!have) return json(400, { ok: false, error: 'have' })
         const bytes = await fns.bundle(have)
+        if (bytes === 'too-big') return json(413, { ok: false, error: 'too-big' })
         return bytes
           ? json(200, { ok: true, b64: Buffer.from(bytes).toString('base64') })
           : json(404, { ok: false, error: 'bundle' })
