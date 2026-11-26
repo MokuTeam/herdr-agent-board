@@ -1384,6 +1384,41 @@ test('#898: a placed agy start with --trust passes --trust to spawn-agent, and r
   assert.equal(l2.state, 'done', JSON.stringify(l2))
   assert.deepEqual(keysSent(herdrAgy.box), ['wA:p9 up', 'wA:p9 enter'])
   assert.deepEqual(promptsSent(herdrAgy.box), ['wA:p9 /rename Agy Two', 'wA:p9 /rename Agy Two', 'wA:p9 Hello agy'])
+
+  // 3. Claude with trust: true on spawnAgentLauncher does NOT pass --trust to spawn-agent (handled by run.ts, as on main).
+  const builtinClaude = await boardServer({ nodes: {} })
+  const dir3 = join(builtinClaude.box.dir, 'claude-builtin')
+  mkdirSync(dir3)
+  const claudeBlocked = {
+    result: { pane: { pane_id: 'wA:p9', tab_id: 'wA:t9', agent: 'claude', agent_status: 'blocked' } },
+  }
+  builtinClaude.box.state({
+    ...HERDR,
+    'pane run': { result: null },
+    'pane get': { seq: [{ result: { pane: { pane_id: 'wA:p9', agent: null } } }, claudeBlocked] },
+    'agent get': idle,
+    'pane read': {
+      seq: [
+        { text: trustScreen(dir3, { selected: 'yes' }) },
+        { text: trustScreen(dir3, { selected: 'yes' }) },
+        { text: 'Session renamed to: Claude Three\n' },
+      ],
+    },
+  })
+  const l3 = await builtinClaude.launched(
+    await builtinClaude.started({
+      name: 'Claude Three',
+      cwd: dir3,
+      category: 'acme',
+      workspace: { id: 'wA' },
+      message: 'Go claude',
+      trust: true,
+    }),
+  )
+  assert.equal(l3.state, 'done', JSON.stringify(l3))
+  assert.ok(builtinClaude.box.calls().some(c => c[0] === 'agent' && c[1] === 'get'))
+  assert.deepEqual(keysSent(builtinClaude.box), ['wA:p9 enter'])
+  assert.deepEqual(promptsSent(builtinClaude.box), ['wA:p9 /rename Claude Three', 'wA:p9 Go claude'])
 }, 40_000)
 
 // A dialog Claude draws after herdr called it ready (#602): on the owner's first node the Code Mode

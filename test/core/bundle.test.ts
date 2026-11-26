@@ -499,7 +499,7 @@ describe("9.1 the board's slice", () => {
 
   test('plain launch.agy travels with its flags; custom launch.agy is reported and left on master (#898)', () => {
     const { board, report } = boardSlice({ launch: { agy: ['agy', '--dangerously-skip-permissions'] } }, undefined)
-    assert.deepEqual(board, { sinks: {}, launch: { agy: ['agy', '--dangerously-skip-permissions'] } })
+    assert.deepEqual(board, { sinks: {}, launchAgy: ['agy', '--dangerously-skip-permissions'] })
     assert.deepEqual(report, [])
 
     const custom = boardSlice({ launch: { agy: ['/opt/custom/agy-wrap', '--x'] } }, undefined)
@@ -514,13 +514,37 @@ describe("9.1 the board's slice", () => {
       },
     ])
 
-    // Unset launch.agy leaves the slice identical (no launch key at all).
+    // Unset launch.agy leaves the slice identical (no launch or launchAgy key at all).
     assert.deepEqual(boardSlice({ launch: {} }, undefined).board, { sinks: {} })
+
+    // Sending only launch.agy preserves a node's own launch.claude (never sets claude: undefined).
+    const agyOnlyPrev = { sinks: {}, launchAgy: ['agy', '--dangerously-skip-permissions'] }
+    const withNodeClaude = appliedSlice({ node: { id: 'n' }, launch: { claude: ['/own/claude'] } }, null, agyOnlyPrev)
+    assert.deepEqual(withNodeClaude, {
+      node: { id: 'n' },
+      launch: { claude: ['/own/claude'], agy: ['agy', '--dangerously-skip-permissions'] },
+    })
+    assert.deepEqual(
+      appliedSlice({ node: { id: 'n' }, launch: { claude: ['/own/claude'] } }, null, {
+        sinks: {},
+        launch: { agy: ['agy', '--dangerously-skip-permissions'] } as never,
+      }),
+      {
+        node: { id: 'n' },
+        launch: { claude: ['/own/claude'], agy: ['agy', '--dangerously-skip-permissions'] },
+      },
+    )
+    assert.equal('claude' in ((withNodeClaude.launch as Record<string, unknown>) ?? {}), true)
+    assert.deepEqual(appliedSlice(withNodeClaude, agyOnlyPrev, { sinks: {} }), {
+      node: { id: 'n' },
+      launch: { claude: ['/own/claude'] },
+    })
 
     // appliedSlice updates and removes launch.agy independently of launch.claude.
     const prev = {
       sinks: {},
-      launch: { claude: ['claude', '--verbose'], agy: ['agy', '--dangerously-skip-permissions'] },
+      launch: { claude: ['claude', '--verbose'] },
+      launchAgy: ['agy', '--dangerously-skip-permissions'],
     }
     const one = appliedSlice({ node: { id: 'n' } }, null, prev)
     assert.deepEqual(one, {

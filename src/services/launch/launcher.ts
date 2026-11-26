@@ -474,7 +474,7 @@ export function spawnAgentLauncher(spec: LaunchSpec, mark = false): Launcher {
       // Codex has no Claude profile: it gets neither (spawn-agent refuses them).
       if (!codex) args.push(...(l.configDir === null ? ['--keep-env'] : ['--config-dir', l.configDir]))
       if (other) args.push('--agent', l.agent)
-      if (l.trust && !codex) args.push('--trust')
+      if (l.trust && isAgy) args.push('--trust')
       args.push(...modelArgs(l.model))
       if (codex && l.effort) args.push('--effort', l.effort)
       return runLauncher(l, on, {

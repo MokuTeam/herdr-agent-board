@@ -99,7 +99,8 @@ export interface BoardSlice {
   models?: unknown
   /** This node's `secrets.sinks`, from `nodes.devices.<id>.sinks`. */
   sinks: unknown
-  launch?: { claude?: unknown; agy?: unknown }
+  launch?: { claude?: unknown }
+  launchAgy?: unknown
 }
 
 export interface BundleManifest {
@@ -892,16 +893,15 @@ export function boardSlice(
     if (cfg[key] !== undefined) board[key] = clone(cfg[key])
   const report: ReportEntry[] = []
   const launch = isRecord(cfg.launch) ? cfg.launch : undefined
-  for (const [key, name, expected, parse] of [
-    ['claude', 'launch.claude', 'claude', (s: unknown) => claudeCommand(s)],
-    ['agy', 'launch.agy', AGY_AGENT, (s: unknown) => agyCommand(s)],
-  ] as const) {
-    const res = sliceLauncher(launch?.[key], name, expected, parse)
-    if (!res) continue
-    if (res.ok) {
-      board.launch ??= {}
-      board.launch[key] = res.value
-    } else report.push(res.report)
+  const claudeRes = sliceLauncher(launch?.claude, 'launch.claude', 'claude', s => claudeCommand(s))
+  if (claudeRes) {
+    if (claudeRes.ok) board.launch = { claude: claudeRes.value }
+    else report.push(claudeRes.report)
+  }
+  const agyRes = sliceLauncher(launch?.agy, 'launch.agy', AGY_AGENT, s => agyCommand(s))
+  if (agyRes) {
+    if (agyRes.ok) board.launchAgy = agyRes.value
+    else report.push(agyRes.report)
   }
   return { board, report: accepted(report, accept) }
 }
@@ -1384,20 +1384,25 @@ export function appliedSlice(config: unknown, previous: BoardSlice | null, next:
     put(s, 'sinks', clone(sinks))
     put(out, 'secrets', s)
   }
-  const nextLaunch = next.launch
-  const prevLaunch = previous?.launch
+  const rawNext: unknown = next.launch
+  const rawPrev: unknown = previous?.launch
+  const nextLaunch = isRecord(rawNext) ? rawNext : undefined
+  const prevLaunch = isRecord(rawPrev) ? rawPrev : undefined
   const hasClaude = nextLaunch?.claude !== undefined
-  const hasAgy = nextLaunch?.agy !== undefined
+  const prevClaude = prevLaunch?.claude !== undefined
+  const nextAgy = next.launchAgy !== undefined ? next.launchAgy : nextLaunch?.agy
+  const hasAgy = nextAgy !== undefined
+  const prevAgy = previous?.launchAgy !== undefined || prevLaunch?.agy !== undefined
   if (hasClaude || hasAgy) {
     const launch = isRecord(out.launch) ? out.launch : {}
-    if (hasClaude) put(launch, 'claude', clone(nextLaunch.claude))
-    else if (prevLaunch?.claude !== undefined) delete launch.claude
-    if (hasAgy) put(launch, 'agy', clone(nextLaunch.agy))
-    else if (prevLaunch?.agy !== undefined) delete launch.agy
+    if (hasClaude) put(launch, 'claude', clone(nextLaunch?.claude))
+    else if (prevClaude) delete launch.claude
+    if (hasAgy) put(launch, 'agy', clone(nextAgy))
+    else if (prevAgy) delete launch.agy
     put(out, 'launch', launch)
-  } else if (prevLaunch && isRecord(out.launch)) {
-    if (prevLaunch.claude !== undefined) delete out.launch.claude
-    if (prevLaunch.agy !== undefined) delete out.launch.agy
+  } else if (isRecord(out.launch)) {
+    if (prevClaude) delete out.launch.claude
+    if (prevAgy) delete out.launch.agy
   }
   return out
 }

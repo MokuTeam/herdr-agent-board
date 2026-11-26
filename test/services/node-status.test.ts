@@ -48,7 +48,6 @@ function sources(over: Partial<StatusSources> = {}): StatusSources {
     launch: () => undefined,
     piFound: () => false,
     agyFound: () => false,
-    codexFound: () => false,
     platform: 'linux',
     arch: 'x64',
     home: '/home/owner',
@@ -166,28 +165,22 @@ describe('the status', () => {
 describe('its helpers', () => {
   test("the agents: what the node's new-session window offers, by the board's own rule", () => {
     const none = (): boolean => false
-    expect(agentsOf(undefined, none, none, none)).toEqual(['claude'])
-    expect(agentsOf(undefined, () => true, none, none)).toEqual(['claude', 'pi'])
-    expect(agentsOf(undefined, none, () => true, none)).toEqual(['claude', 'agy'])
-    expect(agentsOf(undefined, none, none, () => true)).toEqual(['claude', 'codex'])
+    expect(agentsOf(undefined, none, none)).toEqual(['claude'])
+    expect(agentsOf(undefined, () => true, none)).toEqual(['claude', 'pi'])
+    expect(agentsOf(undefined, none, () => true)).toEqual(['claude', 'agy'])
     expect(
       agentsOf(
         undefined,
         () => true,
         () => true,
-        () => true,
       ),
-    ).toEqual(['claude', 'pi', 'agy', 'codex'])
-    expect(agentsOf({ pi: 'pi --model x' } as never, none, none, none)).toEqual(['claude', 'pi'])
-    expect(agentsOf({ agy: ['agy', '--dangerously-skip-permissions'] } as never, none, none, none)).toEqual([
-      'claude',
-      'agy',
-    ])
+    ).toEqual(['claude', 'pi', 'agy'])
+    expect(agentsOf({ pi: 'pi --model x' } as never, none, none)).toEqual(['claude', 'pi'])
+    expect(agentsOf({ agy: ['agy', '--dangerously-skip-permissions'] } as never, none, none)).toEqual(['claude', 'agy'])
     // The config's own launcher starts every session: Claude Code.
     expect(
       agentsOf(
         { command: 'my-launcher {cwd}' } as never,
-        () => true,
         () => true,
         () => true,
       ),

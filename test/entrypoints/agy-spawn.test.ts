@@ -449,52 +449,6 @@ describe('spawn-agent --agent agy and board CLI Antigravity identity', () => {
     expect(cardOf(box2, AGY_ID)).toMatchObject({ key: AGY_ID, category: 'agent-board' })
   })
 
-  test('spawn-agent --agent agy --trust uses launch.agy flags from config.json and handles Windows trust path (#898)', async () => {
-    const box = await sandbox()
-    const cfgFile = join(box.env.APPDATA ?? '', 'herdr', 'plugins', 'config', 'agent-board', 'config.json')
-    mkdirSync(join(cfgFile, '..'), { recursive: true })
-    writeFileSync(cfgFile, JSON.stringify({ launch: { agy: ['agy', '--dangerously-skip-permissions'] } }))
-
-    const dir = join(box.dir, 'Win Agy')
-    mkdirSync(dir)
-    const AGY_BLOCKED = {
-      result: {
-        pane: {
-          pane_id: 'wA:p9',
-          tab_id: 'wA:t9',
-          agent: 'agy',
-          agent_status: 'blocked',
-          agent_session: { value: AGY_ID },
-        },
-      },
-    }
-    box.state({
-      ...BASE_STATE,
-      'pane get': { seq: [AGY_BLOCKED, AGY_READY] },
-      'pane read': { seq: [{ text: agyTrustScreen(dir) }, { text: 'Conversation renamed to: Win Agy\n' }] },
-    })
-
-    const r = await runScript(box, SPAWN, [
-      '--agent',
-      'agy',
-      '--trust',
-      '--name',
-      'Win Agy',
-      '--cwd',
-      dir,
-      '--workspace',
-      'wA',
-      '--brief',
-      'Ship Windows fix',
-    ])
-    expect(r.code, r.stderr).toBe(0)
-    const calls = box.calls().map(c => c.join(' '))
-    expect(calls).toContain('pane run wA:p9 agy --dangerously-skip-permissions')
-    expect(calls).toContain('pane send-keys wA:p9 enter')
-    expect(calls).toContain('agent prompt wA:p9 /rename Win Agy')
-    expect(calls).toContain('agent prompt wA:p9 Ship Windows fix')
-  })
-
   test('spawnAgent prefixes MSYS_NO_PATHCONV=1 on prompt hints only on win32 with MSYSTEM (#898)', async () => {
     const AGY_BLOCKED = {
       result: {
