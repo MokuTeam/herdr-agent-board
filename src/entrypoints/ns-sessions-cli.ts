@@ -2,37 +2,44 @@
 // this computer runs answers them (on a node, relayed from its master): metadata only. The store
 // never answers a value here, and this command prints only the fields it knows, whatever comes.
 import { isRecord } from '../adapters/json-store.ts'
-import { type NsMeta, nsListLine } from '../core/ns-sessions.ts'
+import { type NsMeta, type NsWhere, nsListLine } from '../core/ns-sessions.ts'
 
 export const NS_USAGE = 'usage: board ns-sessions list [--json]'
+
+const s = (v: unknown): string => (typeof v === 'string' ? v : '')
+const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+const whereOf = (v: unknown): NsWhere =>
+  isRecord(v) ? { machine: s(v.machine), profile: s(v.profile) } : { machine: '', profile: '' }
 
 /** The fields an entry shows, picked one by one: nothing else of what came is printed. */
 function metaOf(raw: unknown): NsMeta | null {
   if (!isRecord(raw)) return null
-  const s = (v: unknown): string => (typeof v === 'string' ? v : '')
-  const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
-  const origin = isRecord(raw.origin) ? raw.origin : {}
-  const last = isRecord(raw.last_activity) ? raw.last_activity : {}
   const lock = isRecord(raw.lock) ? raw.lock : null
   const state = raw.state === 'live' || raw.state === 'dying' || raw.state === 'dead' ? raw.state : null
   if (!state || !s(raw.account)) return null
   return {
     account: s(raw.account),
-    user: s(raw.user),
-    role: typeof raw.role === 'string' ? raw.role : null,
+    user: typeof raw.user === 'string' ? raw.user : null,
     host: s(raw.host),
-    state,
-    dead_reason: (typeof raw.dead_reason === 'string' ? raw.dead_reason : null) as NsMeta['dead_reason'],
-    dead_matched: (typeof raw.dead_matched === 'string' ? raw.dead_matched : null) as NsMeta['dead_matched'],
+    role: typeof raw.role === 'string' ? raw.role : null,
     fp: /^[0-9a-f]{8}$/.test(s(raw.fp)) ? s(raw.fp) : '',
+    state,
     generation: n(raw.generation),
-    origin: { machine: s(origin.machine), profile: s(origin.profile) },
     login_at: n(raw.login_at),
     abs_expiry: n(raw.abs_expiry),
     idle_expiry: n(raw.idle_expiry),
-    last_activity: { at: n(last.at), where: s(last.where) },
+    last_activity: n(raw.last_activity),
+    last_where: whereOf(raw.last_where),
+    origin: whereOf(raw.origin),
     holders: Array.isArray(raw.holders) ? raw.holders.filter((h): h is string => typeof h === 'string') : [],
-    lock: lock ? { holder: s(lock.holder), until: n(lock.until) } : null,
+    dead_reason: (typeof raw.dead_reason === 'string' ? raw.dead_reason : null) as NsMeta['dead_reason'],
+    dead_matched: (typeof raw.dead_matched === 'string' ? raw.dead_matched : null) as NsMeta['dead_matched'],
+    lock: lock
+      ? {
+          holder: { ...whereOf(lock.holder), run_id: s(isRecord(lock.holder) ? lock.holder.run_id : '') },
+          until: n(lock.until),
+        }
+      : null,
   }
 }
 
@@ -59,11 +66,11 @@ export async function nsSessionsCommand(
     return 1
   }
   const body: unknown = await res.json().catch(() => null)
-  if (!res.ok || !Array.isArray(body)) {
-    const code = isRecord(body) && typeof body.error === 'string' ? body.error : `HTTP ${res.status}`
+  if (!res.ok || !isRecord(body) || body.ok !== true || !Array.isArray(body.entries)) {
+    const code = isRecord(body) && typeof body.code === 'string' ? body.code : `HTTP ${res.status}`
     throw new Error(`ns-sessions list: ${code}`)
   }
-  const list = body.map(metaOf).filter((m): m is NsMeta => m !== null)
+  const list = body.entries.map(metaOf).filter((m): m is NsMeta => m !== null)
   if (asJson) {
     print(JSON.stringify(list, null, 2))
     return 0

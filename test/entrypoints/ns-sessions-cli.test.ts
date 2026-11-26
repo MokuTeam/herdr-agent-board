@@ -7,19 +7,20 @@ const T = 1_800_000_000_000
 const meta = {
   account: '1234567_SB1',
   user: 'agent@example.com',
-  role: '3',
   host: '1234567-sb1.app.netsuite.com',
-  state: 'live',
-  dead_reason: null,
-  dead_matched: null,
+  role: 'Administrator',
   fp: '0a1b2c3d',
+  state: 'live',
   generation: 2,
-  origin: { machine: 'laptop', profile: 'work' },
   login_at: T - 3_600_000,
   abs_expiry: T + 11 * 3_600_000,
   idle_expiry: T + 2 * 3_600_000,
-  last_activity: { at: T - 120_000, where: 'server-2/main' },
+  last_activity: T - 120_000,
+  last_where: { machine: 'server-2', profile: 'main' },
+  origin: { machine: 'laptop', profile: 'work' },
   holders: ['laptop', 'server-2'],
+  dead_reason: null,
+  dead_matched: null,
   lock: null,
   // What no store sends, and this command never prints whatever comes.
   cookies: [{ name: 'JSESSIONID', value: 'fake-cli-value-55aa' }],
@@ -43,22 +44,24 @@ async function run(argv: string[], status: number, body: unknown): Promise<{ cod
 }
 
 test('lines and JSON hold the metadata, never a value', async () => {
-  const lines = await run(['list'], 200, [meta])
+  const lines = await run(['list'], 200, { ok: true, entries: [meta] })
   expect(lines.code).toBe(0)
   expect(lines.out).toEqual([
     '1234567_SB1 · agent@example.com · live · fp 0a1b2c3d · gen 2 · login 1h00 ago · ends in 2h00 · active 2m ago on server-2/main',
   ])
-  const json = await run(['list', '--json'], 200, [meta])
+  const json = await run(['list', '--json'], 200, { ok: true, entries: [meta] })
   expect(JSON.parse(json.out.join('\n'))).toEqual([{ ...meta, cookies: undefined }].map(({ cookies: _, ...m }) => m))
   for (const r of [lines, json]) expect(r.out.join('\n')).not.toContain('fake-cli-value-55aa')
 })
 
 test('an empty store, no store, and a wrong word', async () => {
-  expect((await run(['list'], 200, [])).out).toEqual(['no NetSuite sessions in the store'])
-  expect(await run(['list'], 503, { ok: false, error: 'node-master-offline' })).toEqual({
+  expect((await run(['list'], 200, { ok: true, entries: [] })).out).toEqual(['no NetSuite sessions in the store'])
+  expect(await run(['list'], 503, { ok: false, code: 'store_unavailable', message: 'm' })).toEqual({
     code: 1,
     out: ['no store: the master board is not reachable now'],
   })
   await expect(run(['get'], 200, [])).rejects.toThrow('usage: board ns-sessions list [--json]')
-  await expect(run(['list'], 403, { error: 'header' })).rejects.toThrow('ns-sessions list: header')
+  await expect(run(['list'], 401, { ok: false, code: 'unauthorized' })).rejects.toThrow(
+    'ns-sessions list: unauthorized',
+  )
 })

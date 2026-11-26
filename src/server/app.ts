@@ -277,7 +277,7 @@ import { moveRoute } from './routes/move.ts'
 import { masterRelayRoute, nodeCallRoutes, nodeDoorRoutes } from './routes/node.ts'
 import { createNodeProxy, type NodeProxy } from './routes/node-proxy.ts'
 import { computerSetupRoutes, handoverRoutes, nodeSetupRoutes, nodesRoutes, relaySetupRoutes } from './routes/nodes.ts'
-import { nsNodeGateRoute, nsSessionRoutes } from './routes/ns-sessions.ts'
+import { nsNodeRoute, nsSessionRoutes } from './routes/ns-sessions.ts'
 import { pageLogRoute } from './routes/page-log.ts'
 import { pilotCallRoutes } from './routes/pilot-call.ts'
 import { presenceRoutes } from './routes/presence.ts'
@@ -446,8 +446,14 @@ export async function startServer({
   const { cfg, log } = deps
   // The NetSuite session store (#860): values in this memory only; the master's, a pure node relays.
   const nsStore = createNsStore()
-  const nsTokens = createNsTokens({ dirs: nsDirs ?? (() => nsBridgeDirs(homedir())), log })
-  nsTokens.refresh()
+  // Each MokuTab bridge data dir here gets <dir>/ns-store.json { url, token, node }, written once
+  // the board listens (below) and again when a token does not match (adapters/ns-store-tokens.ts).
+  const nsTokens = createNsTokens({
+    dirs: nsDirs ?? (() => nsBridgeDirs(homedir())),
+    url: () => `http://127.0.0.1:${server.port ?? port}/api/ns-sessions`,
+    node: () => nodeConfig(cfg.node)?.id ?? nodesConfig(cfg.nodes, hostname())?.id ?? hostname(),
+    log,
+  })
   const initialNoFileCfg = readConfigFile() === null ? structuredClone(cfg) : null
   // Crash recovery (#697): recover any incomplete handover before opening SQLite DBs or services.
   const bootHandover = readHandoverState()
@@ -1893,6 +1899,7 @@ export async function startServer({
   process.on('exit', supervisor.killNow)
   // A login by password's ssh runs in a session of its own: ended with the board too.
   process.on('exit', endLogins)
+  nsTokens.refresh()
 
   // The master door on a node (#498, server/node-listener.ts), its masters and its status: made the
   // first time config.json has `node`, and from then on following it. Without `node` nothing of it
@@ -2072,7 +2079,7 @@ export async function startServer({
     })
     routes.unshift(masterRelayFirst)
     // Before the relay (#860): the bridge's store token is checked here, where it was written.
-    routes.unshift(nsNodeGateRoute(given => nsTokens.check(given)))
+    routes.unshift(nsNodeRoute(upRelay, given => nsTokens.check(given)))
     const nodeTelegram = createNodeTelegram({ cfg, profiles: () => deps.profiles(), log, refresh })
     refreshLocalPilotCallRoutes()
     const nodeLaunch = createNodeLaunch({
