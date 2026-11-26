@@ -40,11 +40,14 @@ import { join } from 'node:path'
 import { installSkill } from '../adapters/agents-skill.ts'
 import {
   agyConfigDir,
+  agyHasBoardHooks,
   agyHooksPlan,
   agyMcpPlan,
   agySettingsDir,
   agySettingsPlan,
   detectAgy,
+  detectAgyBinary,
+  hasAgyConfigDir,
   installAgyHooks,
   installAgyMcp,
   installAgySettings,
@@ -383,10 +386,13 @@ try {
         "wake hooks: not added: the separate herdr-wake plugin's are there (Settings → Sleep and wake… → Switch over…)",
       )
   }
-  // Antigravity CLI hooks, status line, skills and herdr integration: automatically when agy is installed.
-  // A machine without agy leaves ~/.gemini untouched.
-  const hasAgy = agyPresent()
-  if (hasAgy) {
+  // Antigravity CLI hooks, status line, skills and herdr integration: automatically when agy is found.
+  // When ~/.gemini/config (or ANTIGRAVITY_CONFIG_DIR) exists without agy on PATH/user dirs, report
+  // why hooks were not installed instead of skipping silently; without either, leave ~/.gemini untouched.
+  const agyOpts = { launch: rawLaunch(), env: process.env, home: homedir(), platform: agyPlatform }
+  const hasAgyBinary = detectAgyBinary(agyOpts)
+  const hasAgyDir = hasAgyConfigDir(agyOpts)
+  if (hasAgyBinary) {
     const dir = agyConfigDir()
     const settingsDir = agySettingsDir()
     const script = join(ROOT, 'src', 'entrypoints', 'agy-hook.ts')
@@ -424,6 +430,10 @@ try {
         `herdr's Antigravity CLI hook: not installed: ${messageOf(err).split(/\r?\n/)[0]}. Run herdr integration install antigravity-cli.`,
       )
     }
+  } else if (hasAgyDir && !agyHasBoardHooks(agyConfigDir())) {
+    console.log(
+      `Antigravity CLI hooks: not changed: ${agyConfigDir()} exists, but agy was not found on PATH (run bun src/entrypoints/install.ts --agy)`,
+    )
   }
   // The board's MCP server (#814): each shown profile's user scope, and Codex, agy and pi where they are the board's.
   if (mcpOn())
@@ -435,7 +445,7 @@ try {
         cli: paths.cli,
         profiles,
         codexHome: dedicatedCodexHome(),
-        agyInstalled: hasAgy,
+        agyInstalled: hasAgyBinary || hasAgyDir,
       }),
     )
   if (toasts) {

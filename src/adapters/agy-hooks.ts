@@ -4,7 +4,7 @@
 import { constants, copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join, posix, win32 } from 'node:path'
-import { planAgyHooks, planAgyMcp, planAgySettings } from '../core/agy-hooks.ts'
+import { AGY_HOOK_KEY, planAgyHooks, planAgyMcp, planAgySettings } from '../core/agy-hooks.ts'
 import { agyConfigured } from '../core/launch/agents.ts'
 import type { LaunchSpec } from '../core/types.ts'
 import { findCommand } from './setup-facts.ts'
@@ -25,12 +25,15 @@ const isFolder = (file: string): boolean => {
   }
 }
 
+const joinForPlatform = (platform: string, dir: string, ...parts: string[]): string =>
+  platform === 'win32' && !dir.startsWith('/') ? win32.join(dir, ...parts) : posix.join(dir, ...parts)
+
 /**
- * Whether Antigravity CLI (`agy`) is installed or configured on this machine: via `launch.agy`,
+ * Whether Antigravity CLI (`agy`) binary/launcher is installed or configured: via `launch.agy`,
  * `agy` on PATH (including `.cmd`/`.exe`/`.ps1` on Windows), or standard user install folders
  * (`~/.local/bin`, and `%APPDATA%\npm` on Windows) when a daemon's PATH omits them.
  */
-export function detectAgy(o: AgyDetectOptions = {}): boolean {
+export function detectAgyBinary(o: AgyDetectOptions = {}): boolean {
   if (agyConfigured(o.launch)) return true
   const env = o.env ?? process.env
   const home = o.home ?? homedir()
@@ -39,19 +42,41 @@ export function detectAgy(o: AgyDetectOptions = {}): boolean {
   const found = findCommand('agy', { env, platform, exists })
   if (found.ps ?? found.sh) return true
   const candidates = platform === 'win32' ? ['agy.exe', 'agy.cmd', 'agy.bat', 'agy.ps1', 'agy'] : ['agy']
-  const joinFor = (dir: string, ...parts: string[]): string =>
-    platform === 'win32' && !dir.startsWith('/') ? win32.join(dir, ...parts) : posix.join(dir, ...parts)
   const dirs = [
-    joinFor(home, '.local', 'bin'),
-    ...(platform === 'win32' && env.APPDATA ? [joinFor(env.APPDATA, 'npm')] : []),
+    joinForPlatform(platform, home, '.local', 'bin'),
+    ...(platform === 'win32' && env.APPDATA ? [joinForPlatform(platform, env.APPDATA, 'npm')] : []),
   ]
   for (const dir of dirs) {
     for (const name of candidates) {
-      const file = joinFor(dir, name)
+      const file = joinForPlatform(platform, dir, name)
       if (exists(file) && !isFolder(file)) return true
     }
   }
   return false
+}
+
+/** Whether `~/.gemini/config` (or `ANTIGRAVITY_CONFIG_DIR`) exists on this machine. */
+export function hasAgyConfigDir(o: Pick<AgyDetectOptions, 'env' | 'home' | 'platform' | 'exists'> = {}): boolean {
+  const env = o.env ?? process.env
+  const home = o.home ?? homedir()
+  const platform = o.platform ?? process.platform
+  const dir = env.ANTIGRAVITY_CONFIG_DIR || joinForPlatform(platform, home, '.gemini', 'config')
+  return o.exists ? o.exists(dir) : isFolder(dir)
+}
+
+/** Whether Antigravity CLI (`agy`) is present on this machine (binary/config or `~/.gemini/config`). */
+export function detectAgy(o: AgyDetectOptions = {}): boolean {
+  return detectAgyBinary(o) || hasAgyConfigDir(o)
+}
+
+/** Whether agy's hooks.json has the board's group (install.ts --agy). */
+export function agyHasBoardHooks(dir: string): boolean {
+  try {
+    const { parsed } = readJsonFile(join(dir, 'hooks.json'))
+    return !!parsed && typeof parsed === 'object' && Object.hasOwn(parsed, AGY_HOOK_KEY)
+  } catch {
+    return false
+  }
 }
 
 export function agyConfigDir(env: Record<string, string | undefined> = process.env, home = homedir()): string {

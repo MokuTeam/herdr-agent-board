@@ -92,7 +92,7 @@ function isOurAgyStatusLine(cmd: string, script: string): boolean {
  */
 export function planAgySettings(
   settings: unknown,
-  bun: string,
+  _bun: string,
   statusline: string,
 ): { settings: Record<string, unknown>; statusLineSet: boolean } {
   if (settings !== undefined && !isRecord(settings))
@@ -104,7 +104,8 @@ export function planAgySettings(
   if (!ours) return { settings: next, statusLineSet: false }
   next.statusLine = {
     type: 'command',
-    command: `${quote(bun)} ${quote(statusline)}`,
+    // Same Windows-safe form as hooks: unquoted `bun` avoids cmd.exe outer-quote stripping.
+    command: `bun ${quote(statusline)}`,
     stack_with_default: true,
   }
   return { settings: next, statusLineSet: true }

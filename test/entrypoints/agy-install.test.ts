@@ -180,7 +180,14 @@ test('normal install on a Windows home with agy.cmd or agy.exe installs agy hook
         res.stdout.includes(`board MCP (agent-board) for Antigravity CLI: ${join(agyDir, 'mcp_config.json')}`),
       ).toBe(n === 0)
     }
-    expect(existsSync(join(home, '.gemini', 'antigravity-cli', 'settings.json'))).toBe(true)
+    const settings = JSON.parse(readFileSync(join(home, '.gemini', 'antigravity-cli', 'settings.json'), 'utf8')) as {
+      statusLine?: { type?: string; command?: string; stack_with_default?: boolean }
+    }
+    expect(settings.statusLine).toEqual({
+      type: 'command',
+      command: `bun "${join(root, 'src', 'entrypoints', 'agy-statusline.ts').replace(/\\/g, '/')}"`,
+      stack_with_default: true,
+    })
     expect(existsSync(join(agyDir, 'skills', 'herdr-agents', 'SKILL.md'))).toBe(true)
     expect(existsSync(join(agyDir, 'skills', 'agent-board-team', 'SKILL.md'))).toBe(true)
     expect(box.calls()).toContainEqual(['integration', 'install', 'antigravity-cli'])
@@ -195,8 +202,34 @@ test('normal install on a Windows home without agy creates neither agy hooks nor
   writeFileSync(config, '{"language":"en","wakeUrl":"","wake":false}')
   const res = await install(box, [], { BOARD_TEST_PLATFORM: 'win32' })
   expect(res.code).toBe(0)
+  expect(res.stdout).not.toContain('Antigravity CLI')
   expect(existsSync(join(home, '.gemini'))).toBe(false)
   expect(box.calls().filter(c => c[2] === 'antigravity-cli')).toEqual([])
+})
+
+test('normal install prints "not changed:" when ~/.gemini/config or ANTIGRAVITY_CONFIG_DIR exists without agy binary or board hooks', async () => {
+  for (const useCustomDir of [false, true]) {
+    const box = await sandbox()
+    const home = box.env.USERPROFILE as string
+    const config = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json')
+    mkdirSync(dirname(config), { recursive: true })
+    writeFileSync(config, '{"language":"en","wakeUrl":"","wake":false}')
+    const agyDir = useCustomDir ? join(box.dir, 'custom-agy-config') : join(home, '.gemini', 'config')
+    mkdirSync(agyDir, { recursive: true })
+    const hooksBefore = JSON.stringify({ herdr: {} })
+    writeFileSync(join(agyDir, 'hooks.json'), hooksBefore)
+
+    const env: Record<string, string> = {
+      BOARD_TEST_PLATFORM: 'win32',
+      ...(useCustomDir ? { ANTIGRAVITY_CONFIG_DIR: agyDir } : {}),
+    }
+    const res = await install(box, [], env)
+    expect(res.code).toBe(0)
+    expect(res.stdout).toContain(`Antigravity CLI hooks: not changed: ${agyDir} exists, but agy was not found on PATH`)
+    expect(res.stdout).toContain('board MCP (agent-board) for Antigravity CLI: not changed:')
+    expect(readFileSync(join(agyDir, 'hooks.json'), 'utf8')).toBe(hooksBefore)
+    expect(existsSync(join(agyDir, 'mcp_config.json'))).toBe(false)
+  }
 })
 
 test('install --mcp and broken hooks.json print "not changed:" when agy is installed without board hooks', async () => {

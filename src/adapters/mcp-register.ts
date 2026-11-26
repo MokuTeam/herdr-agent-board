@@ -13,7 +13,6 @@
 import { constants, copyFileSync, existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { AGY_HOOK_KEY } from '../core/agy-hooks.ts'
 import {
   BOARD_MCP,
   boardMcpUrl,
@@ -25,7 +24,7 @@ import {
 import { claudeStateFile } from '../core/move.ts'
 import { DEFAULT_PROFILE } from '../core/profiles.ts'
 import type { LaunchSpec } from '../core/types.ts'
-import { detectAgy } from './agy-hooks.ts'
+import { agyHasBoardHooks, detectAgy } from './agy-hooks.ts'
 import { editJson, writeWhole } from './bundle-files.ts'
 
 type Env = Record<string, string | undefined>
@@ -146,16 +145,6 @@ export function editCodexToml(file: string, url: string | null): McpRegistered {
 /** Whether a Codex home has the board's hooks (install.ts --codex). */
 const codexHasBoardHooks = (dir: string): boolean =>
   /entrypoints[\\/]+codex-hook\.ts/.test(readText(join(dir, 'hooks.json')) ?? '')
-
-/** Whether agy's hooks.json has the board's group (install.ts --agy). */
-function agyHasBoardHooks(dir: string): boolean {
-  try {
-    const v = parsed(readText(join(dir, 'hooks.json')))
-    return !!v && typeof v === 'object' && Object.hasOwn(v, AGY_HOOK_KEY)
-  } catch {
-    return false
-  }
-}
 
 /** The folders each harness keeps its config in, as the board finds them elsewhere. */
 export function harnessDirs(o: Pick<McpRegisterOptions, 'codexHome' | 'home' | 'env'>): {
