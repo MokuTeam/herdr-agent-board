@@ -3155,7 +3155,25 @@ board team thread <ref> [--json] [--read] # one thread, a peer's text framed as 
 board team watch [--json] [--every <s>]   # a line per thread with new messages, as they come
 board team wait [--timeout <s>] [--json]  # until a thread this session handles has unread messages
 board team drafts                         # agents' drafts waiting for you: thread, time, file, why
+board team agents [<name>]                # the agents teammates let you address, as @name.code
 ```
+
+**Addressing a teammate's agent (#832).** What you already share decides it: with Agents on for a
+person, every session in a lane you share with them is in their list, by its handle. A handle is the
+session's name in lowercase with dashes for spaces (`-2` when another session has it), and it stays
+the session's across restarts and renames. A session leaves the list when it leaves the lane, is
+archived, or the lane is no longer shared; nothing is switched on per agent, and People and agents
+shows who reaches which session. Each teammate's board gets a signed list of only what it reaches,
+sent when that list changes. They write `@YourName.handle ...` in the Team panel (the box offers the
+names after `@`), in `board team post @YourName.handle "..."` or at the start of a reply; in a topic
+with you it stays there, from anywhere else (a general thread, the team chat) it opens a topic of
+its own with you. On your board that topic goes to the session as if you
+had assigned it, through the same switches, lanes, limits and checks. A handle that is unknown,
+whose lane is not shared with them, or whose session was archived (or is being archived) goes to
+the listener with a note: never to a guessed session, and never waking or bringing back an archived
+one. A teammate can only message that agent: never start a session or reach anything else. An older
+board ignores the list (it drops a message with a field it does not know; the next one goes only
+after a day, then longer).
 
 `inbox` and `watch` never print a message's text, only a thread's ref (what `thread` takes) and who
 it is with. `inbox` adds a topic's title in quotes under a header (with `--json`, a note) that says

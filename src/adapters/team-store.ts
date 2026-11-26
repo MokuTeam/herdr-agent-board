@@ -33,6 +33,8 @@ import {
   type WorkPost,
 } from '../core/team.ts'
 import { type BoxKeyPair, generateBoxKey } from '../core/team-box.ts'
+import { readDirectory, validCode } from '../core/team-directory.ts'
+import type { DirectoryEntry } from '../core/team-wire.ts'
 import type { Alg } from '../core/webauthn.ts'
 import { isRecord, readJson, updateJson } from './json-store.ts'
 import {
@@ -41,6 +43,7 @@ import {
   teamAuditFile,
   teamBlobsFile,
   teamBoxFile,
+  teamDirectoryFile,
   teamDraftsFile,
   teamFilesDir,
   teamInboxFile,
@@ -675,6 +678,78 @@ function readAgentsFrom(f: AgentsFile): AgentSettings {
     peers: bare(f.peers),
     paused: bare(isRecord(f.paused) ? (f.paused as Record<string, number>) : {}),
   }
+}
+
+// ---- Agent directories (#832)
+
+/**
+ * What went to a peer last: the list, its mark (core/team-directory.ts), the message, how far it
+ * got (`sent`: no word from the hub yet; `queued`: the hub has it; `acked`: the peer's board
+ * took it; `expired`: it never did), when, and how many in a row expired unread.
+ */
+export interface DirectorySent {
+  mark: string
+  list: DirectoryEntry[]
+  id: string
+  state: 'sent' | 'queued' | 'acked' | 'expired'
+  at: number
+  misses: number
+}
+/** A peer's directory as it came: its list, and the time and id of the message that brought it. */
+export interface DirectoryGot {
+  list: DirectoryEntry[]
+  ts: string
+  id: string
+}
+export interface DirectoryState {
+  sent: Record<string, DirectorySent>
+  got: Record<string, DirectoryGot>
+  /** This board's handles, by session key: kept, so an address stays the session's. */
+  handles: Record<string, string>
+}
+type DirectoryFile = { v: 1 } & Partial<DirectoryState>
+const isDirectoryFile = (v: unknown): v is DirectoryFile => isRecord(v) && v.v === 1
+const SENT_STATES: readonly DirectorySent['state'][] = ['sent', 'queued', 'acked', 'expired']
+
+function directoryFrom(f: DirectoryFile | null): DirectoryState {
+  const sent = bare<DirectorySent>({})
+  const got = bare<DirectoryGot>({})
+  const handles = bare<string>({})
+  for (const [peer, s] of Object.entries(isRecord(f?.sent) ? f.sent : {})) {
+    const list = isRecord(s) ? readDirectory(s.list) : null
+    if (!list || !isRecord(s) || typeof s.mark !== 'string' || typeof s.id !== 'string') continue
+    const state = SENT_STATES.find(x => x === s.state) ?? 'sent'
+    const at = typeof s.at === 'number' ? s.at : 0
+    const misses = typeof s.misses === 'number' && s.misses >= 0 ? Math.floor(s.misses) : 0
+    sent[peer] = { mark: s.mark, list, id: s.id, state, at, misses }
+  }
+  for (const [peer, g] of Object.entries(isRecord(f?.got) ? f.got : {})) {
+    const list = isRecord(g) ? readDirectory(g.list) : null
+    if (list && isRecord(g) && typeof g.ts === 'string' && typeof g.id === 'string')
+      got[peer] = { list, ts: g.ts, id: g.id }
+  }
+  for (const [key, h] of Object.entries(isRecord(f?.handles) ? f.handles : {})) if (validCode(h)) handles[key] = h
+  return { sent, got, handles }
+}
+
+/** The directories sent and received, and the handles; empty while there is no file. Creates nothing. */
+export const readDirectoryState = (): DirectoryState => directoryFrom(readJson(teamDirectoryFile(), isDirectoryFile))
+
+/** Changes them under their lock: `fn` edits them in place. */
+export function changeDirectoryState<R>(fn: (d: DirectoryState) => R): R {
+  mkdirSync(stateDir(), { recursive: true })
+  let result: R | undefined
+  updateJson(
+    teamDirectoryFile(),
+    (cur: DirectoryFile | null) => {
+      const d = directoryFrom(cur)
+      result = fn(d)
+      return { v: 1 as const, ...d }
+    },
+    isDirectoryFile,
+    PRIVATE,
+  )
+  return result as R
 }
 
 // ---- The owner's passkeys (#224)

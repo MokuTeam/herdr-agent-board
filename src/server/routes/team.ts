@@ -48,6 +48,7 @@ import {
   audit,
   changeAgents,
   readAgents,
+  readDirectoryState,
   readDrafts,
   readPins,
   readThreads,
@@ -58,6 +59,7 @@ import { categoryInfo } from '../../core/categories.ts'
 import { isMessageId, isPeerId, isThreadId, MAX_TEXT, type ReactionOp, validName } from '../../core/team.ts'
 import { agentLimits, splitKey, TEAM, threadKey, validLoop } from '../../core/team-agents.ts'
 import { type OwnerAction, unlocks, widens } from '../../core/team-confirm.ts'
+import { type AddressTarget, addressTarget, leadingMention } from '../../core/team-directory.ts'
 import { checkMeta } from '../../core/team-file.ts'
 import { normalizeEmoji } from '../../core/team-reactions.ts'
 import { changeServices, type ServiceAgent, serviceAgents } from '../../core/team-services.ts'
@@ -107,8 +109,32 @@ function sessionFrom(v: unknown): SessionRef | null {
   return { key: v.key, ...(validName(v.name) && { name: v.name }) }
 }
 
+/**
+ * Where a post that starts with `@Name.handle` goes (#832, core/team-directory.ts addressTarget): by
+ * the roster and the directories the peers sent.
+ */
+function addressed(team: TeamService, text: string, target: AddressTarget): ReturnType<typeof addressTarget> {
+  // Most posts start with no mention: nothing is read for them.
+  if (!leadingMention(text)) return { ok: true, ...target }
+  const got = readDirectoryState().got
+  return addressTarget(text, target, {
+    roster: team.view()?.roster ?? [],
+    listed: peer => (Object.hasOwn(got, peer) ? (got[peer]?.list.map(e => e.code) ?? null) : null),
+  })
+}
+
+/**
+ * What teammates can address on this board (#832), for the owner's panel: each session with a
+ * handle someone can reach now, its lane and whom. Nothing is read without a peer whose Agents are on.
+ */
+function exposedView(team: TeamService, router: TeamRouter | undefined): unknown[] {
+  // A peer whose key changed gets no directory until the owner trusts it: not shown as reaching.
+  const peers = (team.view()?.roster ?? []).filter(p => p.pin !== 'changed').map(p => p.peer)
+  return router?.exposed(peers) ?? []
+}
+
 /** The owner's agent switches as the panel shows them, with the lanes there are to share. */
-function agentsView(cfg: Pick<Config, 'categories' | 'team'>): unknown {
+function agentsView(cfg: Pick<Config, 'categories' | 'team'>, exposed?: unknown[]): unknown {
   const s = readAgents()
   const team = typeof cfg.team === 'object' && cfg.team !== null ? (cfg.team as Record<string, unknown>) : {}
   return {
@@ -121,6 +147,7 @@ function agentsView(cfg: Pick<Config, 'categories' | 'team'>): unknown {
     lanes: cfg.categories.map(c => ({ id: c.id, title: categoryInfo(cfg, c.id).title })),
     // The owner's service agents (#819): each a card with no pane, in its lane.
     services: serviceAgents(cfg.team),
+    ...(exposed?.length && { exposed }),
   }
 }
 
@@ -272,6 +299,14 @@ export function teamRoutes(
   const lanes = (): Pick<Config, 'categories' | 'team'> => cfg ?? { categories: [] }
 
   /**
+   * The peers' directories follow a change of the switches (#832): a lane shared or not, Agents on
+   * or off. The board's own loop (app.ts) logs what fails there and tries again within a minute.
+   */
+  function syncDirectory(): void {
+    void router?.syncDirectory().catch(() => {})
+  }
+
+  /**
    * Why a gated action may not go now (428 with its confirmation), or null: always null while the
    * switch is off (#367). Asked from away (#377: the owner's phone, the domain), it waits for the
    * owner at the computer (GET /api/team/confirm lists it there), and the 428 says so: `where:
@@ -345,6 +380,7 @@ export function teamRoutes(
       if (!c.ok) return { status: 400, body: c }
       c.apply()
       onAgents?.()
+      syncDirectory()
       return { status: 200, body: { ok: true } }
     }
     if (a.kind === 'members') {
@@ -512,12 +548,15 @@ export function teamRoutes(
         // A reply (#370): a line of the thread it goes to, by its id; the send finds it there.
         if (body.replyTo !== undefined && !isMessageId(body.replyTo)) return json(400, { ok: false, error: 'reply' })
         const replyTo = body.replyTo as string | undefined
+        // `@Name.code` first (#832): a peer's agent, in its own topic when this thread is not theirs.
+        const a = addressed(team, words, { to: body.to, ...(thread && { thread }), ...(replyTo && { replyTo }) })
+        if (!a.ok) return json(400, a)
         const action: OwnerAction = {
           kind: 'send',
-          to: body.to,
+          to: a.to,
           text: body.text,
-          ...(thread && { thread }),
-          ...(replyTo && { replyTo }),
+          ...(a.thread && { thread: a.thread }),
+          ...(a.replyTo && { replyTo: a.replyTo }),
           ...(file && { file }),
         }
         const wait = held(req, action)
@@ -641,10 +680,13 @@ export function teamRoutes(
         const replyTo = body.replyTo as string | undefined
         const file = agentFileFrom(body.file)
         if (file === null) return json(400, { ok: false, error: 'file' })
+        // `@Name.code` first (#832): a peer's agent, in its own topic when this thread is not theirs.
+        const a = addressed(team, body.text, { to: body.to, ...(thread && { thread }), ...(replyTo && { replyTo }) })
+        if (!a.ok) return json(400, a)
         const r = await router.agentPost({
-          to: body.to,
-          ...(thread && { thread }),
-          ...(replyTo && { replyTo }),
+          to: a.to,
+          ...(a.thread && { thread: a.thread }),
+          ...(a.replyTo && { replyTo: a.replyTo }),
           text: body.text,
           session,
           ...(body.claimed === true && { claimed: true }),
@@ -704,7 +746,16 @@ export function teamRoutes(
       path: '/api/team/agents',
       handle() {
         if (!team.view()) return undefined
-        return json(200, agentsView(lanes()))
+        return json(200, agentsView(lanes(), exposedView(team, router)))
+      },
+    },
+    {
+      // The peers' agent directories (#832): whom this board may address as `@Name.code`.
+      method: 'GET',
+      path: '/api/team/directory',
+      handle() {
+        if (!team.view()) return undefined
+        return json(200, { peers: team.directories() })
       },
     },
     {
@@ -725,6 +776,7 @@ export function teamRoutes(
         }
         c.apply()
         onAgents?.()
+        syncDirectory()
         return json(200, { ok: true })
       },
     },

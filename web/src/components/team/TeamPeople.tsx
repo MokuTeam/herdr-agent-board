@@ -23,6 +23,7 @@ import {
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import { Switch } from './Switch.tsx'
+import { TeamExposed } from './TeamExposed.tsx'
 import { TeamPasskeys } from './TeamPasskeys.tsx'
 
 export interface TeamPeopleProps {
@@ -147,6 +148,8 @@ export function TeamPeople({
           />
         )}
         {agents && onServices && <ServiceAgents agents={agents} disabled={disabled} onServices={onServices} />}
+        {/* The agents teammates may address as @Name.code (#832). */}
+        {agents && <TeamExposed view={view} agents={agents} />}
       </div>
     </section>
   )

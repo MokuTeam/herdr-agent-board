@@ -203,6 +203,25 @@ export function noticeText(p: NoticeParts): string {
   return `${who} wrote in ${where}${many}, which you handle. ${read}; answer with board team reply ${p.ref} "...".`
 }
 
+/** The notice for the session a peer's message named by its handle (#832): who, where, as whom. */
+export function addressedText(p: Omit<NoticeParts, 'route'> & { code: string }): string {
+  const who = p.agent ? `${p.who}'s agent` : p.who
+  const where = p.team ? `the team thread ${p.ref}` : `thread ${p.ref}`
+  const many = p.count > 1 ? ` (${p.count} new messages)` : ''
+  return `${who} wrote to you as @${p.code} in ${where}${many}. Read it: board team thread ${p.ref}; answer with board team reply ${p.ref} "...".`
+}
+
+/**
+ * The listener's notice for a message that named a handle no agent here answers to for its sender
+ * (#832): no such session, its lane not shared with them, or archived. Never routed to a guessed one.
+ */
+export function unreachableText(p: Omit<NoticeParts, 'route'> & { code: string }): string {
+  const who = p.agent ? `${p.who}'s agent` : p.who
+  const where = p.team ? `the team thread ${p.ref}` : `thread ${p.ref}`
+  const many = p.count > 1 ? ` (${p.count} new messages)` : ''
+  return `${who} wrote in ${where}${many} to @${p.code}, which reaches no agent here now (no session has that handle, its lane is not shared with them, or it was archived). Read it: board team thread ${p.ref}. Then answer (board team reply ${p.ref} "..."), hand it to a session (board team assign ${p.ref} <session>), or ask the owner.`
+}
+
 /** The line the listener gets once when a peer's agents send too much: routing for it pauses. */
 export const pausedText = (who: string, minutes: number): string =>
   `${who}'s board sent more messages in the last hour than the limit, so they are not routed to sessions for ${minutes} minutes. They are all in the Team panel.`
@@ -303,6 +322,9 @@ export function refusedWhy(error: string, detail?: string): string {
       return 'the team is off'
     case 'reply':
       return "that message is not one to answer in that thread: board team thread prints each one's ref"
+    // Addressing a peer's agent (#832).
+    case 'agent':
+      return 'that agent is not in their directory: board team agents lists whom you can address'
     case 'emoji':
       return 'the reaction must be a single emoji or a known :shortcode:'
     case 'message':

@@ -7,6 +7,7 @@
 //   "team": { "hub": "ws://100.64.0.7:7443", "name": "anna" }
 // Only an object with a ws:// or wss:// hub counts.
 import { createHash } from 'node:crypto'
+import { readDirectory, validCode } from './team-directory.ts'
 import { validEmoji } from './team-reactions.ts'
 import {
   BLOB_CHUNK,
@@ -365,7 +366,7 @@ export function checkMessage(
   return { ok: true, msg }
 }
 
-const BODY_KEYS = ['text', 'via', 'agent', 'thread', 'replyTo', 'post', 'file', 'work', 'react']
+const BODY_KEYS = ['text', 'via', 'agent', 'thread', 'replyTo', 'post', 'file', 'work', 'react', 'agents', 'at']
 const THREAD_KEYS = ['id', 'title', 'link', 'group', 'members']
 
 /**
@@ -424,6 +425,18 @@ function readBodyExtras(body: Record<string, unknown>): {
       !Object.hasOwn(body, 'post')
     )
       extras.react = r
+    else ok = false
+  }
+  // A directory of the sender's agents (#832): standalone, as a reaction is.
+  if (Object.hasOwn(body, 'agents')) {
+    const list = readDirectory(body.agents)
+    const alone = Object.keys(body).every(k => k === 'text' || k === 'agents')
+    if (list && alone) extras.agents = list
+    else ok = false
+  }
+  // The code name of the recipient's agent a copy is addressed to (#832): never with a reaction.
+  if (Object.hasOwn(body, 'at')) {
+    if (validCode(body.at) && !Object.hasOwn(body, 'react') && !Object.hasOwn(body, 'agents')) extras.at = body.at
     else ok = false
   }
   return { ok, extras }

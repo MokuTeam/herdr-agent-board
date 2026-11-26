@@ -3,6 +3,10 @@
 // services/team-hub.ts's), the owner's agent switches (GET /api/team/agents), and the lines the
 // panel draws from them. The panel exists only on the local board's page and the owner's own phone
 // or login (#355), while the payload carries `teamRev` (config.json's `team` is on).
+import { mentionWord } from '../../../src/core/team-directory.ts'
+
+export { mentionWord }
+
 import { OUT_STATES, type OutState, VIAS } from '../../../src/core/team-wire.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import type {
@@ -194,6 +198,81 @@ export interface AgentsView {
   loopDefault?: number
   /** The owner's service agents (#819): a card each with no pane, in its lane. */
   services?: ServiceAgentView[]
+  /** What teammates can address here (#832): each session with a handle someone reaches now. */
+  exposed?: ExposedAgent[]
+}
+
+/**
+ * A session teammates can address (#832): its handle, the session (by the board's name), its lane,
+ * and the peers who reach it now (Agents on for them, the lane shared with them).
+ */
+export interface ExposedAgent {
+  code: string
+  session: { key: string; name?: string }
+  lane: string
+  reaches: string[]
+}
+
+const isExposedAgent = (v: unknown): v is ExposedAgent =>
+  isObj(v) &&
+  typeof v.code === 'string' &&
+  isSession(v.session) &&
+  typeof v.lane === 'string' &&
+  Array.isArray(v.reaches) &&
+  v.reaches.every(x => typeof x === 'string')
+
+/** A peer's agent directory (#832, GET /api/team/directory): whom `@Name.code` reaches on their board. */
+export interface PeerDirectory {
+  peer: string
+  name: string
+  agents: { code: string; about?: string }[]
+  ts: string
+}
+
+export const isDirectoryList = (v: unknown): v is { peers: PeerDirectory[] } =>
+  isObj(v) &&
+  Array.isArray(v.peers) &&
+  v.peers.every(
+    p =>
+      isObj(p) &&
+      typeof p.peer === 'string' &&
+      typeof p.name === 'string' &&
+      Array.isArray(p.agents) &&
+      p.agents.every(
+        a => isObj(a) && typeof a.code === 'string' && (a.about === undefined || typeof a.about === 'string'),
+      ),
+  )
+
+/** One agent the composer offers after `@` (#832): how it is written, and whose it is. */
+export interface MentionChoice {
+  /** `Name.code`, what goes after the `@`. */
+  word: string
+  name: string
+  code: string
+  about?: string
+}
+
+/** The composer's choices from the peers' directories (#832), by name then code name. */
+export function mentionChoices(directory: readonly PeerDirectory[]): MentionChoice[] {
+  return directory
+    .flatMap(p =>
+      p.agents.map(a => ({
+        word: `${mentionWord(p.name)}.${a.code}`,
+        name: p.name,
+        code: a.code,
+        ...(a.about && { about: a.about }),
+      })),
+    )
+    .sort((a, b) => a.word.localeCompare(b.word))
+}
+
+/** The choices that fit what is written after `@` (the name, then a dot and the start of a code). */
+export function fitMentions(choices: readonly MentionChoice[], who: string, code: string | null): MentionChoice[] {
+  const w = who.toLowerCase()
+  return choices.filter(c => {
+    const [name = '', own = ''] = c.word.toLowerCase().split('.')
+    return code === null ? name.startsWith(w) : name === w && own.startsWith(code)
+  })
 }
 
 export interface ServiceAgentView {
@@ -228,7 +307,8 @@ export const isAgentsView = (v: unknown): v is AgentsView =>
     (Array.isArray(v.services) &&
       v.services.every(
         x => isObj(x) && typeof x.key === 'string' && typeof x.name === 'string' && typeof x.lane === 'string',
-      )))
+      ))) &&
+  (v.exposed === undefined || (Array.isArray(v.exposed) && v.exposed.every(isExposedAgent)))
 
 /** One change of the switches, as POST /api/team/agents takes it. */
 export type AgentsChange =

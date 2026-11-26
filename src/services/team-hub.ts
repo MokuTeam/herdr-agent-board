@@ -20,6 +20,7 @@ import {
   applyReaction,
   audit,
   changeBlobs,
+  changeDirectoryState,
   changePins,
   changeThreads,
   type Draft,
@@ -39,6 +40,7 @@ import {
   readAllInbox,
   readAllOutbox,
   readBlobs,
+  readDirectoryState,
   readDrafts,
   readInbox,
   readKey,
@@ -68,6 +70,7 @@ import {
   compareMessageTime,
   DEFAULT_MAX_FILE_BYTES,
   DEFAULT_TTL_S,
+  type DeliveryState,
   type Envelope,
   type ErrorCode,
   FILE_LINE,
@@ -116,8 +119,10 @@ import {
 } from '../core/team.ts'
 import { inboundKey, legacyText, splitKey, TEAM, threadKey } from '../core/team-agents.ts'
 import { NONCE_BYTES, TAG_BYTES, usableBox, wrapSecret } from '../core/team-box.ts'
+import { DIRECTORY_TEXT, directoryMark, leadingMention, peerOfWord } from '../core/team-directory.ts'
 import { checkMeta, fileContext, mimeOf, sealFile } from '../core/team-file.ts'
 import { MAX_REACTIONS_PER_MSG, validEmoji } from '../core/team-reactions.ts'
+import type { DirectoryEntry } from '../core/team-wire.ts'
 import { backoffMs } from '../core/tunnel.ts'
 import type { Config } from '../core/types.ts'
 import { createFileTransfer, saveIncoming } from './team-files.ts'
@@ -154,6 +159,8 @@ export interface TeamRosterPeer {
   work?: boolean
   /** The peer's board takes a thread shared again (#569): its caps say `work-reshare`, shown with `work`. */
   reshare?: boolean
+  /** The peer sent a directory with an agent in it (#832): the page asks for the directories only then. */
+  agents?: boolean
 }
 
 export interface TeamView {
@@ -250,6 +257,11 @@ export interface PostTarget {
   thread?: { id?: string; title?: string; link?: string; members?: string[] }
   /** The line of that thread it answers (#370): a message's id, or a team post's (ThreadLine.id). */
   replyTo?: string
+  /**
+   * A peer's agent this post is addressed to (#832): that peer's copy carries the handle, which
+   * must be in the directory the peer sent this board; nobody else's copy says it.
+   */
+  at?: { peer: string; code: string }
 }
 
 /**
@@ -295,6 +307,8 @@ export interface InboundEvent {
   held: boolean
   /** The thread was new to this board. */
   fresh: boolean
+  /** The handle of this board's agent the copy was addressed to (#832), as the sender wrote it. */
+  at?: string
   /**
    * A message in a topic while shared threads are on (#394): what the threads take of it. The
    * text is a peer's, data for the store: it never goes into a session.
@@ -434,6 +448,18 @@ export interface TeamService {
   trust(peer: string): boolean
   /** Changes with every news for the page; null while off. */
   rev(): number | null
+  /**
+   * The peers' agent directories (#832): each trusted roster peer that sent one with an agent in
+   * it, by this board's name for them; empty while off.
+   */
+  directories(): PeerDirectory[]
+  /** The peers this board has sent a directory to (#832): an empty list goes to them once on a change. */
+  directorySent(): string[]
+  /**
+   * Sends a peer this board's directory for them (#832) when it differs from the last one the hub
+   * took, or that one never got there; false when nothing went (the same, offline, not on the roster).
+   */
+  offerDirectory(peer: string, list: DirectoryEntry[]): Promise<boolean>
   /** config.json changed: connect, reconnect or let go. */
   refresh(): void
   start(): void
@@ -460,6 +486,15 @@ interface Options {
 
 /** How much of a thread's latest message the list gets (#370). */
 export const LAST_CHARS = 160
+
+/** A peer's agent directory as the page and `board team agents` show it (#832). */
+export interface PeerDirectory {
+  peer: string
+  name: string
+  agents: DirectoryEntry[]
+  /** When the peer's board sent it. */
+  ts: string
+}
 
 /** Threads kept per peer (and for the team); past it the quietest one nobody handles goes (#216). */
 export const MAX_THREADS_PER_SCOPE = 200
@@ -694,6 +729,7 @@ export function createTeam({
           frame({ t: 'ping' })
         }, PING_MS)
         setState('online')
+        directoryTries.clear()
         resend()
         files.welcome()
         return
@@ -733,6 +769,8 @@ export function createTeam({
         audit('hub-error', null, { code: f.code })
         // A blob of ours, or one being fetched (#371), is settled there.
         if (f.id && files.error(f.id, f.code)) return
+        // A directory of ours (#832) the hub refused is not sent again until it changes.
+        if (f.id && settleDirectory(f.id, 'error')) return
         // An error naming a message of ours settles it: it is not sent again on the next connect.
         if (f.id && (refuseOut(f.id, f.code, clock.now()) || refuseReactionOut(f.id, f.code, clock.now()))) changed()
         return
@@ -825,7 +863,19 @@ export function createTeam({
       .find(i => i.msg.id === f.id)
     if (!item) {
       const rx = readReactionOutbox().find(r => r.id === f.id)
-      if (!rx) return
+      if (!rx) {
+        // A directory of ours (#832): acked counts only with the peer's own signature over it.
+        let state: DeliveryState = f.state
+        if (state === 'acked') {
+          const a = f.ack
+          const peer = Object.entries(readDirectoryState().sent).find(([, s]) => s.id === f.id)?.[0]
+          const ok =
+            !!a && a.by === peer && (await verify(a.by, ackBytes({ by: a.by, id: f.id, to: me.peer, ts: a.ts }), a.sig))
+          if (!ok) state = 'delivered'
+        }
+        settleDirectory(f.id, state)
+        return
+      }
       if (f.state === 'acked') {
         const a = f.ack
         const ok =
@@ -885,6 +935,8 @@ export function createTeam({
       log('team: dropped a message (a channel this board is not in, or a thread it does not fit)')
     } else if (msg.body.react) {
       keepReaction(msg, thread, held)
+    } else if (msg.body.agents) {
+      keepDirectory(msg, msg.body.agents)
     } else {
       keep(msg, thread, held)
       if (msg.body.file) files.kick()
@@ -893,7 +945,133 @@ export function createTeam({
     const ts = new Date(clock.now()).toISOString()
     const sig = await sign(me.pkcs8, ackBytes({ by: me.peer, id: msg.id, to: msg.from, ts }))
     frame({ t: 'ack', id: msg.id, ts, sig })
-    if (!msg.body.react) markAcked(msg.from, msg.id, clock.now())
+    if (!msg.body.react && !msg.body.agents) markAcked(msg.from, msg.id, clock.now())
+  }
+
+  /**
+   * The agent a text's leading `@Name.code` addresses among the recipients (#832): undefined when it
+   * has none, names nobody among them, or names a peer that sent no directory (plain words, as
+   * before #832); null when that peer's directory does not list the code.
+   */
+  function mentionAt(text: string, recipients: RosterPeer[]): { peer: string; code: string } | null | undefined {
+    const m = leadingMention(text)
+    const p = m ? peerOfWord(m.who, recipients) : null
+    if (!m || !p || !readDirectoryState().got[p.peer]) return undefined
+    return listed(p.peer, m.code) ? { peer: p.peer, code: m.code } : null
+  }
+
+  /** Whether a peer's directory, as it last came, lists a handle (#832). */
+  function listed(peer: string, code: string): boolean {
+    return !!readDirectoryState().got[peer]?.list.some(e => e.code === code)
+  }
+
+  /**
+   * A peer's directory (#832), kept when it is newer than the one kept: never in the inbox, never
+   * unread, never a notice. A peer whose key changed is kept too; it is shown only once trusted.
+   * A board that sends one reads them: one of ours that expired before it came by goes again now.
+   */
+  function keepDirectory(msg: Message, list: DirectoryEntry[]): void {
+    const kept = changeDirectoryState(d => {
+      const mine = d.sent[msg.from]
+      if (mine?.state === 'expired') {
+        mine.misses = 0
+        mine.at = 0
+      }
+      const have = d.got[msg.from]
+      if (have && compareMessageTime(have, msg) >= 0) return false
+      d.got[msg.from] = { list, ts: msg.ts, id: msg.id }
+      return true
+    })
+    if (!kept) return
+    if (list.length) withAgents().add(msg.from)
+    else withAgents().delete(msg.from)
+    audit('directory', msg.from, { id: msg.id, agents: list.length })
+    changed()
+  }
+
+  /** The peers whose directory, as kept, lists an agent (#832): read once, then kept up with here. */
+  let agentPeers: Set<string> | null = null
+  function withAgents(): Set<string> {
+    agentPeers ??= new Set(
+      Object.entries(readDirectoryState().got)
+        .filter(([, g]) => g.list.length > 0)
+        .map(([peer]) => peer),
+    )
+    return agentPeers
+  }
+
+  /** The peers whose directory went in this connection with no word from the hub yet: not sent twice in one. */
+  const directoryTries = new Set<string>()
+
+  /**
+   * The hub's word on a directory of ours (#832): `queued` it has it, `acked` the peer's board took
+   * it (an older board never acks: it drops a message with a field it does not know), `expired` it
+   * never did, `error` the hub refused it (settled as taken: not sent again until it changes). A
+   * frame for any other id changes nothing and writes nothing. True when it was one of ours.
+   */
+  function settleDirectory(id: string, word: DeliveryState | 'error'): boolean {
+    const hit = Object.entries(readDirectoryState().sent).find(([, s]) => s.id === id)
+    if (!hit) return false
+    const [peer] = hit
+    changeDirectoryState(d => {
+      const s = d.sent[peer]
+      if (!s || s.id !== id) return
+      if (word === 'acked' || word === 'error') {
+        s.state = 'acked'
+        s.misses = 0
+      } else if (word === 'expired') {
+        // The wait before the next try counts from here.
+        s.state = 'expired'
+        s.misses += 1
+        s.at = clock.now()
+      } else if (s.state === 'sent') s.state = 'queued'
+    })
+    if (word !== 'queued' && word !== 'delivered') directoryTries.delete(peer)
+    // A change made while this one was on its way goes now.
+    changed()
+    return true
+  }
+
+  /**
+   * One directory on its way to a peer at a time (#832): the next goes once the peer's board acked
+   * the last (or the hub refused it). One that expired unread goes again after a day per miss in a
+   * row, a week at most, so an older board, which drops it, gets at most that.
+   */
+  async function offerDirectory(peer: string, list: DirectoryEntry[]): Promise<boolean> {
+    if (!config() || !authed || !roster.some(p => p.peer === peer)) return false
+    if (readPins()[peer]?.status === 'changed') return false
+    const mark = directoryMark(list)
+    const have = readDirectoryState().sent[peer]
+    const now = clock.now()
+    if (have) {
+      // Past its own life at the hub, one with no last word counts as expired: a lost frame wedges nothing.
+      const stale = (have.state === 'queued' || have.state === 'sent') && now > have.at + DEFAULT_TTL_S * 1000 + 60_000
+      if (have.state === 'acked' && have.mark === mark) return false
+      if (have.state === 'queued' && !stale) return false
+      if (have.state === 'sent' && !stale && directoryTries.has(peer)) return false
+      if (have.state === 'expired' && now < have.at + Math.min(have.misses, 7) * 86_400_000) return false
+    } else if (!list.length) return false
+    const key = await ensureKey()
+    const msg: Message = {
+      v: TEAM_PROTOCOL,
+      id: crypto.randomUUID(),
+      from: key.pub,
+      to: peer,
+      kind: 'question',
+      reply_to: null,
+      ts: new Date(now).toISOString(),
+      ttl_s: DEFAULT_TTL_S,
+      body: { text: DIRECTORY_TEXT, agents: list },
+    }
+    const env = await sealEnvelope(key, msg)
+    if (!checkEnvelope(env).ok || !checkMessage(env.payload, env.from).ok) return false
+    changeDirectoryState(d => {
+      d.sent[peer] = { mark, list, id: msg.id, state: 'sent', at: now, misses: have?.misses ?? 0 }
+    })
+    directoryTries.add(peer)
+    frame({ t: 'send', env })
+    audit('directory_sent', peer, { id: msg.id, agents: list.length })
+    return true
   }
 
   /**
@@ -999,6 +1177,7 @@ export function createTeam({
         held,
         fresh: isNew,
         ...(msg.body.via && { via: msg.body.via }),
+        ...(msg.body.at && { at: msg.body.at }),
         ...(part && { work: part }),
       })
     }
@@ -1146,6 +1325,12 @@ export function createTeam({
       : roster.filter(p => p.peer === target.to)
     const skipped = team ? roster.filter(p => inThread(p) && changedKey(p)).map(p => p.name) : []
     if (!recipients.length) return { ok: false, error: 'nobody' }
+    // An agent addressed (#832): one of the recipients, by a handle its board listed for this one.
+    // Named in the call, or by the text's leading `@Name.code` (a held draft sent later says it so).
+    // Addressing is a pair's (#832): a team post names no agent, whatever its text says.
+    const at = team ? undefined : (target.at ?? mentionAt(body, recipients))
+    if (at === null || (at && !(recipients.some(p => p.peer === at.peer) && listed(at.peer, at.code))))
+      return { ok: false, error: 'agent' }
     // A reply (#370): a line of this thread, named on the wire as its sender's board named it.
     let replyTo: string | undefined
     if (target.replyTo !== undefined) {
@@ -1215,6 +1400,7 @@ export function createTeam({
         if (team) msgBody.post = postId
       }
       if (fileRef) msgBody.file = fileRef
+      if (rich && at?.peer === p.peer) msgBody.at = at.code
       // A shared thread's entry (#394): its fields to a board that keeps shared threads; any other
       // reads the text, the board's line when the entry had none.
       // The entry's own time (#564) only to a board that orders by it: an older one drops a body
@@ -1688,6 +1874,7 @@ export function createTeam({
           ...(hasAssistant(p) && { assistant: true }),
           ...(workOn() && hasWork(p) && { work: true }),
           ...(workOn() && hasWorkReshare(p) && { reshare: true }),
+          ...(withAgents().has(p.peer) && pins[p.peer]?.status !== 'changed' && { agents: true }),
         })),
         ...(hubFiles && { files: { max: hubFiles.max - NONCE_BYTES - TAG_BYTES } }),
       }
@@ -1809,6 +1996,22 @@ export function createTeam({
       return out
     },
     nameOf,
+    directories() {
+      if (!config()) return []
+      const pins = readPins()
+      const got = readDirectoryState().got
+      const out: PeerDirectory[] = []
+      for (const p of roster) {
+        const d = got[p.peer]
+        if (d?.list.length && pins[p.peer]?.status !== 'changed')
+          out.push({ peer: p.peer, name: p.name, agents: d.list, ts: d.ts })
+      }
+      return out
+    },
+    directorySent() {
+      return config() ? Object.keys(readDirectoryState().sent) : []
+    },
+    offerDirectory,
     addMembers(key, peers) {
       if (!config()) return { ok: false, error: 'off' }
       const all = readThreads()

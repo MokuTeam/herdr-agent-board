@@ -21,6 +21,7 @@ import {
   draftWhy,
   isChannel,
   keyParts,
+  type MentionChoice,
   safeLink,
   seenLine,
   type TeamRosterPeer,
@@ -83,6 +84,8 @@ export interface TeamThreadProps {
   onAddMembers?(key: string, peers: string[]): void
   /** The files that go with the next message (#371): uploading, ready or failed. */
   files?: readonly Attachment[]
+  /** The peers' agents that may be addressed as `@Name.code` (#832), for the box's list. */
+  mentions?: readonly MentionChoice[]
   /** Files picked, pasted or dropped; none given: the thread takes no files. */
   onAddFiles?(files: File[]): void
   onRemoveFile?(id: number): void
@@ -223,6 +226,7 @@ export function TeamThread(props: TeamThreadProps) {
           reply={reply}
           onCancelReply={() => props.onReply(null)}
           sendTitle={t('team.sendHint')}
+          {...(props.mentions && { mentions: props.mentions })}
           {...(files.length > 0 && {
             attachments: <Attachments id="team-attachments" list={files} onRemove={id => props.onRemoveFile?.(id)} />,
           })}

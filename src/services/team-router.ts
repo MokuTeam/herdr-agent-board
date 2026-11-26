@@ -11,15 +11,18 @@
 
 import { closeSync, constants, fstatSync, openSync, readSync, realpathSync, statSync } from 'node:fs'
 import { basename, join, sep } from 'node:path'
+import { archivedFiles, isArchived } from '../adapters/archive-store.ts'
 import { configDir, stateDir, uploadsDir } from '../adapters/paths.ts'
 import { addEntry, listEntries, updateEntry } from '../adapters/schedule-store.ts'
 import {
   audit,
   changeAgents,
+  changeDirectoryState,
   type OutboxItem,
   readAgents,
   readAllInbox,
   readAllOutbox,
+  readDirectoryState,
   readThreads,
   type SessionRef,
 } from '../adapters/team-store.ts'
@@ -35,6 +38,7 @@ import {
 } from '../core/team.ts'
 import {
   type AgentLimits,
+  addressedText,
   agentLimits,
   fileScanText,
   laneHit,
@@ -49,8 +53,11 @@ import {
   TEAM,
   threadKey,
   threadRef,
+  unreachableText,
 } from '../core/team-agents.ts'
+import { assignHandles, directoryFor, type ReachWorld, reach } from '../core/team-directory.ts'
 import { validEmoji } from '../core/team-reactions.ts'
+import type { DirectoryEntry } from '../core/team-wire.ts'
 import type { Config } from '../core/types.ts'
 import type { InboundEvent, PostResult, PostTarget, ReactResult, TeamService } from './team-hub.ts'
 
@@ -197,6 +204,19 @@ export interface TeamRouter {
   listen(session: SessionRef | null, caller?: SessionRef): { ok: true } | { ok: false; error: string }
   /** What the board calls a session (its card's name), never what a caller said; null when it has none. */
   sessionName(key: string): string | null
+  /** The directory a peer would get now (#832): every session a message from them could reach. */
+  directoryFor(peer: string): DirectoryEntry[]
+  /**
+   * What the owner's panel shows (#832): each session with a handle that someone of `peers` can
+   * reach now, its lane, and whom. Empty without a peer whose Agents are on: nothing is read then.
+   */
+  exposed(peers: string[]): { code: string; session: { key: string; name: string }; lane: string; reaches: string[] }[]
+  /**
+   * Sends each peer its directory where it changed (#832): to every peer with a session it can
+   * reach, and once more to one that had a list before (an empty list takes it back). Nothing is
+   * sent while no peer has Agents on and none ever got a list. Resolves how many went.
+   */
+  syncDirectory(): Promise<number>
 }
 
 interface Options {
@@ -232,6 +252,8 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
   const globalOff = (off: boolean): boolean => off || teamCfg(cfg).agents === false
   /** When a notice last went to a session for a thread, so the next one waits its gap. */
   const lastNotice = new Map<string, number>()
+  /** The directory look under way (#832): the next one waits for it. */
+  let syncing: Promise<number> = Promise.resolve(0)
   /** In-memory reaction timestamps per session for hourly rate limiting (#687). */
   const recentReacts = new Map<string, number[]>()
 
@@ -243,6 +265,41 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
   const asCalled = (session: SessionRef): SessionRef => {
     const item = items().find(i => i.key === session.key)
     return item?.service && item.name ? { key: session.key, name: item.name } : session
+  }
+
+  /**
+   * What the handles reach (#832): the board's sessions now, none archived or being archived (the
+   * archive's own records are read, not only the board's last look), their handles and the
+   * switches. With `assign`, each session in a lane shared with someone who has Agents on gets its
+   * handle, kept in team-directory.json from then on; without, only the handles there count.
+   */
+  function world(s: ReturnType<typeof readAgents>, assign = false): ReachWorld {
+    const archived = archivedFiles()
+    const sessions = items()
+      .filter(i => !isArchived(archived, i.key))
+      .map(i => ({ key: i.key, name: i.name || i.autoName || '', lane: i.category }))
+    let handles = readDirectoryState().handles
+    if (assign && !globalOff(s.off)) {
+      const open = Object.entries(s.peers).filter(([p, sw]) => isPeerId(p) && sw?.on)
+      // Every session on the board counts as there: one in a lane shared with nobody now keeps its handle.
+      const next = assignHandles(
+        sessions.filter(x => open.some(([, sw]) => sharesLane(sw, x.lane))),
+        handles,
+        new Set(sessions.map(x => x.key)),
+      )
+      if (JSON.stringify(next) !== JSON.stringify(handles)) {
+        changeDirectoryState(d => {
+          d.handles = next
+        })
+        handles = next
+      }
+    }
+    return { handles, off: globalOff(s.off), peers: s.peers, sessions }
+  }
+
+  function nameOf(key: string): string | null {
+    const item = items().find(i => i.key === key)
+    return item?.name || item?.autoName || null
   }
 
   /** The agent's posts kept here, one per post (a team post's copies count once), sent within `since`. */
@@ -479,12 +536,40 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
         audit('released', isTeam ? null : e.from, { thread: e.thread, why: 'gone' })
         handler = null
       }
+      const ref = threadRef(parts.scope, parts.id)
+      // Addressed to one of this board's agents by its handle (#832): the board's mapping, while the
+      // session's lane is shared with the sender; anything else goes to the listener with a note,
+      // never a guess, and never to an archived session. An empty board (its first look has not
+      // happened yet) proves nothing: the message is routed as any other.
+      // Only in a pair's thread: addressing is a pair's, weighed by this board's switches for that person.
+      if (e.at && !isTeam && known.length) {
+        const addr = { who, agent: e.via === 'agent', ref, team: isTeam, code: e.at }
+        const hit = reach(e.at, e.from, world(s))
+        if (hit) {
+          const name = nameOf(hit.key) ?? (hit.name || undefined)
+          const session: SessionRef = { key: hit.key, ...(name && { name }) }
+          // A topic nobody but the listener handles becomes the session's; one another session
+          // handles stays with it, and a general thread stays the listener's (what an older board
+          // sends lands there): the session only hears of this message.
+          const takes = parts.id !== GENERAL && (!handler || handler.key === s.listener?.key)
+          if (takes && handler?.key !== session.key) {
+            team.setThread(e.thread, { handler: session })
+            audit('assigned', isTeam ? null : e.from, { thread: e.thread, session: session.key, why: 'addressed' })
+          }
+          // A service agent (#819) finds the thread through the MCP's wait: nothing in the schedule.
+          if (!known.some(i => i.key === session.key && i.service))
+            notify(session, e.thread, (count: number) => addressedText({ ...addr, count }), t)
+          return
+        }
+        audit('unreachable', isTeam ? null : e.from, { thread: e.thread, code: e.at })
+        if (s.listener) notify(s.listener, e.thread, (count: number) => unreachableText({ ...addr, count }), t)
+        return
+      }
       const target = handler ?? s.listener
       if (!target) return
       // A service agent (#819) has no pane to type a notice into: it asks for its threads through
       // the MCP (`team` wait), which finds them by their unread count. Nothing goes in the schedule.
       if (known.some(i => i.key === target.key && i.service)) return
-      const ref = threadRef(parts.scope, parts.id)
       const base = { who, agent: e.via === 'agent', ref, team: isTeam, route: !handler }
       notify(target, e.thread, (count: number) => noticeText({ ...base, count }), t)
     },
@@ -518,10 +603,47 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       return r
     },
 
-    sessionName(key) {
-      const item = items().find(i => i.key === key)
-      return item?.name || item?.autoName || null
+    sessionName: nameOf,
+
+    directoryFor(peer) {
+      return directoryFor(peer, world(readAgents()))
     },
+
+    exposed(peers) {
+      const s = readAgents()
+      if (globalOff(s.off) || !peers.some(p => s.peers[p]?.on)) return []
+      const w = world(s)
+      return w.sessions.flatMap(x => {
+        const code = w.handles[x.key]
+        const reaches = code ? peers.filter(p => reach(code, p, w)) : []
+        return code && reaches.length ? [{ code, session: { key: x.key, name: x.name }, lane: x.lane, reaches }] : []
+      })
+    },
+
+    syncDirectory() {
+      // One at a time: a look that starts while one is under way waits for it.
+      const next = syncing.then(syncOnce, syncOnce)
+      syncing = next.catch(() => 0)
+      return next
+    },
+  }
+
+  async function syncOnce(): Promise<number> {
+    const view = team.view()
+    // An empty board proves nothing (its first look has not happened yet): no list shrinks for it.
+    if (!view || !items().length) return 0
+    const s = readAgents()
+    const open = !globalOff(s.off) && Object.entries(s.peers).some(([p, sw]) => isPeerId(p) && sw?.on)
+    const sent = new Set(team.directorySent())
+    if (!open && !sent.size) return 0
+    const w = world(s, true)
+    let n = 0
+    for (const p of view.roster) {
+      const list = directoryFor(p.peer, w)
+      if (!list.length && !sent.has(p.peer)) continue
+      if (await team.offerDirectory(p.peer, list)) n++
+    }
+    return n
   }
 
   /**
