@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
+import { clockIn, localZone } from '../../src/core/time.ts'
 import { type Sandbox, sandbox, until } from '../support/sandbox.ts'
 
 setDefaultTimeout(15_000)
@@ -123,6 +124,27 @@ describe('startScheduler', () => {
     assert.ok(cron && cron.next > Date.now())
     assert.equal(cron.runs, 1)
     assert.equal(cron.claim, undefined)
+  })
+
+  test("#806 a cron entry's next run is on the owner's clock (time.zone); without one, on this computer's", async () => {
+    const other = localZone() === 'Pacific/Kiritimati' ? 'Asia/Yerevan' : 'Pacific/Kiritimati'
+    const zoned = await sandbox()
+    herdrWith(zoned, 'idle')
+    put(zoned, { id: 'dddd01', text: 'monitor', cron: '57 7 * * *', next: thisMinute() })
+    await scheduler(zoned, { time: { zone: other } })
+    await until(() => runs(zoned).length === 1)
+    const z = read(zoned, 'dddd01')
+    assert.ok(z && z.next > Date.now())
+    assert.deepEqual(clockIn(z.next, other), [7, 57, 0])
+
+    const plain = await sandbox()
+    herdrWith(plain, 'idle')
+    put(plain, { id: 'dddd02', text: 'monitor', cron: '57 7 * * *', next: thisMinute() })
+    await scheduler(plain)
+    await until(() => runs(plain).length === 1)
+    const p = read(plain, 'dddd02')
+    assert.ok(p && p.next > Date.now())
+    assert.deepEqual([new Date(p.next).getHours(), new Date(p.next).getMinutes()], [7, 57])
   })
 
   test('on time, a working session gets it queued into its turn; a dialog and a draft still hold it', async () => {

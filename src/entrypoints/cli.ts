@@ -209,7 +209,9 @@ import {
   fromNow,
   parseEveryRest,
   parseRemindRest,
+  scheduleParts,
   stamp,
+  waitsPart,
 } from '../core/schedule-cli.ts'
 import { MAX_REPORT, promptOf, type ScheduleEntry, type SessionRef } from '../core/schedule-rules.ts'
 import { findTodo, numberTodos, sortTodos, type Todo, todoKey, todosConfig, todosOf } from '../core/todos.ts'
@@ -220,6 +222,7 @@ import { wakeConfig } from '../core/wake/config.ts'
 import { parsePiResume, piResumeArgv, piResumeEnv } from '../core/wake/pi.ts'
 import { keyFor, type TopicSnapshot } from '../core/wake/topics.ts'
 import { type WatchEntry, watchesConfig } from '../core/watches.ts'
+import { scheduleZone } from '../core/when.ts'
 import { checkWake, wakeAnswers, wakeSleepsAgy } from '../services/actions.ts'
 import {
   askArchive,
@@ -332,6 +335,8 @@ const deps = defaultDeps(cfg)
  * sessions. Without `node` it is `cfg` itself and nothing more is read. Never written back.
  */
 const gate = withMasterFlags(cfg, nodeConfig(cfg.node) ? readMasterFlags() : null)
+/** The owner's zone for the schedule's times (#806, core/when.ts scheduleZone); undefined: this computer's. */
+const zone = scheduleZone(cfg.time)
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -456,6 +461,49 @@ async function tryNodeRead(cmd: 'cats' | 'list', fallbackNote: string): Promise<
   }
   console.error(fallbackNote)
   return false
+}
+
+/**
+ * The entries the master holds for a session of this node (#806, `board schedule`): its lines, and a
+ * note for stderr when it could not say (unreachable, or a master from before it answered this).
+ * Asked only while `node` is configured.
+ */
+async function masterSchedule(key: string): Promise<{ lines: string[]; note: string }> {
+  const { callBoard } = await import('./node-call.ts')
+  const answer = await callBoard(cfg.port)({ cmd: 'schedule', argv: [], session: key, lane: null, files: [] })
+  if (answer?.state === 'answered' && answer.code === 0) return { lines: answer.out, note: '' }
+  if (
+    answer?.state === 'answered' &&
+    answer.code === UPLINK_REFUSED &&
+    answer.err.some(l => /is not taken from a node/i.test(l))
+  )
+    return {
+      lines: [],
+      note: "note: the board's computer runs an older version and does not list the entries it holds for this session",
+    }
+  if (answer?.state === 'answered') return { lines: [], note: answer.err.join(' ') }
+  return {
+    lines: [],
+    note: "note: the board's computer is not reachable: the entries it holds for this session are not listed",
+  }
+}
+
+/** `board unschedule all` on a node (#806): the master's entries for the session go too; its line, or why not. */
+async function masterUnscheduleAll(key: string): Promise<void> {
+  const { callBoard } = await import('./node-call.ts')
+  const answer = await callBoard(cfg.port)({
+    id: randomUUID(),
+    cmd: 'unschedule',
+    argv: ['all'],
+    session: key,
+    lane: null,
+    files: [],
+  })
+  if (answer?.state === 'answered' && answer.code === 0) for (const l of answer.out) console.log(l)
+  else if (answer?.state === 'answered' && answer.code === UPLINK_REFUSED)
+    console.error("note: the board's computer runs an older version and kept the entries it holds for this session")
+  else if (answer?.state === 'answered') for (const l of answer.err) console.error(l)
+  else console.error("note: the board's computer is not reachable: the entries it holds for this session stay there")
 }
 
 /**
@@ -836,17 +884,11 @@ const wakeName = (): string => (currentWakeMode(cfg).kind === 'new' ? 'wake' : '
 function entryLine(e: ScheduleEntry, now: number, withSession: boolean, parked = false): string {
   const parts =
     e.kind === 'restart' || e.kind === 'sleep'
-      ? [e.id, `${e.kind}, asked ${stamp(e.created ?? e.next)}`, restartState(e)]
-      : [
-          e.id,
-          `${stamp(e.next)} (${fromNow(e.next, now)})`,
-          e.cron ? `every "${e.cron}"` : 'once',
-          e.idle ? 'when free' : 'on time',
-        ]
+      ? [e.id, `${e.kind}, asked ${stamp(e.created ?? e.next, zone)}`, restartState(e)]
+      : scheduleParts(e, now, zone)
   if (withSession) parts.push(e.name || e.key)
   if (parked) parts.push('parked in the archive')
-  if (e.pendingSince && e.kind !== 'restart' && e.kind !== 'sleep')
-    parts.push(`due, waits for the session since ${stamp(Number(e.pendingSince))}`)
+  if (e.kind !== 'restart' && e.kind !== 'sleep' && waitsPart(e)) parts.push(waitsPart(e, zone))
   if (e.text) parts.push(clip(e.text, 80))
   return parts.join(' · ')
 }
@@ -1538,14 +1580,14 @@ async function main(): Promise<void> {
       break
     }
     case 'remind': {
-      const { at, text: msg } = parseRemindRest(rest, now, { idle })
+      const { at, text: msg } = parseRemindRest(rest, now, { idle, zone })
       const e = addEntry({ ...(await entryFor(s)), ...mode(), text: msg, at, next: at, by: 'agent' })
-      return console.log(formatRemindOk(e.id, at, now, idle, msg, await schedulerNote()))
+      return console.log(formatRemindOk(e.id, at, now, idle, msg, await schedulerNote(), zone))
     }
     case 'every': {
-      const { cron, next, text: msg } = parseEveryRest(rest, now, { idle })
+      const { cron, next, text: msg } = parseEveryRest(rest, now, { idle, zone })
       const e = addEntry({ ...(await entryFor(s)), ...mode(), text: msg, cron: cron.expr, next, by: 'agent' })
-      return console.log(formatEveryOk(e.id, cron.expr, next, now, idle, msg, await schedulerNote()))
+      return console.log(formatEveryOk(e.id, cron.expr, next, now, idle, msg, await schedulerNote(), zone))
     }
     case 'restart':
       return restart(s)
@@ -1554,10 +1596,17 @@ async function main(): Promise<void> {
       const list = listEntries().filter(e => e.key === s.key)
       const parked = getArchived(s.key)?.held ?? []
       const watches = listWatches().filter(w => w.key === s.key)
-      if (!list.length && !parked.length && !watches.length) return console.log('nothing scheduled for this session')
+      // On a node (#806): what the master holds for this session too (a handover brought it there).
+      const held = nodeConfig(cfg.node) ? await masterSchedule(s.key) : null
+      if (!list.length && !parked.length && !watches.length && !held?.lines.length) {
+        if (held?.note) console.error(held.note)
+        return console.log('nothing scheduled for this session')
+      }
       for (const e of list) console.log(entryLine(e, now, false))
+      for (const l of held?.lines ?? []) console.log(l)
       for (const l of await watchLines(watches, false)) console.log(l)
       for (const l of parkedLines(parked, now, false)) console.log(l)
+      if (held?.note) console.error(held.note)
       return
     }
     case 'todo':
@@ -1570,7 +1619,10 @@ async function main(): Promise<void> {
       const mine = listEntries().filter(e => e.key === s.key)
       for (const e of mine) removeEntry(e.id)
       const n = mine.length + dropHeld(s.key).length + endWatches(s.key, await takenOver(s)).length
-      return console.log(`ok · removed ${n} ${n === 1 ? 'entry' : 'entries'}`)
+      console.log(`ok · removed ${n} ${n === 1 ? 'entry' : 'entries'}`)
+      // On a node (#806): the master's for this session too.
+      if (nodeConfig(cfg.node)) await masterUnscheduleAll(s.key)
+      return
     }
     default:
       throw new Error(`unknown command "${cmd}". ${usageText()}`)

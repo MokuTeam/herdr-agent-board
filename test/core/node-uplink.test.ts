@@ -91,9 +91,13 @@ test('what the master takes, what a node keeps, and what is never run for a node
     'remind',
     'every',
     'unschedule',
+    'schedule',
     'spawn',
     'ask',
   ])
+  // A node's `board schedule` (#806) is a read: neither kept nor remembered.
+  expect(isKeptCall('schedule', [])).toBe(false)
+  expect(isRememberedCall('schedule', [])).toBe(false)
   expect(UPLINK_COMMANDS.has('spend')).toBe(false)
   expect([...KEPT_SUBS].sort()).toEqual(['ask', 'done', 'new', 'post', 'set', 'unwatch', 'watch'])
   expect([...TIME_WRITE_SUBS].sort()).toEqual(['add', 'edit', 'import', 'move', 'post', 'restore', 'rm', 'unpost'])

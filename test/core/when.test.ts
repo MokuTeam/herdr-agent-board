@@ -1,7 +1,16 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { translator } from '../../src/core/i18n/translator.ts'
-import { countRuns, nextRun, parseCron, parseDuration, parseWhen, shortestGap } from '../../src/core/when.ts'
+import { localZone } from '../../src/core/time.ts'
+import {
+  countRuns,
+  nextRun,
+  parseCron,
+  parseDuration,
+  parseWhen,
+  scheduleZone,
+  shortestGap,
+} from '../../src/core/when.ts'
 import { capital, dayLabel, shortWhen, span } from '../../src/core/when-format.ts'
 
 // Local time throughout: Thursday 15 October 2026, 14:00.
@@ -151,4 +160,93 @@ test('scheduled times in words', () => {
   assert.match(shortWhen(local(2026, 9, 16, 9, 0), t, now), /^Fri 9:00\s?AM$/)
   assert.match(shortWhen(local(2026, 10, 20, 9, 0), t, now), /Nov 20|20 Nov/)
   assert.equal(dayLabel(local(2026, 9, 16, 9, 0), translator('ru'), now), 'завтра')
+})
+
+// #806: a master on a server in UTC reads the owner's clock (config.json's time.zone). Instants are
+// written in UTC, so these hold on a computer in any zone.
+const Z = (y: number, mo: number, d: number, h = 0, mi = 0) => Date.UTC(y, mo, d, h, mi)
+
+test("#806 cron in the owner's zone: the hour, the window and the weekday on its clock", () => {
+  const after = Z(2026, 10, 25, 12, 0) // Wed 25 Nov, 16:00 in Yerevan (UTC+4, no DST)
+  assert.equal(nextRun('57 7 * * *', after, 'Asia/Yerevan'), Z(2026, 10, 26, 3, 57))
+  assert.equal(nextRun('2 23 * * *', after, 'Asia/Yerevan'), Z(2026, 10, 25, 19, 2))
+  // 8-22 there is 04-18 UTC: after the last run of the day, the first one of the next.
+  assert.equal(nextRun('2,12,22,32,42,52 8-22 * * *', Z(2026, 10, 25, 18, 52), 'Asia/Yerevan'), Z(2026, 10, 26, 4, 2))
+  // Fri 18:30 there: 18:00 has gone, the next weekday run is Monday's 12:00.
+  assert.equal(nextRun('0 12,15,18 * * 1-5', Z(2026, 10, 27, 14, 30), 'Asia/Yerevan'), Z(2026, 10, 30, 8, 0))
+  // Sat 01:00 in Yerevan is still Friday in UTC: the day is the zone's.
+  assert.equal(nextRun('0 9 * * 6', Z(2026, 10, 27, 21, 0), 'Asia/Yerevan'), Z(2026, 10, 28, 5, 0))
+  assert.equal(nextRun('0 11 2 * *', after, 'Asia/Yerevan'), Z(2026, 11, 2, 7, 0))
+  assert.equal(nextRun('0 0 30 2 *', after, 'Asia/Yerevan'), null)
+})
+
+test('#806 cron in a zone with DST: the skipped hour runs after the gap, the repeated one once', () => {
+  // New York springs forward on Sun 8 Mar 2026 at 02:00: 02:30 is not shown that day.
+  assert.equal(nextRun('30 2 * * *', Z(2026, 2, 8, 5, 0), 'America/New_York'), Z(2026, 2, 8, 7, 30))
+  assert.equal(nextRun('30 2 * * *', Z(2026, 2, 8, 7, 30), 'America/New_York'), Z(2026, 2, 9, 6, 30))
+  // It falls back on Sun 1 Nov 2026: 01:30 is shown twice, the run is the first, then the next day's.
+  assert.equal(nextRun('30 1 * * *', Z(2026, 10, 1, 4, 0), 'America/New_York'), Z(2026, 10, 1, 5, 30))
+  assert.equal(nextRun('30 1 * * *', Z(2026, 10, 1, 5, 30), 'America/New_York'), Z(2026, 10, 2, 6, 30))
+  // Every hour goes on through both changes, never twice at one instant nor backwards.
+  let at = Z(2026, 10, 1, 3, 0)
+  for (let i = 0; i < 6; i++) {
+    const next = nextRun('0 * * * *', at, 'America/New_York') as number
+    assert.ok(next > at && next - at <= 2 * 3600e3)
+    at = next
+  }
+})
+
+test("#806 one-off times in the owner's zone: a time of day, a day, a weekday, a date", () => {
+  const at = Z(2026, 10, 25, 12, 0) // Wed 16:00 in Yerevan
+  assert.equal(parseWhen('at 15:30', at, 'Asia/Yerevan'), Z(2026, 10, 26, 11, 30))
+  assert.equal(parseWhen('at 17:00', at, 'Asia/Yerevan'), Z(2026, 10, 25, 13, 0))
+  assert.equal(parseWhen('tomorrow 9:00', at, 'Asia/Yerevan'), Z(2026, 10, 26, 5, 0))
+  assert.equal(parseWhen('fri 17:00', at, 'Asia/Yerevan'), Z(2026, 10, 27, 13, 0))
+  assert.equal(parseWhen('wed 9:00', at, 'Asia/Yerevan'), Z(2026, 11, 2, 5, 0))
+  assert.equal(parseWhen('2026-12-01 09:00', at, 'Asia/Yerevan'), Z(2026, 11, 1, 5, 0))
+  assert.equal(parseWhen('2026-12-01', at, 'Asia/Yerevan'), Z(2026, 11, 1, 5, 0))
+  assert.equal(parseWhen('2026-02-30 09:00', at, 'Asia/Yerevan'), null)
+  // 23:30 UTC is already the 26th in Yerevan: "today" and "at 9:00" are that day's.
+  const late = Z(2026, 10, 25, 23, 30)
+  assert.equal(parseWhen('at 9:00', late, 'Asia/Yerevan'), Z(2026, 10, 26, 5, 0))
+  assert.equal(parseWhen('today 20:00', late, 'Asia/Yerevan'), Z(2026, 10, 26, 16, 0))
+  // What carries its own instant does not move.
+  assert.equal(parseWhen('in 30m', at, 'Asia/Yerevan'), at + 30 * 60e3)
+  assert.equal(parseWhen('2026-12-01T09:00Z', at, 'Asia/Yerevan'), Z(2026, 11, 1, 9, 0))
+})
+
+test("#806 scheduleZone: time.zone when it is a zone and not the computer's own, else none", () => {
+  const other = localZone() === 'Pacific/Kiritimati' ? 'Asia/Yerevan' : 'Pacific/Kiritimati'
+  assert.equal(scheduleZone({ zone: other }), other)
+  assert.equal(scheduleZone({ zone: ` ${other} `, on: false }), other)
+  // No zone of its own: the computer's local time, down the code it took before.
+  for (const none of [
+    undefined,
+    null,
+    true,
+    'Asia/Yerevan',
+    {},
+    { zone: '' },
+    { zone: 3 },
+    { zone: 'Nowhere/Atlantis' },
+  ])
+    assert.equal(scheduleZone(none), undefined)
+  assert.equal(scheduleZone({ zone: localZone() }), undefined)
+})
+
+test("#806 the zone walk agrees with the local one on the computer's own zone", () => {
+  const zone = localZone()
+  const crons = [
+    '57 7 * * *',
+    '2,12,22,32,42,52 8-22 * * *',
+    '0 12,15,18 * * 1-5',
+    '0 11 2 * *',
+    '30 2 * * *',
+    '0 0 29 2 *',
+  ]
+  for (const cron of crons)
+    for (let t = now; t < now + 400 * 86400e3; t += 37 * 86400e3 + 3_600_000)
+      assert.equal(nextRun(cron, t, zone), nextRun(cron, t), `${cron} after ${new Date(t).toISOString()}`)
+  for (const text of ['at 15:30', 'at 13:00', 'tomorrow 9:00', 'fri 17:00', 'sun', '2026-12-01 09:00', '2026-02-30'])
+    assert.equal(parseWhen(text, now, zone), parseWhen(text, now), text)
 })

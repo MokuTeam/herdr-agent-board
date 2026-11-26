@@ -1390,7 +1390,13 @@ describe("the master's side", () => {
       from: { key: '@server-1:s-1', name: 'NodeOne' },
     })
     expect(byId('un-other')[0]?.code).toBe(126)
-    expect(byId('un-all')[0]?.code).toBe(126)
+    // All of the calling session's (#806): none held here for it, and nothing of anyone else's goes.
+    expect(byId('un-all')[0]).toEqual({
+      code: 0,
+      out: ["ok · removed 0 entries held by the board's computer"],
+      err: [],
+    })
+    expect(listEntries().some(e => e.id === otherEntry.id)).toBe(true)
 
     // Caller can unschedule its own created entry over the uplink.
     const createdId = created[0]?.id as string
@@ -1418,5 +1424,94 @@ describe("the master's side", () => {
     expect(posted2[0]?.code).toBe(0)
     expect(posted2[0]?.out[0]).toContain(`ok · removed ${createdId}`)
     expect(listEntries().some(e => e.id === createdId)).toBe(false)
+  })
+
+  test("#806 a node's board schedule lists what this board holds for that session, and unschedule reaches it", async () => {
+    const dir = isolatedHome()
+    const store = createDeviceStore({ dir: join(dir, 'nodes') })
+    const mine = { key: '@server-1:s-1', session: 's-1', name: 'NodeOne', column: 'work', status: 'idle' } as Item
+    const peer = { key: '@server-1:s-2', session: 's-2', name: 'NodeTwo', column: 'work', status: 'idle' } as Item
+    const masters = { key: N1, session: N1, name: 'Atlas', pane: 'w1:p1', column: 'idle', status: 'idle' } as Item
+    const items = [mine, peer, masters]
+    // As a handover leaves them: keyed by the node's prefix, no `from`.
+    const next = Date.UTC(2030, 0, 2, 3, 57)
+    const daily = addEntry({
+      key: mine.key,
+      name: 'NodeOne',
+      text: 'monitor cycle',
+      cron: '57 7 * * *',
+      next,
+      by: 'agent',
+    })
+    const once = addEntry({
+      key: mine.key,
+      name: 'NodeOne',
+      text: 'call back',
+      at: next,
+      next,
+      idle: true,
+      by: 'agent',
+    })
+    const theirs = addEntry({ key: peer.key, name: 'NodeTwo', text: 'not yours', at: next, next, by: 'agent' })
+    const own = addEntry({ key: N1, name: 'Atlas', text: 'the master s own', at: next, next, by: 'agent' })
+
+    const run = async (sent: Record<string, unknown>[]): Promise<Map<string, UplinkResult>> => {
+      const got = new Map<string, UplinkResult>()
+      const link = standIn((path, init) => {
+        if (path === '/api/node/uplink') return streamOf(sent, init.signal)
+        got.set(path.split('/').pop() as string, JSON.parse(String(init.body)) as UplinkResult)
+        return new Response('{}')
+      })
+      const runner = createUplinkRunner({
+        links: link.links,
+        find: key => items.find(i => i.key === key),
+        items: () => items,
+        cfg: { time: { zone: 'Asia/Yerevan' }, node: { id: 'server-1', port: 12430 } } as never,
+        log: () => {},
+        store,
+      })
+      link.changed('online')
+      await until(() => got.size === sent.length, 5000)
+      await runner.close()
+      return got
+    }
+
+    const listed = await run([
+      { id: 'sc-1', cmd: 'schedule', argv: [], session: 's-1', lane: null },
+      { id: 'sc-x', cmd: 'schedule', argv: [], session: 's-3', lane: null },
+    ])
+    expect(listed.get('sc-1')?.code).toBe(0)
+    // On the owner's clock: 03:57 UTC is 07:57 in Yerevan.
+    expect(
+      listed
+        .get('sc-1')
+        ?.out.map(l => l.replace(/\(in [^)]+\)/, '(in …)'))
+        .sort(),
+    ).toEqual(
+      [
+        `${daily.id} · Wed 2030-01-02 07:57 (in …) · every "57 7 * * *" · on time · monitor cycle`,
+        `${once.id} · Wed 2030-01-02 07:57 (in …) · once · when free · call back`,
+      ].sort(),
+    )
+    // A session it holds nothing for: no line, nothing of the others'.
+    expect(listed.get('sc-x')).toEqual({ code: 0, out: [], err: [] })
+
+    const removed = await run([
+      { id: 'un-1', cmd: 'unschedule', argv: [once.id], session: 's-1', lane: null },
+      { id: 'un-x', cmd: 'unschedule', argv: [theirs.id], session: 's-1', lane: null },
+    ])
+    expect(removed.get('un-1')?.out[0]).toContain(`ok · removed ${once.id}`)
+    expect(removed.get('un-x')?.code).toBe(126)
+    const all = await run([{ id: 'un-all-1', cmd: 'unschedule', argv: ['all'], session: 's-1', lane: null }])
+    expect(all.get('un-all-1')).toEqual({
+      code: 0,
+      out: ["ok · removed 1 entry held by the board's computer"],
+      err: [],
+    })
+    expect(
+      listEntries()
+        .map(e => e.id)
+        .sort(),
+    ).toEqual([theirs.id, own.id].sort())
   })
 })

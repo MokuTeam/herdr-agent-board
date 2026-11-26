@@ -765,6 +765,31 @@ test('#698 shared-state commands from a node reach master state, enforce trust b
   expect(unsched.stdout).toContain(`ok · removed ${remId}`)
   expect(existsSync(join(masterSchedDir, `${remId}.json`))).toBe(false)
 
+  // #806: what the master holds for this node session, keyed @<node>:<session> as a handover leaves
+  // it, is listed by board schedule on the node beside its own, and board unschedule all reaches it.
+  writeFileSync(
+    join(masterSchedDir, 'ab806c.json'),
+    JSON.stringify({
+      id: 'ab806c',
+      key: `@${node.id}:${S}`,
+      name: 'node session',
+      text: 'handed over',
+      cron: '57 7 * * *',
+      next: Date.now() + 3 * 3_600_000,
+      created: Date.now(),
+      by: 'agent',
+    }),
+  )
+  const sched = await nodeCli(['schedule'])
+  expect(sched.code, sched.stderr).toBe(0)
+  expect(sched.stdout).toContain(`${localRemId} · `)
+  expect(sched.stdout).toMatch(/^ab806c · .+ · every "57 7 \* \* \*" · on time · handed over$/m)
+  const unAll = await nodeCli(['unschedule', 'all'])
+  expect(unAll.code, unAll.stderr).toBe(0)
+  expect(unAll.stdout).toContain("ok · removed 1 entry held by the board's computer")
+  expect(existsSync(join(masterSchedDir, 'ab806c.json'))).toBe(false)
+  expect(existsSync(join(nodeSchedDir, `${localRemId}.json`))).toBe(false)
+
   // When master is offline: cal fails as unreachable; same-node remind, list, cats, spend, decisions work locally.
   await node.proxy.cut('drop')
   await pair.waitDevice(node.id, d => d.link?.state === 'offline', 10_000)

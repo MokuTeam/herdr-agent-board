@@ -11,7 +11,7 @@ import { type CardDecision, cardDecisionOf } from './decisions.ts'
 import { hasUnprintable } from './team.ts'
 import { FILE_MAX_BYTES, FILES_MAX } from './work-threads.ts'
 
-/** The commands a master takes from a node: `board thread` (stage 1, 10 item 6), `board send` (#619), `board agents` (#628), `board time` (#644), shared-state commands (#698), spawn-agent's start (#760, `spawn`), and `board ask` with options (#781, `ask`). */
+/** The commands a master takes from a node: `board thread` (stage 1, 10 item 6), `board send` (#619), `board agents` (#628), `board time` (#644), shared-state commands (#698), spawn-agent's start (#760, `spawn`), `board ask` with options (#781, `ask`), and `board schedule` (#806, the entries the master holds for the calling session). */
 export const UPLINK_COMMANDS: ReadonlySet<string> = new Set([
   'thread',
   'threads',
@@ -29,6 +29,7 @@ export const UPLINK_COMMANDS: ReadonlySet<string> = new Set([
   'remind',
   'every',
   'unschedule',
+  'schedule',
   'spawn',
   'ask',
 ])

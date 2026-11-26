@@ -1,6 +1,12 @@
 // Times for the board's scheduler, in local time: when a one-off reminder is due ("in 30m",
 // "at 15:30", "tomorrow 9:00", "fri 17:00", "2026-10-20 14:00") and when a cron schedule
 // (5 fields, or @daily and the like) runs next.
+//
+// Local time is the owner's (#806): config.json's `time.zone` where it names a zone other than the
+// computer's (scheduleZone), so a board on a server in UTC keeps the owner's clock and a master
+// handover never shifts a schedule. Without one, or with the computer's own zone, the computer's
+// local time, as before: the same code as before, no zone is looked up.
+import { clockIn, dateIn, instantIn, knownZone, localZone } from './time.ts'
 
 type Unit = 's' | 'm' | 'h' | 'd' | 'w'
 type Clock = { h: number; min: number }
@@ -65,11 +71,31 @@ const at = (base: Date, dayOffset: number, { h, min }: Clock): number =>
   new Date(base.getFullYear(), base.getMonth(), base.getDate() + dayOffset, h, min).getTime()
 
 /**
+ * The zone the schedule reads its times in (#806): `time.zone` of config.json when it is a zone
+ * Intl knows and not the computer's own; undefined (the computer's local time) otherwise.
+ */
+export function scheduleZone(time: unknown): string | undefined {
+  if (typeof time !== 'object' || time === null) return undefined
+  const raw = (time as { zone?: unknown }).zone
+  const zone = typeof raw === 'string' ? raw.trim() : ''
+  return zone && knownZone(zone) && zone !== localZone() ? zone : undefined
+}
+
+/** A date by its year, month (0-11) and day, which may run past the month's end, as YYYY-MM-DD. */
+const dateOf = (y: number, mo: number, d: number): string => new Date(Date.UTC(y, mo, d)).toISOString().slice(0, 10)
+
+/** The date of an instant in a zone: year, month (0-11), day and weekday. */
+function dayIn(ms: number, zone: string): { y: number; mo: number; d: number; dow: number } {
+  const [y, m, d] = dateIn(ms, zone).split('-').map(Number) as [number, number, number]
+  return { y, mo: m - 1, d, dow: new Date(Date.UTC(y, m - 1, d)).getUTCDay() }
+}
+
+/**
  * When a reminder is due, in ms, or null when `text` is not a time. A time of day alone is its
  * next occurrence (tomorrow when it has passed today); everything else is taken as written, so
  * the caller checks that it is in the future.
  */
-export function parseWhen(text: string, now = Date.now()): number | null {
+export function parseWhen(text: string, now = Date.now(), zone?: string): number | null {
   const s = String(text ?? '')
     .toLowerCase()
     .replace(/\s+/g, ' ')
@@ -91,6 +117,10 @@ export function parseWhen(text: string, now = Date.now()): number | null {
   if (m) {
     const clock = m[4] ? clockOf(m[4], true) : MORNING
     if (!clock) return null
+    if (zone) {
+      const date = dateOf(Number(m[1]), Number(m[2]) - 1, Number(m[3]))
+      return date === `${m[1]}-${m[2]}-${m[3]}` ? instantIn(date, [clock.h, clock.min, 0], zone) : null
+    }
     const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), clock.h, clock.min)
     // 2026-02-30 rolls over in Date: not a date.
     return d.getMonth() === Number(m[2]) - 1 && d.getDate() === Number(m[3]) ? d.getTime() : null
@@ -111,16 +141,22 @@ export function parseWhen(text: string, now = Date.now()): number | null {
     prev = word
   }
   const base = new Date(now)
+  // In the owner's zone (#806): the same days and clocks, read on that zone's calendar.
+  const zoned = zone ? dayIn(now, zone) : null
+  const on = (dayOffset: number, c: Clock): number =>
+    zoned && zone
+      ? instantIn(dateOf(zoned.y, zoned.mo, zoned.d + dayOffset), [c.h, c.min, 0], zone)
+      : at(base, dayOffset, c)
   if (day === null) {
     if (!clock) return null
-    const today = at(base, 0, clock)
-    return today > now ? today : at(base, 1, clock)
+    const today = on(0, clock)
+    return today > now ? today : on(1, clock)
   }
-  if (typeof day === 'number') return day === 0 && !clock ? null : at(base, day, clock ?? MORNING)
+  if (typeof day === 'number') return day === 0 && !clock ? null : on(day, clock ?? MORNING)
   // A weekday: the next one, today included while its time is still ahead.
-  const ahead = (day.dow - base.getDay() + 7) % 7
-  const time = at(base, ahead, clock ?? MORNING)
-  return time > now ? time : at(base, ahead + 7, clock ?? MORNING)
+  const ahead = (day.dow - (zoned ? zoned.dow : base.getDay()) + 7) % 7
+  const time = on(ahead, clock ?? MORNING)
+  return time > now ? time : on(ahead + 7, clock ?? MORNING)
 }
 
 // ---------------------------------------------------------------- cron
@@ -231,10 +267,12 @@ const HORIZON_MS = 8 * 366 * 86400e3
 
 /**
  * The first run strictly after `after` (ms), or null when it never runs (Feb 30). `cron` may be
- * the text of a schedule too (as stored with a scheduled entry).
+ * the text of a schedule too (as stored with a scheduled entry). `zone`: read in that zone
+ * (scheduleZone), else in the computer's local time.
  */
-export function nextRun(cron: Cron | string, after: number): number | null {
+export function nextRun(cron: Cron | string, after: number, zone?: string): number | null {
   const c = typeof cron === 'string' ? parseCron(cron) : cron
+  if (zone) return nextRunIn(c, after, zone)
   const d = new Date(after)
   d.setSeconds(0, 0)
   d.setMinutes(d.getMinutes() + 1)
@@ -259,13 +297,51 @@ export function nextRun(cron: Cron | string, after: number): number | null {
   return null
 }
 
+/**
+ * nextRun in a zone (#806): the same walk on the zone's wall clock, kept in a UTC date (which has no
+ * DST to stall on), each match turned into its instant. A time the zone skips (the spring's gap)
+ * runs once the gap is over, as instantIn places it; one the zone shows twice (the autumn's) runs
+ * the first time.
+ */
+function nextRunIn(c: Cron, after: number, zone: string): number | null {
+  const today = dayIn(after, zone)
+  const [h, min] = clockIn(after, zone)
+  const d = new Date(Date.UTC(today.y, today.mo, today.d, h, min + 1))
+  const start = d.getTime()
+  while (d.getTime() - start < HORIZON_MS) {
+    if (!c.month.has(d.getUTCMonth() + 1)) {
+      d.setUTCMonth(d.getUTCMonth() + 1, 1)
+      d.setUTCHours(0, 0, 0, 0)
+    } else if (!dayFits(c, d.getUTCDate(), d.getUTCDay())) {
+      d.setUTCDate(d.getUTCDate() + 1)
+      d.setUTCHours(0, 0, 0, 0)
+    } else if (!c.hour.has(d.getUTCHours())) {
+      d.setUTCHours(d.getUTCHours() + 1, 0, 0, 0)
+    } else if (!c.minute.has(d.getUTCMinutes())) {
+      d.setUTCMinutes(d.getUTCMinutes() + 1, 0, 0)
+    } else {
+      const at = instantIn(d.toISOString().slice(0, 10), [d.getUTCHours(), d.getUTCMinutes(), 0], zone)
+      if (at > after) return at
+      d.setUTCMinutes(d.getUTCMinutes() + 1, 0, 0)
+    }
+  }
+  return null
+}
+
+/** dayMatches on a day given by its date and weekday. */
+function dayFits(c: Cron, date: number, weekday: number): boolean {
+  const dom = c.dom.has(date)
+  const dow = c.dow.has(weekday)
+  return c.anyDom || c.anyDow ? dom && dow : dom || dow
+}
+
 /** The shortest gap between its next `runs` runs after `after`, in ms (Infinity when it runs once or never). */
-export function shortestGap(cron: Cron | string, after: number, runs = 50): number {
+export function shortestGap(cron: Cron | string, after: number, runs = 50, zone?: string): number {
   const c = typeof cron === 'string' ? parseCron(cron) : cron
   let gap = Infinity
-  let at: number | null = nextRun(c, after)
+  let at: number | null = nextRun(c, after, zone)
   for (let i = 1; i < runs && at !== null; i++) {
-    const next = nextRun(c, at)
+    const next = nextRun(c, at, zone)
     if (next !== null) gap = Math.min(gap, next - at)
     at = next
   }

@@ -25,6 +25,7 @@ export interface NodeCall {
     | 'remind'
     | 'every'
     | 'unschedule'
+    | 'schedule'
     | 'spawn'
     | 'ask'
   argv: string[]

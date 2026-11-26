@@ -32,7 +32,7 @@ import { isRecord } from '../../adapters/json-store.ts'
 import { createDeviceStore, type DeviceStore } from '../../adapters/node-store.ts'
 import { pace } from '../../adapters/pacing.ts'
 import { currentPresence, setPresence } from '../../adapters/presence-store.ts'
-import { addEntry, getEntry, removeEntry } from '../../adapters/schedule-store.ts'
+import { addEntry, getEntry, listEntries, removeEntry } from '../../adapters/schedule-store.ts'
 import { formatListLines } from '../../core/board-list.ts'
 import { categoryInfo } from '../../core/categories.ts'
 import {
@@ -69,11 +69,21 @@ import {
   presenceConfig,
   presenceLine,
 } from '../../core/presence.ts'
-import { clip, formatEveryOk, formatRemindOk, parseEveryRest, parseRemindRest, stamp } from '../../core/schedule-cli.ts'
+import {
+  clip,
+  formatEveryOk,
+  formatRemindOk,
+  parseEveryRest,
+  parseRemindRest,
+  scheduleParts,
+  stamp,
+  waitsPart,
+} from '../../core/schedule-cli.ts'
 import { teamConfig } from '../../core/team.ts'
 import type { Actor } from '../../core/time.ts'
 import type { Config, Item } from '../../core/types.ts'
 import { safeName } from '../../core/upload-name.ts'
+import { scheduleZone } from '../../core/when.ts'
 import { FILE_MAX_BYTES, FILES_MAX, type Party, threadsConfig } from '../../core/work-threads.ts'
 import type { CalCmdContext } from '../../entrypoints/cal-cli.ts'
 import type { ThreadCmdContext } from '../../entrypoints/thread-cli.ts'
@@ -493,6 +503,8 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
         return scheduleWriteFrom(id, call)
       case 'unschedule':
         return unscheduleFrom(id, call)
+      case 'schedule':
+        return scheduleFrom(id, call)
       case 'spawn':
         return spawnCall(id, call)
       case 'ask':
@@ -981,8 +993,10 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
       const now = Date.now()
       const isMasterTarget = !parseNodeKey(targetItem.key)
       const from = targetItem.key !== who.key ? { key: who.key, name: who.name } : undefined
+      // The owner's clock (#806), whichever computer this master runs on.
+      const zone = scheduleZone(o.cfg.time)
       if (call.cmd === 'remind') {
-        const parsed = parseRemindRest(restArgv, now)
+        const parsed = parseRemindRest(restArgv, now, { zone })
         const e = addEntry({
           key: targetItem.key,
           name: targetItem.name || targetItem.autoName || '',
@@ -995,9 +1009,9 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
           next: parsed.at,
           by: 'agent',
         })
-        return { code: 0, out: [formatRemindOk(e.id, parsed.at, now, parsed.idle, parsed.text)], err: [] }
+        return { code: 0, out: [formatRemindOk(e.id, parsed.at, now, parsed.idle, parsed.text, '', zone)], err: [] }
       }
-      const parsed = parseEveryRest(restArgv, now)
+      const parsed = parseEveryRest(restArgv, now, { zone })
       const e = addEntry({
         key: targetItem.key,
         name: targetItem.name || targetItem.autoName || '',
@@ -1012,7 +1026,7 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
       })
       return {
         code: 0,
-        out: [formatEveryOk(e.id, parsed.cron.expr, parsed.next, now, parsed.idle, parsed.text)],
+        out: [formatEveryOk(e.id, parsed.cron.expr, parsed.next, now, parsed.idle, parsed.text, '', zone)],
         err: [],
       }
     } catch (e) {
@@ -1062,14 +1076,25 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
     })
   }
 
-  /** `board unschedule <id>` from a node (#698): removes an entry belonging to or created by the calling node session. */
+  /**
+   * `board unschedule <id>` from a node (#698): removes an entry belonging to or created by the calling
+   * node session. `all` (#806): every entry this board holds for that session (its key here is
+   * `@<node>:<session>`), as `board unschedule all` on the node removes its own there.
+   */
   function unscheduleFrom(id: string, call: UplinkCall): UplinkResult {
     const who = sessionOf(id, call.session)
     if (!who) return refused('not a session of the node')
     const raw = call.argv[0] ?? ''
     if (!raw) return failed('usage: board unschedule <id>')
-    if (raw.toLowerCase() === 'all')
-      return refused("board unschedule all is for this session's local schedule on the node")
+    if (raw.toLowerCase() === 'all') {
+      const mine = listEntries().filter(e => e.key === who.key)
+      const n = mine.filter(e => removeEntry(e.id)).length
+      return {
+        code: 0,
+        out: [`ok · removed ${n} ${n === 1 ? 'entry' : 'entries'} held by the board's computer`],
+        err: [],
+      }
+    }
     const entryId = raw.toLowerCase()
     const existing = getEntry(entryId)
     if (!existing) return failed(`no entry "${raw}"; see board schedule`)
@@ -1084,6 +1109,26 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
       ],
       err: [],
     }
+  }
+
+  /**
+   * `board schedule` from a node (#806): the entries this board holds for the calling session (its
+   * key here is `@<node>:<session>`: a handover brought them, or another session set them for it),
+   * a line each as the node lists its own, on the owner's clock. Nothing of other sessions.
+   */
+  function scheduleFrom(id: string, call: UplinkCall): UplinkResult {
+    const who = sessionOf(id, call.session)
+    if (!who) return refused('not a session of the node')
+    const now = Date.now()
+    const zone = scheduleZone(o.cfg.time)
+    const out = listEntries()
+      .filter(e => e.key === who.key)
+      .map(e =>
+        [...scheduleParts(e, now, zone), waitsPart(e, zone), e.text ? clip(e.text, 80) : '']
+          .filter(Boolean)
+          .join(' · '),
+      )
+    return { code: 0, out, err: [] }
   }
 
   /** A session on the board by its name, pane or key, as `board thread` finds one on this computer. */

@@ -66,7 +66,7 @@ import { cleanText, NODE_OFFLINE_WHY, promptOf, type ScheduleEntry, targetOf } f
 import type { Item } from '../core/types.ts'
 import { wakeOffByKey } from '../core/wake/mode.ts'
 import { watchesConfig } from '../core/watches.ts'
-import { nextRun } from '../core/when.ts'
+import { nextRun, scheduleZone } from '../core/when.ts'
 import { threadsConfig } from '../core/work-threads.ts'
 import { workdeskConfig } from '../core/workdesk.ts'
 import { type ActionResult, checkWake, readyToSleep, send, sleepSession, wake } from './actions.ts'
@@ -911,7 +911,8 @@ export function startScheduler({
   /** A cron entry after a run: its next time, the waiting fields cleared. */
   function settle(e: ScheduleEntry, now: number, counts: Record<string, unknown>): ScheduleEntry | undefined {
     const { pendingSince, tried, waited, why, claim, gone, ...rest } = e
-    const next = e.cron ? nextRun(e.cron, now) : null
+    // On the owner's clock (#806): config.json's time.zone, else this computer's.
+    const next = e.cron ? nextRun(e.cron, now, scheduleZone(cfg.time)) : null
     // null deletes the file; the store's type only names the "no change" case.
     return (next === null ? null : { ...rest, ...counts, next }) as ScheduleEntry | undefined
   }
