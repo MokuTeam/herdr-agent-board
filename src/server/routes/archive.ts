@@ -3,13 +3,16 @@
 // page (origin), and through herdr only on fresh data; removing needs neither. The entries that
 // wait with a session (#295): one dropped for good, or moved to a session on the board, as
 // `board unschedule <id>` and `board schedule --move <id> --session <s>` do.
+import { readArchiveLog } from '../../adapters/archive-store.ts'
 import { publicRecord } from '../../core/archive.ts'
+import { translator } from '../../core/i18n/translator.ts'
 import { t } from '../../core/lang.ts'
 import type { Item } from '../../core/types.ts'
 import { scheduleZone } from '../../core/when.ts'
 import {
   askArchive,
   bringBack,
+  closeDue,
   dropHeld,
   dueAgain,
   forgetArchived,
@@ -17,6 +20,7 @@ import {
   heldEntry,
   listArchive,
   moveHeld,
+  profileDoubt,
   type ReturnApp,
   returningOn,
   undoMs,
@@ -109,25 +113,44 @@ export function archiveRoutes(app: ArchiveApp): Route[] {
           const refused = ctx.refuse('fresh-data')
           if (refused) return refused
         }
-        const grace = undoMs(deps.cfg)
+        const immediate = body.immediate === true
+        const grace = immediate ? 0 : undoMs(deps.cfg)
+        const tr = immediate ? translator('en') : t
         const done: Done[] = []
         const failed: Failed[] = []
         for (const key of keys) {
           if (body.op === 'archive') {
             const item = app.find(key)
             if (!item) {
-              failed.push({ key, error: t('err.gone') })
+              failed.push({ key, error: tr('err.gone') })
               continue
             }
-            const r = await askArchive(deps, item, { by: 'user', grace })
-            if (r.ok) done.push({ key, name: item.name, held: r.held, closeAt: r.record.closeAt })
-            else
+            const r = await askArchive(deps, item, { by: immediate ? 'agent' : 'user', grace, tr })
+            if (r.ok) {
+              if (immediate) {
+                const { closed } = await closeDue(deps, { keys: [key] })
+                if (!getArchived(key)) {
+                  const kept = readArchiveLog(20).find(e => e.key === key && e.result === 'kept')
+                  const detail =
+                    kept?.why === 'archive.why.profile'
+                      ? (profileDoubt(item, deps.profiles(), tr) ?? kept.detail ?? '')
+                      : (kept?.detail ?? '')
+                  const why = kept ? tr(kept.why ?? '', { why: detail }) : 'it is not in the archive'
+                  failed.push({ key, name: item.name, ...(kept?.why && { why: kept.why }), error: why })
+                } else {
+                  done.push({ key, name: item.name, held: r.held, closeAt: r.record.closeAt, closed })
+                }
+              } else {
+                done.push({ key, name: item.name, held: r.held, closeAt: r.record.closeAt })
+              }
+            } else {
               failed.push({
                 key,
                 name: item.name,
                 why: r.why,
-                error: t(r.why, { name: item.name, why: r.detail ?? '' }),
+                error: tr(r.why, { name: item.name, why: r.detail ?? '' }),
               })
+            }
           } else if (body.op === 'return') {
             const r = await bringBack(deps, app, key)
             if (r.ok) done.push({ key, ...r })

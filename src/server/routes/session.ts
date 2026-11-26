@@ -8,7 +8,7 @@ import { helpersOf } from '../../adapters/helpers.ts'
 import { herdrText } from '../../adapters/herdr.ts'
 import { uploadsCheck } from '../../adapters/own-files.ts'
 import { pause } from '../../adapters/pacing.ts'
-import { askRestart } from '../../adapters/schedule-store.ts'
+import { askRestart, endWatches } from '../../adapters/schedule-store.ts'
 import { sessionCommands } from '../../adapters/slash-commands.ts'
 import { isAgyItem } from '../../core/agy.ts'
 import { busy, PINS } from '../../core/board.ts'
@@ -26,6 +26,7 @@ import { isPiItem } from '../../core/pi.ts'
 import type { QueuedPrompt, QueueWindow } from '../../core/queue.ts'
 import type { ConversationTurn } from '../../core/transcript.ts'
 import type { Item, Pin } from '../../core/types.ts'
+import { watchesConfig } from '../../core/watches.ts'
 import {
   checkWake,
   focus,
@@ -256,16 +257,37 @@ async function rename(item: Item, body: Body): Promise<Result> {
 const boardWorkspace = (cfg: Deps['cfg']): string =>
   (cfg.placement ?? 'workspace') === 'workspace' ? (cfg.workspace ?? 'Board') : ''
 
-function card(item: Item, body: Body): Result {
+function card(deps: Deps, item: Item, body: Body): Result {
+  const by = body.by === 'agent' ? 'agent' : 'user'
   const patch: CardPatch = {}
   if (typeof body.category === 'string') patch.category = body.category.toLowerCase().replace(/[^a-z0-9_-]/g, '')
   if (typeof body.wait === 'string')
     Object.assign(
       patch,
       body.wait.trim() ? { wait: body.wait.trim(), waitSince: Date.now() } : { wait: '', waitSince: '' },
-      { by: 'user' },
+      { by },
     )
-  if (typeof body.doing === 'string') patch.doing = body.doing.trim()
+  if (typeof body.ask === 'string')
+    Object.assign(
+      patch,
+      body.ask.trim() ? { ask: body.ask.trim(), askSince: Date.now(), decision: '' } : { ask: '', askSince: '' },
+      { by },
+    )
+  if (typeof body.doing === 'string') {
+    if (by === 'agent')
+      Object.assign(patch, { doing: body.doing.trim(), wait: '', waitSince: '', ask: '', askSince: '', result: '', by })
+    else patch.doing = body.doing.trim()
+  }
+  if (body.done === true)
+    Object.assign(patch, {
+      doing: '',
+      wait: '',
+      waitSince: '',
+      ask: '',
+      askSince: '',
+      result: typeof body.result === 'string' ? body.result.trim() : '',
+      by,
+    })
   // Kept in sight, or not any more.
   if (typeof body.favorite === 'boolean') patch.favorite = body.favorite || ''
   // "This model is fine here" (#429): the family it runs now, so another one warns again; false takes it back.
@@ -301,6 +323,12 @@ function card(item: Item, body: Body): Result {
       unpin,
     )
   writeCard(item.key, patch)
+  if (
+    by === 'agent' &&
+    watchesConfig(deps.cfg.watches) &&
+    (body.done === true || typeof body.doing === 'string' || typeof body.wait === 'string' || body.clear)
+  )
+    endWatches(item.key)
   return { ok: true }
 }
 
@@ -310,7 +338,7 @@ function card(item: Item, body: Body): Result {
  * restart. One the board would not wake again (its profile guard) is refused here, before
  * anything is scheduled.
  */
-async function restart(deps: SessionApp['deps'], item: Item): Promise<Result> {
+async function restart(deps: SessionApp['deps'], item: Item, body?: Body): Promise<Result> {
   if (isCodexItem(item) && !wakeSleepsAgy(deps)) return { ok: false, error: t('err.restart.noWake') }
   if (isAgyItem(item) && !wakeSleepsAgy(deps))
     return { ok: false, error: t('err.restart.agyNeedsBoardWake', { name: item.name }) }
@@ -321,12 +349,15 @@ async function restart(deps: SessionApp['deps'], item: Item): Promise<Result> {
   if (!up.ok) return up
   const guard = await checkWake(deps, item)
   if (!guard.ok) return { ok: false, error: guard.error }
+  const note = typeof body?.text === 'string' ? body.text.trim() : ''
+  const by = body?.by === 'agent' ? 'agent' : 'user'
   const { entry, again } = askRestart({
     key: item.key,
     name: item.name,
     pane: item.pane,
     ...(item.cwd && { cwd: item.cwd }),
-    by: 'user',
+    ...(note && { text: note }),
+    by,
   })
   deps.log(`restart ${item.name}: ${again ? 'on its way already' : `asked, ${entry.id}`}`)
   return { ok: true, id: entry.id, again }
@@ -373,7 +404,7 @@ async function act(
     case 'sleep':
       return sleepSession(deps, item).finally(() => deps.wake.forget())
     case 'restart':
-      return restart(deps, item)
+      return restart(deps, item, await body())
     case 'message':
       return message(app, item, await body())
     case 'answer':
@@ -392,7 +423,7 @@ async function act(
     case 'workspace':
       return renameWorkspace(item, String((await body()).name ?? ''), boardWorkspace(deps.cfg))
     case 'card':
-      return card(item, await body())
+      return card(deps, item, await body())
     // Off the board: hidden at once, its pane closed a few seconds later by the scheduler (services/archive.ts).
     case 'archive': {
       const grace = undoMs(deps.cfg)

@@ -283,10 +283,15 @@ export function resolveTarget(
   word: string,
   own = '',
 ): { target: Target } | { error: string; ambiguous: true } | null {
-  let fits = matching(targets, word)
+  const at = parseNodeKey(word.trim())
+  const ref = at && own && at.device === own ? at.key : word
+  let fits = matching(targets, ref)
   if (!fits.length) {
-    const w = word.trim().toLowerCase()
-    if (w) fits = targets.filter(t => t.device === null && t.pane?.toLowerCase() === w)
+    const w = ref.trim().toLowerCase()
+    if (w) {
+      fits = targets.filter(t => t.device === null && t.pane?.toLowerCase() === w)
+      if (!fits.length) fits = targets.filter(t => t.device !== null && parseNodeKey(t.key)?.key.toLowerCase() === w)
+    }
   }
   if (!fits.length) return null
   const [target] = fits
