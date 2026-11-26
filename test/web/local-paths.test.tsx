@@ -167,12 +167,14 @@ describe('the quick look on another device', () => {
     const home = draw(null)
     expect(home).not.toContain('ql-download')
     expect(home).not.toContain('ql-local')
-    // A node session file at the computer offers Download with ?key= and disables local Open/Reveal.
+    expect(home).toContain('data-ql="open"')
+    // A node session file at the computer offers Download with ?key= and disables/hides Open and Reveal.
     const nodeHtml = draw(null, { ...file, path: 'C:\\Projects\\Demo\\a.zip' }, 'en', '@win-node:s1')
     expect(nodeHtml).toContain(
       'class="icon-button ql-download" href="/api/fs/download?key=%40win-node%3As1&amp;path=C%3A%5CProjects%5CDemo%5Ca.zip&amp;t=tok" download=""',
     )
     expect(nodeHtml).not.toContain('ql-local')
+    expect(nodeHtml).not.toContain('data-ql="open"')
     expect(nodeHtml).toContain('class="button primary ql-open" disabled=""')
     expect(nodeHtml).toContain(
       'class="icon-button ql-reveal" title="Show in folder" aria-label="Show in folder" disabled=""',

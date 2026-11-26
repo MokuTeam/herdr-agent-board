@@ -363,7 +363,7 @@ function LookBody({ view, token, onImage, onImageGone, onPages, onZoomable, onZo
       token={token}
       sessionKey={nodeKey}
       onGo={on.go}
-      onOpen={() => on.act?.('open')}
+      onOpen={nodeKey ? undefined : () => on.act?.('open')}
       onImage={img => onImage?.(img, d)}
       onImageGone={onImageGone}
       onPages={n => onPages?.(n, d)}
