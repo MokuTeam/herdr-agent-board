@@ -369,6 +369,67 @@ describe('offline node hold (#695)', () => {
     }
   })
 
+  test('a node that takes a delivery and never answers does not hold its session for good (#876)', async () => {
+    // The laptop's update restarts its board in seconds: its link stays online, and a request the
+    // node took before it went answers never. The entries queued behind it go once that one gives up.
+    const box = await sandbox()
+    showPanes(box, [])
+    const savedEnv = { ...process.env }
+    Object.assign(process.env, box.env, { BOARD_NODE_SEND_MS: '300' })
+    const cfg = {
+      language: 'en',
+      categories: [{ id: 'other', title: 'Other', color: 'gray' }],
+      scheduleTickSec: 0.2,
+      scheduleWaitMin: 60,
+      nodes: { id: 'master', devices: { 'server-1': { link: { kind: 'direct', url: 'http://127.0.0.1:1' } } } },
+    }
+    const typed: string[] = []
+    let calls = 0
+    const link = {
+      state: () => ({ state: 'online', since: 0, heardAt: null }),
+      payload: () => ({ stale: false }),
+      onState: () => () => {},
+      fetch: (_path: string, init: RequestInit): Promise<Response> => {
+        calls++
+        // The first one is lost on the way: no answer and no error, until the caller gives up.
+        if (calls === 1)
+          return new Promise((_, reject) =>
+            init.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))),
+          )
+        typed.push(String(JSON.parse(String(init.body)).text))
+        return Promise.resolve(Response.json({ ok: true }))
+      },
+    }
+    const proxy = createNodeProxy({
+      cfg: cfg as never,
+      links: { link: () => link as never, onChange: () => () => {} },
+      find: key =>
+        key === S1 ? ({ key, session: 's-server-1', name: 's-server-1', status: 'idle' } as never) : undefined,
+      own: () => [],
+      remote: () => [],
+      local: [],
+    })
+    const now = Date.now()
+    const send = { idle: true, by: 'agent', from: { key: 'pane-m', name: 'atlas' }, replyBy: 'board', replyTo: 'atlas' }
+    putEntry(box, { id: 'b87601', text: 'first', at: now - 2000, next: now - 2000, created: now - 2000, ...send })
+    putEntry(box, { id: 'b87602', text: 'second', at: now - 1000, next: now - 1000, created: now - 1000, ...send })
+    const sched = startScheduler({ deps: defaultDeps(cfg as never), remote: () => proxy })
+    try {
+      await until(() => readRuns(box).length === 2, 10_000)
+      expect(typed.map(t => t.replace(/^\[[^\]]*\] /, ''))).toEqual(['first', 'second'])
+      expect(readEntry(box, 'b87601')).toBeNull()
+      expect(readEntry(box, 'b87602')).toBeNull()
+      expect(readRuns(box).map(r => [r.id, r.result])).toEqual([
+        ['b87601', 'sent'],
+        ['b87602', 'sent'],
+      ])
+    } finally {
+      sched.stop()
+      for (const k of Object.keys(process.env)) if (!(k in savedEnv)) delete process.env[k]
+      Object.assign(process.env, savedEnv)
+    }
+  })
+
   test('local sessions and a board without nodes keep expiring as before', async () => {
     const plain = await sandbox()
     plain.state({

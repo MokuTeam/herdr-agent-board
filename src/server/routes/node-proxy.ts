@@ -25,6 +25,7 @@
 // - A device that is not reachable: 503 `{ error: 'node-offline', device }`; one refused for its
 //   link's version: 503 `node-api`. A device config.json does not have: 404, as a session that is gone.
 import { isRecord } from '../../adapters/json-store.ts'
+import { knobMs } from '../../adapters/pacing.ts'
 import { t } from '../../core/lang.ts'
 import {
   type Asked,
@@ -85,6 +86,16 @@ const DESKTOP = new Set(['/api/fs/open', '/api/open-url', '/api/reveal'])
 const ARCHIVE_OPS: ReadonlySet<unknown> = new Set(['archive', 'return', 'remove'])
 /** As the board's own bulk routes: more than a lane shows. */
 const MAX_TARGETS = 200
+
+/**
+ * How long a scheduled delivery waits for the node's answer (#876). The link stays online through a
+ * short drop (a node's update restarts its board in seconds), so nothing else ends a request the
+ * node will never answer, and the session's queue on the master would wait behind it for good. The
+ * node's own work for one (a wake, its named wait, the typing) ends well within it.
+ * BOARD_NODE_SEND_MS in tests.
+ */
+const NODE_SEND_MS = 120_000
+const sendMs = (): number => knobMs('BOARD_NODE_SEND_MS', NODE_SEND_MS)
 
 const desktop = (): Response => json(403, { error: 'desktop' })
 const gone = (): Response => json(404, { error: t('err.gone') })
@@ -159,7 +170,8 @@ export function createNodeProxy(app: NodeProxyApp): NodeProxy {
 
   /**
    * `path` asked of the device through `link`. The answer ends when the caller goes, when the link
-   * stops being online, and when the device leaves config.json: a terminal's stream too.
+   * stops being online, when the device leaves config.json (a terminal's stream too), and when
+   * `limit` aborts.
    */
   async function forward(
     device: string,
@@ -167,10 +179,12 @@ export function createNodeProxy(app: NodeProxyApp): NodeProxy {
     path: string,
     init: RequestInit,
     req?: Request,
+    limit?: AbortSignal,
   ): Promise<Response> {
     const ac = new AbortController()
     const end = (): void => ac.abort()
     req?.signal.addEventListener('abort', end, { once: true })
+    limit?.addEventListener('abort', end, { once: true })
     const offState = link.onState(s => {
       if (s.state !== 'online') end()
     })
@@ -184,6 +198,7 @@ export function createNodeProxy(app: NodeProxyApp): NodeProxy {
       offState()
       offLinks()
       req?.signal.removeEventListener('abort', end)
+      limit?.removeEventListener('abort', end)
     }
     try {
       const res = await link.fetch(path, { ...init, signal: ac.signal })
@@ -531,14 +546,20 @@ export function createNodeProxy(app: NodeProxyApp): NodeProxy {
       if (o.idle && item.status === 'working') return { ok: false, busy: true, error: 'busy' }
       const link = app.links.link(at.device)
       if (!link) return { ok: false, offline: true, error: 'node-offline' }
+      const limit = AbortSignal.timeout(sendMs())
       const res = await forward(
         at.device,
         link,
         nodePath({ area: 'session', key: at.key, rest: '/message' }),
         jsonInit({ text, session: item.session ?? null, requestId: o.requestId, ...(o.draft && { draft: true }) }),
+        undefined,
+        limit,
       )
       const answer = await answerOf(res)
       if (res.ok && isRecord(answer) && answer.ok === true) return { ok: true }
+      // No answer in time (#876): not sent as far as the master knows; the entry waits and goes
+      // again on a later tick, with the same request id (core/message-gate.ts on the node).
+      if (limit.aborted) return { ok: false, error: 'node-timeout' }
       if (isOffline(res)) {
         const nowState = deviceState(at.device)
         if (nowState === 'forgotten') return { ok: false, end: true, error: 'node-forgotten' }
