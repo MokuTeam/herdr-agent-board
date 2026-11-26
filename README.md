@@ -2966,6 +2966,14 @@ The explicit spawn flag sets coverage to incomplete until confirmed again. Only 
 and Codex sessions in Herdr's working or blocked state count. Missing or incomplete coverage
 is shown as unknown in Workdesk. A complete roster with no active workers shows zero.
 
+### Workdesk executor briefs
+
+On the host running the session, set `workdesk.workerBriefSessions` to the exact session IDs
+of Workdesk executors. Native Claude and Codex use this opt-in to give those sessions the Workdesk
+owner-question and reminder guidance in their Board brief. Load a new brief after changing the
+allowlist by starting or resuming the session. An enabled Workdesk integration or a Workdesk lane
+alone does not opt in other sessions.
+
 ### Workdesk owner dialogue metadata
 
 Set `workdeskDialog` to an object to enable the metadata poller. It uses the existing

@@ -79,6 +79,7 @@ test('the brief tells agents about the schedule', () => {
     { categories: [{ id: 'other', title: 'Other', color: 'gray', paths: [] }] } as unknown as Config,
     null,
     'C:\\X',
+    {},
   )
   assert.match(text, /board remind <when> "<text>"/)
   assert.match(text, /board every "<cron, 5 fields>"/)
@@ -155,7 +156,7 @@ test('MCP-first brief (#911): names MCP tools first, fallback once, and stays no
     assert.match(mcp, /- Fallback: if the MCP server is unavailable/)
     if (agent === 'Claude') {
       assert.match(mcp, /- cal: read the owner's schedule/)
-      assert.match(mcp, /CronCreate or ScheduleWakeup/)
+      assert.match(mcp, /CronCreate and ScheduleWakeup reminders disappear when the Claude session sleeps or restarts/)
       assert.match(mcp, /board secret request/)
       assert.match(mcp, /board todo add/)
       assert.match(mcp, /card op ask/)
@@ -182,4 +183,37 @@ test('MCP-first brief (#911): names MCP tools first, fallback once, and stays no
   assert.match(decisionsBrief({ defaults: true }, true), /`card` op `ask`/)
   assert.match(waitReminder({ wait: 'CI' }, true), /card op doing \/ done \/ wait/)
   assert.match(waitReminder({ wait: 'CI' }, false), /board doing \/ done \/ wait/)
+})
+
+test('only explicitly configured native executors get Workdesk guidance in both brief modes', () => {
+  const env = { HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p3' }
+  const configured = { ...cfg, workdesk: { workerBriefSessions: ['worker-id'] } }
+  for (const agent of ['Claude', 'Codex'] as const) {
+    for (const mcp of [true, false]) {
+      const say = (session: string, settings = configured) =>
+        brief(settings, null, 'C:\\Work 50%', env, agent, null, null, [], false, null, false, null, {
+          mcp,
+          workdeskSession: session,
+        })
+      const worker = say('worker-id')
+      const other = say('another-id')
+      assert.match(worker, /report_task with status "waiting" and 2–4 options/)
+      assert.match(worker, /Notify the Orchestrator/)
+      assert.match(worker, /Workdesk rule 10/)
+      assert.doesNotMatch(worker, /short question|^- board ask/m)
+      assert.doesNotMatch(other, /Workdesk rule|report_task/)
+      assert.match(other, mcp ? /ask.*short question/ : /board ask/)
+      assert.match(other, /then end your turn/)
+      if (agent === 'Claude') {
+        assert.match(
+          worker,
+          /CronCreate and ScheduleWakeup reminders disappear when the Claude session sleeps or restarts/,
+        )
+        assert.match(
+          other,
+          /CronCreate and ScheduleWakeup reminders disappear when the Claude session sleeps or restarts/,
+        )
+      }
+    }
+  }
 })

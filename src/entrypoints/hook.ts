@@ -32,7 +32,7 @@ import { boardMcpRegistered } from '../adapters/mcp-register.ts'
 import { presenceForBrief, presenceNews } from '../adapters/presence-store.ts'
 import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
 import { readStdin } from '../adapters/stdin.ts'
-import { BRIEF_VERSION, brief, waitReminder } from '../core/brief.ts'
+import { brief, briefVersionFor, waitReminder } from '../core/brief.ts'
 import { calendarConfig } from '../core/calendar.ts'
 import { type DecisionAnswer, decisionAnswerFor, decisionsConfig, heldByMaster } from '../core/decisions.ts'
 import { heldQuestionOf } from '../core/held-question.ts'
@@ -177,10 +177,11 @@ async function main(): Promise<void> {
     if (piNote) piPatch.decisionAnswer = piNote
     if (boardKey && Object.keys(piPatch).length) writeCard(boardKey, piPatch)
   }
+  const briefVersion = briefVersionFor('Claude')
   let context: string | null = null
   let cfg: Config | undefined
   const briefed = card?.briefV ?? (card?.briefedAt ? 1 : 0)
-  if (event === 'SessionStart' || (event === 'UserPromptSubmit' && Number(briefed) < BRIEF_VERSION)) {
+  if (event === 'SessionStart' || (event === 'UserPromptSubmit' && Number(briefed) < briefVersion)) {
     cfg = loadConfig()
     // On a node (#775): the features its master has on, which config.json there no longer has.
     // Without `node` nothing is read: `gated` is cfg and `via` says nothing.
@@ -211,12 +212,12 @@ async function main(): Promise<void> {
       watchesConfig(gated.watches) !== null,
       // Decisions (#487), likewise.
       decisionsConfig(gated.decisions),
-      { mcp, team },
+      { mcp, team, workdeskSession: sid },
     )
     // The presence a node's master last said, when it has not been heard from for a while: its age.
     const stale = presence && presence === via.presence ? staleFlagsLine(flags, Date.now()) : null
     if (stale) context = `${context}\n${stale}`
-    Object.assign(patch, { briefedAt: Date.now(), briefV: BRIEF_VERSION })
+    Object.assign(patch, { briefedAt: Date.now(), briefV: briefVersion })
     if (presence) patch.presenceSeen = presence.since
     else if (card?.presenceSeen !== undefined) patch.presenceSeen = ''
   } else if (event === 'UserPromptSubmit') {
