@@ -10,6 +10,7 @@ import {
   NS_ABS_MS,
   NS_DYING_MS,
   NS_IDLE_MS,
+  NS_MAX_ENTRIES,
   NsBodyError,
   nsAccount,
   nsFingerprint,
@@ -246,6 +247,20 @@ describe('the store', () => {
     expect(s.list().map(m => m.account)).toEqual(['1111111', '3333333', '4444444'])
   })
 
+  test('at the real limit of 500 live entries: store_full, and every live one still there', () => {
+    const s = createNsStore({ now: clock().now })
+    const pub = (i: number) => {
+      const account = String(1_000_000 + i)
+      return s.publish(nsPublishOf(body(`fake-limit-${i}`, { account, host: `${account}.app.netsuite.com` })))
+    }
+    for (let i = 0; i < NS_MAX_ENTRIES; i++) expect(pub(i)).toMatchObject({ ok: true, stored: true })
+    expect(pub(NS_MAX_ENTRIES)).toEqual({ ok: false, code: 'store_full' })
+    const list = s.list()
+    expect(list).toHaveLength(NS_MAX_ENTRIES)
+    expect(list.every(m => m.state === 'live')).toBe(true)
+    expect(s.take('1000000', null)).toMatchObject({ ok: true })
+  })
+
   test('the list and its CLI line hold metadata only', () => {
     const c = clock()
     const s = createNsStore({ now: c.now })
@@ -281,6 +296,8 @@ describe('the relay carries PUT and DELETE for the store only', () => {
       entry: { group: 'ns-sessions' },
     })
     expect(relayMatch('DELETE', '/api/ns-sessions/lock', none)).toMatchObject({ kind: 'table' })
+    expect(relayMatch('POST', '/api/ns-sessions/entry', none)).toMatchObject({ kind: 'table' })
+    expect(relayMatch('POST', '/api/ns-sessions/unlock', none)).toMatchObject({ kind: 'table' })
     expect(relayMatch('GET', '/api/ns-sessions/list', none)).toMatchObject({ kind: 'table' })
     expect(relayMatch('PUT', '/api/ns-sessions/lock', none)).toBeNull()
     expect(relayMatch('DELETE', '/api/ns-sessions/entry', none)).toBeNull()

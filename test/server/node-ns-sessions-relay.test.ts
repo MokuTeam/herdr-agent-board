@@ -123,7 +123,7 @@ test("a node's bridge reaches the master's store through its own board; values s
 
   // A hand login on the master's side is newer; the node takes that one.
   expect(
-    (await call(masterBase, 'PUT', 'entry', { body: entry(NEWER, 'server-2'), token: masterToken })).json,
+    (await call(masterBase, 'POST', 'entry', { body: entry(NEWER, 'server-2'), token: masterToken })).json,
   ).toMatchObject({ stored: true, generation: 2 })
   const back = await call(nodeBase, 'GET', `entry?account=${A}`, { token: nodeToken })
   expect(back.status).toBe(200)
@@ -152,14 +152,20 @@ test("a node's bridge reaches the master's store through its own board; values s
   expect(
     (await call(nodeBase, 'DELETE', 'lock', { body: { account: A, user: U, lock_id: lockId }, token: nodeToken })).json,
   ).toEqual({ ok: true })
+  const second = await call(masterBase, 'POST', 'lock', {
+    body: { account: A, user: U, holder: { machine: 'server-2', profile: 'main', run_id: 'r2' } },
+    token: masterToken,
+  })
+  expect(second.status).toBe(200)
+  // POST /unlock goes up the relay too, as DELETE /lock does.
   expect(
     (
-      await call(masterBase, 'POST', 'lock', {
-        body: { account: A, user: U, holder: { machine: 'server-2', profile: 'main', run_id: 'r2' } },
-        token: masterToken,
+      await call(nodeBase, 'POST', 'unlock', {
+        body: { account: A, user: U, lock_id: second.json.lock_id },
+        token: nodeToken,
       })
-    ).status,
-  ).toBe(200)
+    ).json,
+  ).toEqual({ ok: true })
 
   // The list, read on either board, by a bridge or as the board's own call: metadata only.
   const lists = [

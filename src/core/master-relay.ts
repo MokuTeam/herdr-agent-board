@@ -111,7 +111,7 @@ export const RELAY_TABLE: readonly RelayEntry[] = [
   // (server/routes/ns-sessions.ts nsNodeRoute). Bodies are never logged, the path only.
   { group: 'ns-sessions', method: 'GET', path: /^\/api\/ns-sessions\/(?:entry|list)$/ },
   { group: 'ns-sessions', method: 'PUT', path: /^\/api\/ns-sessions\/entry$/ },
-  { group: 'ns-sessions', method: 'POST', path: /^\/api\/ns-sessions\/(?:touch|dead|lock)$/ },
+  { group: 'ns-sessions', method: 'POST', path: /^\/api\/ns-sessions\/(?:entry|touch|dead|lock|unlock)$/ },
   { group: 'ns-sessions', method: 'DELETE', path: /^\/api\/ns-sessions\/lock$/ },
 ]
 

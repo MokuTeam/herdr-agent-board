@@ -225,6 +225,30 @@ describe('routes', () => {
     ).toBe(200)
   })
 
+  test('POST /entry and POST /unlock answer as PUT /entry and DELETE /lock', async () => {
+    const h = harness()
+    expect((await h.call('POST', 'entry', { body: entry() })).json).toEqual({
+      ok: true,
+      stored: true,
+      generation: 1,
+      state: 'live',
+    })
+    expect((await h.call('POST', 'entry', { body: entry(), token: null })).status).toBe(401)
+    const holder = { ...SERVER, run_id: 'run-1' }
+    const a = await h.call('POST', 'lock', { body: { account: A, user: U, holder } })
+    const lockId = (a.json as { lock_id: string }).lock_id
+    expect((await h.call('POST', 'unlock', { body: { account: A, user: U, lock_id: 'other' } })).json).toEqual({
+      ok: true,
+      released: false,
+    })
+    expect(
+      (await h.call('POST', 'unlock', { body: { account: A, user: U, lock_id: lockId }, token: null })).status,
+    ).toBe(401)
+    expect((await h.call('POST', 'unlock', { body: { account: A, user: U, lock_id: lockId } })).json).toEqual({
+      ok: true,
+    })
+  })
+
   test('the list: entries, by account, no value', async () => {
     const h = harness()
     await h.call('PUT', 'entry', { body: entry() })

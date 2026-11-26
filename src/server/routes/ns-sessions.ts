@@ -4,12 +4,12 @@
 // and relays the rest up as the owner (core/master-relay.ts, group ns-sessions), so a laptop's
 // bridge reaches the master's store. Any 503 means "no store": the bridge behaves as without one.
 //
-//   PUT    /entry   publish            token
+//   PUT    /entry   publish            token   (also POST /entry)
 //   GET    /entry   the values         token
 //   POST   /touch   activity, by fp    token
 //   POST   /dead    a death, by fp     token
 //   POST   /lock    login lock         token
-//   DELETE /lock    release by lock_id token
+//   DELETE /lock    release by lock_id token   (also POST /unlock)
 //   GET    /list    metadata only      token, or X-Board: 1 from this computer (the board's own CLI and page)
 //
 // Answers: {"ok": true, ...} or {"ok": false, "code", "message"}. Cookie values come in with a
@@ -183,7 +183,7 @@ export function nsSessionRoutes(deps: NsRoutesDeps): Route[] {
   const entry = `${NS_PREFIX}/entry`
   const lock = `${NS_PREFIX}/lock`
 
-  return [
+  const routes: Route[] = [
     {
       method: 'PUT',
       path: entry,
@@ -311,4 +311,9 @@ export function nsSessionRoutes(deps: NsRoutesDeps): Route[] {
       },
     },
   ]
+  // The same two under POST (review of #868): the contract's PUT /entry and DELETE /lock, and
+  // POST /entry and POST /unlock {account, user, lock_id}, answer alike; a bridge may use either.
+  const put = routes.find(r => r.method === 'PUT') as Route
+  const release = routes.find(r => r.method === 'DELETE') as Route
+  return [...routes, { ...put, method: 'POST' }, { ...release, method: 'POST', path: `${NS_PREFIX}/unlock` }]
 }
