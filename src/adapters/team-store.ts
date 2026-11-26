@@ -183,6 +183,11 @@ export interface InboxItem {
   replyTo?: string
   /** A team post's copy (#370): the post's id, the same on every member's copy. */
   post?: string
+  /**
+   * The handle of this board's agent the copy named (#832), as the sender wrote it: kept so that
+   * agent's answer in the team chat or a channel is weighed by the sender's switches (#875).
+   */
+  at?: string
   /** When the signed ack went out (null: not yet, or the hub was away). */
   ackedAt: number | null
   /** A file in it (#371). */

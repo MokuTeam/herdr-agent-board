@@ -13,6 +13,7 @@ import {
   useRef,
   useState,
 } from 'react'
+import { leadingMention } from '../../../../src/core/team-directory.ts'
 import { QUICK_REACTIONS } from '../../../../src/core/team-reactions.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { delivery, type ThreadLine } from '../../models/team.ts'
@@ -266,8 +267,30 @@ export function TeamMessage({
 
 /** A message's text, drawn again only when it changes: a key typed in the box leaves it alone. */
 const Text = memo(function Text({ text }: { text: string }) {
-  return <MessageText text={text} />
+  return <MessageText text={text} decorate={mentionMark(text)} />
 })
+
+const ESCAPED: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
+
+/**
+ * A message that starts with `@Name.handle` (#875): that mention in its first paragraph wrapped in
+ * `.team-at`, so whoever reads the chat sees whom it addressed. Only the tag is added, around the
+ * words Markdown already escaped; when they are not there as written (Markdown changed them), the
+ * text stays as it was. Undefined for a text with no mention.
+ */
+export function mentionMark(text: string): ((html: string) => string) | undefined {
+  const m = leadingMention(text)
+  if (!m) return undefined
+  const word = `@${m.who}.${m.code}`.replace(/[&<>"']/g, c => ESCAPED[c] as string)
+  const head = `<p>${word}`
+  return html => {
+    if (!html.startsWith(head)) return html
+    const after = html.slice(head.length)
+    // The mention ends there: the paragraph, a line break or a space follows, or punctuation.
+    if (!/^(?:<\/p>|<br>|[\s,:;!?])/.test(after)) return html
+    return `<p><span class="team-at">${word}</span>${after}`
+  }
+}
 
 /** The message a reply answers: its sender and a line of it; a click goes there. Not found: said so, not a link. */
 export function QuoteView({ quote, onQuote }: { quote: Quote; onQuote(id: string): void }) {

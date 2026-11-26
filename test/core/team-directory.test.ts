@@ -199,15 +199,56 @@ describe('where a post that starts with a mention goes', () => {
   test('a code name not in their directory is refused', () => {
     expect(addressTarget('@dima.ops hi', { to: P }, w)).toEqual({ ok: false, error: 'agent' })
   })
-  test("from a general thread, or one they are not in: a topic of its own with them, a reply's line dropped", () => {
+  test("from a thread they do not read: a topic of its own with them, a reply's line dropped", () => {
     const own = { ok: true as const, to: P, thread: { title: '@rev: check it' }, at: { peer: P, code: 'rev' } }
-    expect(addressTarget('@dima.rev check it', { to: P }, w)).toEqual(own)
-    expect(addressTarget('@dima.rev check it', { to: P, thread: { id: 'general' } }, w)).toEqual(own)
-    expect(addressTarget('@dima.rev check it', { to: 'team', replyTo: topic }, w)).toEqual(own)
-    expect(addressTarget('@dima.rev check it', { to: 'team', thread: { id: CH.slice(5) } }, w)).toEqual(own)
+    const channel = CH.slice(5)
+    const members = (id: string) => (id === channel ? [Q] : null)
+    // A pair's thread with someone else, and a channel without them.
+    expect(addressTarget('@dima.rev check it', { to: Q }, w)).toEqual(own)
     expect(addressTarget('@dima.rev check it', { to: Q, thread: { id: topic } }, w)).toEqual(own)
+    expect(addressTarget('@dima.rev check it', { to: 'team', thread: { id: channel } }, { ...w, members })).toEqual(own)
+    expect(
+      addressTarget('@dima.rev check it', { to: 'team', thread: { title: 'Ops', members: [Q] } }, { ...w, members }),
+    ).toEqual(own)
   })
-  test('a topic with them keeps it, with the agent named; a team topic opens their own', () => {
+  test('a thread they read keeps it (#875): the team chat, a team topic, a channel with them, their general', () => {
+    const at = { peer: P, code: 'rev' }
+    const channel = CH.slice(5)
+    const members = (id: string) => (id === channel ? [P, Q] : null)
+    expect(addressTarget('@dima.rev check it', { to: 'team' }, w)).toEqual({ ok: true, to: 'team', at })
+    expect(addressTarget('@dima.rev check it', { to: 'team', replyTo: topic }, w)).toEqual({
+      ok: true,
+      to: 'team',
+      replyTo: topic,
+      at,
+    })
+    expect(addressTarget('@dima.rev x', { to: 'team', thread: { id: 'general' } }, w)).toEqual({
+      ok: true,
+      to: 'team',
+      thread: { id: 'general' },
+      at,
+    })
+    expect(addressTarget('@dima.rev x', { to: 'team', thread: { id: channel } }, { ...w, members })).toEqual({
+      ok: true,
+      to: 'team',
+      thread: { id: channel },
+      at,
+    })
+    expect(addressTarget('@dima.rev x', { to: 'team', thread: { title: 'Ops', members: [P] } }, w)).toEqual({
+      ok: true,
+      to: 'team',
+      thread: { title: 'Ops', members: [P] },
+      at,
+    })
+    expect(addressTarget('@dima.rev check it', { to: P }, w)).toEqual({ ok: true, to: P, at })
+    expect(addressTarget('@dima.rev x', { to: P, thread: { id: 'general' } }, w)).toEqual({
+      ok: true,
+      to: P,
+      thread: { id: 'general' },
+      at,
+    })
+  })
+  test('a topic with them keeps it, with the agent named; so does a team topic', () => {
     const at = { peer: P, code: 'rev' }
     expect(addressTarget('@dima.rev x', { to: P, thread: { id: topic }, replyTo: topic }, w)).toEqual({
       ok: true,
@@ -224,8 +265,8 @@ describe('where a post that starts with a mention goes', () => {
     })
     expect(addressTarget('@dima.rev x', { to: 'team', thread: { id: topic } }, w)).toEqual({
       ok: true,
-      to: P,
-      thread: { title: '@rev: x' },
+      to: 'team',
+      thread: { id: topic },
       at,
     })
   })

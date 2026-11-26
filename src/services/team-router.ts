@@ -316,6 +316,20 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
     return { handles, aliases: state.aliases, off: globalOff(s.off), peers: s.peers, sessions: reachable }
   }
 
+  /**
+   * Who named a session in a team thread's message (#875): the sender of that line of `key`, when
+   * its copy carried a handle that reaches this session for them now (Agents on for them, the lane
+   * shared, not archived); else null.
+   */
+  function askedBy(key: string, line: string, session: string, s: ReturnType<typeof readAgents>): string | null {
+    for (const [from, list] of Object.entries(readAllInbox())) {
+      const i = list.find(x => x.id === line && x.thread === key)
+      if (!i) continue
+      return i.at && !i.held && reach(i.at, from, world(s))?.key === session ? from : null
+    }
+    return null
+  }
+
   function nameOf(key: string): string | null {
     const item = items().find(i => i.key === key)
     return item?.name || item?.autoName || null
@@ -396,7 +410,11 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       // Too long is said with its numbers (#415): the agent can tell how much to cut, or send a file.
       const length = text.trim().length
       if (length > MAX_TEXT) return { ok: false, error: 'text', detail: `${length} of ${MAX_TEXT}` }
-      const peer = s.peers[switchesKey(to, key)]
+      // A session's answer to a message that named it in the team chat or a channel (#875): a reply
+      // to that message, weighed by the switches this board keeps for its writer, as an answer in a
+      // pair's thread is. Any other post there goes by the team's (or the channel's) switches.
+      const asker = to === TEAM && key && replyTo !== undefined ? askedBy(key, replyTo, session.key, s) : null
+      const peer = s.peers[asker ?? switchesKey(to, key)]
       const name = file && basename(file.path)
       const refused = overLimit(to, key, text, session, name ? { name, size: sizeOf(file.path) } : undefined)
       if (refused) return { ok: false, error: refused }
@@ -529,8 +547,14 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       const parts = splitKey(e.thread)
       if (!parts) return
       const isTeam = parts.scope === TEAM
+      const known = items()
+      // Addressed to one of this board's agents by its handle (#832): a pair's word, weighed by the
+      // switches this board keeps for its writer, in the team chat or a channel too (#875). Under the
+      // default policy an empty board (its first look has not happened yet) proves nothing: routed
+      // as any other; with masters only (#872) the mapping alone decides.
+      const addressed = !!e.at && (known.length > 0 || s.mastersOnly) && (!isTeam || !!s.peers[e.from]?.on)
       // A channel has switches of its own (#355); the team chat's mute is not a channel's.
-      const rules = isTeam ? switchesKey(TEAM, e.thread) : e.from
+      const rules = isTeam && !addressed ? switchesKey(TEAM, e.thread) : e.from
       if (!s.peers[rules]?.on) return
       if (rules === TEAM && s.peers[TEAM]?.muted) return
       const rec = readThreads()[e.thread]
@@ -552,28 +576,26 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       // A handler that left the board gives the thread back to the listener. An empty board (the
       // first look has not happened yet) proves nothing.
       let handler = rec?.handler ?? null
-      const known = items()
       if (handler && known.length && !known.some(i => i.key === handler?.key)) {
         team.setThread(e.thread, { handler: null })
         audit('released', isTeam ? null : e.from, { thread: e.thread, why: 'gone' })
         handler = null
       }
       const ref = threadRef(parts.scope, parts.id)
-      // Addressed to one of this board's agents by its handle (#832): the board's mapping, while the
-      // session's lane is shared with the sender; anything else goes to the listener with a note,
-      // never a guess, and never to an archived session. Under the default policy an empty board
-      // still routes as any other message while waiting for its first look.
-      // Only in a pair's thread: addressing is a pair's, weighed by this board's switches for that person.
-      if (e.at && !isTeam && (known.length || s.mastersOnly)) {
-        const addr = { who, agent: e.via === 'agent', ref, team: isTeam, code: e.at }
+      // Addressed (#832): the board's mapping, while the session's lane is shared with the sender;
+      // anything else goes to the listener with a note, never a guess, and never to an archived
+      // session. The notice names the message, so the answer goes to it where it was written (#875).
+      if (addressed && e.at) {
+        const addr = { who, agent: e.via === 'agent', ref, team: isTeam, code: e.at, message: e.id.slice(0, 8) }
         const hit = reach(e.at, e.from, world(s))
         if (hit) {
           const name = nameOf(hit.key) ?? (hit.name || undefined)
           const session: SessionRef = { key: hit.key, ...(name && { name }) }
-          // A topic nobody but the listener handles becomes the session's; one another session
+          // A pair's topic nobody but the listener handles becomes the session's; one another session
           // handles stays with it, and a general thread stays the listener's (what an older board
-          // sends lands there): the session only hears of this message.
-          const takes = parts.id !== GENERAL && (!handler || handler.key === s.listener?.key)
+          // sends lands there). A team thread or a channel stays as it was (#875): it is everyone's,
+          // and the session only hears of this message.
+          const takes = !isTeam && parts.id !== GENERAL && (!handler || handler.key === s.listener?.key)
           if (takes && handler?.key !== session.key) {
             team.setThread(e.thread, { handler: session })
             audit('assigned', isTeam ? null : e.from, { thread: e.thread, session: session.key, why: 'addressed' })

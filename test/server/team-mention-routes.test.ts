@@ -1,6 +1,6 @@
 // Addressing a peer's agent (#832) on the board's local API, against a hub in this process: the
 // switches as before while nothing is reachable; a peer's directory in GET /api/team/directory and as `agents` on its roster row; a send that
-// starts with `@name.code` opens a topic with that peer and names the agent on the signed copy, a
+// starts with `@name.code` stays where it was written (#875) and names the agent on that peer's signed copy, a
 // code not in their directory is refused, and a session's post goes the same way into the router.
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { mkdirSync, writeFileSync } from 'node:fs'
@@ -66,7 +66,7 @@ describe('team on, against a hub in this process (#832)', () => {
     expect((await post(url, '/api/team/agents', { expose: { code: 'rev' } })).status).toBe(400)
   })
 
-  test("anna's directory: listed, marked on her roster row; @anna.helper opens a topic with her, a code she did not list is refused", async () => {
+  test("anna's directory: listed, marked on her roster row; @anna.helper stays in the team chat (#875), a topic only with a title, a code she did not list is refused", async () => {
     const view0 = await get<{ roster: Record<string, unknown>[] }>(url, '/api/team')
     expect(view0.roster[0]).not.toHaveProperty('agents')
     const env = await question(
@@ -88,24 +88,33 @@ describe('team on, against a hub in this process (#832)', () => {
       agents: true,
     })
 
-    // From the team chat's general: a topic of its own with anna, the agent named on her copy.
+    // From the team chat's general (#875): it stays there, the agent named on her copy.
     const [status, sent] = (await answer(
       post(url, '/api/team/send', { to: 'team', text: '@anna.helper look at this' }),
     )) as [number, { ok: boolean; thread: string }]
     expect(status).toBe(200)
-    expect(sent.thread.startsWith(`${anna.pub}/`)).toBe(true)
+    expect(sent.thread).toBe('team/general')
     const d = msgOf((await annaClient.take('deliver')).env)
     expect(d.body).toMatchObject({
       text: '@anna.helper look at this',
       at: 'helper',
-      thread: { title: '@helper: look at this' },
+      thread: { id: 'general', group: true },
+    })
+    // A topic only when the writer opens one.
+    const [, topic] = (await answer(
+      post(url, '/api/team/send', { to: anna.pub, text: '@anna.helper a topic', thread: { title: 'Mine' } }),
+    )) as [number, { ok: boolean; thread: string }]
+    expect(topic.thread.startsWith(`${anna.pub}/`)).toBe(true)
+    expect(msgOf((await annaClient.take('deliver')).env).body).toMatchObject({
+      at: 'helper',
+      thread: { title: 'Mine' },
     })
     expect(await answer(post(url, '/api/team/send', { to: anna.pub, text: '@anna.nope x' }))).toEqual([
       400,
       { ok: false, error: 'agent' },
     ])
 
-    // A session's post goes the same way into the router: Agents are off for anna, so it is held, in the new topic.
+    // A session's post goes the same way into the router: Agents are off, so it is held, in the team chat.
     const r = (await (
       await post(url, '/api/team/post', {
         to: 'team',
@@ -116,7 +125,7 @@ describe('team on, against a hub in this process (#832)', () => {
     expect(r).toMatchObject({ ok: true, sent: false, reason: 'off' })
     const drafts = (await get<{ drafts: { to: string; thread: string; text: string }[] }>(url, '/api/team/threads'))
       .drafts
-    expect(drafts.at(-1)).toMatchObject({ to: anna.pub, text: '@anna.helper from a session' })
+    expect(drafts.at(-1)).toMatchObject({ to: 'team', key: 'team/general', text: '@anna.helper from a session' })
     expect(
       await answer(post(url, '/api/team/post', { to: anna.pub, text: '@anna.nope x', session: { key: 'sess-1' } })),
     ).toEqual([400, { ok: false, error: 'agent' }])

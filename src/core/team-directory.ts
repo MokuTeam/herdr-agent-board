@@ -6,7 +6,7 @@
 // person, every session in a lane shared with them is listed for them by its handle (its name,
 // lowercase, spaces to dashes; kept for the session), and nothing else is. On the wire a handle is
 // the directory entry's `code` and the addressed copy's `at`.
-import { sharesAnyLane, sharesLane } from './team-agents.ts'
+import { sharesAnyLane, sharesLane, TEAM } from './team-agents.ts'
 import { type DirectoryEntry, GENERAL, MAX_CODE, MAX_DIRECTORY, MAX_TITLE } from './team-wire.ts'
 
 const CODE = new RegExp(`^[a-z0-9][a-z0-9-]{0,${MAX_CODE - 1}}$`)
@@ -323,12 +323,14 @@ export interface AddressTarget {
 }
 
 /**
- * Where a post that starts with `@Name.handle` goes (#832). A topic with that peer (or a new one)
- * keeps it, with the agent named on the copy; from anywhere else (a general thread, the team chat,
- * a channel, a topic with someone else) it opens a topic of its own with that peer, titled by the
- * handle and the text. A text with no mention, or one naming nobody on the roster or a peer that
- * sent no directory, goes where it was going, as before #832. A handle not in that peer's directory
- * is refused (`agent`): never sent to a guessed agent.
+ * Where a post that starts with `@Name.handle` goes (#832, #875). It stays where it was written
+ * when that peer reads that thread: the team chat and its topics, a channel they are a member of,
+ * their own general thread or a topic with them (a new one too: `--new`). The agent is named on
+ * that peer's copy, and everyone else in the thread reads the message as written. From a thread
+ * that peer does not read (a pair's thread with someone else, a channel without them) it opens a
+ * topic of its own with them, titled by the handle and the text. A text with no mention, or one
+ * naming nobody on the roster or a peer that sent no directory, goes where it was going, as before
+ * #832. A handle not in that peer's directory is refused (`agent`): never sent to a guessed agent.
  */
 export function addressTarget(
   text: string,
@@ -337,6 +339,8 @@ export function addressTarget(
     roster: readonly { peer: string; name: string }[]
     /** A peer's directory's handles, null when it sent none. */
     listed: (peer: string) => readonly string[] | null
+    /** A team thread's members by its id when it is a channel, null for the team's own threads. */
+    members?: (id: string) => readonly string[] | null
   },
 ): ({ ok: true; at?: { peer: string; code: string } } & AddressTarget) | { ok: false; error: 'agent' } {
   const m = leadingMention(text)
@@ -345,10 +349,20 @@ export function addressTarget(
   if (!m || !p || !codes) return { ok: true, ...target }
   if (!codes.includes(m.code)) return { ok: false, error: 'agent' }
   const at = { peer: p.peer, code: m.code }
-  // A topic with that peer keeps it; anything else opens one of its own with them. Addressing is
-  // always a pair's: their board weighs it by the switches it keeps for this board.
-  const t = target.thread
-  const topic = !!t && (t.title !== undefined || (t.id !== undefined && t.id !== GENERAL))
-  if (topic && target.to === p.peer) return { ok: true, ...target, at }
+  // A thread that peer reads keeps it (#875): the mention is seen where it was written, and the
+  // agent answers there. Addressing is still a pair's: their board weighs it by the switches it
+  // keeps for this board, wherever it was written.
+  if (target.to === p.peer || (target.to === TEAM && reads(p.peer, target.thread, w.members)))
+    return { ok: true, ...target, at }
   return { ok: true, to: p.peer, thread: { title: mentionTitle(m.code, m.rest) }, at }
+}
+
+/** Whether a peer gets the copies of a team thread: every member of the team does, a channel's members only. */
+function reads(
+  peer: string,
+  thread: AddressTarget['thread'],
+  members: ((id: string) => readonly string[] | null) | undefined,
+): boolean {
+  const list = thread?.members ?? (thread?.id !== undefined && thread.id !== GENERAL ? members?.(thread.id) : null)
+  return !list || list.includes(peer)
 }

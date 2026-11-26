@@ -155,3 +155,49 @@ test("B's directory on A: listed for the composer and the CLI; A's @ben.helper n
   expect(got.body).toMatchObject({ text: '@ben.helper hi', at: 'helper', thread: { title: '@helper: hi' } })
   expect(await team.post({ to: B.pub }, '@ben.other hi', { by: 'ui' })).toEqual({ ok: false, error: 'agent' })
 })
+
+test('#875: a mention in the team chat stays there: the session hears of that message, answers it there as a reply, everyone gets the answer, nobody gets a topic', async () => {
+  const { A, B, C, b, c, router, schedule } = await boards()
+  // Agents on for B with acme shared; the team's own switches stay off.
+  changeAgents(x => {
+    x.peers[B.pub] = { on: true, lanes: ['acme'] }
+    x.listener = { key: 'sess-listener', name: 'day' }
+  })
+  expect(await router.syncDirectory()).toBe(1)
+  expect((await next(b)).body.agents).toEqual([{ code: 'acme-work' }])
+
+  // B's board posts to the team chat: one copy per member, the same post id, the agent named on A's only.
+  const post = crypto.randomUUID()
+  const text = '@alice.acme-work is the release green?'
+  const ts = new Date().toISOString()
+  const thread = { id: 'general', group: true as const }
+  const env = await question(B, A.pub, text, { body: { text, via: 'agent', thread, post, at: 'acme-work' } }, ts)
+  const toC = await question(B, C.pub, text, { body: { text, via: 'agent', thread, post } }, ts)
+  b.send({ t: 'send', env })
+  b.send({ t: 'send', env: toC })
+  expect((await next(c)).body).toMatchObject({ text, thread })
+
+  const ref = msgOf(env).id.slice(0, 8)
+  await until(() => schedule.entries.length === 1, 'a notice')
+  expect(schedule.entries[0]).toMatchObject({ key: 'sess-acme', teamThread: 'team/general' })
+  expect(schedule.entries[0]?.text).toContain(
+    `ben's agent wrote to you as @acme-work in the team chat (message ${ref})`,
+  )
+  expect(schedule.entries[0]?.text).toContain(`board team reply team --to ${ref} "..."`)
+  expect(readThreads()['team/general']?.handler ?? null).toBeNull()
+
+  // The session answers that message in the chat: B and C both get it, as a reply to B's post.
+  const r = await router.agentPost({
+    to: 'team',
+    thread: { id: 'general' },
+    replyTo: msgOf(env).id,
+    text: 'green since 14:00',
+    session: { key: 'sess-acme', name: 'acme-work' },
+  })
+  expect(r).toMatchObject({ ok: true, sent: true, thread: 'team/general' })
+  for (const who of [b, c])
+    expect((await next(who)).body).toMatchObject({ text: 'green since 14:00', via: 'agent', thread, replyTo: post })
+
+  // Nobody got a topic: every thread on A is the team chat's.
+  expect(Object.keys(readThreads()).filter(k => k !== 'team/general')).toEqual([])
+})

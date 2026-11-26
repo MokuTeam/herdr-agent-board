@@ -3190,10 +3190,16 @@ the session's across restarts and renames. A session leaves the list when it lea
 archived, or the lane is no longer shared; nothing is switched on per agent, and People and agents
 shows who reaches which session. Each teammate's board gets a signed list of only what it reaches,
 sent when that list changes. They write `@YourName.handle ...` in the Team panel (the box offers the
-names after `@`), in `board team post @YourName.handle "..."` or at the start of a reply; in a topic
-with you it stays there, from anywhere else (a general thread, the team chat) it opens a topic of
-its own with you. On your board that topic goes to the session as if you
-had assigned it, through the same switches, lanes, limits and checks. A handle that is unknown,
+names after `@`), in `board team post @YourName.handle "..."` (their general thread with you, or a
+topic with `--new`) or at the start of a message or a reply. A mention stays where it was written
+(#875): in the team chat, a channel you are in, or a thread with you, everyone there reads it as
+written, with the mention highlighted, and only your session is notified, with the thread and the
+message named, so it answers there as a reply to it. From a thread you do not read (their thread
+with someone else, a channel without you) it opens a topic of its own with you. On your board a
+topic with them goes to the session as if you had assigned it; a team thread or a channel stays
+everyone's, and the session only hears of the message. Either way it goes through the switches you
+keep for that person (Agents on for them, the lane shared), its answer too, with the same limits
+and checks. A handle that is unknown,
 whose lane is not shared with them, or whose session was archived (or is being archived) goes to
 the listener with a note: never to a guessed session, and never waking or bringing back an archived
 one. A teammate can only message that agent: never start a session or reach anything else. An older

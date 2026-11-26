@@ -342,7 +342,12 @@ test('a published alias reaches the exposed service over the hub and is withdraw
     expect((await change({ publishAlias: { key: 'service-missing', name: 'Reports' } })).status).toBe(400)
     expect((await alias('Reports')).status).toBe(200)
     await waitFor(directory, entries => entries.some(a => a.alias === 'Reports'), 'published alias')
-    const send = await post(peerUrl, '/api/team/send', { to: 'team', text: '@rEpOrTs prepare the report' })
+    // A topic with the owner's board (#875: from the team chat the mention would stay in the chat).
+    const send = await post(peerUrl, '/api/team/send', {
+      to: owner.pub,
+      thread: { title: 'Report' },
+      text: '@rEpOrTs prepare the report',
+    })
     expect(send.status).toBe(200)
     const { thread: key } = (await send.json()) as { thread: string }
     const thread = key.slice(key.indexOf('/') + 1)

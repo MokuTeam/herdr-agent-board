@@ -420,7 +420,7 @@ describe("the peers' directories", () => {
     expect(of(w.P.pub)).not.toHaveProperty('agents')
   })
 
-  test('a post to her that starts with @Name.handle names the agent; a team post names none; one not listed is refused', async () => {
+  test('a post to her that starts with @Name.handle names the agent; a team post names it on her copy only (#875); one not listed is refused', async () => {
     const w = await world()
     await deliver(w, w.P, { text: 'agent directory', agents: [{ code: 'helper' }] })
     const r = await w.s.svc.post({ to: w.P.pub, thread: { title: '@helper: look' } }, '@anna.helper can you look', {
@@ -430,11 +430,16 @@ describe("the peers' directories", () => {
     expect(sent(w.ws)[0]?.body.at).toBe('helper')
     const t = await w.s.svc.post({ to: 'team', thread: { title: 'Weekly' } }, '@anna.helper in the team', { by: 'ui' })
     expect(t.ok).toBe(true)
-    expect(
-      sent(w.ws)
-        .slice(1)
-        .every(c => c.body.at === undefined),
-    ).toBe(true)
+    const copies = sent(w.ws).slice(1)
+    expect(copies.map(c => [c.to, c.body.at, c.body.text])).toEqual([
+      [w.P.pub, 'helper', '@anna.helper in the team'],
+      [w.Q.pub, undefined, '@anna.helper in the team'],
+    ])
+    // A team post that names a code her board did not list is refused, as a pair's is.
+    expect(await w.s.svc.post({ to: 'team' }, '@anna.nope all of you', { by: 'ui' })).toEqual({
+      ok: false,
+      error: 'agent',
+    })
     expect(await w.s.svc.post({ to: w.P.pub }, '@anna.nope hi', { by: 'ui' })).toEqual({ ok: false, error: 'agent' })
     expect(await w.s.svc.post({ to: w.P.pub, at: { peer: w.P.pub, code: 'nope' } }, 'hi', { by: 'ui' })).toEqual({
       ok: false,
@@ -456,13 +461,13 @@ describe('the router and an addressed message', () => {
     const w = await world()
     await ready(w)
     const t = topic()
-    await deliver(w, w.P, { text: '@me.acme-work look', via: 'agent', thread: t, at: 'acme-work' })
+    const id = await deliver(w, w.P, { text: '@me.acme-work look', via: 'agent', thread: t, at: 'acme-work' })
     const key = `${w.P.pub}/${t.id}`
     expect(readThreads()[key]?.handler).toEqual({ key: 'sess-acme', name: 'acme-work' })
     expect(w.schedule.entries).toHaveLength(1)
     expect(w.schedule.entries[0]).toMatchObject({ key: 'sess-acme', teamThread: key })
     expect(w.schedule.entries[0]?.text).toBe(
-      `anna's agent wrote to you as @acme-work in thread ${t.id.slice(0, 8)}. Read it: board team thread ${t.id.slice(0, 8)}; answer with board team reply ${t.id.slice(0, 8)} "...".`,
+      `anna's agent wrote to you as @acme-work in thread ${t.id.slice(0, 8)} (message ${id.slice(0, 8)}). Read it: board team thread ${t.id.slice(0, 8)}; answer there with board team reply ${t.id.slice(0, 8)} --to ${id.slice(0, 8)} "...".`,
     )
     const r = await w.router.agentPost({
       to: w.P.pub,
@@ -506,19 +511,117 @@ describe('the router and an addressed message', () => {
     expect(w.schedule.entries.at(-1)?.key).toBe('sess-acme')
   })
 
-  test('a handle in a team thread is no address: the message is routed as any other there', async () => {
+  test("a mention in the team chat (#875): the session hears of that message where it was written; the chat stays everyone's, no topic opens", async () => {
+    const w = await world()
+    await ready(w)
+    // The team's own switches are off: the mention is weighed by anna's.
+    const post = crypto.randomUUID()
+    const id = await deliver(w, w.P, {
+      text: '@me.acme-work can you look',
+      via: 'agent',
+      thread: { id: 'general', group: true },
+      post,
+      at: 'acme-work',
+    })
+    const ref = id.slice(0, 8)
+    expect(w.schedule.entries).toHaveLength(1)
+    expect(w.schedule.entries[0]).toMatchObject({ key: 'sess-acme', teamThread: 'team/general' })
+    expect(w.schedule.entries[0]?.text).toBe(
+      `anna's agent wrote to you as @acme-work in the team chat (message ${ref}). Read it: board team thread team; answer there with board team reply team --to ${ref} "...".`,
+    )
+    expect(readThreads()['team/general']?.handler ?? null).toBeNull()
+    expect(Object.keys(readThreads()).filter(k => k.startsWith(`${w.P.pub}/`))).toEqual([])
+
+    // Its answer, a reply to that message, goes to the chat by anna's switches: everyone reads it there.
+    const before = sent(w.ws).length
+    const r = await w.router.agentPost({
+      to: 'team',
+      thread: { id: 'general' },
+      replyTo: id,
+      text: 'looked: fine',
+      session: { key: 'sess-acme' },
+    })
+    expect(r).toMatchObject({ ok: true, sent: true, thread: 'team/general' })
+    const copies = sent(w.ws).slice(before)
+    expect(copies.map(c => c.to).sort()).toEqual([w.P.pub, w.Q.pub].sort())
+    // The reply names her post, the same on every member's copy (#370).
+    for (const c of copies)
+      expect(c.body).toMatchObject({ text: 'looked: fine', thread: { id: 'general', group: true }, replyTo: post })
+    // Anything else there still goes by the team's switches: held while they are off.
+    expect(
+      await w.router.agentPost({
+        to: 'team',
+        thread: { id: 'general' },
+        text: 'and more',
+        session: { key: 'sess-acme' },
+      }),
+    ).toMatchObject({ ok: true, sent: false, reason: 'off' })
+    // A session the message did not name gets no pass from it.
+    expect(
+      await w.router.agentPost({
+        to: 'team',
+        thread: { id: 'general' },
+        replyTo: id,
+        text: 'me too',
+        session: { key: 'sess-globex' },
+      }),
+    ).toMatchObject({ ok: true, sent: false, reason: 'off' })
+  })
+
+  test('a mention in a channel she is in: the session hears of it there; a second one counts on the same notice', async () => {
+    const w = await world()
+    await ready(w)
+    const ch = { id: crypto.randomUUID(), title: 'ops', group: true as const, members: [w.me, w.P.pub].sort() }
+    const first = await deliver(w, w.P, {
+      text: '@me.acme-work one',
+      thread: ch,
+      post: crypto.randomUUID(),
+      at: 'acme-work',
+    })
+    const last = await deliver(w, w.P, {
+      text: '@me.acme-work two',
+      thread: ch,
+      post: crypto.randomUUID(),
+      at: 'acme-work',
+    })
+    expect(first).not.toBe(last)
+    expect(w.schedule.entries).toHaveLength(1)
+    expect(w.schedule.entries[0]).toMatchObject({ key: 'sess-acme', teamThread: `team/${ch.id}`, teamCount: 2 })
+    expect(w.schedule.entries[0]?.text).toContain(`(2 new messages, the last ${last.slice(0, 8)})`)
+    expect(w.schedule.entries[0]?.text).toContain(`--to ${last.slice(0, 8)}`)
+    expect(readThreads()[`team/${ch.id}`]?.handler ?? null).toBeNull()
+  })
+
+  test("a mention in the team chat from someone whose Agents are off: routed by the team's switches, as any team message", async () => {
     const w = await world()
     await ready(w)
     changeAgents(x => {
+      x.peers[w.P.pub] = { on: false, lanes: ['acme'] }
       x.peers.team = { on: true, lanes: [] }
     })
     await deliver(w, w.P, {
       text: '@me.acme-work hi',
       thread: { id: crypto.randomUUID(), title: 'T', group: true },
+      post: crypto.randomUUID(),
       at: 'acme-work',
     })
     expect(w.schedule.entries.map(e => e.key)).toEqual(['sess-listener'])
     expect(w.schedule.entries[0]?.text).not.toContain('acme-work')
+  })
+
+  test('a handle that reaches no agent, in the team chat: the listener hears with a note naming the message', async () => {
+    const w = await world()
+    await ready(w)
+    const id = await deliver(w, w.P, {
+      text: '@me.globex-work hi',
+      thread: { id: 'general', group: true },
+      post: crypto.randomUUID(),
+      at: 'globex-work',
+    })
+    expect(w.schedule.entries.map(e => e.key)).toEqual(['sess-listener'])
+    expect(w.schedule.entries[0]?.text).toContain(
+      `in the team chat (message ${id.slice(0, 8)}) to @globex-work, which reaches no agent here now`,
+    )
   })
 
   test("in a pair's general thread the session hears of it, and the thread stays the listener's", async () => {

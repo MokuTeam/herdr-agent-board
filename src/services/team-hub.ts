@@ -1261,6 +1261,7 @@ export function createTeam({
       thread,
       ...(msg.body.replyTo && { replyTo: msg.body.replyTo }),
       ...(msg.body.post && { post: msg.body.post }),
+      ...(msg.body.at && { at: msg.body.at }),
       ackedAt: null,
       ...(msg.body.file && { file: { state: 'pending' as const, ref: msg.body.file } }),
     })
@@ -1440,8 +1441,9 @@ export function createTeam({
     if (!recipients.length) return { ok: false, error: 'nobody' }
     // An agent addressed (#832): one of the recipients, by a handle its board listed for this one.
     // Named in the call, or by the text's leading `@Name.code` (a held draft sent later says it so).
-    // Addressing is a pair's (#832): a team post names no agent, whatever its text says.
-    const at = team ? undefined : (target.at ?? mentionAt(body, recipients))
+    // In the team chat or a channel too (#875): only that peer's copy names the agent, and everyone
+    // reads the message as written; their board weighs it by the switches it keeps for this one.
+    const at = target.at ?? mentionAt(body, recipients)
     if (at === null || (at && !(recipients.some(p => p.peer === at.peer) && listed(at.peer, at.code))))
       return { ok: false, error: 'agent' }
     // A reply (#370): a line of this thread, named on the wire as its sender's board named it.

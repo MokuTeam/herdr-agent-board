@@ -121,8 +121,8 @@ function sessionFrom(v: unknown): SessionRef | null {
 }
 
 /**
- * Where a post that starts with `@Name.handle` goes (#832, core/team-directory.ts addressTarget): by
- * the roster and the directories the peers sent.
+ * Where a post that starts with `@Name.handle` goes (#832, #875, core/team-directory.ts addressTarget):
+ * by the roster, the directories the peers sent and a channel's members.
  */
 function addressed(team: TeamService, text: string, target: AddressTarget): ReturnType<typeof addressTarget> {
   // Most posts start with no mention: nothing is read for them.
@@ -131,6 +131,8 @@ function addressed(team: TeamService, text: string, target: AddressTarget): Retu
   return addressTarget(text, target, {
     roster: team.view()?.roster ?? [],
     listed: peer => (Object.hasOwn(got, peer) ? (got[peer]?.list.map(e => e.code) ?? null) : null),
+    // A channel's members (#875): a mention there stays only when that peer is one of them.
+    members: id => readThreads()[threadKey(TEAM, id)]?.members ?? null,
   })
 }
 
