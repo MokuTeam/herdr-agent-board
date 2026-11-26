@@ -14,6 +14,7 @@
 //   answer is as before. Without that URL the node's page stays local and nothing goes up.
 import { describe, expect, test } from 'bun:test'
 import { nodeRevealOf, RELAY_TABLE, relayMatch } from '../../src/core/master-relay.ts'
+import { threadCmd } from '../../src/entrypoints/thread-cli.ts'
 import type { BoardWindow } from '../../src/integrations/edge-window.ts'
 import { nodeRevealAnswer, revealRoute, threadUp } from '../../src/server/routes/reveal.ts'
 import { openWeb } from '../../src/services/web-open.ts'
@@ -351,6 +352,46 @@ test("a click on the node with the board's window open on the master: that windo
     const none = fakeWindow(false)
     expect(await openWeb(cfg, { pane: 'p1', window: none.win })).toEqual({ ok: true, url: `${node.url}/` })
     expect(none.did).toEqual(['raise', `launch ${node.url}/#session=${encodeURIComponent(S)}`])
+  } finally {
+    onMaster.close()
+  }
+}, 60_000)
+
+test('board thread open in a session on the node (#849): its board window raised, the thread opened on the master page in it', async () => {
+  const { pair, node } = await meshWith(true)
+  const made = await post(`${pair.master.url}/api/threads`, { op: 'new', lane: 'atlas', title: 'Open check' })
+  const thread = ((await made.json()) as { key: string }).key
+  const port = Number(new URL(node.url).port)
+  const onMaster = await listen(pair.master.url)
+  try {
+    const win = fakeWindow(true)
+    const out: string[] = []
+    const asked: unknown[] = []
+    const code = await threadCmd(['open', thread], {
+      cfg: { node: { id: node.id }, port } as never,
+      actor: { kind: 'session', key: S, name: 'worker' },
+      lane: 'atlas',
+      findSession: async () => null,
+      setAsk: () => {},
+      out: l => void out.push(l),
+      err: l => void out.push(l),
+      call: async body => {
+        asked.push(body)
+        return { state: 'answered', code: 126, out: [], err: ['not from a node'] }
+      },
+      // as cli.ts wires it, with the window a fake
+      openBoard: async key => {
+        const r = await openWeb({ port }, { thread: key, window: win.win })
+        return r.ok ? { ok: true, url: r.url } : { ok: false, error: r.error }
+      },
+    })
+    expect(code).toBe(0)
+    expect(out).toEqual([`ok · ${thread} · http://127.0.0.1:${port}/#thread=${thread}`])
+    expect(asked).toEqual([])
+    expect(win.did).toEqual(['raise'])
+    await until("the master's page in the raised window opens the thread", async () =>
+      onMaster.heard().includes(told('thread-open', { key: thread })),
+    )
   } finally {
     onMaster.close()
   }

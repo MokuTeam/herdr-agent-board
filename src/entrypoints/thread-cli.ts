@@ -68,6 +68,7 @@ import {
   SHOW_LAST,
   sharingOf,
   showText,
+  THREAD_KEY,
   type ThreadHead,
   type ThreadsConfig,
   threadLink,
@@ -396,6 +397,9 @@ export async function threadCmd(rest: readonly string[], ctx: ThreadCmdContext):
     // On a node every command goes to the master, which holds the threads (#508): this computer's
     // database is not opened. Without `node` the command runs here, as it always has.
     // Decisions (#781): a question with options goes too, and the master holds it.
+    // `open` stays here (#849): it raises this computer's board window, as a notification clicked does,
+    // and the node's board passes the reveal on to the master's page in it (#841).
+    if (nodeConfig(ctx.cfg.node) && sub === 'open') return await openOnNode(args, ctx, out, json)
     if (nodeConfig(ctx.cfg.node)) return await forward(sub, args, ctx, out, json)
     const a = parseArgs(sub, args, !!cfg?.cases, { decisions: !!ctx.decisions, verify: !!cfg?.verify })
     const base = `http://127.0.0.1:${typeof ctx.cfg.port === 'number' ? ctx.cfg.port : 12422}/`
@@ -429,6 +433,34 @@ export async function threadCmd(rest: readonly string[], ctx: ThreadCmdContext):
   } finally {
     if (db && !ctx.db) db.close()
   }
+}
+
+/**
+ * `board thread open <key>` on a node (#849): this computer's board window raised, or one opened when
+ * there is none (services/web-open.ts), and the thread shown in it: the node's board tells the
+ * master's page there (#841). The master is not asked to open anything: it would raise its own window
+ * (core/node-uplink.ts NOT_FROM_NODE). A session's or not; the key in full, as the lane's bare
+ * numbers live on the master. What it prints is what `open` prints on a board without `node`.
+ */
+async function openOnNode(
+  args: readonly string[],
+  ctx: ThreadCmdContext,
+  out: (line: string) => void,
+  json: boolean,
+): Promise<number> {
+  const words = args.filter(w => w !== '--json' && w !== '--')
+  const key = (words[0] ?? '').trim().toLowerCase()
+  if (words.length !== 1 || !THREAD_KEY.test(key)) {
+    const message = "usage: board thread open <key> (on a node, the thread's full key, as atlas-12)"
+    if (json) out(JSON.stringify({ ok: false, error: 'usage', message }))
+    else (ctx.err ?? console.error)(message)
+    return 1
+  }
+  const url = threadLink(`http://127.0.0.1:${typeof ctx.cfg.port === 'number' ? ctx.cfg.port : 12422}/`, key)
+  const r = ctx.openBoard ? await ctx.openBoard(key) : { ok: false as const, error: 'cannot open the board' }
+  if (json) out(JSON.stringify({ ok: r.ok, key, url, ...(!r.ok && { message: r.error }) }))
+  else out(r.ok ? `ok · ${key} · ${url}` : `${r.error} · ${key} · ${url}`)
+  return 0
 }
 
 /**

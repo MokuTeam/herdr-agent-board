@@ -3,6 +3,8 @@
 // the master answered; this computer's database is never opened. Without `node` each command runs
 // as it always has, with no request to any board on its way. The running pair is in
 // test/server/node-uplink.test.ts.
+// `board thread open` on a node (#849) stays on the node: its board window raised and the thread shown
+// there (web-open.ts, the reveal through the master: test/server/node-reveal.test.ts); nothing goes up.
 import { afterEach, expect, test } from 'bun:test'
 import { existsSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -495,4 +497,71 @@ test('outside a session on a node, a thread read goes up the relay as the owner;
     over: { callOwner: async () => Promise.reject(new Error('never')) },
   })
   expect(post).toMatchObject({ code: 1, calls: [] })
+})
+
+test('on a node, board thread open stays here: the board window and the thread in it, nothing sent to the master', async () => {
+  isolatedHome()
+  for (const actor of [me, { kind: 'owner' } as unknown as Party]) {
+    const opened: string[] = []
+    const owner: unknown[] = []
+    const r = await run(['open', 'Atlas-12'], {
+      actor,
+      over: {
+        openBoard: async key => {
+          opened.push(key)
+          return { ok: true, url: 'http://127.0.0.1:12422/' }
+        },
+        callOwner: async body => {
+          owner.push(body)
+          return { state: 'answered', code: 0, out: [], err: [] }
+        },
+      },
+    })
+    expect(r).toMatchObject({ code: 0, out: ['ok · atlas-12 · http://127.0.0.1:12422/#thread=atlas-12'], err: [] })
+    expect(opened).toEqual(['atlas-12'])
+    expect(r.calls).toEqual([])
+    expect(owner).toEqual([])
+  }
+  // --json, a peer's key, the port of this board.
+  const opened: string[] = []
+  const j = await run(['open', 'atlas-12@peer_1', '--json'], {
+    cfg: { node: NODE, port: 12500 },
+    over: {
+      openBoard: async key => {
+        opened.push(key)
+        return { ok: true, url: 'http://127.0.0.1:12500/' }
+      },
+    },
+  })
+  expect(j.out.map(l => JSON.parse(l))).toEqual([
+    { ok: true, key: 'atlas-12@peer_1', url: 'http://127.0.0.1:12500/#thread=atlas-12%40peer_1' },
+  ])
+  expect(opened).toEqual(['atlas-12@peer_1'])
+  expect(j.calls).toEqual([])
+  expect(nothingWritten()).toBe(true)
+})
+
+test("on a node, board thread open says what the board said when it could not, and wants the thread's full key", async () => {
+  isolatedHome()
+  const failed = await run(['open', 'atlas-12'], {
+    over: { openBoard: async () => ({ ok: false, error: 'The board is not running' }) },
+  })
+  expect(failed).toMatchObject({
+    code: 0,
+    out: ['The board is not running · atlas-12 · http://127.0.0.1:12422/#thread=atlas-12'],
+  })
+  expect(failed.calls).toEqual([])
+  for (const args of [['open'], ['open', '12'], ['open', 'not a key'], ['open', 'atlas-12', 'atlas-13']]) {
+    let asked = 0
+    const r = await run(args, {
+      over: {
+        openBoard: async () => {
+          asked++
+          return { ok: true, url: '' }
+        },
+      },
+    })
+    expect([args, r.code, asked, r.calls.length]).toEqual([args, 1, 0, 0])
+    expect(r.err.join('\n')).toContain("the thread's full key")
+  }
 })
