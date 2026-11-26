@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { writeCard } from '../../src/adapters/cards.ts'
 import { archiveDir, teamAgentsFile, teamDirectoryFile } from '../../src/adapters/paths.ts'
+import { markRead, teamReadsFile } from '../../src/adapters/team-reads.ts'
 import {
   changeAgents,
   changeDirectoryState,
@@ -717,5 +718,167 @@ describe('the router and an addressed message', () => {
     })
     await deliver(w, w.P, { text: 'look', thread: topic(), at: 'acme-work' })
     expect(w.schedule.entries).toEqual([])
+  })
+})
+
+describe('addressedUnread (#880)', () => {
+  async function ready(w: World): Promise<void> {
+    shareWithAnna(w)
+    await w.router.syncDirectory()
+  }
+
+  test('team chat and channels: returns latest unread addressed message per thread and session, even with team switches off', async () => {
+    const w = await world()
+    await ready(w)
+    // team chat mention weighed by anna's switches, team's own switches off.
+    const t1 = await deliver(w, w.P, {
+      text: '@me.acme-work one',
+      thread: { id: 'general', group: true },
+      post: crypto.randomUUID(),
+      at: 'acme-work',
+    })
+    expect(w.router.addressedUnread()).toEqual({
+      'team/general': [{ key: 'sess-acme', message: t1 }],
+    })
+    w.s.clock.tick(1000)
+    const t2 = await deliver(w, w.P, {
+      text: '@me.acme-work two',
+      thread: { id: 'general', group: true },
+      post: crypto.randomUUID(),
+      at: 'acme-work',
+    })
+    expect(w.router.addressedUnread()).toEqual({
+      'team/general': [{ key: 'sess-acme', message: t2 }],
+    })
+
+    // Channel mention: muting team chat does NOT suppress a channel, muting the channel or archiving it DOES.
+    const chId = crypto.randomUUID()
+    const ch = { id: chId, title: 'Ops', group: true as const, members: [w.me, w.P.pub].sort() }
+    const c1 = await deliver(w, w.P, {
+      text: '@me.acme-work ch',
+      thread: ch,
+      post: crypto.randomUUID(),
+      at: 'acme-work',
+    })
+    expect(w.router.addressedUnread()).toEqual({
+      'team/general': [{ key: 'sess-acme', message: t2 }],
+      [`team/${chId}`]: [{ key: 'sess-acme', message: c1 }],
+    })
+
+    changeAgents(x => {
+      x.peers.team = { on: false, lanes: [], muted: true }
+    })
+    expect(w.router.addressedUnread()).toEqual({
+      [`team/${chId}`]: [{ key: 'sess-acme', message: c1 }],
+    })
+
+    w.s.svc.setThread(`team/${chId}`, { muted: true })
+    expect(w.router.addressedUnread()).toEqual({})
+  })
+
+  test('pair general (explicit and legacy) and topic handled by another session return the addressed session', async () => {
+    const w = await world()
+    await ready(w)
+    const g1 = await deliver(w, w.P, { text: '@me.acme-work gen', at: 'acme-work' })
+    const tId = crypto.randomUUID()
+    await deliver(w, w.P, { text: 'first', thread: { id: tId, title: 'Topic' } })
+    w.s.svc.setThread(`${w.P.pub}/${tId}`, { handler: { key: 'sess-globex', name: 'globex-work' } })
+    const m1 = await deliver(w, w.P, {
+      text: '@me.acme-work too',
+      thread: { id: tId, title: 'Topic' },
+      at: 'acme-work',
+    })
+    expect(w.router.addressedUnread()).toEqual({
+      [`${w.P.pub}/general`]: [{ key: 'sess-acme', message: g1 }],
+      [`${w.P.pub}/${tId}`]: [{ key: 'sess-acme', message: m1 }],
+    })
+  })
+
+  test('markRead clears earlier addressed messages even when an unaddressed message arrives later', async () => {
+    const w = await world()
+    await ready(w)
+    const id = await deliver(w, w.P, {
+      text: '@me.acme-work look',
+      thread: { id: 'general', group: true },
+      post: crypto.randomUUID(),
+      at: 'acme-work',
+    })
+    expect(w.router.addressedUnread()['team/general']).toEqual([{ key: 'sess-acme', message: id }])
+    markRead('team/general', w.s.clock.now())
+    w.s.clock.tick(1000)
+    await deliver(w, w.P, {
+      text: 'plain follow-up',
+      thread: { id: 'general', group: true },
+      post: crypto.randomUUID(),
+    })
+    expect(w.router.addressedUnread()).toEqual({})
+  })
+
+  test('drops unreachable sessions (Agents off, lane unshared, removed, archived, mastersOnly, held, paused) and does not create team-reads.json when off', async () => {
+    const w = await world()
+    // With Agents off, addressedUnread returns {} without creating team-reads.json.
+    expect(w.router.addressedUnread()).toEqual({})
+    expect(existsSync(teamReadsFile())).toBe(false)
+
+    await ready(w)
+    await deliver(w, w.P, {
+      text: '@me.acme-work check',
+      thread: { id: 'general', group: true },
+      post: crypto.randomUUID(),
+      at: 'acme-work',
+    })
+    expect(w.router.addressedUnread()['team/general']).toHaveLength(1)
+
+    // Lane unshared
+    shareWithAnna(w, ['globex'])
+    expect(w.router.addressedUnread()).toEqual({})
+    shareWithAnna(w, ['acme'])
+    expect(w.router.addressedUnread()['team/general']).toHaveLength(1)
+
+    // mastersOnly without master flag
+    changeAgents(x => {
+      x.mastersOnly = true
+    })
+    expect(w.router.addressedUnread()).toEqual({})
+    writeCard('sess-acme', { teamMaster: true })
+    expect(w.router.addressedUnread()['team/general']).toHaveLength(1)
+    changeAgents(x => {
+      delete x.mastersOnly
+    })
+
+    // Sender paused
+    changeAgents(x => {
+      x.paused[w.P.pub] = w.s.clock.now() + 60_000
+    })
+    expect(w.router.addressedUnread()).toEqual({})
+    changeAgents(x => {
+      delete x.paused[w.P.pub]
+    })
+
+    // Global off
+    changeAgents(x => {
+      x.off = true
+    })
+    expect(w.router.addressedUnread()).toEqual({})
+    changeAgents(x => {
+      x.off = false
+    })
+
+    // Held message (changed key)
+    changePins(p => {
+      p[w.P.pub] = { name: 'anna', status: 'changed', at: w.s.clock.now() }
+    })
+    const chId = crypto.randomUUID()
+    await deliver(w, w.P, {
+      text: '@me.acme-work held',
+      thread: { id: chId, title: 'Held', group: true, members: [w.me, w.P.pub].sort() },
+      post: crypto.randomUUID(),
+      at: 'acme-work',
+    })
+    expect(w.router.addressedUnread()[`team/${chId}`]).toBeUndefined()
+
+    // Archived / removed session
+    archive('sess-acme')
+    expect(w.router.addressedUnread()).toEqual({})
   })
 })

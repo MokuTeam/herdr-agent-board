@@ -16,6 +16,7 @@ import { readCard } from '../adapters/cards.ts'
 import { ownerServices } from '../adapters/owner-services.ts'
 import { configDir, stateDir, uploadsDir } from '../adapters/paths.ts'
 import { addEntry, listEntries, updateEntry } from '../adapters/schedule-store.ts'
+import { peekReads } from '../adapters/team-reads.ts'
 import {
   audit,
   changeAgents,
@@ -61,6 +62,7 @@ import {
 } from '../core/team-agents.ts'
 import { assignHandles, directoryFor, type ReachWorld, reach, sharesHandleLane } from '../core/team-directory.ts'
 import { validEmoji } from '../core/team-reactions.ts'
+import type { Reads } from '../core/team-unread.ts'
 import type { DirectoryEntry } from '../core/team-wire.ts'
 import type { Config } from '../core/types.ts'
 import type { InboundEvent, PostResult, PostTarget, ReactResult, TeamService } from './team-hub.ts'
@@ -172,6 +174,12 @@ export function boardOwnFile(path: string): boolean {
   return inside(stateDir()) || inside(configDir())
 }
 
+/** A session addressed by an unread message in a thread (#880), with the latest such message's id. */
+export interface AddressedEntry {
+  key: string
+  message: string
+}
+
 export interface TeamRouter {
   /**
    * A session's post (`board team post | reply`): sent, held as a draft with the reason, or refused.
@@ -224,6 +232,13 @@ export interface TeamRouter {
    * sent while no peer has Agents on and none ever got a list. Resolves how many went.
    */
   syncDirectory(): Promise<number>
+  /**
+   * Unread messages that addressed a live session by its handle (#880), by thread key: each
+   * session whose handle still reaches it for the sender (Agents on, lane shared, not archived)
+   * with the latest unread addressed message's id. Empty while Agents are off or nothing unread
+   * carries `at`.
+   */
+  addressedUnread(reads?: Reads | null): Record<string, AddressedEntry[]>
 }
 
 interface Options {
@@ -636,8 +651,7 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
             team.setThread(e.thread, { handler: session })
             audit('assigned', isTeam ? null : e.from, { thread: e.thread, session: session.key, why: 'addressed' })
           }
-          // A service agent (#819) finds the thread through the MCP's wait: nothing in the schedule.
-          // Not yet a team thread or a channel it does not handle (#880).
+          // A service agent (#819) finds handled or addressed threads through the MCP's wait (#880): nothing in the schedule.
           if (!known.some(i => i.key === session.key && i.service))
             notify(session, e.thread, (count: number) => addressedText({ ...addr, count }), t, true)
           return
@@ -717,6 +731,48 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       const next = syncing.then(syncOnce, syncOnce)
       syncing = next.catch(() => 0)
       return next
+    },
+
+    addressedUnread(givenReads) {
+      const s = readAgents()
+      if (globalOff(s.off) || !Object.entries(s.peers).some(([p, sw]) => isPeerId(p) && sw?.on)) return {}
+      const reads = givenReads === undefined ? peekReads() : givenReads
+      const t = now()
+      const threads = readThreads()
+      const teamMuted = s.peers[TEAM]?.muted === true
+      const hits: { thread: string; from: string; at: string; id: string; receivedAt: number }[] = []
+      for (const [from, list] of Object.entries(readAllInbox())) {
+        if (!s.peers[from]?.on || (s.paused[from] ?? 0) > t) continue
+        for (const i of list) {
+          if (!i.at || i.held) continue
+          const key = i.thread ?? threadKey(from, GENERAL)
+          const rec = Object.hasOwn(threads, key) ? threads[key] : undefined
+          if (rec?.muted || rec?.archived) continue
+          if (teamMuted && splitKey(key)?.scope === TEAM && !rec?.members) continue
+          const mark = reads ? Math.max(reads.since, reads.threads[key] ?? 0) : 0
+          if (i.receivedAt <= mark) continue
+          hits.push({ thread: key, from, at: i.at, id: i.id, receivedAt: i.receivedAt })
+        }
+      }
+      if (!hits.length) return {}
+      const w = world(s)
+      const latest = new Map<string, { thread: string; key: string; message: string; receivedAt: number }>()
+      for (const h of hits) {
+        const target = reach(h.at, h.from, w)
+        if (!target) continue
+        const slot = `${h.thread}\n${target.key}`
+        const prev = latest.get(slot)
+        if (!prev || h.receivedAt >= prev.receivedAt)
+          latest.set(slot, { thread: h.thread, key: target.key, message: h.id, receivedAt: h.receivedAt })
+      }
+      const out: Record<string, AddressedEntry[]> = {}
+      for (const v of latest.values()) {
+        const list = out[v.thread]
+        const entry = { key: v.key, message: v.message }
+        if (list) list.push(entry)
+        else out[v.thread] = [entry]
+      }
+      return out
     },
   }
 

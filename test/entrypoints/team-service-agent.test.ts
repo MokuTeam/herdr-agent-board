@@ -437,3 +437,224 @@ test('an owner service uses each peer’s shared lanes even when its card is in 
     client.close()
   }
 })
+
+test('a service agent addressed in the team chat, a channel, or general is woken by wait and replies there (#880)', async () => {
+  const localHub = await startHarness()
+  const box = await sandbox()
+  const me = await generateKey()
+  const claire = (await generateKey()) as KeyPair
+  const david = (await generateKey()) as KeyPair
+  ;(await localHub.join(me, 'owner4', undefined, ['threads', 'replies'])).close()
+  const claireClient = await localHub.join(claire, 'claire', undefined, ['threads', 'replies'])
+  const davidClient = await localHub.join(david, 'david', undefined, ['threads', 'replies'])
+  try {
+    const state = join(box.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board')
+    mkdirSync(state, { recursive: true })
+    writeFileSync(join(state, 'team-key.json'), JSON.stringify({ v: 1, ...me }), { mode: 0o600 })
+    const cfg = {
+      language: 'en',
+      categories: [
+        { id: 'home', title: 'Home', color: 'green' },
+        { id: 'work', title: 'Work', color: 'blue' },
+      ],
+      wakeUrl: null,
+      refreshSec: 1,
+      team: { hub: localHub.url.replace(/\/v1$/, ''), name: 'owner4' },
+    }
+    const file = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json')
+    mkdirSync(join(file, '..'), { recursive: true })
+    writeFileSync(file, JSON.stringify(cfg))
+    box.state({
+      'api snapshot': { result: { snapshot: { panes: [], tabs: [], workspaces: [] } } },
+    })
+    const { url } = await serveBoard(box, cfg, { TEST_LIVE_CONFIG: '1' })
+    const view = await waitFor(
+      async () => (await (await fetch(`${url}/api/team`)).json()) as { state?: string; roster?: unknown[] },
+      v => v.state === 'online' && (v.roster?.length ?? 0) === 2,
+      'the board online at the hub with claire and david in the roster',
+    )
+
+    // Register Juno (home) and Ledger (work) first, then share home with claire and david; keep team switches off.
+    expect((await post(url, '/api/team/services', { add: { name: 'Juno', lane: 'home' } })).status).toBe(200)
+    expect((await post(url, '/api/team/services', { add: { name: 'Ledger', lane: 'work' } })).status).toBe(200)
+    await waitFor(
+      async () => ((await (await fetch(`${url}/api/board`)).json()) as { items: Card[] }).items,
+      items => items.filter(i => i.service).length === 2,
+      'both service cards on the board',
+    )
+    expect((await post(url, '/api/team/agents', { peer: claire.pub, on: true, lanes: ['home'] })).status).toBe(200)
+    expect((await post(url, '/api/team/agents', { peer: david.pub, on: true, lanes: ['home'] })).status).toBe(200)
+
+    // Wait for directories with Juno's handle to arrive on claire and david.
+    for (const c of [claireClient, davidClient]) {
+      const f = await c.take('deliver', 5000)
+      expect(msgOf(f.env).body.agents).toEqual([{ code: 'juno' }])
+    }
+
+    const ctx = (key: string) => ({
+      webPort: Number(new URL(url).port),
+      roster: view.roster ?? [],
+      self: async () => ({ key }),
+      find: () => Promise.reject(new Error('not asked')),
+    })
+
+    // 1. Mention in the team chat (team/general) wakes Juno, not Ledger, and reply lands in team/general.
+    const teamPost = crypto.randomUUID()
+    const teamEnv = await question(claire, me.pub, '@owner4.juno is the deploy green?', {
+      body: {
+        text: '@owner4.juno is the deploy green?',
+        via: 'agent',
+        thread: { id: 'general', group: true },
+        post: teamPost,
+        at: 'juno',
+      },
+    })
+    const teamMsgId = msgOf(teamEnv).id
+    claireClient.send({ t: 'send', env: teamEnv })
+
+    await waitFor(
+      async () =>
+        (
+          (await (await fetch(`${url}/api/team/threads`)).json()) as {
+            threads: { key: string; addressed?: { key: string; message: string }[] }[]
+          }
+        ).threads,
+      threads =>
+        threads.some(
+          t => t.key === 'team/general' && t.addressed?.some(a => a.key === 'service-juno' && a.message === teamMsgId),
+        ),
+      'team/general shows addressed for service-juno',
+    )
+
+    const waited = await teamWait(ctx('service-juno'), {
+      json: false,
+      timeoutMs: 5000,
+      self: ctx('service-juno').self,
+      everyMs: 50,
+    })
+    const teamRef = teamMsgId.slice(0, 8)
+    expect(waited).toContain(`team · team chat · general · 1 unread · addressed to you (msg ${teamRef})`)
+    expect(waited).not.toContain('deploy green')
+
+    const waitedJson = JSON.parse(
+      await teamWait(ctx('service-juno'), {
+        json: true,
+        timeoutMs: 5000,
+        self: ctx('service-juno').self,
+        everyMs: 50,
+      }),
+    ) as { threads: Record<string, unknown>[] }
+    expect(waitedJson.threads).toEqual([expect.objectContaining({ key: 'team/general', addressed: teamMsgId })])
+
+    expect(
+      await teamWait(ctx('service-ledger'), {
+        json: false,
+        timeoutMs: 1000,
+        self: ctx('service-ledger').self,
+        everyMs: 50,
+      }),
+    ).toBe('nothing new in 1 s: wait again')
+
+    const read = await teamAgents('thread', ['--read', '--', 'team'], ctx('service-juno'))
+    expect(read).toContain('@owner4.juno is the deploy green?')
+    expect(read.endsWith('(marked read)')).toBe(true)
+
+    const replied = await teamAgents('reply', ['--to', teamRef, '--', 'team', 'green since 14:00'], ctx('service-juno'))
+    expect(replied).toStartWith('ok · sent to the team')
+    for (const c of [claireClient, davidClient]) {
+      const f = await c.take('deliver', 5000)
+      expect(msgOf(f.env).body).toMatchObject({
+        text: 'green since 14:00',
+        via: 'agent',
+        agent: 'Juno',
+        thread: { id: 'general', group: true },
+        replyTo: teamPost,
+      })
+    }
+
+    // No separate pair topic was opened.
+    const listAfter = (
+      (await (await fetch(`${url}/api/team/threads`)).json()) as { threads: { key: string; id: string }[] }
+    ).threads
+    expect(listAfter.filter(t => t.key.startsWith(`${claire.pub}/`) && t.id !== 'general')).toEqual([])
+
+    // After marking read, a plain unaddressed message in team/general does not wake Juno.
+    claireClient.send({
+      t: 'send',
+      env: await question(claire, me.pub, 'plain update', {
+        body: { text: 'plain update', thread: { id: 'general', group: true }, post: crypto.randomUUID() },
+      }),
+    })
+    await waitFor(
+      async () =>
+        ((await (await fetch(`${url}/api/team/unread`)).json()) as { threads: Record<string, number> }).threads[
+          'team/general'
+        ],
+      n => n === 1,
+      'plain message unread in team/general',
+    )
+    expect(
+      await teamWait(ctx('service-juno'), {
+        json: false,
+        timeoutMs: 1000,
+        self: ctx('service-juno').self,
+        everyMs: 50,
+      }),
+    ).toBe('nothing new in 1 s: wait again')
+
+    // 2. Mention in a channel wakes Juno.
+    const chId = crypto.randomUUID()
+    const chPost = crypto.randomUUID()
+    const chEnv = await question(claire, me.pub, '@owner4.juno check ops channel', {
+      body: {
+        text: '@owner4.juno check ops channel',
+        thread: { id: chId, title: 'Ops', group: true, members: [me.pub, claire.pub].sort() },
+        post: chPost,
+        at: 'juno',
+      },
+    })
+    const chMsgId = msgOf(chEnv).id
+    claireClient.send({ t: 'send', env: chEnv })
+    const chWait = await teamWait(ctx('service-juno'), {
+      json: false,
+      timeoutMs: 5000,
+      self: ctx('service-juno').self,
+      everyMs: 50,
+    })
+    expect(chWait).toContain(
+      `${chId.slice(0, 8)} · channel with claire · "Ops" · 1 unread · addressed to you (msg ${chMsgId.slice(0, 8)})`,
+    )
+    await teamAgents('thread', ['--read', '--', chId.slice(0, 8)], ctx('service-juno'))
+
+    // 3. Mention in a pair's general thread wakes Juno; turning Agents off for claire stops waking while still unread.
+    const genEnv = await question(claire, me.pub, '@owner4.juno quick question', {
+      body: { text: '@owner4.juno quick question', at: 'juno' },
+    })
+    const genMsgId = msgOf(genEnv).id
+    claireClient.send({ t: 'send', env: genEnv })
+    const genWait = await teamWait(ctx('service-juno'), {
+      json: false,
+      timeoutMs: 5000,
+      self: ctx('service-juno').self,
+      everyMs: 50,
+    })
+    expect(genWait).toContain(
+      `general:${claire.pub.slice(0, 10)} · with claire · general · 1 unread · addressed to you (msg ${genMsgId.slice(0, 8)})`,
+    )
+
+    // Narrow claire's switches (off): still unread, but handle no longer reaches Juno for claire -> wait returns nothing.
+    expect((await post(url, '/api/team/agents', { peer: claire.pub, on: false, lanes: ['home'] })).status).toBe(200)
+    expect(
+      await teamWait(ctx('service-juno'), {
+        json: false,
+        timeoutMs: 1000,
+        self: ctx('service-juno').self,
+        everyMs: 50,
+      }),
+    ).toBe('nothing new in 1 s: wait again')
+  } finally {
+    claireClient.close()
+    davidClient.close()
+    localHub.stop()
+  }
+})
