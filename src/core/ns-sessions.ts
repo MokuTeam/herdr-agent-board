@@ -1,0 +1,569 @@
+// The NetSuite session store (#860, thread agent-board-149, contract ns-contract-final.md): the
+// newest session of every (account, user), kept in this process's memory only, so a browser on
+// any machine that lands on NetSuite's login page takes the newest session instead of logging in
+// again (and kicking the other machine out: NetSuite keeps one UI session per user per account).
+//
+// A session is the cookies of the account's host (<account>.app.netsuite.com). Their values live
+// in this store's memory and nowhere else: never on disk, in the payload, SSE, a journal, a log or
+// an error. What leaves the store is metadata: names, hosts, times and `fp`, the first 8 hex
+// characters of sha256(JSESSIONID). `take` is the one call that hands values out, to the route
+// that answers a bridge holding its board's token.
+//
+// No I/O here: the clock is passed in, so the routes and the tests drive it.
+import { createHash, randomUUID } from 'node:crypto'
+import { hasUnprintable } from './team.ts'
+
+export const NS_ABS_MS = 12 * 3600_000
+export const NS_IDLE_MS = 3 * 3600_000
+/** An entry turns `dying` this long before either predicted expiry. */
+export const NS_DYING_MS = 20 * 60_000
+export const NS_LOCK_DEFAULT_S = 120
+export const NS_LOCK_MAX_S = 120
+/** A dead entry stays in the list (metadata only) this long, then goes. */
+export const NS_DEAD_KEPT_MS = 24 * 3600_000
+export const NS_MAX_ENTRIES = 500
+export const NS_MAX_COOKIES = 60
+export const NS_MAX_BODY = 64 * 1024
+const MAX_VALUE = 8192
+/** The dead fingerprints a key remembers, so a dead session is never published again. */
+const DEAD_FPS = 32
+
+export type NsState = 'live' | 'dying' | 'dead'
+export type NsDeadReason = 'login_redirect' | 'import_bounced' | 'switch' | 'logout' | 'expired'
+const DEAD_REASONS: ReadonlySet<string> = new Set(['login_redirect', 'import_bounced', 'switch', 'logout', 'expired'])
+
+export interface NsCookie {
+  name: string
+  value: string
+  domain: string
+  path: string
+  secure: boolean
+  httpOnly: boolean
+  sameSite: string
+  expirationDate?: number
+}
+
+/** A machine and its browser profile: a publisher, a holder, where activity was seen. */
+export interface NsWhere {
+  machine: string
+  profile: string
+}
+
+export interface NsHolder extends NsWhere {
+  run_id: string
+}
+
+export interface NsPublish {
+  account: string
+  user: string | null
+  host: string
+  role: string | null
+  role_id: string | number | null
+  fp: string
+  cookies: NsCookie[]
+  origin: NsWhere
+  login_at: number | null
+}
+
+/** What the list shows of an entry: never a value. */
+export interface NsMeta {
+  account: string
+  user: string | null
+  host: string
+  role: string | null
+  fp: string
+  state: NsState
+  generation: number
+  login_at: number
+  abs_expiry: number
+  idle_expiry: number
+  last_activity: number
+  last_where: NsWhere
+  origin: NsWhere
+  holders: string[]
+  dead_reason: NsDeadReason | null
+  lock: { holder: NsHolder; until: number } | null
+}
+
+interface Entry {
+  account: string
+  user: string | null
+  host: string
+  role: string | null
+  roleId: string | number | null
+  /** Null once the entry is dead: the values go with it. */
+  cookies: NsCookie[] | null
+  fp: string
+  generation: number
+  origin: NsWhere
+  loginAt: number
+  lastActivity: number
+  lastWhere: NsWhere
+  deadAt: number | null
+  deadReason: NsDeadReason | null
+  /** Which prediction a death matched (abs, idle or none): kept for tuning the policies (phase 3), not shown yet. */
+  deadMatched: 'abs' | 'idle' | 'none' | null
+  holders: Set<string>
+  /** Fingerprints this key saw die, newest last. */
+  deadFps: string[]
+}
+
+interface Lock {
+  id: string
+  holder: NsHolder
+  until: number
+}
+
+/** A field that is wrong, by name: the routes answer it as 400 bad_request. Never holds a value. */
+export class NsBodyError extends Error {
+  constructor(readonly field: string) {
+    super(`bad ${field}`)
+  }
+}
+
+export type NsPublishResult =
+  | { ok: true; stored: boolean; generation: number; state: NsState }
+  | { ok: false; code: 'dead_fp' | 'store_full' }
+
+export interface NsTaken {
+  account: string
+  user: string | null
+  host: string
+  role: string | null
+  role_id: string | number | null
+  fp: string
+  generation: number
+  state: NsState
+  login_at: number
+  last_activity: number
+  cookies: NsCookie[]
+}
+
+export type NsTakeResult =
+  | ({ ok: true } & NsTaken)
+  | { ok: false; code: 'none' }
+  | { ok: false; code: 'ambiguous_user'; users: { user: string | null; last_activity: number }[] }
+
+export type NsLockResult =
+  | { ok: true; lock_id: string; until: number }
+  | { ok: false; code: 'locked'; holder: NsHolder; until: number }
+
+/** `1234567-sb1.app.netsuite.com` and the like: an account's own UI host. */
+const HOST = /^([0-9a-z]+(?:-[0-9a-z]+)?)\.app\.netsuite\.com$/
+const ACCOUNT = /^[0-9A-Z]+(?:_[0-9A-Z]+)?$/
+const EMAIL = /^[^\s@]+@[^\s@]+$/
+const FP = /^[0-9a-f]{8}$/
+
+/** The account as the store keys it (upper case), or null. */
+export function nsAccount(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  const a = v.trim().toUpperCase()
+  return a.length >= 1 && a.length <= 64 && ACCOUNT.test(a) ? a : null
+}
+
+/** The user as the store keys it (a lower-case email), or null. */
+export function nsUser(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  const u = v.trim().toLowerCase()
+  return u.length >= 3 && u.length <= 254 && EMAIL.test(u) && !hasUnprintable(u) ? u : null
+}
+
+/** The account a host belongs to (`1234567-sb1.app.netsuite.com` is 1234567_SB1), or null. */
+export function nsHostAccount(host: string): string | null {
+  const m = HOST.exec(host)
+  return m?.[1] ? m[1].replace(/-/g, '_').toUpperCase() : null
+}
+
+/** The 8-hex fingerprint of a JSESSIONID value: the only trace of a value that leaves the store. */
+export const nsFingerprint = (jsessionid: string): string =>
+  createHash('sha256').update(jsessionid).digest('hex').slice(0, 8)
+
+export const isNsFp = (v: unknown): v is string => typeof v === 'string' && FP.test(v)
+export const isNsDeadReason = (v: unknown): v is NsDeadReason => typeof v === 'string' && DEAD_REASONS.has(v)
+
+export const nsLabel = (v: unknown, max: number): string | null =>
+  typeof v === 'string' && v.length >= 1 && v.length <= max && !hasUnprintable(v) ? v : null
+
+/** A {machine, profile} read field by field, or null. */
+export function nsWhereOf(v: unknown): NsWhere | null {
+  if (!isObject(v)) return null
+  const machine = nsLabel(v.machine, 64)
+  const profile = nsLabel(v.profile, 64)
+  return machine && profile ? { machine, profile } : null
+}
+
+/** A lock holder {machine, profile, run_id}, or null. */
+export function nsHolderOf(v: unknown): NsHolder | null {
+  const where = nsWhereOf(v)
+  const runId = isObject(v) ? nsLabel(v.run_id, 128) : null
+  return where && runId ? { ...where, run_id: runId } : null
+}
+
+/** `user` of a body: a user, null (unknown), or undefined when it is wrong. */
+export function nsUserField(v: unknown): string | null | undefined {
+  if (v === null || v === undefined || v === '') return null
+  return nsUser(v) ?? undefined
+}
+
+const time = (v: unknown): number | null | undefined => {
+  if (v === null || v === undefined) return null
+  const t = typeof v === 'string' ? Date.parse(v) : v
+  return typeof t === 'number' && Number.isFinite(t) && t > 0 ? t : undefined
+}
+
+/** A published body read field by field; NsBodyError names the first field that is wrong, never its value. */
+export function nsPublishOf(raw: unknown): NsPublish {
+  if (!isObject(raw)) throw new NsBodyError('body')
+  const account = nsAccount(raw.account)
+  if (!account) throw new NsBodyError('account')
+  const user = nsUserField(raw.user)
+  if (user === undefined) throw new NsBodyError('user')
+  const host = typeof raw.host === 'string' ? raw.host.trim().toLowerCase() : ''
+  if (nsHostAccount(host) !== account) throw new NsBodyError('host')
+  let role: string | null = null
+  if (raw.role !== undefined && raw.role !== null) {
+    role = typeof raw.role === 'number' && Number.isFinite(raw.role) ? String(raw.role) : nsLabel(raw.role, 128)
+    if (role === null) throw new NsBodyError('role')
+  }
+  let roleId: string | number | null = null
+  if (raw.role_id !== undefined && raw.role_id !== null) {
+    if (typeof raw.role_id === 'number' && Number.isFinite(raw.role_id)) roleId = raw.role_id
+    else if (nsLabel(raw.role_id, 64)) roleId = raw.role_id as string
+    else throw new NsBodyError('role_id')
+  }
+  const origin = nsWhereOf(raw.origin)
+  if (!origin) throw new NsBodyError('origin')
+  const loginAt = time(raw.login_at)
+  if (loginAt === undefined) throw new NsBodyError('login_at')
+  if (time(raw.seen_at) === undefined) throw new NsBodyError('seen_at')
+  if (!Array.isArray(raw.cookies) || raw.cookies.length < 1 || raw.cookies.length > NS_MAX_COOKIES)
+    throw new NsBodyError('cookies')
+  const cookies = raw.cookies.map((c, i) => cookieOf(c, host, i))
+  const jsid =
+    cookies.find(c => c.name === 'JSESSIONID' && c.path === '/') ?? cookies.find(c => c.name === 'JSESSIONID')
+  if (!jsid) throw new NsBodyError('cookies.JSESSIONID')
+  // The bridge's fp, recomputed: one that does not match is refused.
+  if (!isNsFp(raw.fp) || raw.fp !== nsFingerprint(jsid.value)) throw new NsBodyError('fp')
+  return { account, user, host, role, role_id: roleId, fp: raw.fp, cookies, origin, login_at: loginAt }
+}
+
+function cookieOf(raw: unknown, host: string, i: number): NsCookie {
+  const at = `cookies[${i}]`
+  if (!isObject(raw)) throw new NsBodyError(at)
+  const name = nsLabel(raw.name, 256)
+  if (!name || /[\s=;,]/.test(name)) throw new NsBodyError(`${at}.name`)
+  if (typeof raw.value !== 'string' || raw.value.length > MAX_VALUE || /[\0\r\n]/.test(raw.value))
+    throw new NsBodyError(`${at}.value`)
+  const domain = typeof raw.domain === 'string' ? raw.domain.trim().toLowerCase() : ''
+  // The account host's own cookies only (host-only, or its dot-domain): never another site's.
+  if (domain !== host && domain !== `.${host}`) throw new NsBodyError(`${at}.domain`)
+  const path = raw.path === undefined ? '/' : nsLabel(raw.path, 1024)
+  if (!path?.startsWith('/')) throw new NsBodyError(`${at}.path`)
+  const sameSite = raw.sameSite === undefined ? 'unspecified' : nsLabel(raw.sameSite, 32)
+  if (!sameSite) throw new NsBodyError(`${at}.sameSite`)
+  if (
+    raw.expirationDate !== undefined &&
+    (typeof raw.expirationDate !== 'number' || !Number.isFinite(raw.expirationDate))
+  )
+    throw new NsBodyError(`${at}.expirationDate`)
+  return {
+    name,
+    value: raw.value,
+    domain,
+    path,
+    secure: raw.secure === true,
+    httpOnly: raw.httpOnly === true,
+    sameSite,
+    ...(typeof raw.expirationDate === 'number' && { expirationDate: raw.expirationDate }),
+  }
+}
+
+export interface NsStoreOptions {
+  now?: () => number
+  absMs?: number
+  idleMs?: number
+  max?: number
+  newId?: () => string
+}
+
+export interface NsStore {
+  publish(p: NsPublish): NsPublishResult
+  /** The values of the live entry of (account, user); with no user, the account's only live one. */
+  take(account: string, user: string | null): NsTakeResult
+  touch(account: string, fp: string, where: NsWhere): { matched: boolean; state: NsState | null }
+  dead(account: string, fp: string, reason: NsDeadReason): boolean
+  lock(account: string, user: string | null, holder: NsHolder, ttlS: number): NsLockResult
+  /** Releases the lock of (account, user) when `holder` holds it. */
+  unlock(account: string, user: string | null, holder: NsHolder): boolean
+  /** Which prediction the entry's death matched, for tests and phase 3. */
+  deadMatched(account: string, user: string | null): 'abs' | 'idle' | 'none' | null
+  list(account?: string | null): NsMeta[]
+  /** Every value dropped (the board stops). */
+  clear(): void
+}
+
+const keyOf = (account: string, user: string | null): string => `${account}\u0000${user ?? ''}`
+const sameHolder = (a: NsHolder, b: NsHolder): boolean =>
+  a.machine === b.machine && a.profile === b.profile && a.run_id === b.run_id
+
+export function createNsStore(o: NsStoreOptions = {}): NsStore {
+  const now = o.now ?? Date.now
+  const absMs = o.absMs ?? NS_ABS_MS
+  const idleMs = o.idleMs ?? NS_IDLE_MS
+  const max = o.max ?? NS_MAX_ENTRIES
+  const newId = o.newId ?? randomUUID
+  const entries = new Map<string, Entry>()
+  const locks = new Map<string, Lock>()
+
+  const absOf = (e: Entry): number => e.loginAt + absMs
+  const idleOf = (e: Entry): number => e.lastActivity + idleMs
+
+  function kill(e: Entry, reason: NsDeadReason, at: number): void {
+    if (e.deadAt !== null) return
+    e.deadMatched = at >= absOf(e) - NS_DYING_MS ? 'abs' : at >= idleOf(e) - NS_DYING_MS ? 'idle' : 'none'
+    e.deadAt = at
+    e.deadReason = reason
+    e.cookies = null
+    e.deadFps = [...e.deadFps.filter(f => f !== e.fp), e.fp].slice(-DEAD_FPS)
+  }
+
+  /** The entry's state now; past its absolute expiry it dies here and its values go. */
+  function stateOf(e: Entry, t: number): NsState {
+    if (e.deadAt === null && t >= absOf(e)) kill(e, 'expired', t)
+    if (e.deadAt !== null) return 'dead'
+    return t >= Math.min(absOf(e), idleOf(e)) - NS_DYING_MS ? 'dying' : 'live'
+  }
+
+  function prune(t: number): void {
+    for (const [k, e] of entries) {
+      stateOf(e, t)
+      if (e.deadAt !== null && t - e.deadAt > NS_DEAD_KEPT_MS) entries.delete(k)
+    }
+    for (const [k, l] of locks) if (l.until <= t) locks.delete(k)
+  }
+
+  /** The account's entry whose current session is `fp`. */
+  const byFp = (account: string, fp: string): Entry | undefined =>
+    [...entries.values()].find(e => e.account === account && e.fp === fp)
+
+  /** Room for one more key: the oldest dead entry goes; a live one never does. */
+  function makeRoom(): boolean {
+    if (entries.size < max) return true
+    const dead = [...entries.entries()]
+      .filter(([, e]) => e.deadAt !== null)
+      .sort((a, b) => (a[1].deadAt ?? 0) - (b[1].deadAt ?? 0))[0]
+    if (!dead) return false
+    entries.delete(dead[0])
+    return true
+  }
+
+  function releaseBy(account: string, user: string | null, origin: NsWhere): void {
+    const k = keyOf(account, user)
+    const l = locks.get(k)
+    if (l && l.holder.machine === origin.machine && l.holder.profile === origin.profile) locks.delete(k)
+  }
+
+  function merge(e: Entry, p: NsPublish): void {
+    if (e.role === null && p.role !== null) e.role = p.role
+    if (e.roleId === null && p.role_id !== null) e.roleId = p.role_id
+    e.holders.add(p.origin.machine)
+  }
+
+  return {
+    publish(p) {
+      const t = now()
+      prune(t)
+      // No user known (no loaded tab): the entry with this session, else one kept as unknown.
+      if (p.user === null) {
+        const same = byFp(p.account, p.fp)
+        if (same) {
+          if (stateOf(same, t) === 'dead') return { ok: false, code: 'dead_fp' }
+          merge(same, p)
+          releaseBy(p.account, same.user, p.origin)
+          return { ok: true, stored: false, generation: same.generation, state: stateOf(same, t) }
+        }
+      }
+      const k = keyOf(p.account, p.user)
+      const cur = entries.get(k)
+      if (cur?.deadFps.includes(p.fp)) return { ok: false, code: 'dead_fp' }
+      if (cur && cur.fp === p.fp) {
+        if (stateOf(cur, t) === 'dead') return { ok: false, code: 'dead_fp' }
+        merge(cur, p)
+        releaseBy(p.account, p.user, p.origin)
+        return { ok: true, stored: false, generation: cur.generation, state: stateOf(cur, t) }
+      }
+      // The same session kept as unknown gets its user now.
+      if (p.user !== null) {
+        const unknown = entries.get(keyOf(p.account, null))
+        if (unknown?.fp === p.fp) entries.delete(keyOf(p.account, null))
+      }
+      if (!cur && !makeRoom()) return { ok: false, code: 'store_full' }
+      const e: Entry = {
+        account: p.account,
+        user: p.user,
+        host: p.host,
+        role: p.role ?? cur?.role ?? null,
+        roleId: p.role_id ?? cur?.roleId ?? null,
+        cookies: p.cookies,
+        fp: p.fp,
+        generation: (cur?.generation ?? 0) + 1,
+        origin: p.origin,
+        loginAt: p.login_at !== null && p.login_at <= t ? p.login_at : t,
+        lastActivity: t,
+        lastWhere: p.origin,
+        deadAt: null,
+        deadReason: null,
+        deadMatched: null,
+        holders: new Set([p.origin.machine]),
+        deadFps: cur?.deadFps ?? [],
+      }
+      entries.set(k, e)
+      releaseBy(p.account, p.user, p.origin)
+      return { ok: true, stored: true, generation: e.generation, state: stateOf(e, t) }
+    },
+
+    take(account, user) {
+      const t = now()
+      prune(t)
+      let e: Entry | undefined
+      if (user !== null) e = entries.get(keyOf(account, user))
+      else {
+        const alive = [...entries.values()].filter(x => x.account === account && stateOf(x, t) !== 'dead')
+        if (alive.length > 1)
+          return {
+            ok: false,
+            code: 'ambiguous_user',
+            users: alive
+              .map(x => ({ user: x.user, last_activity: x.lastActivity }))
+              .sort((a, b) => b.last_activity - a.last_activity),
+          }
+        e = alive[0]
+      }
+      if (!e?.cookies || stateOf(e, t) === 'dead') return { ok: false, code: 'none' }
+      return {
+        ok: true,
+        account: e.account,
+        user: e.user,
+        host: e.host,
+        role: e.role,
+        role_id: e.roleId,
+        fp: e.fp,
+        generation: e.generation,
+        state: stateOf(e, t),
+        login_at: e.loginAt,
+        last_activity: e.lastActivity,
+        cookies: e.cookies.map(c => ({ ...c })),
+      }
+    },
+
+    touch(account, fp, where) {
+      const t = now()
+      const e = byFp(account, fp)
+      if (!e || stateOf(e, t) === 'dead') return { matched: false, state: null }
+      e.lastActivity = t
+      e.lastWhere = where
+      e.holders.add(where.machine)
+      return { matched: true, state: stateOf(e, t) }
+    },
+
+    dead(account, fp, reason) {
+      const t = now()
+      const e = byFp(account, fp)
+      if (!e || stateOf(e, t) === 'dead') return false
+      kill(e, reason, t)
+      return true
+    },
+
+    lock(account, user, holder, ttlS) {
+      const t = now()
+      prune(t)
+      const k = keyOf(account, user)
+      const held = locks.get(k)
+      const until = t + Math.min(Math.max(1, Math.floor(ttlS)), NS_LOCK_MAX_S) * 1000
+      if (held && held.until > t) {
+        if (!sameHolder(held.holder, holder))
+          return { ok: false, code: 'locked', holder: held.holder, until: held.until }
+        held.until = until
+        return { ok: true, lock_id: held.id, until }
+      }
+      const id = newId()
+      locks.set(k, { id, holder, until })
+      return { ok: true, lock_id: id, until }
+    },
+
+    unlock(account, user, holder) {
+      const t = now()
+      const k = keyOf(account, user)
+      const held = locks.get(k)
+      if (!held || held.until <= t || !sameHolder(held.holder, holder)) return false
+      locks.delete(k)
+      return true
+    },
+
+    deadMatched(account, user) {
+      return entries.get(keyOf(account, user))?.deadMatched ?? null
+    },
+
+    list(account) {
+      const t = now()
+      prune(t)
+      return [...entries.values()]
+        .filter(e => !account || e.account === account)
+        .map((e): NsMeta => {
+          const state = stateOf(e, t)
+          const l = locks.get(keyOf(e.account, e.user))
+          return {
+            account: e.account,
+            user: e.user,
+            host: e.host,
+            role: e.role,
+            fp: e.fp,
+            state,
+            generation: e.generation,
+            login_at: e.loginAt,
+            abs_expiry: absOf(e),
+            idle_expiry: idleOf(e),
+            last_activity: e.lastActivity,
+            last_where: { ...e.lastWhere },
+            origin: { ...e.origin },
+            holders: [...e.holders].sort(),
+            dead_reason: e.deadReason,
+            lock: l && l.until > t ? { holder: { ...l.holder }, until: l.until } : null,
+          }
+        })
+        .sort((a, b) => a.account.localeCompare(b.account) || (a.user ?? '').localeCompare(b.user ?? ''))
+    },
+
+    clear() {
+      for (const e of entries.values()) e.cookies = null
+      entries.clear()
+      locks.clear()
+    },
+  }
+}
+
+/** One line of `board ns-sessions list`: metadata only. */
+export function nsListLine(m: NsMeta, t: number): string {
+  const span = (ms: number): string => {
+    const min = Math.max(0, Math.round(ms / 60_000))
+    return min < 60 ? `${min}m` : `${Math.floor(min / 60)}h${String(min % 60).padStart(2, '0')}`
+  }
+  const ago = (at: number): string => span(t - at)
+  const left = (at: number): string => (at <= t ? 'now' : `in ${span(at - t)}`)
+  const parts = [
+    m.account,
+    m.user ?? '(user unknown)',
+    m.state + (m.dead_reason ? ` (${m.dead_reason})` : ''),
+    `fp ${m.fp}`,
+    `gen ${m.generation}`,
+    `login ${ago(m.login_at)} ago`,
+    ...(m.state === 'dead' ? [] : [`ends ${left(Math.min(m.abs_expiry, m.idle_expiry))}`]),
+    `active ${ago(m.last_activity)} ago on ${m.last_where.machine}/${m.last_where.profile}`,
+    ...(m.lock ? [`locked by ${m.lock.holder.machine}/${m.lock.holder.profile}`] : []),
+  ]
+  return parts.join(' · ')
+}
+
+function isObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
