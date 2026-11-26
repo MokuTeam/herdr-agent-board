@@ -9,12 +9,14 @@ import { readFileSync } from 'node:fs'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { TeamView } from '../../src/services/team-hub.ts'
 import { TeamComposer, type TeamComposerProps } from '../../web/src/components/team/TeamComposer.tsx'
+import { mentionMark, TeamMessage } from '../../web/src/components/team/TeamMessage.tsx'
 import { TeamBody, type TeamBodyProps } from '../../web/src/components/team/TeamPanel.tsx'
 import { teamSource } from '../../web/src/hooks/useTeam.ts'
+import { markdown } from '../../web/src/models/markdown.ts'
 import { type AgentsView, type MentionPerson, mentionPeople, mentionRows } from '../../web/src/models/team.ts'
 import { board, renderInBoard } from './support/board.tsx'
 import { answers, restoreFetch } from './support/fetch-answers.ts'
-import { findAll, type Node } from './support/markup.ts'
+import { findAll, hasClass, type Node } from './support/markup.ts'
 import { type Host, hostElements } from './support/react-events.ts'
 
 afterEach(restoreFetch)
@@ -357,5 +359,46 @@ describe('the directories are asked only when a peer sent one', () => {
     await Bun.sleep(10)
     expect(calls.map(c => c.url)).toEqual(['/api/team', '/api/team/threads', '/api/team/directory'])
     expect(source.now.get().directory).toEqual(DIRECTORY)
+  })
+})
+
+describe("a message's leading mention, highlighted where it was written (#875)", () => {
+  const marked = (text: string): string => {
+    const mark = mentionMark(text)
+    return mark ? mark(markdown(text)) : markdown(text)
+  }
+  test('the mention is wrapped, the rest of the text as Markdown made it', () => {
+    expect(marked('@Anna.helper is the release green?')).toBe(
+      '<p><span class="team-at">@Anna.helper</span> is the release green?</p>',
+    )
+    expect(marked('@bob.reviewer, look\nnow')).toBe('<p><span class="team-at">@bob.reviewer</span>, look<br>now</p>')
+    expect(marked('@bob.reviewer')).toBe('<p><span class="team-at">@bob.reviewer</span></p>')
+  })
+  test('a name that needed escaping stays escaped; no mention, or one Markdown changed, leaves the text alone', () => {
+    expect(marked('@a<b>.ops hi')).toBe('<p><span class="team-at">@a&lt;b&gt;.ops</span> hi</p>')
+    expect(mentionMark('hello @Anna.helper')).toBeUndefined()
+    expect(mentionMark('mail@Anna.helper')).toBeUndefined()
+    expect(marked('@*x*.ops hi')).toBe(markdown('@*x*.ops hi'))
+  })
+  test('a bubble shows it: the mention in its own span, the words after it as written', () => {
+    const line = {
+      id: 'm1',
+      dir: 'in' as const,
+      from: ANA,
+      who: 'Anna Lee',
+      text: '@me.helper is it green?',
+      ts: '2026-11-26T10:00:00Z',
+    }
+    const nodes = renderInBoard(
+      <TeamMessage line={line} first last named={false} quote={null} onQuote={() => {}} />,
+      board(),
+    )
+    const at = findAll(nodes, el => hasClass(el, 'team-at'))
+    expect(at.map(n => text([n]))).toEqual(['@me.helper'])
+    expect(text(findAll(nodes, el => hasClass(el, 'md')))).toBe('@me.helper is it green?')
+  })
+  test("the highlight is tinted in the accent, a little stronger in this board's own bubble", () => {
+    expect(css).toMatch(/\.team-bubble \.team-at \{[^}]*color: var\(--accent\)/)
+    expect(css).toMatch(/\.team-msg\.out \.team-bubble \.team-at \{/)
   })
 })

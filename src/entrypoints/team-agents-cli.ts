@@ -238,7 +238,7 @@ export function directoryLines(peers: Record<string, unknown>[], only: string | 
   return [
     ...lines,
     '',
-    'Write to one: board team post @name.agent "<text>" (a topic of its own), or start a reply with @name.agent.',
+    'Write to one: board team post @name.agent "<text>" (your thread with that person; --new "<title>" opens a topic), or start a message or a reply with @name.agent where you write (the team chat, a channel, a topic): it stays there, and the agent answers there.',
   ].join('\n')
 }
 
@@ -356,8 +356,8 @@ export async function teamAgents(op: string, args: string[], ctx: Ctx): Promise<
     const file = fileFlag(flags)
     if (link !== undefined && title === undefined) throw new Error(`usage: ${AGENT_USAGE}`)
     const [who = '', given = ''] = wordsOf([...flags, ...after], 2, file)
-    // `@name.agent` (#832): that peer's agent, by a handle from `board team agents`; the board
-    // opens a topic of its own for it (or the --new one) and names the agent on the peer's copy.
+    // `@name.agent` (#832): that peer's agent, by a handle from `board team agents`, in the pair's
+    // own thread (#875), or the --new topic; the board names the agent on the peer's copy.
     const mention = who.startsWith('@') ? leadingMention(who) : null
     if (who.startsWith('@') && (!mention || mention.rest)) throw new Error(`usage: ${AGENT_USAGE}`)
     const to = mention ? peerOfMention(ctx, mention.who) : targetOf(ctx, who)

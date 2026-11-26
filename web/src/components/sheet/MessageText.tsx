@@ -21,9 +21,18 @@ export interface MessageTextProps {
   plain?: boolean | undefined
   /** The text's own class; Markdown's `md` by default. */
   className?: string | undefined
+  /** Marks up the Markdown's HTML once more (a Team message's leading mention, #875); it adds tags, never text. */
+  decorate?: ((html: string) => string) | undefined
 }
 
-export function MessageText({ text, cut = false, onResize, plain = false, className = 'md' }: MessageTextProps) {
+export function MessageText({
+  text,
+  cut = false,
+  onResize,
+  plain = false,
+  className = 'md',
+  decorate,
+}: MessageTextProps) {
   const t = useT()
   const id = useId()
   const body = useRef<HTMLDivElement>(null)
@@ -76,7 +85,7 @@ export function MessageText({ text, cut = false, onResize, plain = false, classN
         <span {...box}>{text}</span>
       ) : (
         // biome-ignore lint/security/noDangerouslySetInnerHtml: markdown() escapes every piece of text itself and makes only known tags
-        <div {...box} dangerouslySetInnerHTML={{ __html: markdown(text) }} />
+        <div {...box} dangerouslySetInnerHTML={{ __html: decorate ? decorate(markdown(text)) : markdown(text) }} />
       )}
       {cut && <p className="msg-cut">{t('thread.cut')}</p>}
       {long && (

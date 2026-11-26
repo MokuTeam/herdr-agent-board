@@ -259,6 +259,8 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
   const globalOff = (off: boolean): boolean => off || teamCfg(cfg).agents === false
   /** When a notice last went to a session for a thread, so the next one waits its gap. */
   const lastNotice = new Map<string, number>()
+  /** The words of the last addressed notice for a session and thread (#875), kept while it waits. */
+  const namedNotice = new Map<string, (count: number) => string>()
   /** The directory look under way (#832): the next one waits for it. */
   let syncing: Promise<number> = Promise.resolve(0)
   /** In-memory reaction timestamps per session for hourly rate limiting (#687). */
@@ -314,6 +316,39 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       }
     }
     return { handles, aliases: state.aliases, off: globalOff(s.off), peers: s.peers, sessions: reachable }
+  }
+
+  /**
+   * Who named a session in a team thread's message (#875): the sender of that line of `key`, when
+   * its copy carried a handle that reaches this session for them now (Agents on for them, the lane
+   * shared, not archived); else null.
+   */
+  function askedBy(key: string, line: string, session: string, s: ReturnType<typeof readAgents>): string | null {
+    for (const [from, list] of Object.entries(readAllInbox())) {
+      const i = list.find(x => x.id === line && x.thread === key)
+      if (!i) continue
+      return i.at && !i.held && reach(i.at, from, world(s))?.key === session ? from : null
+    }
+    return null
+  }
+
+  /**
+   * Whether everyone a team thread's posts reach may read what `fits` asks of their switches (#875):
+   * the thread's own switches (the team's, or the channel's) are on and fit, or every member but
+   * `asker` (the team's roster, or the channel's members) has Agents on and fits.
+   */
+  function everyoneShares(
+    key: string,
+    asker: string,
+    fits: (sw: Parameters<typeof sharesLane>[0]) => boolean,
+    s: ReturnType<typeof readAgents>,
+  ): boolean {
+    const own = s.peers[switchesKey(TEAM, key)]
+    if (own?.on && fits(own)) return true
+    const members = readThreads()[key]?.members
+    return (team.view()?.roster ?? [])
+      .filter(p => p.peer !== asker && (!members || members.includes(p.peer)))
+      .every(p => !!s.peers[p.peer]?.on && fits(s.peers[p.peer]))
   }
 
   function nameOf(key: string): string | null {
@@ -396,7 +431,11 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       // Too long is said with its numbers (#415): the agent can tell how much to cut, or send a file.
       const length = text.trim().length
       if (length > MAX_TEXT) return { ok: false, error: 'text', detail: `${length} of ${MAX_TEXT}` }
-      const peer = s.peers[switchesKey(to, key)]
+      // A session's answer to a message that named it in the team chat or a channel (#875): a reply
+      // to that message, weighed by the switches this board keeps for its writer, as an answer in a
+      // pair's thread is. Any other post there goes by the team's (or the channel's) switches.
+      const asker = to === TEAM && key && replyTo !== undefined ? askedBy(key, replyTo, session.key, s) : null
+      const peer = s.peers[asker ?? switchesKey(to, key)]
       const name = file && basename(file.path)
       const refused = overLimit(to, key, text, session, name ? { name, size: sizeOf(file.path) } : undefined)
       if (refused) return { ok: false, error: refused }
@@ -419,6 +458,15 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       let bytes: Uint8Array | undefined
       if (globalOff(s.off) || !peer?.on) reason = 'off'
       else if ((!listener || isOwnerServiceKey(session.key)) && !shares(peer, session.key)) reason = 'lane'
+      // An answer on the writer's pass reaches everyone in the thread (#875): the session's lane must
+      // be one the thread's own switches share, or one shared with every member who reads it.
+      else if (
+        (!listener || isOwnerServiceKey(session.key)) &&
+        asker &&
+        key &&
+        !everyoneShares(key, asker, sw => shares(sw, session.key), s)
+      )
+        reason = 'lane'
       else {
         // The file (#415): one of the board's own (its keys, its settings) is held as a secret;
         // any other is read once, here, and these bytes are what the check reads and the post
@@ -436,7 +484,11 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
         }
         const secret = secretHit(words) ?? fileSecret
         const others = cfg.categories
-          .filter(c => !sharesLane(peer, c.id))
+          .filter(
+            c =>
+              !sharesLane(peer, c.id) ||
+              (!!asker && !!key && !everyoneShares(key, asker, sw => sharesLane(sw, c.id), s)),
+          )
           .map(c => ({ id: c.id, title: categoryInfo(cfg, c.id).title }))
         const lane = secret ? null : laneHit(words, others)
         if (secret) [reason, detail] = ['secret', secret]
@@ -529,10 +581,17 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       const parts = splitKey(e.thread)
       if (!parts) return
       const isTeam = parts.scope === TEAM
-      // A channel has switches of its own (#355); the team chat's mute is not a channel's.
-      const rules = isTeam ? switchesKey(TEAM, e.thread) : e.from
+      // Addressed to one of this board's agents by its handle (#832): a pair's word, weighed by the
+      // switches this board keeps for its writer, in the team chat or a channel too (#875). Under the
+      // default policy an empty board (its first look has not happened yet) proves nothing: routed
+      // as any other; with masters only (#872) the mapping alone decides.
+      const addressed = !!e.at && (!isTeam || !!s.peers[e.from]?.on) && (s.mastersOnly || items().length > 0)
+      // A channel has switches of its own (#355); the team chat's mute is not a channel's, and it
+      // holds for a message addressed there too.
+      const own = isTeam ? switchesKey(TEAM, e.thread) : e.from
+      const rules = addressed ? e.from : own
       if (!s.peers[rules]?.on) return
-      if (rules === TEAM && s.peers[TEAM]?.muted) return
+      if (own === TEAM && s.peers[TEAM]?.muted) return
       const rec = readThreads()[e.thread]
       if (rec?.muted || rec?.archived) return
       const t = now()
@@ -559,32 +618,32 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
         handler = null
       }
       const ref = threadRef(parts.scope, parts.id)
-      // Addressed to one of this board's agents by its handle (#832): the board's mapping, while the
-      // session's lane is shared with the sender; anything else goes to the listener with a note,
-      // never a guess, and never to an archived session. Under the default policy an empty board
-      // still routes as any other message while waiting for its first look.
-      // Only in a pair's thread: addressing is a pair's, weighed by this board's switches for that person.
-      if (e.at && !isTeam && (known.length || s.mastersOnly)) {
-        const addr = { who, agent: e.via === 'agent', ref, team: isTeam, code: e.at }
+      // Addressed (#832): the board's mapping, while the session's lane is shared with the sender;
+      // anything else goes to the listener with a note, never a guess, and never to an archived
+      // session. The notice names the message, so the answer goes to it where it was written (#875).
+      if (addressed && e.at) {
+        const addr = { who, agent: e.via === 'agent', ref, team: isTeam, code: e.at, message: e.id.slice(0, 8) }
         const hit = reach(e.at, e.from, world(s))
         if (hit) {
           const name = nameOf(hit.key) ?? (hit.name || undefined)
           const session: SessionRef = { key: hit.key, ...(name && { name }) }
-          // A topic nobody but the listener handles becomes the session's; one another session
+          // A pair's topic nobody but the listener handles becomes the session's; one another session
           // handles stays with it, and a general thread stays the listener's (what an older board
-          // sends lands there): the session only hears of this message.
-          const takes = parts.id !== GENERAL && (!handler || handler.key === s.listener?.key)
+          // sends lands there). A team thread or a channel stays as it was (#875): it is everyone's,
+          // and the session only hears of this message.
+          const takes = !isTeam && parts.id !== GENERAL && (!handler || handler.key === s.listener?.key)
           if (takes && handler?.key !== session.key) {
             team.setThread(e.thread, { handler: session })
             audit('assigned', isTeam ? null : e.from, { thread: e.thread, session: session.key, why: 'addressed' })
           }
           // A service agent (#819) finds the thread through the MCP's wait: nothing in the schedule.
+          // Not yet a team thread or a channel it does not handle (#880).
           if (!known.some(i => i.key === session.key && i.service))
-            notify(session, e.thread, (count: number) => addressedText({ ...addr, count }), t)
+            notify(session, e.thread, (count: number) => addressedText({ ...addr, count }), t, true)
           return
         }
         audit('unreachable', isTeam ? null : e.from, { thread: e.thread, code: e.at })
-        if (s.listener) notify(s.listener, e.thread, (count: number) => unreachableText({ ...addr, count }), t)
+        if (s.listener) notify(s.listener, e.thread, (count: number) => unreachableText({ ...addr, count }), t, true)
         return
       }
       const target = handler ?? s.listener
@@ -681,18 +740,32 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
 
   /**
    * One notice per session and thread at a time: a pending one counts the new message instead,
-   * and the next waits out the gap after the last. `text` is given the count.
+   * and the next waits out the gap after the last. `text` is given the count. An addressed notice
+   * (`named`, #875) keeps its words while it waits: a plain message after it only adds to its count,
+   * so the message to answer is not lost.
    */
-  function notify(target: SessionRef, thread: string, text: string | ((count: number) => string), t: number): void {
+  function notify(
+    target: SessionRef,
+    thread: string,
+    text: string | ((count: number) => string),
+    t: number,
+    named = false,
+  ): void {
+    const mark = `${target.key}\n${thread}`
+    if (named && typeof text === 'function') namedNotice.set(mark, text)
     if (isOwnerServiceKey(target.key)) return
-    const words = (n: number): string => (typeof text === 'string' ? text : text(n))
     try {
       const mine = schedule.list().filter(e => e.key === target.key && typeof e.teamThread === 'string' && !e.claim)
       const pending = mine.find(e => e.teamThread === thread)
+      const said = named ? undefined : namedNotice.get(mark)
+      const words = (n: number): string => (said ? said(n) : typeof text === 'string' ? text : text(n))
       if (pending) {
         const n = (typeof pending.teamCount === 'number' ? pending.teamCount : 1) + 1
         if (schedule.update(pending.id, words(n), n)) return
       }
+      // A new notice: a plain one says only what it says.
+      if (!named) namedNotice.delete(mark)
+      const plain = (n: number): string => (typeof text === 'string' ? text : text(n))
       // A session's own reminders keep their room: past this many waiting notices, a new thread
       // waits in the Team panel only.
       if (mine.length >= MAX_PENDING_NOTICES) {
@@ -700,13 +773,12 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
         return
       }
       const gap = limits().noticeGapMin * 60_000
-      const mark = `${target.key}\n${thread}`
       const next = Math.max(t, (lastNotice.get(mark) ?? 0) + gap)
       lastNotice.set(mark, next)
       schedule.add({
         key: target.key,
         ...(target.name && { name: target.name }),
-        text: words(1),
+        text: plain(1),
         next,
         teamThread: thread,
         teamCount: 1,
