@@ -34,7 +34,7 @@ import { pace } from '../../adapters/pacing.ts'
 import { currentPresence, setPresence } from '../../adapters/presence-store.ts'
 import { addEntry, getEntry, listEntries, removeEntry } from '../../adapters/schedule-store.ts'
 import { formatListLines } from '../../core/board-list.ts'
-import { categoryInfo } from '../../core/categories.ts'
+import { categoryInfo, itemLane } from '../../core/categories.ts'
 import {
   type CardDecision,
   cardDecisionOf,
@@ -561,6 +561,12 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
         idle: false,
         ...(decided?.ctx ?? {}),
         findSession: async word => findSession(word),
+        sessionLane: async k => {
+          const item = o.find(k) ?? o.items().find(i => i.key === k)
+          const fromItem = itemLane(item, o.cfg)
+          if (fromItem) return fromItem
+          return !parseNodeKey(k) ? itemLane({ category: readCard(k)?.category, categorySet: true }) : null
+        },
         out: l => out.push(l),
         err: l => err.push(l),
         sendOut: (thread, entry) => sendOut(thread, entry),

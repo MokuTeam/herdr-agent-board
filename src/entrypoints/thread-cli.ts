@@ -273,6 +273,8 @@ export interface ThreadCmdContext {
   lane: string | null
   /** A session on the board by its name, pane or key, for --to and --assignee; null when none is. */
   findSession: (word: string) => Promise<Party | null>
+  /** A session's lane by its key (#903), used when `--to` or `--assignee` picks a session without `--lane`. */
+  sessionLane?: (key: string) => Promise<string | null> | string | null
   /** A session on the board by its key alone (an imported item's owner_id); null when none has it. */
   sessionByKey?: (key: string) => Promise<Party | null>
   /**
@@ -653,13 +655,18 @@ class Run {
       case 'new': {
         const title = a.words.join(' ')
         if (!title.trim()) throw new Usage('usage: board thread new [--lane <id>] "<title>"')
-        const lane = a.one('--lane') ?? this.ctx.lane
-        if (!lane)
-          throw new ThreadError('no_lane', 'this session has no lane: board cat <id> first, or give --lane <id>')
+        const explicitLane = a.one('--lane')
         const parentWord = a.one('--parent')
         const parent = parentWord ? this.thread(parentWord) : null
         const toWord = a.one('--to')
         const to = toWord ? await this.party(toWord, '--to') : null
+        const rawToLane =
+          !explicitLane && to?.kind === 'session' && this.ctx.sessionLane ? await this.ctx.sessionLane(to.key) : null
+        const toLane = rawToLane && LANE.test(rawToLane.toLowerCase()) ? rawToLane.toLowerCase() : null
+        const lane = explicitLane ?? toLane ?? this.ctx.lane
+        if (!lane)
+          throw new ThreadError('no_lane', 'this session has no lane: board cat <id> first, or give --lane <id>')
+        const laneDefault = !explicitLane && !toLane
         const ref = a.one('--ref')
         const accept = a.all('--accept')
         const w = newThread(this.write, {
@@ -668,6 +675,7 @@ class Run {
           parent,
           to,
           doing: a.has('--doing'),
+          ...(laneDefault && { laneDefault: true }),
           ...(ref !== undefined && { ref }),
           ...(a.has('--verify') && { verify: true }),
           ...(accept.length && { accept }),
@@ -743,7 +751,7 @@ class Run {
       }
       case 'set': {
         const head = this.thread(a.words[0])
-        const assignee = a.one('--assignee')
+        const assigneeWord = a.one('--assignee')
         const parent = a.one('--parent')
         const title = a.one('--title')
         const lane = a.one('--lane')
@@ -751,11 +759,17 @@ class Run {
         const verify = a.one('--verify')
         if (verify !== undefined && verify !== 'on' && verify !== 'off')
           throw new Usage(`--verify is on or off, not "${verify}"`)
+        const assignee = assigneeWord !== undefined ? await this.party(assigneeWord, '--assignee') : undefined
+        const assigneeLane =
+          lane === undefined && assignee?.kind === 'session' && this.ctx.sessionLane
+            ? await this.ctx.sessionLane(assignee.key)
+            : undefined
         const w = setFields(this.write, head, {
           ...(ref !== undefined && { ref: ref.trim().toLowerCase() === 'none' ? null : ref }),
           ...(verify !== undefined && { verify: verify === 'on' }),
           ...(title !== undefined && { title }),
-          ...(assignee !== undefined && { assignee: await this.party(assignee, '--assignee') }),
+          ...(assignee !== undefined && { assignee }),
+          ...(assigneeLane && { assigneeLane }),
           ...(lane !== undefined && { lane }),
           ...(parent !== undefined && {
             parent: parent.toLowerCase() === 'none' ? null : this.thread(parent),

@@ -43,6 +43,8 @@ export interface EntrySet {
   assignee?: Party | null
   parent?: string | null
   lane?: string
+  /** Lane was only the creator's default (not given by --lane or --to) (#903). */
+  laneDefault?: true
   /** Case files (#488, core/work-cases.ts): the case's outside reference (null: cleared), and where it stands. */
   ref?: string | null
   state?: string
@@ -771,6 +773,13 @@ export function applyEntry(head: ThreadHead, entry: ThreadEntry): ThreadHead {
   const verify = foldVerify(head, next, s)
   if (verify) next.verify = verify
   return next
+}
+
+/** Whether the thread's lane is still only the creator's default (never set via --lane or --to, nor changed later) (#903). */
+export function laneIsDefault(entries: readonly ThreadEntry[]): boolean {
+  const first = entries.find(e => e.type === 'system' && e.n === 1)
+  if (!first?.set?.laneDefault) return false
+  return !entries.some(e => e.id !== first.id && e.set?.lane !== undefined)
 }
 
 /**

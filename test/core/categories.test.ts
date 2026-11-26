@@ -1,6 +1,15 @@
 import { beforeEach, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { categoryFor, categoryInfo, DEFAULT_CONFIG, laneRank, normalizeConfig } from '../../src/core/categories.ts'
+import {
+  categoryFor,
+  categoryInfo,
+  DEFAULT_CONFIG,
+  itemLane,
+  LANE_ID,
+  laneRank,
+  normalizeConfig,
+  resolveSpawnLane,
+} from '../../src/core/categories.ts'
 import { useLanguage } from '../../src/core/lang.ts'
 import type { Config } from '../../src/core/types.ts'
 
@@ -81,4 +90,27 @@ test('normalizeConfig keeps every object of a hand-edited list as upstream, skip
     normalizeConfig({ categories: [null, 'x', 7, []] }).categories.map(x => x.id),
     ['work', 'personal', 'other'],
   )
+})
+
+test('itemLane, LANE_ID and resolveSpawnLane (#903)', () => {
+  assert.equal(LANE_ID.test('agent-board'), true)
+  assert.equal(LANE_ID.test('-bad'), false)
+  assert.equal(LANE_ID.test('UPPER'), false)
+
+  assert.equal(itemLane({ category: 'acme' }, cfg), 'acme')
+  assert.equal(itemLane({ category: 'other', categorySet: true }, cfg), 'other')
+  assert.equal(itemLane({ category: 'other', categorySet: false, cwd: 'C:\\Unmatched' }, cfg), null)
+  assert.equal(
+    itemLane(
+      { category: 'other', categorySet: false, cwd: 'C:\\OtherRoot\\proj' },
+      { categories: [{ id: 'other', title: 'Other', color: 'gray', paths: ['C:\\OtherRoot'] }] },
+    ),
+    'other',
+  )
+  assert.equal(itemLane(null, cfg), null)
+
+  assert.equal(resolveSpawnLane({ explicit: 'beta', folderLane: 'acme', callerLane: 'personal' }), 'beta')
+  assert.equal(resolveSpawnLane({ explicit: undefined, folderLane: 'acme', callerLane: 'personal' }), 'acme')
+  assert.equal(resolveSpawnLane({ explicit: null, folderLane: null, callerLane: 'personal' }), 'personal')
+  assert.equal(resolveSpawnLane({ explicit: null, folderLane: null, callerLane: null }), undefined)
 })

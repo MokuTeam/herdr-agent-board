@@ -269,8 +269,8 @@ export function createLaunches({
     // Only the board's own spawn-agent types a profile's start command: the others never read it.
     const launcher = launcherFor(deps.cfg.launch, { resume: !!resume, fork: !!fork, ...(codexFork && { codexFork }) })
     const r = await checkRequest(body, {
-      // A node's start runs in its master's lane, which the bundle (T10) may not have brought yet.
-      categories: node ? null : categories,
+      // A node's start runs in its master's lane, and an agent's --lane may name any lane id (#903).
+      categories: node || !byHand ? null : categories,
       ...(codexFork ? { codexFork } : { profiles: deps.profiles() }),
       items,
       typesCommand: launcher.kind === 'builtin',

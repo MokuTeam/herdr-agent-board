@@ -92,6 +92,7 @@ import { rekeySession } from '../adapters/work-thread-store.ts'
 import { connectWorkdeskEvents } from '../adapters/workdesk-events.ts'
 import { nodeSlicesView, nodesAnswerForNode, withNodeDecisions } from '../core/board-slices.ts'
 import { NODE_PROGRAMS } from '../core/bundle.ts'
+import { itemLane } from '../core/categories.ts'
 import { answerText, decisionsConfig } from '../core/decisions.ts'
 import { journalConfig } from '../core/journal.ts'
 import { t } from '../core/lang.ts'
@@ -1514,6 +1515,14 @@ export async function startServer({
         // Case files (#488): a case's sessions as the board sees them now (its items, the nodes' items
         // where it is a master with them, the archive).
         caseLive: keys => liveOf(keys, board.stale() ? null : caseItems(board.items(), nodeAggregate?.part() ?? null)),
+        // Assignee's lane (#903): item's real lane, falling back to its local card when unshown.
+        sessionLane: key => {
+          const all = [...board.items(), ...(nodeAggregate?.part()?.items ?? [])]
+          const found = all.find(i => i.key === key)
+          const fromItem = itemLane(found, cfg)
+          if (fromItem) return fromItem
+          return !parseNodeKey(key) ? itemLane({ category: readCard(key)?.category, categorySet: true }) : null
+        },
         // Settings turned them on (#410): the skill where the install action puts it.
         skill: () => installThreadsSkill(deps.profiles().list),
       },

@@ -17,6 +17,7 @@ import { herdr } from '../../adapters/herdr.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { pause } from '../../adapters/pacing.ts'
 import { type Env, inheritedProfileDir } from '../../adapters/profiles.ts'
+import { categoryFor, itemLane, resolveSpawnLane } from '../../core/categories.ts'
 import { parentProfile } from '../../core/item-profile.ts'
 import { t } from '../../core/lang.ts'
 import { type SpawnOptions, spawnLine } from '../../core/launch/spawn-args.ts'
@@ -117,12 +118,18 @@ export async function askBoard(o: SpawnOptions, cfg: Config, d: AskBoardDeps): P
   if (target.profile?.hidden && !same)
     return notAsked(`the profile ${target.profile.id} is hidden: the board starts in it only for its own sessions`)
   const here = absoluteDir(o.cwd)
+  const cwd = device !== undefined && device !== LOCAL && !isFolder(here) ? writtenDir(o.cwd) : here
+  const category = resolveSpawnLane({
+    explicit: o.lane,
+    folderLane: categoryFor(cfg, cwd),
+    callerLane: itemLane(caller, cfg),
+  })
   const body = launchBody(device === undefined ? o : { ...o, device }, {
     // A folder this computer lacks may be the pinned device's, as that device writes it.
-    cwd: device !== undefined && device !== LOCAL && !isFolder(here) ? writtenDir(o.cwd) : here,
+    cwd,
     message,
     workspace: { id: workspace, ...(!o.workspace && caller?.workspace && { label: caller.workspace }) },
-    ...(caller?.category && { category: caller.category }),
+    ...(category && { category }),
     ...(profile && { profile }),
     ...(same && caller && { parent: caller.key }),
   })

@@ -153,6 +153,7 @@ export async function askMaster(o: SpawnOptions, node: NodeConfig, d: AskMasterD
     ...(o.agent !== undefined && { agent: o.agent }),
     ...(target.profile && { profile: target.profile.id }),
     ...(o.device !== undefined && { device: o.device }),
+    ...(o.lane !== undefined && { lane: o.lane }),
     ...(o.trust && { trust: true as const }),
   }
   const argv = spawnCallArgv(req)

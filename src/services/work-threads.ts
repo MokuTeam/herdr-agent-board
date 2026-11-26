@@ -76,6 +76,7 @@ import {
   LEVEL,
   LINK_MAX,
   LINKS_MAX,
+  laneIsDefault,
   MINE,
   OWNER as OWNER_PARTY,
   oneLine,
@@ -262,6 +263,8 @@ export function newThread(
     /** Verified done (#492): the thread asks for it, and its acceptance lines. */
     verify?: boolean
     accept?: readonly string[]
+    /** Lane was only the creator's default (not given by --lane or --to) (#903). */
+    laneDefault?: boolean
   },
 ): Written {
   mayWrite(ctx)
@@ -288,6 +291,7 @@ export function newThread(
       parent: input.parent?.id ?? null,
       ...(ref && { ref }),
       ...((input.verify || byLane) && { verify: { on: true, lane: byLane } }),
+      ...(input.laneDefault && { laneDefault: true }),
     })
     // Acceptance lines given with it: an entry each, by its creator (#492).
     for (const line of accept)
@@ -599,6 +603,8 @@ export function setFields(
     ref?: string | null
     /** Verified done on or off (#492). */
     verify?: boolean
+    /** The new assignee's lane (#903): moves the thread there when its lane was only the creator's default. */
+    assigneeLane?: string | null
   },
 ): Written {
   const set: EntrySet = {}
@@ -619,6 +625,9 @@ export function setFields(
     const lane = input.lane.toLowerCase()
     if (!LANE.test(lane)) throw new ThreadError('lane', `"${input.lane}" is not a lane id`)
     set.lane = lane
+  } else if (input.assignee && input.assigneeLane) {
+    const lane = input.assigneeLane.trim().toLowerCase()
+    if (LANE.test(lane) && lane !== head.lane && laneIsDefault(entriesOf(ctx.db, head.id))) set.lane = lane
   }
   if (input.parent !== undefined) {
     if (input.parent) parentFor(ctx, input.parent, head)

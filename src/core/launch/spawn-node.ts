@@ -3,6 +3,7 @@
 // with what only the node can read of the folder: its checkout and whether the brief names a file
 // of the node. The logic without the network: the call's words, read back field by field on the
 // master (neither side trusts what the other sends), and the line the node prints.
+import { LANE_ID } from '../categories.ts'
 import { type GitIdentity, identityOf } from '../git-access.ts'
 import { DEVICE_ID, LOCAL } from '../node-key.ts'
 import { hasUnprintable } from '../team.ts'
@@ -46,6 +47,8 @@ export interface SpawnCall {
   profile?: string
   /** --device: a device id of the master's, or `local` for the master itself. */
   device?: string
+  /** --lane (#903): the lane id to place the session in. */
+  lane?: string
   /** --trust (#798): the board that runs it answers Claude's folder-trust dialog for its folder. */
   trust?: true
   timeoutSec: number
@@ -101,7 +104,7 @@ export function spawnCallOf(argv: readonly string[]): SpawnCall | null {
     return null
   }
   if (!isObject(raw)) return null
-  const { name, cwd, label, message, model, agent, profile, device, timeoutSec, workspace, trust } = raw
+  const { name, cwd, label, message, model, agent, profile, device, lane, timeoutSec, workspace, trust } = raw
   if (!text(name, 60) || !name.trim() || !text(cwd, 4096) || !cwd.trim()) return null
   if (typeof message !== 'string' || message.length > 64 * 1024) return null
   if (label !== undefined && !text(label, 200)) return null
@@ -109,6 +112,7 @@ export function spawnCallOf(argv: readonly string[]): SpawnCall | null {
   if (agent !== undefined && !AGENTS.includes(agent as (typeof AGENTS)[number])) return null
   if (profile !== undefined && !text(profile, 64)) return null
   if (device !== undefined && (typeof device !== 'string' || (device !== LOCAL && !DEVICE_ID.test(device)))) return null
+  if (lane !== undefined && (typeof lane !== 'string' || !LANE_ID.test(lane))) return null
   if (typeof timeoutSec !== 'number' || !Number.isFinite(timeoutSec) || timeoutSec <= 0) return null
   if (trust !== undefined && trust !== true) return null
   if (!text(workspace, 200)) return null
@@ -126,6 +130,7 @@ export function spawnCallOf(argv: readonly string[]): SpawnCall | null {
     ...(agent !== undefined && { agent: agent as SpawnCall['agent'] & string }),
     ...(profile !== undefined && { profile }),
     ...(device !== undefined && { device }),
+    ...(lane !== undefined && { lane }),
     ...(trust === true && { trust: true as const }),
   }
 }

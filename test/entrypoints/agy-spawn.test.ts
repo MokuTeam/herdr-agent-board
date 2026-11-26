@@ -411,4 +411,41 @@ describe('spawn-agent --agent agy and board CLI Antigravity identity', () => {
       expect(box4.calls().some(c => c[0] === 'pane' && c[1] === 'send-keys')).toBe(false)
     }
   })
+
+  test('spawn-agent --agent agy inherits caller lane when unmatched and respects --lane (#903)', async () => {
+    const box = await sandbox()
+    box.state(BASE_STATE)
+    const dir = join(box.dir, 'Agy unmatched')
+    mkdirSync(dir)
+    mkdirSync(box.cards, { recursive: true })
+    writeFileSync(join(box.cards, `${CLAUDE_ID}.json`), JSON.stringify({ key: CLAUDE_ID, category: 'agent-board' }))
+
+    const inherited = await runScript(
+      box,
+      SPAWN,
+      ['--agent', 'agy', '--name', 'Agy Inherited', '--cwd', dir, '--workspace', 'wA'],
+      { CLAUDE_CODE_SESSION_ID: CLAUDE_ID },
+    )
+    expect(inherited.code, inherited.stderr).toBe(0)
+    expect(cardOf(box, AGY_ID)).toMatchObject({ key: AGY_ID, category: 'agent-board', parent: CLAUDE_ID })
+
+    const box2 = await sandbox()
+    box2.state(BASE_STATE)
+    const dir2 = join(box2.dir, 'Agy matched')
+    mkdirSync(dir2)
+    const cfgDir = join(box2.env.APPDATA as string, 'herdr', 'plugins', 'config', 'agent-board')
+    mkdirSync(cfgDir, { recursive: true })
+    writeFileSync(
+      join(cfgDir, 'config.json'),
+      JSON.stringify({ categories: [{ id: 'acme', title: 'Acme', color: 'blue', paths: [dir2] }] }),
+    )
+    const explicit = await runScript(
+      box2,
+      SPAWN,
+      ['--agent', 'agy', '--name', 'Agy Explicit', '--cwd', dir2, '--workspace', 'wA', '--lane', 'agent-board'],
+      { CLAUDE_CODE_SESSION_ID: CLAUDE_ID },
+    )
+    expect(explicit.code, explicit.stderr).toBe(0)
+    expect(cardOf(box2, AGY_ID)).toMatchObject({ key: AGY_ID, category: 'agent-board' })
+  })
 })

@@ -248,4 +248,14 @@ describe('the call a node sends its master, trust (#798)', () => {
       model: 'opus',
     })
   })
+
+  test('--lane rides in SpawnCall and rejects bad lane ids (#903)', async () => {
+    const line = `pane=@server-2:w5:p1 name=Atlas worker agent=atlas device=server-2 session=${SID}`
+    const laned = deps(answered(0, [line]))
+    expect(await askMaster(opts(folder(), '--lane', 'agent-board'), node, laned.d)).toBe(line)
+    expect(spawnCallOf((laned.calls[0] as NodeCall).argv)).toMatchObject({ lane: 'agent-board' })
+    expect(read({ lane: 'agent-board' })).toEqual({ ...base, lane: 'agent-board' })
+    expect(read({ lane: '-bad' })).toBeNull()
+    expect(read({ lane: 123 })).toBeNull()
+  })
 })

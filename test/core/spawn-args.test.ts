@@ -209,6 +209,17 @@ describe('spawn-agent options', () => {
     expect(HELP).toContain('Do not type /model')
     expect(HELP).toContain('default of every later session in the profile')
   })
+
+  test('--lane (#903): sets the lane id, lowercased, allowed with codex and --device, rejects bad ids', () => {
+    expect(parseArgs(['--name', 'A', '--cwd', 'x', '--lane', 'agent-board'])).toMatchObject({ lane: 'agent-board' })
+    expect(parseArgs(['--name', 'A', '--cwd', 'x', '-Lane', 'Agent-Board'])).toMatchObject({ lane: 'agent-board' })
+    expect(
+      parseArgs(['--name', 'A', '--cwd', 'x', '--agent', 'codex', '--device', 'server-1', '--lane', 'acme']),
+    ).toMatchObject({ agent: 'codex', device: 'server-1', lane: 'acme' })
+    expect(USAGE).toContain('[--lane <id>]')
+    for (const bad of ['', '   ', '-bad', 'has space', 'bad/slash'])
+      expect(() => parseArgs(['--name', 'A', '--cwd', 'x', '--lane', bad])).toThrow('--lane must be a lane id')
+  })
 })
 
 describe('a model a start asks for (#380)', () => {

@@ -141,6 +141,8 @@ export interface ThreadsApp {
   confirm?: Pick<TeamConfirm, 'required' | 'unlocked' | 'safe' | 'pend' | 'urlOf' | 'away'>
   /** Case files (#488): where these sessions are now, from the board's own items and the archive. */
   caseLive?(keys: readonly string[]): Map<string, SessionLive>
+  /** A session's lane by its key (#903), for `new` (`to`) and `set` (`assignee`). */
+  sessionLane?(key: string): string | null
 }
 
 /** The revision's own stream: made on its first client, so a board with threads off keeps no timer for it. */
@@ -436,12 +438,15 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
       const ctx = ctxOf(db)
       if (word === null) {
         if (body.op !== 'new') throw new ThreadError('bad', t('thread.err.bad'))
+        const to = body.to === undefined ? null : assigneeOf(body.to)
+        const rawLane = typeof body.lane === 'string' ? body.lane.trim() : ''
+        const lane = rawLane || (to?.kind === 'session' ? (app.sessionLane?.(to.key) ?? '') : '')
         return {
           written: newThread(ctx, {
-            lane: String(body.lane ?? ''),
+            lane,
             title: String(body.title ?? ''),
             parent: parentOf(db, body.parent) ?? null,
-            to: body.to === undefined ? null : assigneeOf(body.to),
+            to,
             doing: body.doing === true,
           }),
         }
@@ -465,15 +470,23 @@ export function threadsRoutes(app: ThreadsApp, revs: RevStream): Route[] {
             }),
           }
         }
-        case 'set':
+        case 'set': {
+          const assignee = body.assignee !== undefined ? assigneeOf(body.assignee, head) : undefined
+          const lane = typeof body.lane === 'string' ? body.lane : undefined
+          const assigneeLane =
+            lane === undefined && assignee?.kind === 'session'
+              ? (app.sessionLane?.(assignee.key) ?? undefined)
+              : undefined
           return {
             written: setFields(ctx, head, {
               ...(typeof body.title === 'string' && { title: body.title }),
-              ...(body.assignee !== undefined && { assignee: assigneeOf(body.assignee, head) }),
-              ...(typeof body.lane === 'string' && { lane: body.lane }),
+              ...(assignee !== undefined && { assignee }),
+              ...(assigneeLane && { assigneeLane }),
+              ...(lane !== undefined && { lane }),
               ...(body.parent !== undefined && { parent: parentOf(db, body.parent) ?? null }),
             }),
           }
+        }
         case 'ask':
           return { written: askOwner(ctx, head, String(body.text ?? '')) }
         case 'answer': {

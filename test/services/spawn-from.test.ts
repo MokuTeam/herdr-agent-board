@@ -346,3 +346,24 @@ describe('a node’s start with --trust on its master (#798)', () => {
     expect(dismissed).toEqual([])
   })
 })
+
+test('spawnFrom lane precedence: req.lane > folder category > caller lane (#903)', async () => {
+  const withCats = (more: Partial<SpawnCall> = {}) => {
+    const res = deps({ payload: onNode('server-1') })
+    res.d.cfg = {
+      nodes,
+      categories: [{ id: 'acme', title: 'Acme', color: 'blue', paths: ['/home/anna/work/atlas'] }],
+    } as unknown as Config
+    return { ...res, call: ask(more) }
+  }
+
+  // Folder category wins over caller lane.
+  const folderWins = withCats()
+  expect((await spawnFrom('laptop', who, folderWins.call, folderWins.d)).code).toBe(0)
+  expect(folderWins.started[0]?.body.category).toBe('acme')
+
+  // Explicit --lane wins over both folder category and caller lane.
+  const explicitWins = withCats({ lane: 'agent-board' })
+  expect((await spawnFrom('laptop', who, explicitWins.call, explicitWins.d)).code).toBe(0)
+  expect(explicitWins.started[0]?.body.category).toBe('agent-board')
+})

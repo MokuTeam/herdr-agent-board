@@ -417,3 +417,35 @@ test("from outside: the owner's own login reaches the threads routes, every othe
   assert.equal(remoteRefusal('/api/team', '/api/team', false, false, true)?.status, 403)
   assert.equal(remoteRefusal('/api/team', '/api/team', false, true, false), null)
 })
+
+test('HTTP threads new/set follow assignee lane via app.sessionLane (#903)', async () => {
+  const { app, call, cli } = setUp()
+  const worker: Party = { kind: 'session', key: 'worker-1', name: 'Worker' }
+  app.sessionLane = key => (key === 'worker-1' ? 'agent-board' : null)
+
+  // POST /api/threads op: 'new' without lane takes assignee's lane.
+  const made = await call('POST', '/api/threads', { op: 'new', title: 'Assigned via HTTP', to: worker })
+  assert.equal(made.status, 200)
+  assert.equal((made.body as { head: ThreadView['head'] }).head.lane, 'agent-board')
+
+  // Explicit lane wins over assignee's lane.
+  const explicit = await call('POST', '/api/threads', {
+    op: 'new',
+    lane: 'personal',
+    title: 'Explicit via HTTP',
+    to: worker,
+  })
+  assert.equal(explicit.status, 200)
+  assert.equal((explicit.body as { head: ThreadView['head'] }).head.lane, 'personal')
+
+  // Default-lane thread created via CLI moves when assigned via HTTP; explicit-lane thread stays.
+  await cli(master, ['new', 'Default via CLI'])
+  await cli(master, ['new', '--lane', 'personal', 'Explicit via CLI'])
+  const moved = await call('POST', '/api/threads/atlas-1', { op: 'set', assignee: worker })
+  assert.equal(moved.status, 200)
+  assert.equal((moved.body as { head: ThreadView['head'] }).head.lane, 'agent-board')
+
+  const stayed = await call('POST', '/api/threads/personal-1', { op: 'set', assignee: worker })
+  assert.equal(stayed.status, 200)
+  assert.equal((stayed.body as { head: ThreadView['head'] }).head.lane, 'personal')
+})
