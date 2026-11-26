@@ -40,6 +40,7 @@ export const LAYOUT_KEY = 'board.panel'
 /** What the place needs of a panel. */
 export interface PlacedPanel {
   readonly isOpen: boolean
+  readonly modal?: boolean
   /** A gesture is in progress. */
   readonly gesturing: boolean
   close(velocity?: { x?: number; y?: number }): void
@@ -210,10 +211,11 @@ export class PanelPlace {
     const open = this.openPanel()
     const vp = this.viewport()
     const phone = this.isPhone()
-    const want = roomWanted(!!open, phone, this.layout, vp)
-    const wantOver = overWanted(!!open, phone, this.layout, vp)
+    const docked = !!open && !open.modal
+    const want = roomWanted(docked, phone, this.layout, vp)
+    const wantOver = overWanted(docked, phone, this.layout, vp)
     // Over the board it casts a deeper shadow, a drawer over the cards rather than beside them.
-    open?.setOver(!phone && overlays(this.layout, vp))
+    open?.setOver(docked && !phone && overlays(this.layout, vp))
     if (jump) {
       for (const side of OVER_SIDES) this.over[side].set(wantOver[side])
       for (const side of SIDES) this.room[side].set(want[side])

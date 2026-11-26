@@ -12,6 +12,7 @@ import { usePanelPlace } from './usePanelLayout.ts'
 
 export interface PanelOptions {
   open: boolean
+  modal?: boolean
   onClose(): void
   about?: (() => Element | null) | undefined
 }
@@ -28,7 +29,7 @@ export interface PanelControls {
   close(): void
 }
 
-export function usePanel({ open, onClose, about }: PanelOptions): PanelControls {
+export function usePanel({ open, modal = false, onClose, about }: PanelOptions): PanelControls {
   const place = usePanelPlace()
   // Updated in this component's layout effects, before the one below that opens or closes it.
   const latest = useLatest({ onClose, about })
@@ -43,6 +44,7 @@ export function usePanel({ open, onClose, about }: PanelOptions): PanelControls 
   const ref = useRef<HTMLElement>(null)
 
   useLayoutEffect(() => (ref.current ? motion.attach(ref.current) : undefined), [motion])
+  useLayoutEffect(() => motion.setModal(modal), [motion, modal])
   // After the element is taken: a panel asked open comes in, one asked closed goes.
   useLayoutEffect(() => {
     if (open) motion.open()

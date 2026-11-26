@@ -4,6 +4,7 @@
 /** What the manager reads of an element: the DOM's, or a stand-in in the tests. */
 export interface FocusElement {
   inert?: boolean | undefined
+  children?: Iterable<unknown>
   tabIndex?: number | undefined
   disabled?: boolean | undefined
   isConnected?: boolean | undefined
@@ -59,7 +60,7 @@ export function modalFocusManager(doc: FocusDocument): (layer: FocusElement, win
     node !== null &&
     'closest' in node &&
     typeof node.closest === 'function' &&
-    !!node.closest('.menu, .rename, .toasts')
+    !!node.closest('.menu, .rename, .toasts, .card-window-scrim')
   const ownKeys = (node: unknown) =>
     typeof node === 'object' &&
     node !== null &&
@@ -76,11 +77,18 @@ export function modalFocusManager(doc: FocusDocument): (layer: FocusElement, win
     saved.clear()
     const scope = top()
     if (!scope) return
-    for (const el of doc.body.children) {
-      if (el === scope.layer || auxiliary(el) || !isElement(el)) continue
-      saved.set(el, el.inert)
-      el.inert = true
+    function cover(children: Iterable<unknown>, layer: FocusElement): void {
+      for (const el of children) {
+        if (el === layer || auxiliary(el) || !isElement(el)) continue
+        if (el.contains(layer) && el.children) {
+          cover(el.children, layer)
+          continue
+        }
+        saved.set(el, el.inert)
+        el.inert = true
+      }
     }
+    cover(doc.body.children, scope.layer)
   }
   const focusFirst = (scope: Scope) => (controls(scope)[0] ?? scope.win).focus({ preventScroll: true })
   doc.addEventListener(

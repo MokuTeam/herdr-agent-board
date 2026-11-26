@@ -25,13 +25,24 @@ export interface PanelHeadProps {
   glyph: Dock
   /** The place menu is up from this panel's button. */
   menuOpen: boolean
+  hidePlace?: boolean
   /** The session sheet's close button has an id (#sheet-close); the others do not. */
   closeId?: string | undefined
   onPlace?: ((button: HTMLElement) => void) | undefined
   onClose?: (() => void) | undefined
 }
 
-export function PanelHead({ back, title, tools, glyph, menuOpen, closeId, onPlace, onClose }: PanelHeadProps) {
+export function PanelHead({
+  back,
+  title,
+  tools,
+  glyph,
+  menuOpen,
+  hidePlace,
+  closeId,
+  onPlace,
+  onClose,
+}: PanelHeadProps) {
   const t = useT()
   return (
     <header className="sheet-head">
@@ -50,19 +61,21 @@ export function PanelHead({ back, title, tools, glyph, menuOpen, closeId, onPlac
       <div className="sheet-title">{title}</div>
       <div className="sheet-tools">
         {tools}
-        <button
-          type="button"
-          className="icon-button"
-          data-layout=""
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          title={t('panel.place')}
-          aria-label={t('panel.place')}
-          data-glyph={glyph}
-          onClick={(e: MouseEvent<HTMLButtonElement>) => onPlace?.(e.currentTarget)}
-        >
-          <DockGlyph dock={glyph} />
-        </button>
+        {!hidePlace && (
+          <button
+            type="button"
+            className="icon-button"
+            data-layout=""
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            title={t('panel.place')}
+            aria-label={t('panel.place')}
+            data-glyph={glyph}
+            onClick={(e: MouseEvent<HTMLButtonElement>) => onPlace?.(e.currentTarget)}
+          >
+            <DockGlyph dock={glyph} />
+          </button>
+        )}
         <button
           type="button"
           className="icon-button"

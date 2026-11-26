@@ -152,6 +152,13 @@ export class PanelMotion implements PlacedPanel {
   readonly state: Store<PanelState>
   /** The owner's: closed by the panel itself (its close button, a flick, folded away, Esc, the board beside it, Back) or by another opening. */
   onClose: () => void = () => {}
+  modal = false
+
+  setModal(modal: boolean): void {
+    if (this.modal === modal) return
+    this.modal = modal
+    if (this.isOpen) this.place.syncRoom({ about: this.about })
+  }
   /** What it is about (the session's card): kept in its place on screen while the board makes room. */
   about: About = () => null
 
@@ -379,7 +386,7 @@ export class PanelMotion implements PlacedPanel {
   }
 
   private down(e: PointerEvent): void {
-    if (!this.isOpen || e.button !== 0) return
+    if (!this.isOpen || this.modal || e.button !== 0) return
     const edge = closest(e.target, '.sheet-edge')
     if (edge instanceof HTMLElement) {
       this.resizeStart(e, edge)

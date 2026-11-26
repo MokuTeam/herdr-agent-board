@@ -383,7 +383,8 @@ export function App() {
     openNextAttention,
     newSession,
     // They take their keys first; the terminal window too, even while its screen has not the keys.
-    layerOpen: () => menus.menu.isOpen() || launch.isOpen() || terminal.isOpen() || helpers.isOpen() || fork.isOpen(),
+    layerOpen: () =>
+      menus.menu.isOpen() || launch.isOpen() || terminal.engine.blocksBoardKeys() || helpers.isOpen() || fork.isOpen(),
     quickLookOpen: () => quickLook.isOpen() || pictureOpen(),
     panelOpen: () => !!panels.place.openPanel(),
     closePanel: () => {

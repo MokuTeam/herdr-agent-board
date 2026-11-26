@@ -2,13 +2,18 @@
 // aside with a grip, the head and the panel's content, and the edges that resize it. Where it sits,
 // how it moves and the one-open-at-a-time rule are the shared place's (components/panel/place.ts
 // and motion.ts); `open` asks for it, `onClose` hears when it closed itself or gave way to another.
-import type { ReactNode, Ref } from 'react'
+import { type ReactNode, type Ref, useLayoutEffect } from 'react'
+import { useCardWindow } from '../../hooks/useCardWindow.ts'
 import type { DropHandlers } from '../../hooks/useFileDrop.ts'
+import { useLatest } from '../../hooks/useLatest.ts'
+import { useModalFocus } from '../../hooks/useModalFocus.ts'
 import { usePanel } from '../../hooks/usePanel.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
+import type { CardWindowKind } from '../../models/card-window.ts'
 import type { Edge } from '../../models/panel-layout.ts'
 import { EDGES, edgeChrome, type PanelChrome } from '../../models/panel-motion.ts'
 import { classNames } from '../class-names.ts'
+import { CardWindowSwitch } from './CardWindowSwitch.tsx'
 import { type PanelBack, PanelHead } from './PanelHead.tsx'
 
 export type { PanelBack }
@@ -91,36 +96,71 @@ interface ShellProps {
 
 export interface PanelProps extends ShellProps {
   open: boolean
+  cardWindow?: CardWindowKind
   onClose(): void
   /** The element the panel is about (the session's card): kept in its place on screen while the board makes room. */
   about?: () => Element | null
 }
 
-export function Panel({ open, onClose, about, ...shell }: PanelProps) {
-  const panel = usePanel({ open, onClose, about })
+export function Panel({ open, onClose, about, cardWindow, ...shell }: PanelProps) {
+  const t = useT()
+  const choice = useCardWindow(cardWindow)
+  const modal = choice?.view === 'modal'
+  const panel = usePanel({ open, modal, onClose, about })
+  const { ref, shown } = panel
+  const focus = useModalFocus(ref)
+  const origin = useLatest(about)
+  useLayoutEffect(() => {
+    if (!open || !modal || !shown) return
+    const active = document.activeElement
+    focus.open(ref.current?.contains(active) ? active : (origin.current?.() ?? active))
+    return () => focus.close()
+  }, [focus, open, modal, shown, origin, ref])
+
   return (
-    <PanelView
-      {...shell}
-      shown={panel.shown}
-      chrome={panel.chrome}
-      over={panel.over}
-      menuOpen={panel.menuOpen}
-      asideRef={panel.ref}
-      onPlace={panel.togglePlaceMenu}
-      onClose={panel.close}
-    />
+    <>
+      {modal && open && (
+        <button
+          type="button"
+          className="card-window-scrim"
+          tabIndex={-1}
+          aria-label={t('sheet.closeLabel')}
+          onClick={panel.close}
+        />
+      )}
+      <PanelView
+        {...shell}
+        tools={
+          <>
+            {shell.tools}
+            {(open || panel.shown) && choice?.toggle && (
+              <CardWindowSwitch view={choice.view} onToggle={choice.toggle} />
+            )}
+          </>
+        }
+        modal={modal}
+        shown={panel.shown && (!modal || open)}
+        chrome={panel.chrome}
+        over={panel.over}
+        menuOpen={panel.menuOpen}
+        asideRef={panel.ref}
+        onPlace={modal ? undefined : panel.togglePlaceMenu}
+        onClose={panel.close}
+      />
+    </>
   )
 }
 
 export interface PanelViewProps extends ShellProps {
   /** In the page: from opening until it has left. */
   shown: boolean
+  modal?: boolean
   chrome: PanelChrome
   /** Docked at a side, it lies over the board: a deeper shadow, a drawer over the cards. */
   over?: boolean
   menuOpen: boolean
   asideRef?: Ref<HTMLElement>
-  onPlace?: (button: HTMLElement) => void
+  onPlace?: ((button: HTMLElement) => void) | undefined
   onClose?: () => void
 }
 
@@ -137,6 +177,7 @@ export function PanelView(props: PanelViewProps) {
     measure = 'reading',
     children,
     shown,
+    modal = false,
     chrome,
     over = false,
     menuOpen,
@@ -147,12 +188,16 @@ export function PanelView(props: PanelViewProps) {
   const t = useT()
   const { label, closeId } = KINDS[kind]
   return (
+    // biome-ignore lint/a11y/useAriaPropsSupportedByRole: the modal branch has role=dialog and the side panel has no aria-modal.
     <aside
       className={classNames('sheet', shown && 'open', over && 'over', className)}
       id={id}
       aria-hidden={!shown}
       aria-label={t(label)}
-      data-dock={chrome.mode}
+      role={modal ? 'dialog' : undefined}
+      aria-modal={modal || undefined}
+      tabIndex={modal ? -1 : undefined}
+      data-dock={modal ? 'modal' : chrome.mode}
       data-measure={measure === 'full' ? 'full' : undefined}
       ref={asideRef}
       {...drop}
@@ -165,15 +210,14 @@ export function PanelView(props: PanelViewProps) {
           tools={tools}
           glyph={chrome.glyph}
           menuOpen={menuOpen}
+          hidePlace={modal}
           closeId={closeId}
           onPlace={onPlace}
           onClose={onClose}
         />
         {children}
       </div>
-      {EDGES.map(edge => (
-        <PanelEdge key={edge} edge={edge} chrome={chrome} />
-      ))}
+      {!modal && EDGES.map(edge => <PanelEdge key={edge} edge={edge} chrome={chrome} />)}
     </aside>
   )
 }
