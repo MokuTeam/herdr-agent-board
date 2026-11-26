@@ -101,8 +101,10 @@ import {
   BOARD_SLICES_PATH,
   BULK_FIELD,
   DECISIONS_PATH,
+  MASTER_SCOPE_PREFIX,
   masterBulkBody,
   masterNodesBody,
+  masterScopePath,
   NODE_CLI_PATH,
   NODE_REVEAL_PATH,
   type NodeReveal,
@@ -1822,6 +1824,22 @@ export async function startServer({
       own.pathname = nodePath(keyed)
       return replayRelayed(new Request(own, req), from)
     }
+    // Settings → The whole board on a node's page (#887): this board's own settings, Owner services
+    // and the passkey's window, the owner's on that device only, the declared paths only.
+    if (from && raw.startsWith(`${MASTER_SCOPE_PREFIX}/`)) {
+      if (from.who.kind !== 'owner') return json(403, { ok: false, error: 'owner' })
+      const inner = masterScopePath(req.method, raw)
+      const innerPath = inner === null ? null : decoded(inner)
+      if (inner === null || innerPath === null) return json(404, { ok: false, error: 'not found' })
+      const innerUrl = new URL(`${inner}${url.search}`, url)
+      const body = req.method === 'POST' ? await req.arrayBuffer() : undefined
+      const innerReq = new Request(innerUrl, { method: req.method, headers: req.headers, ...(body && { body }) })
+      // None of them acts on this computer's screen; the check stays for any path added later.
+      const refused = remoteRefusal(inner, innerPath, false, false, true, true)
+      if (refused) return refused
+      const table = masterRelayFirst ? routes.filter(r => r !== masterRelayFirst) : routes
+      return replayAdmin(innerReq, innerUrl, innerPath, table, from.device, req.method !== 'GET', true)
+    }
     // For a node only (#780): the payload's master-run parts, and a sessionless terminal's command as the owner's.
     if (req.method === 'GET' && raw === BOARD_SLICES_PATH) {
       // The node's own page asks as the owner; a node session reads its panels by their own paths.
@@ -1915,7 +1933,10 @@ export async function startServer({
     return replayAdmin(req, url, path, table, device, setting && req.method !== 'GET')
   }
 
-  /** A relayed request run against `table` as a remote caller's; with `log`, in the admin log as the owner's on `device`. */
+  /**
+   * A relayed request run against `table` as a remote caller's; with `log`, in the admin log as the
+   * owner's on `device`; with `scope`, as Settings → The whole board on its page (#887).
+   */
   async function replayAdmin(
     req: Request,
     url: URL,
@@ -1923,12 +1944,18 @@ export async function startServer({
     table: Route[],
     device: string,
     log: boolean,
+    scope = false,
   ): Promise<Response> {
     if (log && !board.checkAdminAudit()) return json(503, { ok: false, error: 'audit' })
     const op = log ? await adminOpOf(req) : undefined
     let res: Response | undefined
     try {
-      res = await dispatch(table, req, url, path, { ...guards, remote: true, relayFrom: device })
+      res = await dispatch(table, req, url, path, {
+        ...guards,
+        remote: true,
+        relayFrom: device,
+        ...(scope && { masterScope: true as const }),
+      })
       return res
     } finally {
       if (log)
@@ -2155,6 +2182,12 @@ export async function startServer({
     // An answer or a Hold the master took (#784): its decisions again at once, so the page shows it.
     masterRelayFirst = masterRelayRoute(upRelay, (method, rawPath, status) => {
       if (method === 'POST' && rawPath === DECISIONS_PATH && status === 200) upSlices.poke()
+      // The master waits for the passkey (#887): its window opens on this board's localhost, which
+      // [::1] must reach here, as for a confirmation of this board's own.
+      if (status === 428 && rawPath.startsWith(`${MASTER_SCOPE_PREFIX}/`) && !ownerConfirmationOpen) {
+        ownerConfirmationOpen = true
+        holdLoopback6()
+      }
     })
     routes.unshift(masterRelayFirst)
     // Before the relay (#860): the bridge's store token is checked here, where it was written.

@@ -22,6 +22,11 @@
 // away: waiting() lists those for the Team panel on the computer, where the owner opens the window
 // with a click, and `changed` tells the board when that list moves (one added, done, or gone after
 // CONFIRM_MS), so the head's Team button follows.
+//
+// From a node (#887): an owner action a node's page asks of its master (/api/master/..., the relay)
+// is pended for that node (`via`). The node's page opens the window on its own localhost, and its
+// answer comes up the relay: the same passkeys, the same challenge and RP ID, any localhost port as
+// the origin (core/team-confirm.ts loopbackOrigin), since an RP ID has no port.
 import { createHash, randomBytes } from 'node:crypto'
 import { audit, changeOwnerKeys, type OwnerPasskey, readOwnerKeys } from '../adapters/team-store.ts'
 import { deviceLabel } from '../core/access.ts'
@@ -31,6 +36,7 @@ import {
   confirmUrl,
   fromComputer,
   HINTS,
+  loopbackOrigin,
   MAX_PENDING,
   type OwnerAction,
   RP_ID,
@@ -63,6 +69,11 @@ interface Pending {
   viewed: boolean
   /** Asked from away (#377): it waits for the owner at the computer, listed in the Team panel. */
   away: boolean
+  /**
+   * Asked by a node's page for this master (#887): the node's id. Only that node's page reads and
+   * answers it, from its own origin on localhost; a pending action of this computer never through a node.
+   */
+  via?: string
 }
 
 /** A gated action asked from away that waits for the owner at the computer (#377). */
@@ -100,16 +111,22 @@ export interface TeamConfirm {
   /** Whether the gated actions wait for a confirmation (#367): the switch on, and a passkey there. */
   required(): boolean
   passkeys(): PublicPasskey[]
-  /** Keeps a gated action for its confirmation; its id. `away`: asked from away (#377), listed by waiting(). */
-  pend(action: OwnerAction, away?: boolean): string
+  /**
+   * Keeps a gated action for its confirmation; its id. `away`: asked from away (#377), listed by
+   * waiting(). `via`: asked by that node's page through the relay (#887).
+   */
+  pend(action: OwnerAction, away?: boolean, via?: string): string
   /** Whether a request (its URL) came from away, not to the board on this computer (#377). */
   away(url: string): boolean
   /** The actions asked from away that wait for a confirmation, oldest first (#377). */
   waiting(): Waiting[]
-  /** The pending action and the window's next step, with a fresh challenge; null when it is gone. */
-  view(id: string): ConfirmView | null | 'passkey'
-  /** The window's answer to `view` (an assertion or a registration). */
-  answer(id: string, body: unknown, userAgent: string | null): ConfirmAnswer
+  /**
+   * The pending action and the window's next step, with a fresh challenge; null when it is gone.
+   * `via`: the node that asks (#887); an action pended for another, or for none, is gone to it.
+   */
+  view(id: string, via?: string): ConfirmView | null | 'passkey'
+  /** The window's answer to `view` (an assertion or a registration); `via` as for view. */
+  answer(id: string, body: unknown, userAgent: string | null, via?: string): ConfirmAnswer
   /** Whether `token` (the X-Board-Unlock header) still unlocks the owner's sending. */
   unlocked(token: string | null): boolean
   /** Where the panel opens the confirmation of `id`. */
@@ -159,12 +176,18 @@ export function createTeamConfirm({
     for (const [h, until] of unlockedUntil) if (until <= t) unlockedUntil.delete(h)
   }
 
-  function live(id: string): Pending | null {
+  function live(id: string, via?: string): Pending | null {
     sweep()
-    return pending.get(id) ?? null
+    const p = pending.get(id) ?? null
+    return p && p.via === via ? p : null
   }
 
-  const expect = (challenge: string) => ({ challenge, origin: confirmOrigin(port()), rpId: RP_ID })
+  // A node's window (#887) is on its own localhost, at the node's port.
+  const expect = (challenge: string, via?: string) => ({
+    challenge,
+    origin: via === undefined ? confirmOrigin(port()) : loopbackOrigin,
+    rpId: RP_ID,
+  })
 
   function creationOptions(challenge: string, userId: string, have: OwnerPasskey[]): Record<string, unknown> {
     return {
@@ -201,7 +224,7 @@ export function createTeamConfirm({
     const keys = readOwnerKeys()
     const stored = keys.passkeys.find(k => k.id === a.id)
     if (!stored || keys.userId === null) return 'passkey'
-    const checked = verifyAssertion(a, expect(p.challenge), { ...stored, userId: keys.userId })
+    const checked = verifyAssertion(a, expect(p.challenge, p.via), { ...stored, userId: keys.userId })
     if (!checked.ok) return checked.why
     changeOwnerKeys(k => {
       const kept = k.passkeys.find(x => x.id === stored.id)
@@ -217,7 +240,7 @@ export function createTeamConfirm({
   function registered(p: Pending, body: unknown, userAgent: string | null): string | null {
     const r = registrationOf(body)
     if (!r || p.challenge === null || challengeOf(r.clientDataJSON) !== p.challenge) return 'challenge'
-    const checked = verifyRegistration(r, expect(p.challenge))
+    const checked = verifyRegistration(r, expect(p.challenge, p.via))
     if (!checked.ok) return checked.why
     const { id, jwk, alg, counter } = checked.credential
     if (id !== r.id || (b64url.decode(id)?.length ?? 0) > CREDENTIAL_ID_MAX) return 'shape'
@@ -245,7 +268,7 @@ export function createTeamConfirm({
     passkeys: () =>
       readOwnerKeys().passkeys.map(p => ({ id: p.id, label: p.label, addedAt: p.addedAt, usedAt: p.usedAt })),
 
-    pend(action, away = false) {
+    pend(action, away = false, via) {
       sweep()
       // Full: the oldest that no window has read goes first (a flood of requests nobody opens
       // does not push out the one the owner is confirming), else the oldest.
@@ -256,7 +279,15 @@ export function createTeamConfirm({
         drop(oldest)
       }
       const id = random(ID_BYTES)
-      pending.set(id, { action, at: now(), challenge: null, verified: false, viewed: false, away })
+      pending.set(id, {
+        action,
+        at: now(),
+        challenge: null,
+        verified: false,
+        viewed: false,
+        away,
+        ...(via !== undefined && { via }),
+      })
       if (away) {
         changed?.()
         // Gone after CONFIRM_MS: the list is read again then, and the head's count drops.
@@ -274,8 +305,8 @@ export function createTeamConfirm({
       return [...pending].filter(([, p]) => p.away).map(([id, p]) => ({ id, action: p.action, at: p.at }))
     },
 
-    view(id) {
-      const p = live(id)
+    view(id, via) {
+      const p = live(id, via)
       if (!p) return null
       p.viewed = true
       const keys = readOwnerKeys()
@@ -295,8 +326,8 @@ export function createTeamConfirm({
       return { action: p.action, step: 'get', options: requestOptions(challenge, keys.passkeys) }
     },
 
-    answer(id, body, userAgent) {
-      const p = live(id)
+    answer(id, body, userAgent, via) {
+      const p = live(id, via)
       if (!p) return { ok: false, error: 'gone' }
       const create = p.action.kind === 'passkey-add' && (p.verified || !readOwnerKeys().passkeys.length)
       const why = create ? registered(p, body, userAgent) : asserted(p, body)

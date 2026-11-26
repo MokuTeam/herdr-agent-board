@@ -145,6 +145,17 @@ p.set-err {
   font-size: 12px;
   line-height: 1.35;
 }
+/* Settings → This computer / The whole board on a node's page (#887), above the sections. */
+.set-scope-switch {
+  margin-bottom: 16px;
+}
+/* A line on what this scope does not offer, and why. */
+p.set-note {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--label-2);
+}
 .set-inline {
   display: flex;
   align-items: center;

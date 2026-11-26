@@ -4,6 +4,7 @@ import { boardSlicesOf, slicesOf } from '../../src/core/board-slices.ts'
 import {
   BOARD_SLICES_PATH,
   masterPath,
+  masterScopePath,
   NODE_CLI_PATH,
   OWNER_CLI_COMMANDS,
   OWNER_THREAD_SUBS,
@@ -307,4 +308,47 @@ test("the master's threads revision and count ride in the slices (#797)", () => 
   const threads = { rev: 7, needsOwner: 2, cases: true as const }
   expect(boardSlicesOf({ ok: true, slices: { threads, items: [] } })).toEqual({ threads })
   expect(slicesOf({ threads: undefined } as never)).toEqual({})
+})
+
+describe('Settings → The whole board (#887): the master scope reaches its declared paths only', () => {
+  test('a declared path goes up and names the master its own path', () => {
+    expect(masterScopePath('GET', '/api/master/board')).toBe('/api/board')
+    expect(masterScopePath('POST', '/api/master/settings')).toBe('/api/settings')
+    expect(masterScopePath('POST', '/api/master/todos')).toBe('/api/todos')
+    expect(masterScopePath('GET', '/api/master/owner-services')).toBe('/api/owner-services')
+    expect(masterScopePath('POST', '/api/master/owner-services')).toBe('/api/owner-services')
+    const id = 'A'.repeat(22)
+    expect(masterScopePath('GET', `/api/master/team/confirm/${id}`)).toBe(`/api/team/confirm/${id}`)
+    expect(masterScopePath('POST', `/api/master/team/confirm/${id}?x=1`)).toBe(`/api/team/confirm/${id}?x=1`)
+    for (const [method, path] of [
+      ['GET', '/api/master/board'],
+      ['POST', '/api/master/settings'],
+      ['POST', `/api/master/team/confirm/${id}`],
+    ] as const) {
+      const m = relayMatch(method, path, none)
+      expect(m?.kind === 'table' && m.entry.group).toBe('master')
+      expect(m?.kind === 'table' && m.entry.relayOnly).toBe(true)
+    }
+  })
+
+  test('anything else stays here: another method, a path off the list, another spelling', () => {
+    for (const [method, path] of [
+      ['POST', '/api/master/board'],
+      ['GET', '/api/master/settings'],
+      ['GET', '/api/master/backup'],
+      ['POST', '/api/master/access'],
+      ['POST', '/api/master/remote'],
+      ['POST', '/api/master/team/passkeys'],
+      ['GET', '/api/master/team/confirm'],
+      ['GET', '/api/master/team/confirm/short'],
+      ['GET', '/api/master/../board'],
+      ['GET', '/api/masterboard'],
+      ['GET', '/api/board'],
+      ['GET', '/api/master/master/board'],
+    ] as const) {
+      expect(masterScopePath(method, path)).toBeNull()
+      const m = relayMatch(method, path, none)
+      expect(m?.kind === 'table' && m.entry.group === 'master').toBe(false)
+    }
+  })
 })

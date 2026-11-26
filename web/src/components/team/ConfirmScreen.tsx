@@ -10,7 +10,7 @@ import type { Translator } from '../../../../src/core/types.ts'
 import { isReply, postJson, type Reply, replyOf } from '../../api/client.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { assertionJson, attestationJson, creationOptions, requestOptions } from '../../models/passkey.ts'
-import { confirmed } from '../../models/team-confirm.ts'
+import { confirmed, confirmPath } from '../../models/team-confirm.ts'
 
 /** Where passkeys are made and used (navigator.credentials). */
 export type PasskeyCredentials = Pick<CredentialsContainer, 'get' | 'create'>
@@ -199,14 +199,17 @@ type State =
 
 export function ConfirmScreen({
   id,
+  scope = null,
   credentials = () => navigator.credentials,
 }: {
   id: string
+  /** The master's confirmation, for Settings → The whole board on this node's page (#887). */
+  scope?: 'master' | null
   credentials?: () => PasskeyCredentials
 }) {
   const t = useT()
   const [state, setState] = useState<State>({ at: 'reading' })
-  const path = `/api/team/confirm/${id}`
+  const path = confirmPath(id, scope)
 
   async function read(): Promise<void> {
     const res = await fetch(path, { cache: 'no-store' }).catch(() => null)

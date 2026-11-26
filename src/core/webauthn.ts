@@ -187,7 +187,8 @@ export function coseKey(key: Map<unknown, unknown>): { alg: Alg; jwk: JsonWebKey
 
 export interface Expect {
   challenge: string
-  origin: string
+  /** The page's origin, or a test of it (a node's page relayed to its master, #887). */
+  origin: string | ((origin: string) => boolean)
   rpId: string
 }
 export type WhyNot =
@@ -222,7 +223,7 @@ function clientData(encoded: string, type: string, e: Expect): Uint8Array | WhyN
   if (!isRecord(data) || ![data.type, data.challenge, data.origin].every(v => typeof v === 'string')) return 'shape'
   if (data.type !== type) return 'type'
   if (data.challenge !== e.challenge) return 'challenge'
-  if (data.origin !== e.origin) return 'origin'
+  if (typeof e.origin === 'string' ? data.origin !== e.origin : !e.origin(String(data.origin))) return 'origin'
   return bytes
 }
 

@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react'
 import type { OwnerService } from '../../../../src/core/owner-services.ts'
 import { api, errorText, isReply } from '../../api/client.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
+import { type SettingsScope, scopedPath } from '../../models/master-scope.ts'
 import { ownerPost } from '../../models/team-confirm.ts'
 
-const path = '/api/owner-services'
 interface View {
   services: OwnerService[]
   hasPasskey: boolean
@@ -15,8 +15,10 @@ const isView = (value: unknown): value is View =>
   Array.isArray(value.services) &&
   value.services.every(s => isReply(s) && typeof s.key === 'string' && typeof s.name === 'string')
 
-export function OwnerServices() {
+/** This board's owner services, or with `scope` 'board' its master's (#887, the passkey signed on this page). */
+export function OwnerServices({ scope = 'here' }: { scope?: SettingsScope } = {}) {
   const t = useT()
+  const path = scopedPath('/api/owner-services', scope)
   const [view, setView] = useState<View | null>(null)
   const [name, setName] = useState('')
   const [token, setToken] = useState('')
@@ -28,7 +30,7 @@ export function OwnerServices() {
       if (!controller.signal.aborted) setError(errorText(err, t))
     })
     return () => controller.abort()
-  }, [t])
+  }, [t, path])
 
   const submit = async (action: { op: 'passkey' | 'add' | 'revoke'; name?: string; key?: string }) => {
     setBusy(true)

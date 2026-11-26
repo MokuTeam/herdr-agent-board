@@ -383,3 +383,48 @@ test('#377 what is asked from away is listed until it is confirmed or gone, and 
   expect(told).toBe(4)
   expect(c.view(late)).toBeNull()
 })
+
+test("a node's page confirms its master's action (#887): pended for that node only, signed at any localhost port", async () => {
+  const w = world()
+  const c = w.make()
+  const key = await softAuthenticator(-7)
+  // The first passkey, made on the node's page (port 12470, not the master's 12460).
+  const add = c.pend({ kind: 'passkey-add' }, false, 'server-1')
+  expect(c.view(add)).toBeNull()
+  expect(c.view(add, 'server-2')).toBeNull()
+  const made = c.view(add, 'server-1')
+  if (made === null || made === 'passkey') throw new Error('no view')
+  expect(made.step).toBe('create')
+  const reg = page(
+    key.register({ challenge: made.options.challenge as string, origin: origin(12470), rpId: 'localhost' }),
+  )
+  expect(c.answer(add, reg, null, 'server-1')).toEqual({ ok: true, done: true, action: { kind: 'passkey-add' } })
+
+  // An action for the node: the master's own window and another node do not see it.
+  const id = c.pend(SEND, false, 'server-1')
+  expect(c.waiting()).toEqual([])
+  const v = c.view(id, 'server-1')
+  if (v === null || v === 'passkey') throw new Error('no view')
+  const challenge = v.options.challenge as string
+  const signed = (o: string, counter: number) => page(key.assert({ challenge, origin: o, rpId: 'localhost', counter }))
+  expect(c.answer(id, signed(origin(12470), 1), null)).toEqual({ ok: false, error: 'gone' })
+  expect(c.answer(id, signed(origin(12470), 1), null, 'server-2')).toEqual({ ok: false, error: 'gone' })
+  // Not a board page on localhost: refused, and the challenge served its one answer.
+  expect(c.answer(id, signed('https://example.com', 1), null, 'server-1')).toEqual({ ok: false, error: 'origin' })
+  const again = c.view(id, 'server-1')
+  if (again === null || again === 'passkey') throw new Error('no view')
+  const ok = page(
+    key.assert({ challenge: again.options.challenge as string, origin: origin(12470), rpId: 'localhost', counter: 2 }),
+  )
+  expect(c.answer(id, ok, null, 'server-1')).toMatchObject({ ok: true, done: true, action: SEND })
+
+  // The master's own action is never the node's, and keeps its exact origin.
+  const own = c.pend(SEND)
+  expect(c.view(own, 'server-1')).toBeNull()
+  const local = c.view(own)
+  if (local === null || local === 'passkey') throw new Error('no view')
+  const elsewhere = page(
+    key.assert({ challenge: local.options.challenge as string, origin: origin(12470), rpId: 'localhost', counter: 3 }),
+  )
+  expect(c.answer(own, elsewhere, null)).toEqual({ ok: false, error: 'origin' })
+})

@@ -2,14 +2,14 @@
 // 5-section panel (Display, Board & Agents, Features, Integrations, System) aligned with the
 // board's design system. Works docked or floating on desktop, and full-screen with section tabs
 // on phone widths. Every existing setting and dedicated sub-panel stays reachable.
-import { type ReactNode, useLayoutEffect, useRef, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { FOLD_MODES, type FoldMode } from '../../../../src/core/fold-mode.ts'
 import { LANGUAGES } from '../../../../src/core/i18n/translator.ts'
 import { PRESENCE_MODES, type PresenceMode } from '../../../../src/core/presence.ts'
 import { SPAWN_CHOICES, SPAWN_NUMBERS, type SpawnNumber } from '../../../../src/core/spawn-limits.ts'
 import { TODO_MODES, type TodoMode, todoModeOf } from '../../../../src/core/todos.ts'
 import { THREAD_MODES } from '../../../../src/core/work-threads.ts'
-import { api, errorText } from '../../api/client.ts'
+import { api, type BoardPayload, errorText, isBoardPayload } from '../../api/client.ts'
 import { usePanelPlace } from '../../hooks/usePanelLayout.ts'
 import {
   chooseCompact,
@@ -32,6 +32,7 @@ import { CARD_TEXT_KEY, CARD_TEXTS, type CardText, cardTextNow, setCardText } fr
 import { reachable } from '../../models/devices.ts'
 import { LOOK_KEY, LOOKS, lookNow, setLook } from '../../models/look.ts'
 import { backupAlert, masterOwnedNow, onNodePage } from '../../models/master-owned.ts'
+import { masterScoped, offersBoardScope, type SettingsScope, scopedPath } from '../../models/master-scope.ts'
 import { DOCKS, type Dock } from '../../models/panel-layout.ts'
 import { offersProfiles } from '../../models/profiles.ts'
 import { adminHere, keptAuth, ownerAdminPage, remotePage } from '../../models/remote-page.ts'
@@ -75,6 +76,9 @@ export interface SettingsPanelProps {
   onOpenTeam(): void
   onOpenDevices(): void
 }
+
+/** How often The whole board reads the master's settings again while Settings is open (#887). */
+const MASTER_READ_MS = 5000
 
 const crossFade = (): ((apply: () => void) => unknown) | undefined =>
   typeof document !== 'undefined' && typeof document.startViewTransition === 'function' && !reducedMotion.matches
@@ -162,6 +166,10 @@ export function SettingsPanel({
   const place = usePanelPlace()
   const [ownerServicesOpen, showOwnerServices] = useState(false)
   const [section, setSection] = useState<SettingsSection>('display')
+  // This computer or The whole board (#887): on a node's own page only, This computer until switched.
+  const [scopePick, setScopePick] = useState<SettingsScope>('here')
+  const [master, setMaster] = useState<BoardPayload | null>(null)
+  const [masterError, setMasterError] = useState('')
   // Preserve list scroll position when opening an inner Settings page and returning (#679).
   const paneRef = useRef<HTMLDivElement>(null)
   const navRef = useRef<HTMLElement>(null)
@@ -199,12 +207,41 @@ export function SettingsPanel({
   const cardText = cardTextNow(rootEl)
   const isRemote = remotePage()
   const canAdmin = adminHere()
-  const languages = data?.languages ?? LANGUAGES
+  const scopeOffered = offersBoardScope(data, isRemote)
+  const scope: SettingsScope = scopeOffered ? scopePick : 'here'
+  const wholeBoard = scope === 'board'
+  // The whole board (#887): the master's payload, read through the relay while Settings is open.
+  const readMaster = useCallback(
+    async (signal?: AbortSignal) => {
+      try {
+        const next = await api.get(masterScoped('/api/board'), isBoardPayload, signal ? { signal } : undefined)
+        setMaster(next)
+        setMasterError('')
+      } catch (err) {
+        if (!signal?.aborted) setMasterError(errorText(err, t))
+      }
+    },
+    [t],
+  )
+  useEffect(() => {
+    if (!open || !wholeBoard) return
+    const controller = new AbortController()
+    void readMaster(controller.signal)
+    const timer = setInterval(() => void readMaster(controller.signal), MASTER_READ_MS)
+    return () => {
+      controller.abort()
+      clearInterval(timer)
+    }
+  }, [open, wholeBoard, readMaster])
+  // What the rows show: this board's payload, or the master's in The whole board.
+  const view = wholeBoard ? master : data
+  const languages = view?.languages ?? LANGUAGES
+  const langNow = wholeBoard ? (master?.lang ?? t.lang) : t.lang
   // A node's master-owned features (#775): shown as the master has them, and written there through
   // the relay (#780); Tasks stay read-only here.
-  const masterOwned = data?.masterFlags ?? null
+  const masterOwned = wholeBoard ? null : (data?.masterFlags ?? null)
   // On a node (#797): each row says whose it is, this computer's own or the master's.
-  const onNode = onNodePage(data)
+  const onNode = onNodePage(data) && !wholeBoard
   const headName = masterOwned?.master || data?.nodeMaster?.name || ''
   const headLabel = headName ? t('node.scope.head', { name: headName }) : t('node.scope.headNone')
   const hereMark = onNode ? <small className="set-owned">{t('node.scope.here')}</small> : null
@@ -215,13 +252,13 @@ export function SettingsPanel({
   ) : null
   // As the master has them, not this computer's own (off) values.
   const owned = masterOwned ? masterOwnedNow(masterOwned) : null
-  const presenceMode: PresenceMode | 'none' = owned ? owned.presence : (data?.presence?.mode ?? 'none')
-  const idleMinutes = data?.presence?.idleMinutes ?? 15
-  const todosMode: TodoMode = owned ? owned.todos : todoModeOf(data?.todos ?? null)
+  const presenceMode: PresenceMode | 'none' = owned ? owned.presence : (view?.presence?.mode ?? 'none')
+  const idleMinutes = view?.presence?.idleMinutes ?? 15
+  const todosMode: TodoMode = owned ? owned.todos : todoModeOf(view?.todos ?? null)
   const threadsInfo =
-    data && canAdmin ? (owned ? { mode: owned.threads, share: owned.threadsShare } : threadsNow(data)) : null
+    view && canAdmin ? (owned ? { mode: owned.threads, share: owned.threadsShare } : threadsNow(view)) : null
   const features =
-    data && canAdmin
+    view && canAdmin
       ? owned
         ? {
             watches: owned.watches,
@@ -232,21 +269,35 @@ export function SettingsPanel({
             ...(owned.threads !== 'none' &&
               owned.threadsVerify !== undefined && { threadsVerify: owned.threadsVerify }),
           }
-        : featuresNow(data)
+        : featuresNow(view)
       : null
-  const compact = data?.compactDefault
+  const compact = view?.compactDefault
   // Agent starts (#815): this computer's own limits; a board before them sends none.
-  // Written on the computer itself only (#815): not shown on another device's page.
-  const spawnLimits = canAdmin && !isRemote ? data?.spawnLimits : undefined
-  const turnResumeOn = data?.turnResume !== false
+  // Written on the computer itself only (#815): not shown on another device's page; the master's
+  // in The whole board (#887), read-only.
+  const spawnLimits = wholeBoard ? master?.spawnLimits : canAdmin && !isRemote ? data?.spawnLimits : undefined
+  const spawnEdit = canEdit && !wholeBoard
+  const turnResumeOn = view?.turnResume !== false
   const compactChoices =
     compact && !COMPACT_CHOICES.includes(compact as (typeof COMPACT_CHOICES)[number])
       ? [...COMPACT_CHOICES, compact]
       : [...COMPACT_CHOICES]
 
   const backupProblem = data?.backup?.problem
-  const wakeDown = canAdmin && isWakeView(data?.wake) && noteShown(data.wake, now)
-  const systemWarn = !!setup?.shown || backupAlert(data) || wakeDown
+  const wakeDown = !wholeBoard && canAdmin && isWakeView(data?.wake) && noteShown(data.wake, now)
+  const systemWarn = !wholeBoard && (!!setup?.shown || backupAlert(data) || wakeDown)
+  // Where Settings writes a path of the board's (#887), and a fresh read of the master after it.
+  const at = (path: string) => scopedPath(path, scope)
+  // The whole board shows its rows once the master's settings are read.
+  const ready = !wholeBoard || !!master
+  const after = <T,>(p: Promise<T>): Promise<T> => {
+    if (wholeBoard)
+      void p.then(
+        () => readMaster(),
+        () => readMaster(),
+      )
+    return p
+  }
 
   const pickTheme = (next: string) => {
     setTheme(next, { root: rootEl, keep: v => storage.set(THEME_KEY, v), transition: crossFade() })
@@ -261,32 +312,40 @@ export function SettingsPanel({
     setCardText(next, { root: rootEl, keep: v => storage.set(CARD_TEXT_KEY, v), transition: crossFade() })
     bump()
   }
+  const saveSettings = (body: object) => after(api.post(at('/api/settings'), body))
   const pickLang = (lang: string) => {
-    void chooseLanguage(lang, { t, canEdit, choose, save: body => api.post('/api/settings', body), toast })
+    // The master's language (#887): this page keeps its own.
+    if (wholeBoard) {
+      if (!canEdit) return toast(t('live.off'), true)
+      if (lang === langNow) return
+      saveSettings({ language: lang }).catch(err => toast(errorText(err, t), true))
+      return
+    }
+    void chooseLanguage(lang, { t, canEdit, choose, save: saveSettings, toast })
   }
   const pickFold = (mode: FoldMode) => {
-    void chooseFold(mode, { t, canEdit, save: body => api.post('/api/settings', body), toast })
+    void chooseFold(mode, { t, canEdit, save: saveSettings, toast })
   }
-  const pickCompact = (at: string) => {
-    void chooseCompact(at, { t, canEdit, save: body => api.post('/api/settings', body), toast })
+  const pickCompact = (limit: string) => {
+    void chooseCompact(limit, { t, canEdit, save: saveSettings, toast })
   }
   const pickTurnResume = (on: boolean) => {
-    void chooseTurnResume(on, { t, canEdit, save: body => api.post('/api/settings', body), toast })
+    void chooseTurnResume(on, { t, canEdit, save: saveSettings, toast })
   }
   const pickSpawn = (change: SpawnLimitsSetting) => {
-    void chooseSpawnLimits(change, { t, canEdit, save: body => api.post('/api/settings', body), toast })
+    void chooseSpawnLimits(change, { t, canEdit: spawnEdit, save: saveSettings, toast })
   }
+  // Presence, Threads and the features go to the master from a node already (#780).
   const pickPresence = (body: PresenceSetting) => {
-    void choosePresence(body, { t, canEdit, save: b => api.post('/api/presence', b), toast })
+    void choosePresence(body, { t, canEdit, save: b => after(api.post('/api/presence', b)), toast })
   }
   const pickTodos = (mode: TodoMode) => {
     if (!canEdit) return toast(t('live.off'), true)
-    api.post('/api/todos', { op: 'settings', mode }).catch(err => toast(errorText(err, t), true))
+    after(api.post(at('/api/todos'), { op: 'settings', mode })).catch(err => toast(errorText(err, t), true))
   }
   const pickThreads = (body: ThreadsSetting) => {
     if (!canEdit) return toast(t('live.off'), true)
-    api
-      .post('/api/threads-settings', body)
+    after(api.post('/api/threads-settings', body))
       .then(r => {
         const note = (r as { note?: unknown } | null)?.note
         if (typeof note === 'string' && note) toast(note, true)
@@ -295,7 +354,7 @@ export function SettingsPanel({
   }
   const pickFeature = (body: FeatureSetting) => {
     if (!canEdit) return toast(t('live.off'), true)
-    api.post('/api/feature-settings', body).catch(err => toast(errorText(err, t), true))
+    after(api.post('/api/feature-settings', body)).catch(err => toast(errorText(err, t), true))
   }
 
   const sections: { id: SettingsSection; label: string; icon: ReactNode; warn?: boolean }[] = [
@@ -306,7 +365,7 @@ export function SettingsPanel({
     { id: 'system', label: t('set.sec.system'), icon: <ShieldIcon />, warn: systemWarn },
   ]
 
-  const todosRow = data ? (
+  const todosRow = view ? (
     <div className="set-row">
       <div className="set-lbl">
         <b>{t('set.todos')}</b>
@@ -358,6 +417,34 @@ export function SettingsPanel({
         </nav>
 
         <div className="set-pane" ref={paneRef} onScroll={rememberScroll}>
+          {scopeOffered && (
+            <div className="set-group set-scope-switch">
+              <div className="set-row">
+                <div className="set-lbl">
+                  <b>{t('node.scope.switch')}</b>
+                  {wholeBoard && (
+                    <small>
+                      {headName ? t('node.scope.wholeNote', { name: headName }) : t('node.scope.wholeNoteNone')}
+                    </small>
+                  )}
+                </div>
+                <Segmented
+                  label={t('node.scope.switch')}
+                  value={scope}
+                  options={[
+                    { value: 'here' as const, label: t('node.scope.thisComputer') },
+                    { value: 'board' as const, label: t('node.scope.wholeBoard') },
+                  ]}
+                  onChange={next => setScopePick(next)}
+                />
+              </div>
+              {wholeBoard && !master && (
+                <p className={classNames('set-row', masterError && 'set-err')} role={masterError ? 'alert' : undefined}>
+                  {masterError || t('node.scope.reading')}
+                </p>
+              )}
+            </div>
+          )}
           {section === 'display' && (
             <section className="set-section">
               <div className="set-sec-head">
@@ -429,7 +516,7 @@ export function SettingsPanel({
                     onToggle={() => dispatch({ type: 'toggleSleepers' })}
                   />
                 </div>
-                {data?.foldWaiting && (
+                {view?.foldWaiting && (
                   <div className="set-row">
                     <div className="set-lbl">
                       <b>{t('set.fold')}</b>
@@ -439,7 +526,7 @@ export function SettingsPanel({
                       className="set-select"
                       aria-label={t('set.fold')}
                       disabled={!canEdit}
-                      value={data.foldWaiting}
+                      value={view.foldWaiting}
                       onChange={e => pickFold(e.currentTarget.value as FoldMode)}
                     >
                       {FOLD_MODES.map(id => (
@@ -454,7 +541,7 @@ export function SettingsPanel({
             </section>
           )}
 
-          {section === 'board' && (
+          {section === 'board' && ready && (
             <section className="set-section">
               <div className="set-sec-head">
                 <h3>{t('set.sec.board')}</h3>
@@ -471,7 +558,7 @@ export function SettingsPanel({
                     className="set-select"
                     aria-label={t('set.lang')}
                     disabled={!canEdit}
-                    value={t.lang}
+                    value={langNow}
                     onChange={e => pickLang(e.currentTarget.value)}
                   >
                     {Object.entries(languages).map(([code, name]) => (
@@ -481,7 +568,7 @@ export function SettingsPanel({
                     ))}
                   </select>
                 </div>
-                {data && (
+                {view && (
                   <div className="set-row">
                     <div className="set-lbl">
                       <b>{t('set.presence')}</b>
@@ -505,7 +592,7 @@ export function SettingsPanel({
                     </select>
                   </div>
                 )}
-                {data && presenceMode !== 'none' && presenceMode !== 'off' && (
+                {view && presenceMode !== 'none' && presenceMode !== 'off' && (
                   <div className="set-row">
                     <div className="set-lbl">
                       <b>{t('set.presence.idleLabel')}</b>
@@ -550,7 +637,7 @@ export function SettingsPanel({
                     </select>
                   </div>
                 )}
-                {data && (
+                {view && (
                   <div className="set-row">
                     <div className="set-lbl">
                       <b>{t('set.turnResume')}</b>
@@ -570,12 +657,12 @@ export function SettingsPanel({
                     <div className="set-row">
                       <div className="set-lbl">
                         <b>{t('set.spawn')}</b>
-                        <small>{t('set.spawn.note')}</small>
+                        <small>{wholeBoard ? t('node.scope.spawnHere') : t('set.spawn.note')}</small>
                         {hereMark}
                       </div>
                       <Switch
                         checked={spawnLimits.agents}
-                        disabled={!canEdit}
+                        disabled={!spawnEdit}
                         label={t('set.spawn')}
                         onToggle={() => pickSpawn({ agents: !spawnLimits.agents })}
                       />
@@ -589,7 +676,7 @@ export function SettingsPanel({
                           <select
                             className="set-select"
                             aria-label={t(`set.spawn.${key}`)}
-                            disabled={!canEdit}
+                            disabled={!spawnEdit}
                             value={spawnLimits[key]}
                             onChange={e => pickSpawn({ [key]: Number(e.currentTarget.value) })}
                           >
@@ -609,7 +696,7 @@ export function SettingsPanel({
             </section>
           )}
 
-          {section === 'features' && canAdmin && (
+          {section === 'features' && canAdmin && ready && (
             <section className="set-section">
               <div className="set-sec-head">
                 <h3>{t('set.sec.features')}</h3>
@@ -741,21 +828,21 @@ export function SettingsPanel({
             </section>
           )}
 
-          {section === 'integrations' && (
+          {section === 'integrations' && ready && (
             <section className="set-section">
               <div className="set-sec-head">
                 <h3>{t('set.sec.integrations')}</h3>
                 <span className="set-scope">{t('set.scope.panels')}</span>
               </div>
               <div className="set-group">
-                {offersProfiles(data?.profiles) && (
+                {!wholeBoard && offersProfiles(data?.profiles) && (
                   <LinkRow
                     label={t('set.profiles')}
                     meta={<span>{t('set.integrations.shown', { n: shownProfiles })}</span>}
                     onClick={openChild(onOpenProfiles)}
                   />
                 )}
-                {isWakeView(data?.wake) && (
+                {!wholeBoard && isWakeView(data?.wake) && (
                   <LinkRow
                     label={t('set.wake')}
                     meta={<span>{wakeDown ? t('wake.stopped') : t('set.integrations.on')}</span>}
@@ -768,21 +855,21 @@ export function SettingsPanel({
                     label={t('set.calendar')}
                     meta={
                       <span>
-                        {data?.calendar
-                          ? data.calendar.failing > 0
+                        {view?.calendar
+                          ? view.calendar.failing > 0
                             ? t('set.integrations.problem')
                             : t('set.integrations.on')
                           : t('set.integrations.off')}
                       </span>
                     }
-                    warn={(data?.calendar?.failing ?? 0) > 0}
+                    warn={(view?.calendar?.failing ?? 0) > 0}
                     onClick={openChild(onOpenCalendarSettings)}
                   />
                 )}
                 {canAdmin && (
                   <LinkRow
                     label={t('set.time')}
-                    meta={<span>{data?.time ? t('set.integrations.on') : t('set.integrations.off')}</span>}
+                    meta={<span>{view?.time ? t('set.integrations.on') : t('set.integrations.off')}</span>}
                     onClick={openChild(onOpenTimeSettings)}
                   />
                 )}
@@ -798,8 +885,11 @@ export function SettingsPanel({
                 {!isRemote && !onNode && (
                   <LinkRow label={t('ownerServices.title')} onClick={() => showOwnerServices(value => !value)} />
                 )}
-                {open && !isRemote && !onNode && ownerServicesOpen && <OwnerServices />}
-                {offersMokupilot(data) && <LinkRow label={t('set.mokupilot')} onClick={openChild(onOpenMokupilot)} />}
+                {/* The master's in The whole board (#887): its passkey signs in a window on this page. */}
+                {open && !isRemote && !onNode && ownerServicesOpen && <OwnerServices key={scope} scope={scope} />}
+                {!wholeBoard && offersMokupilot(data) && (
+                  <LinkRow label={t('set.mokupilot')} onClick={openChild(onOpenMokupilot)} />
+                )}
                 {offersDevices(isRemote, ownerAdminPage()) && (
                   <LinkRow
                     label={t('node.set.devices')}
@@ -811,21 +901,27 @@ export function SettingsPanel({
                     onClick={openChild(onOpenDevices)}
                   />
                 )}
-                {!!data?.remote && <LinkRow label={t('set.phones')} onClick={openChild(onOpenPhones)} />}
-                {canAdmin && <LinkRow label={t('set.access')} onClick={openChild(onOpenAccess)} />}
+                {!wholeBoard && !!data?.remote && <LinkRow label={t('set.phones')} onClick={openChild(onOpenPhones)} />}
+                {!wholeBoard && canAdmin && <LinkRow label={t('set.access')} onClick={openChild(onOpenAccess)} />}
                 {isRemote && <LinkRow label={t('set.localPaths')} onClick={openChild(onOpenLocalPaths)} />}
               </div>
+              {wholeBoard && (
+                <div className="set-group">
+                  <p className="set-row set-note">{t('node.scope.later')}</p>
+                  <p className="set-row set-note">{t('node.scope.oneComputer')}</p>
+                </div>
+              )}
             </section>
           )}
 
-          {section === 'system' && (
+          {section === 'system' && ready && (
             <section className="set-section">
               <div className="set-sec-head">
                 <h3>{t('set.sec.system')}</h3>
                 <span className="set-scope">{t('set.scope.panels')}</span>
               </div>
               <div className="set-group">
-                {canAdmin && (
+                {!wholeBoard && canAdmin && (
                   <LinkRow
                     label={t('set.backup')}
                     meta={
@@ -842,7 +938,7 @@ export function SettingsPanel({
                   />
                 )}
                 {canAdmin && <LinkRow label={t('set.updates')} onClick={openChild(onOpenUpdates)} />}
-                {canAdmin && (
+                {!wholeBoard && canAdmin && (
                   <LinkRow
                     label={t('set.housekeeping')}
                     meta={
@@ -856,7 +952,7 @@ export function SettingsPanel({
                     onClick={openChild(onOpenHousekeeping)}
                   />
                 )}
-                {setup && (
+                {!wholeBoard && setup && (
                   <LinkRow
                     label={t('set.setup')}
                     meta={<span>{t(setup.shown ? 'set.setup.warn' : 'set.setup.ok')}</span>}
@@ -864,7 +960,8 @@ export function SettingsPanel({
                     onClick={() => setup.toggle()}
                   />
                 )}
-                {isRemote && keptAuth() === 'login' && (
+                {wholeBoard && <p className="set-row set-note">{t('node.scope.oneComputer')}</p>}
+                {!wholeBoard && isRemote && keptAuth() === 'login' && (
                   <LinkRow label={t('set.signOut')} danger onClick={() => void endLogin({ t, toast })} />
                 )}
               </div>

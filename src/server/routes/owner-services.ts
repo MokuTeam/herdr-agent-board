@@ -17,7 +17,9 @@ export function ownerServicesRoutes(
       method: 'ANY',
       path: '/api/owner-services',
       async handle(req, ctx) {
-        if (!enabled() || ctx.remote || !isLoopback(ctx.peer())) return json(404, { error: 'not found' })
+        // This computer's own page, or the owner on a node's page asking for this master's (#887).
+        if (!enabled() || (!ctx.masterScope && (ctx.remote || !isLoopback(ctx.peer()))))
+          return json(404, { error: 'not found' })
         const refused = ctx.refuse('origin')
         if (refused) return refused
         if (req.method === 'GET') return json(200, { services: ownerServices(), hasPasskey: confirm.hasPasskey() })
@@ -43,6 +45,11 @@ export function ownerServicesRoutes(
           action = { kind: 'owner-service-add', name }
         } else return json(400, { ok: false, error: 'body' })
         openConfirmation()
+        // A node's page (#887) confirms on its own localhost, through the relay.
+        if (ctx.masterScope) {
+          const id = confirm.pend(action, false, ctx.relayFrom)
+          return json(428, { ok: false, error: 'confirm', id, scope: 'master' })
+        }
         if (!confirm.safe()) return json(503, { ok: false, error: 'loopback' })
         const id = confirm.pend(action)
         return json(428, { ok: false, error: 'confirm', id, confirm: confirm.urlOf(id) })

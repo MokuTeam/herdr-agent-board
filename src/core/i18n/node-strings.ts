@@ -536,6 +536,18 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.scope.here': 'On this computer',
     'node.scope.head': 'On the master {name}',
     'node.scope.headNone': 'On the master',
+    // Settings → This computer / The whole board on a node's page (#887)
+    'node.scope.switch': 'Settings of',
+    'node.scope.thisComputer': 'This computer',
+    'node.scope.wholeBoard': 'The whole board',
+    'node.scope.wholeNote': 'The settings of the master {name}: a change here is made there, over the link to it.',
+    'node.scope.wholeNoteNone': 'The settings of the master: a change here is made there, over the link to it.',
+    'node.scope.reading': "Reading the master's settings…",
+    'node.scope.oneComputer':
+      "Profiles, Sleep and wake, MokuPilot, Housekeeping and Setup check belong to one computer and work with its screen and files: open them on that computer's own page.",
+    'node.scope.later':
+      "The master's Remote access, Phones and Backup are not reachable from a node yet: open them on the master.",
+    'node.scope.spawnHere': "Changed on the master's own computer only.",
     // A relayed call while the shared board is away (#780)
     'node.err.masterOffline': 'The shared board is not reachable from this computer now: try again once it is back',
   },
@@ -1078,6 +1090,17 @@ export const NODE_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'node.scope.here': 'На этом компьютере',
     'node.scope.head': 'На голове {name}',
     'node.scope.headNone': 'На голове',
+    // Settings → This computer / The whole board on a node's page (#887)
+    'node.scope.switch': 'Настройки',
+    'node.scope.thisComputer': 'Этот компьютер',
+    'node.scope.wholeBoard': 'Вся доска',
+    'node.scope.wholeNote': 'Настройки головы {name}: изменения применяются там, через связь с ней.',
+    'node.scope.wholeNoteNone': 'Настройки головы: изменения применяются там, через связь с ней.',
+    'node.scope.reading': 'Читаю настройки головы…',
+    'node.scope.oneComputer':
+      'Профили, Сон и пробуждение, MokuPilot, Уборка узла и Проверка настройки относятся к одному компьютеру и работают с его экраном и файлами: открывайте их на странице этого компьютера.',
+    'node.scope.later': 'Удалённый доступ, Телефоны и Бэкап головы с узла пока недоступны: откройте их на голове.',
+    'node.scope.spawnHere': 'Меняется только на самом компьютере головы.',
     // A relayed call while the shared board is away (#780)
     'node.err.masterOffline': 'Общая доска сейчас недоступна с этого компьютера: повторите, когда она вернётся',
   },
