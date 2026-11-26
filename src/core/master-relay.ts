@@ -103,6 +103,7 @@ export const RELAY_TABLE: readonly RelayEntry[] = [
   { group: 'moves', method: 'POST', path: /^\/api\/archive$/, when: 'foreign' },
   { group: 'payload', method: 'GET', path: /^\/api\/board-slices$/, relayOnly: true },
   { group: 'cli', method: 'POST', path: /^\/api\/node-cli$/, relayOnly: true },
+  { group: 'reveal', method: 'POST', path: /^\/api\/node-reveal$/, relayOnly: true },
 ]
 
 /** The decisions' path (#781), whose session keys the master reads as the node's own (relayedDecisions). */
@@ -150,6 +151,28 @@ export function relayedDecisions(
 /** The relay-only paths (RelayEntry.relayOnly), as the master answers them. */
 export const BOARD_SLICES_PATH = '/api/board-slices'
 export const NODE_CLI_PATH = '/api/node-cli'
+/**
+ * A reveal on a node whose page went to its master (#841): a notification's session or
+ * `board thread open`'s thread, shown on the master's pages, where the node's page now is.
+ */
+export const NODE_REVEAL_PATH = '/api/node-reveal'
+
+/** What a node asks its master to show (#841): its own session by the key it knows, or a thread. */
+export type NodeReveal = { key: string } | { thread: string }
+
+/**
+ * A node's reveal as it came, or null: one of its own sessions by its bare key (the master puts
+ * the node's prefix on it, so another machine's session is never named), or a thread's key.
+ */
+export function nodeRevealOf(raw: unknown): NodeReveal | null {
+  if (!isObject(raw)) return null
+  const { key, thread } = raw
+  if (typeof key === 'string' && thread === undefined)
+    return key && key.length <= 1024 && !key.startsWith('@') && !hasUnprintable(key) ? { key } : null
+  if (typeof thread === 'string' && key === undefined)
+    return thread && thread.length <= 128 && !hasUnprintable(thread) ? { thread } : null
+  return null
+}
 
 /** The payload's master-run parts a node's page shows as the master has them (#780; threads since #797). */
 export const BOARD_SLICE_KEYS = ['time', 'calendar', 'journal', 'presence', 'threads'] as const
