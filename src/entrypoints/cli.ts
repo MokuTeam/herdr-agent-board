@@ -945,7 +945,7 @@ function entryLine(e: ScheduleEntry, now: number, withSession: boolean, parked =
 function parkedLines(held: ScheduleEntry[], now: number, withSession: boolean): string[] {
   if (!held.length) return []
   return [
-    ...held.map(e => entryLine({ ...e, next: dueAgain(e, now) ?? e.next }, now, withSession, true)),
+    ...held.map(e => entryLine({ ...e, next: dueAgain(e, now, zone) ?? e.next }, now, withSession, true)),
     'parked entries come back with their session; board schedule --move <id> moves one to this session (--session <id|name|pane>: to that one), board unschedule <id> removes it',
   ]
 }
@@ -1814,9 +1814,9 @@ async function moveParked(id: string, s: Session, now: number): Promise<void> {
   if (getArchived(s.key))
     throw new Error(`${s.name || s.key} is in the archive too; move the entry to a session on the board`)
   const { from, ...to } = await entryFor(s)
-  const e = moveHeld(id.toLowerCase(), to)
+  const e = moveHeld(id.toLowerCase(), to, zone)
   if (!e) throw new Error(`no entry "${id}" is parked in the archive; see board schedule --all`)
-  const when = e.cron ? `every "${e.cron}", next ${stamp(e.next)}` : stamp(e.next)
+  const when = e.cron ? `every "${e.cron}", next ${stamp(e.next, zone)}` : stamp(e.next, zone)
   console.log(
     `ok · moved ${e.id} to ${to.name || to.key.slice(0, 8)}: ${when} (${fromNow(e.next, now)}): ${clip(e.text)} · cancel: board unschedule ${e.id}${await schedulerNote()}`,
   )

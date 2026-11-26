@@ -5,7 +5,9 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
+import { stamp } from '../../src/core/schedule-cli.ts'
 import { promptOf } from '../../src/core/schedule-rules.ts'
+import { clockIn, localZone } from '../../src/core/time.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
 
 setDefaultTimeout(15_000)
@@ -283,6 +285,72 @@ test('board schedule and unschedule all for a session never archived: as before,
   assert.equal((await cli(box, ['unschedule', ...s, 'all'])).out, 'ok · removed 0 entries')
   assert.match((await cli(box, ['unschedule', 'abc123'])).out, /no entry "abc123"; see board schedule/)
   assert.equal(existsSync(archiveDirOf(box)), false)
+})
+
+test('#807 board schedule / --move compute parked repeating next run in time.zone; without it, in host time', async () => {
+  const other = localZone() === 'Pacific/Kiritimati' ? 'Pacific/Honolulu' : 'Pacific/Kiritimati'
+  const setup = async (timeCfg?: Record<string, unknown>) => {
+    const box = await sandbox()
+    config(box, timeCfg ? { time: timeCfg } : {})
+    const snapshot = {
+      panes: [
+        {
+          pane_id: 'p2',
+          agent: 'claude',
+          agent_session: { value: 's2' },
+          agent_status: 'idle',
+          cwd: box.dir,
+          terminal_title_stripped: 'Target',
+        },
+      ],
+      tabs: [],
+      workspaces: [],
+    }
+    box.state({ 'api snapshot': { result: { snapshot } } })
+    const now = Date.now()
+    archived(box, ARCHIVED, 'Zoned card', [
+      {
+        id: 'bed807',
+        text: 'morning check',
+        cron: '57 7 * * *',
+        next: now - 3 * 86_400_000,
+        created: now - 9 * 86_400_000,
+      },
+    ])
+    return { box, now }
+  }
+
+  // With time.zone differing from the host's: listing and --move use time.zone.
+  const zoned = await setup({ zone: other })
+  const listed = await agentCli(zoned.box, ['schedule', '--session', ARCHIVED])
+  assert.equal(listed.code, 0, listed.out)
+  assert.match(listed.out, /bed807 · .* 07:57 \(in [^)]+\) · every "57 7 \* \* \*"/)
+  const all = await agentCli(zoned.box, ['schedule', '--all'])
+  assert.equal(all.code, 0, all.out)
+  assert.match(
+    all.out,
+    /bed807 · .* 07:57 \(in [^)]+\) · every "57 7 \* \* \*" · on time · Zoned card · parked in the archive/,
+  )
+  const moved = await agentCli(zoned.box, ['schedule', '--move', 'bed807', '--session', 'Target'])
+  assert.equal(moved.code, 0, moved.out)
+  const eZ = read(zoned.box, 'bed807')
+  assert.ok(eZ && eZ.next > zoned.now)
+  assert.deepEqual(clockIn(eZ.next, other), [7, 57, 0])
+  assert.ok(moved.out.includes(`next ${stamp(eZ.next, other)}`), moved.out)
+
+  // Without time.zone (and with time.zone equal to the host's): host local time as before.
+  for (const timeCfg of [undefined, { zone: localZone() }]) {
+    const plain = await setup(timeCfg)
+    const pList = await agentCli(plain.box, ['schedule', '--session', ARCHIVED])
+    assert.equal(pList.code, 0, pList.out)
+    assert.match(pList.out, /bed807 · .* 07:57 \(in [^)]+\) · every "57 7 \* \* \*"/)
+    const pMoved = await agentCli(plain.box, ['schedule', '--move', 'bed807', '--session', 'Target'])
+    assert.equal(pMoved.code, 0, pMoved.out)
+    const eP = read(plain.box, 'bed807')
+    assert.ok(eP && eP.next > plain.now)
+    assert.deepEqual([new Date(eP.next).getHours(), new Date(eP.next).getMinutes()], [7, 57])
+    assert.ok(pMoved.out.includes(`next ${stamp(eP.next)}`), pMoved.out)
+  }
 })
 
 test('board favorite keeps the session in sight; off takes it back (#64)', async () => {

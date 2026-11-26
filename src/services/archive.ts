@@ -58,7 +58,7 @@ import { cleanName, type ScheduleEntry, type SessionRef } from '../core/schedule
 import { TURN_RESUME_KIND } from '../core/turn-resume.ts'
 import type { Config, Item, Translator } from '../core/types.ts'
 import { sleepLabels } from '../core/wake/sessions.ts'
-import { nextRun } from '../core/when.ts'
+import { nextRun, scheduleZone } from '../core/when.ts'
 import { readyToSleep } from './actions.ts'
 import type { Deps } from './deps.ts'
 import type { Launches } from './launch/launches.ts'
@@ -412,15 +412,16 @@ export async function tabPanes(
 export async function closeOne(deps: Deps, key: string, log: Log): Promise<'closed' | 'kept' | null> {
   const r = claim(key, Date.now())
   if (!r) return null
+  const zone = scheduleZone(deps.cfg.time)
   // Entries set for it while it was on its way wait in the record too; a MokuPilot report that
   // came for it meanwhile keeps it on the board, to be delivered.
   holdEntries(key)
-  if (listEntries().some(e => e.key === key && e.receipt)) return keep(r, 'archive.why.report', '', log)
+  if (listEntries().some(e => e.key === key && e.receipt)) return keep(r, 'archive.why.report', '', log, zone)
   const free = await freeToClose(deps, r)
   if (!free.ok) {
     // herdr not answering is tried again; the session itself not being free calls it off.
-    if (free.why === 'archive.why.herdr') return retry(r, free.detail ?? '', log)
-    return keep(r, free.why, free.detail ?? '', log)
+    if (free.why === 'archive.why.herdr') return retry(r, free.detail ?? '', log, zone)
+    return keep(r, free.why, free.detail ?? '', log, zone)
   }
   const pane = free.pane
   if (pane) {
@@ -432,15 +433,15 @@ export async function closeOne(deps: Deps, key: string, log: Log): Promise<'clos
       if (!others.length && pane.tab) await herdr(['tab', 'close', pane.tab])
       else await herdr(['pane', 'close', r.pane])
     } catch (err) {
-      if (!notFound(err)) return retry(r, messageOf(err), log)
+      if (!notFound(err)) return retry(r, messageOf(err), log, zone)
     }
     // Archived only once the pane is gone: one still there would stay hidden, and Return would
     // start a second Claude beside it.
     try {
       await herdr(['pane', 'get', r.pane])
-      return retry(r, 'its pane is still there', log)
+      return retry(r, 'its pane is still there', log, zone)
     } catch (err) {
-      if (!notFound(err)) return retry(r, messageOf(err), log)
+      if (!notFound(err)) return retry(r, messageOf(err), log, zone)
     }
   }
   update(key, rec => {
@@ -453,9 +454,9 @@ export async function closeOne(deps: Deps, key: string, log: Log): Promise<'clos
 }
 
 /** herdr failed: tried again on the next tick, CLOSE_TRIES times in all, then called off. */
-function retry(r: ArchiveRecord, detail: string, log: Log): 'kept' | null {
+function retry(r: ArchiveRecord, detail: string, log: Log, zone?: string): 'kept' | null {
   const tries = (r.tries ?? 0) + 1
-  if (tries >= CLOSE_TRIES) return keep(r, 'archive.why.herdr', detail, log)
+  if (tries >= CLOSE_TRIES) return keep(r, 'archive.why.herdr', detail, log, zone)
   update(r.key, rec => {
     const { claim: c, ...rest } = rec
     return { ...rest, tries }
@@ -465,12 +466,12 @@ function retry(r: ArchiveRecord, detail: string, log: Log): 'kept' | null {
 }
 
 /** The session stays on the board after all: its entries back, the record gone, the reason logged. */
-function keep(r: ArchiveRecord, why: string, detail: string, log: Log): 'kept' {
+function keep(r: ArchiveRecord, why: string, detail: string, log: Log, zone?: string): 'kept' {
   update(r.key, rec => {
     const { claim: c, ...rest } = rec
     return { ...rest, state: 'restoring' }
   })
-  putBack(r.key)
+  putBack(r.key, {}, zone)
   logArchive({ key: r.key, name: r.name, at: Date.now(), result: 'kept', why, ...(detail && { detail }) })
   log(`archive ${r.name}: kept on the board (${why}${detail ? `: ${detail}` : ''})`)
   return 'kept'
@@ -484,10 +485,10 @@ type Where = { pane?: string | null; cwd?: string }
  * that could not go back yet (a lock held too long) stay in it for the next try. `where`: the
  * session's pane and folder now, when it came back in another pane. Returns whether it is done.
  */
-export function putBack(key: string, where: Where = {}): boolean {
+export function putBack(key: string, where: Where = {}, zone?: string): boolean {
   const r = getArchived(key)
   if (r?.state !== 'restoring') return !r
-  const left = restoreHeld(r, where)
+  const left = restoreHeld(r, where, zone)
   if (left.length) {
     update(key, rec => ({ ...rec, held: left }))
     return false
@@ -503,11 +504,11 @@ export function putBack(key: string, where: Where = {}): boolean {
  * is. One still in the schedule under its id (a board stopped between copying and removing it)
  * is there already. When they run, they wake the session through the board's profile guards.
  */
-export function restoreHeld(r: ArchiveRecord, where: Where = {}): ScheduleEntry[] {
+export function restoreHeld(r: ArchiveRecord, where: Where = {}, zone?: string): ScheduleEntry[] {
   const now = Date.now()
   const left: ScheduleEntry[] = []
   for (const e of r.held) {
-    const next = dueAgain(e, now)
+    const next = dueAgain(e, now, zone)
     if (next === null) continue
     try {
       restoreEntry({ ...e, next, ...(where.pane && { pane: where.pane }), ...(where.cwd && { cwd: where.cwd }) })
@@ -522,12 +523,12 @@ export function restoreHeld(r: ArchiveRecord, where: Where = {}): ScheduleEntry[
 /**
  * When an entry that waited is due once it is back in the schedule (`now`): a repeating one from
  * its next run after now (the runs it missed are not owed), null when it runs no more; a one-off
- * when it was.
+ * when it was. `zone`: the owner's zone (core/when.ts scheduleZone), else the computer's local time.
  */
-export function dueAgain(e: ScheduleEntry, now: number): number | null {
+export function dueAgain(e: ScheduleEntry, now: number, zone?: string): number | null {
   if (!e.cron || e.next >= now) return e.next
   try {
-    return nextRun(e.cron, now)
+    return nextRun(e.cron, now, zone)
   } catch {
     return null
   }
@@ -564,11 +565,11 @@ export function dropHeld(key: string, id?: string): ScheduleEntry[] {
  * of the record, as holdEntries does. Returns the entry in the schedule, or null when no record
  * holds it.
  */
-export function moveHeld(id: string, to: SessionRef & Where): ScheduleEntry | null {
+export function moveHeld(id: string, to: SessionRef & Where, zone?: string): ScheduleEntry | null {
   const found = heldEntry(id)
   if (!found) return null
   const { record: r, entry: e } = found
-  const next = dueAgain(e, Date.now())
+  const next = dueAgain(e, Date.now(), zone)
   if (next === null) throw new Error(`entry ${id}: "${e.cron}" runs no more`)
   const { pane, cwd, movedFrom, gone, ...rest } = e
   const moved = restoreEntry({
@@ -606,7 +607,11 @@ export type TakeBack =
  */
 export function takeBack(
   key: string,
-  { busy = () => false, now = Date.now() }: { busy?: (returning: ArchiveReturning) => boolean; now?: number } = {},
+  {
+    busy = () => false,
+    now = Date.now(),
+    zone,
+  }: { busy?: (returning: ArchiveReturning) => boolean; now?: number; zone?: string | undefined } = {},
 ): TakeBack {
   const seen: { out: TakeBack; back: string | null } = { out: { ok: false, gone: true }, back: null }
   update(key, r => {
@@ -632,7 +637,7 @@ export function takeBack(
     return next
   })
   if (seen.back !== null) {
-    putBack(key)
+    putBack(key, {}, zone)
     logArchive({ key, name: seen.back, at: now, result: 'returned' })
   }
   return seen.out
@@ -652,7 +657,7 @@ export function markReturning(key: string, launch: string | null): void {
  * by hand. Its entries go back with its pane and folder now, the record goes. Also finishes a
  * record a board left `restoring` when it stopped. Returns whether the record is gone.
  */
-export function settleReturned(item: Pick<Item, 'key' | 'pane' | 'cwd' | 'sleeping'>): boolean {
+export function settleReturned(item: Pick<Item, 'key' | 'pane' | 'cwd' | 'sleeping'>, zone?: string): boolean {
   const seen: { r: ArchiveRecord | null; fresh: boolean } = { r: null, fresh: false }
   update(item.key, rec => {
     if (rec.state === 'restoring') {
@@ -668,7 +673,7 @@ export function settleReturned(item: Pick<Item, 'key' | 'pane' | 'cwd' | 'sleepi
   const r = seen.r
   if (!r) return false
   if (seen.fresh) logArchive({ key: r.key, name: r.name, at: Date.now(), result: 'returned' })
-  return putBack(item.key, r.moved ? { pane: item.pane, cwd: item.cwd } : {})
+  return putBack(item.key, r.moved ? { pane: item.pane, cwd: item.cwd } : {}, zone)
 }
 
 export type Forget = { ok: true; record: ArchiveRecord } | { ok: false; gone: true } | { ok: false; closing: true }
@@ -724,8 +729,9 @@ export type BringBack =
  */
 export async function bringBack(deps: Deps, app: ReturnApp, key: string): Promise<BringBack> {
   const { cfg } = deps
+  const zone = scheduleZone(cfg.time)
   // A resume that failed or was waved off does not stand in the way of another; one on its way does.
-  const back = (): TakeBack => takeBack(key, { busy: ret => returningOn(app.launches, ret) })
+  const back = (): TakeBack => takeBack(key, { busy: ret => returningOn(app.launches, ret), zone })
   let r = back()
   // Its pane is being closed right now: Return comes once that is done.
   for (const end = Date.now() + 20_000; 'wait' in r && Date.now() < end; r = back()) await pause(300)
