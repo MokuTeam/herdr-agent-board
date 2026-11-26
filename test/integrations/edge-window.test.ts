@@ -20,11 +20,12 @@ test('without a browser: the system opener of each platform', () => {
   expect(edgeCommand(url, 'linux')).toEqual({ file: 'xdg-open', args: [url] })
 })
 
-test("the board's window by its title: the --app window and the installed app, on the node or the master", () => {
+test("the board's window: the page's exact titles, the installed app's form, on the node or the master", () => {
   for (const title of [
     'MokuBoard',
     '(3) MokuBoard',
     '(12) MokuBoard',
+    'MokuBoard - MokuBoard',
     'MokuBoard - (3) MokuBoard',
     'Agent board',
     '(1) Agent board',
@@ -36,29 +37,45 @@ test("the board's window by its title: the --app window and the installed app, o
     'MokuBoard - Microsoft Edge',
     '(3) MokuBoard - Google Chrome',
     'MokuBoard and 2 more pages - Work - Microsoft\u200b Edge',
-    // other programs that only name it
+    // Chromium programs that only name it (Electron: the same window class)
+    'MokuBoard - Visual Studio Code',
+    'notes about MokuBoard.md - Visual Studio Code',
+    'MokuBoard - Slack',
+    'Agent board - Slack',
+    'Agent board review - Slack',
+    // others
     'LAPTOP: claude-mokuboard-fix',
     'mokuboard',
-    'notes about MokuBoard.md - Visual Studio Code',
+    'MOKUBOARD',
+    'MokuBoard ',
+    ' MokuBoard',
+    '() MokuBoard',
+    '(3)MokuBoard',
     'Agent-board',
-    'Agent board review - Slack',
+    'MokuBoard - MokuBoard - MokuBoard',
     '',
   ])
     expect([title, isBoardWindow(title)]).toEqual([title, false])
 })
 
-test('the window is raised by those titles, and an open one is not opened again', async () => {
+test("a window of another class titled so is not the board's: Explorer on a folder named MokuBoard", () => {
+  expect(isBoardWindow('MokuBoard', 'Chrome_WidgetWin_1')).toBe(true)
+  for (const cls of ['CabinetWClass', 'Notepad', 'CASCADIA_HOSTING_WINDOW_CLASS', 'MozillaWindowClass', ''])
+    expect([cls, isBoardWindow('MokuBoard', cls)]).toEqual([cls, false])
+})
+
+test('the window is raised by that title and class, and an open one is not opened again', async () => {
   const asked: [string, string][] = []
-  const win = edgeWindow('/usr/bin/false', async (match, not) => {
-    asked.push([match, not])
+  const win = edgeWindow('/usr/bin/false', async (match, windowClass) => {
+    asked.push([match, windowClass])
     return true
   })
   expect(await win.raise()).toBe(true)
   await win.open('http://127.0.0.1:12422/')
   expect(asked).toEqual([
-    [BOARD_WINDOW.match, BOARD_WINDOW.not],
-    [BOARD_WINDOW.match, BOARD_WINDOW.not],
+    [BOARD_WINDOW.match, 'Chrome_WidgetWin_1'],
+    [BOARD_WINDOW.match, 'Chrome_WidgetWin_1'],
   ])
-  // The patterns hold to what .NET reads as JavaScript does: no flags, lookbehinds or named groups.
-  for (const re of [BOARD_WINDOW.match, BOARD_WINDOW.not]) expect(re).not.toMatch(/\(\?|\\k<|\\p\{/)
+  // The pattern holds to what .NET reads as JavaScript does: no flags, lookarounds or named groups.
+  expect(BOARD_WINDOW.match).not.toMatch(/\(\?|\\k<|\\p\{/)
 })

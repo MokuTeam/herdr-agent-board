@@ -34,21 +34,22 @@ export function edgeCommand(
 }
 
 /**
- * The board's own window by its title (#841): the page's title (web/index.html, models/toolbar.ts
+ * The board's own window (#841, #845): a Chromium window (`Chrome_WidgetWin_1`: Edge, Chrome and
+ * their installed apps) titled exactly as the page is (web/index.html, models/toolbar.ts
  * documentTitle: `MokuBoard`, `(3) MokuBoard`; `Agent board` before #720, a master not updated
- * yet), as an Edge --app window shows it, or after the app's name as the installed app (the
- * manifest's MokuBoard) shows it: `MokuBoard - (3) MokuBoard`. The node's page or the master's, the
- * same titles. A browser's own window is not the board's even with the board in its tab in front:
- * raised, it may show another tab, and a reveal would open the sheet out of sight.
+ * yet), the node's page or the master's. The one longer form is the installed app's: Chromium puts
+ * the app's name (the manifest's MokuBoard) before a page title that does not start with it,
+ * `MokuBoard - (3) MokuBoard`. Nothing else: a browser's own window (` - Microsoft Edge`), an editor
+ * or Slack (Chromium too) with a file or channel of that name, Explorer on a folder of that name.
  */
 export const BOARD_WINDOW = {
-  match: '^(\\(\\d+\\) )?(MokuBoard|Agent board)( - .*)?$',
-  not: ' - (Microsoft.{0,2}Edge|Google Chrome|Chromium|Brave|Opera|Mozilla Firefox|Vivaldi)$',
+  match: '^((MokuBoard|Agent board) - )?(\\(\\d+\\) )?(MokuBoard|Agent board)$',
+  windowClass: 'Chrome_WidgetWin_1',
 } as const
 
-/** Whether a window titled `title` is the board's (BOARD_WINDOW, as the raise reads it on Windows). */
-export const isBoardWindow = (title: string): boolean =>
-  new RegExp(BOARD_WINDOW.match).test(title) && !new RegExp(BOARD_WINDOW.not).test(title)
+/** Whether a window of `windowClass` titled `title` is the board's (BOARD_WINDOW, as the raise reads it on Windows). */
+export const isBoardWindow = (title: string, windowClass: string = BOARD_WINDOW.windowClass): boolean =>
+  windowClass === BOARD_WINDOW.windowClass && new RegExp(BOARD_WINDOW.match).test(title)
 
 /**
  * `browser`: the config's browser program; else the first known browser that is installed.
@@ -56,9 +57,9 @@ export const isBoardWindow = (title: string): boolean =>
  */
 export function edgeWindow(
   browser?: string | null,
-  raiseMatching: (match: string, not: string) => Promise<boolean> = raiseWindowMatching,
+  raiseMatching: (match: string, windowClass: string) => Promise<boolean> = raiseWindowMatching,
 ): BoardWindow {
-  const raise = () => raiseMatching(BOARD_WINDOW.match, BOARD_WINDOW.not)
+  const raise = () => raiseMatching(BOARD_WINDOW.match, BOARD_WINDOW.windowClass)
   function launch(url: string): void {
     const program = browser || BROWSERS.find(p => existsSync(p))
     const cmd = edgeCommand(url, process.platform, program)
