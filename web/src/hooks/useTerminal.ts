@@ -113,6 +113,8 @@ export interface TerminalEngine {
   isOpen(): boolean
   /** After a draw: one that just opened grows out of where it came from. */
   grow(): void
+  setSide(side: boolean): void
+  blocksBoardKeys(): boolean
   /** The listeners on the window's elements, the page and the window; returns what takes them away. */
   mount(): () => void
   /** The board changed: fresh data or not, the session still there, a shell opened or closed. */
@@ -220,6 +222,7 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
   let from = { dx: 0, dy: 24, s: 0.94 }
   let origin: Element | null = null
   let openedAt = 0
+  let side = false
   function paint(p: number): void {
     const win = refs.win.current
     const scrim = refs.scrim.current
@@ -258,7 +261,8 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
     from = measureFrom(win, origin)
     if (motion.value <= 0.001) paint(0)
     motion.to(1, { damping: 1, response: 0.34 })
-    deps.focus().open(origin ?? document.activeElement)
+    if (!side || refs.layer.current?.inert) deps.focus().open(origin ?? document.activeElement)
+    else win.focus({ preventScroll: true })
     changed()
   }
 
@@ -284,6 +288,8 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
     s.lines = []
     s.key = null
     deps.focus().close()
+    if (side && refs.win.current?.contains(document.activeElement) && origin instanceof HTMLElement)
+      origin.focus({ preventScroll: true })
     changed()
   }
 
@@ -655,9 +661,12 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
     paste(e.clipboardData?.getData('text/plain') ?? '')
   }
 
+  const sideHasFocus = () => side && (refs.win.current?.contains(document.activeElement) ?? false)
+
   // The window's own keys while the screen does not have them: Esc closes, Ctrl+` too.
   const onWindowKey = (e: KeyboardEvent) => {
-    if (!isOpen() || !deps.focus().isTop() || e.target === refs.input.current) return
+    const ownsKeys = deps.focus().isTop() || sideHasFocus()
+    if (!isOpen() || !ownsKeys || e.target === refs.input.current) return
     // A paste that asks first: Esc says no to it, the window stays.
     if (s.paste && e.key === 'Escape') {
       e.preventDefault()
@@ -779,6 +788,16 @@ export function terminalEngine(deps: TerminalDeps): TerminalEngine {
     close,
     isOpen,
     grow,
+    setSide(next) {
+      if (side === next) return
+      side = next
+      if (!isOpen() || growing) return
+      const active = document.activeElement
+      if (side) deps.focus().close()
+      if (!side || refs.layer.current?.inert) deps.focus().open(origin ?? active)
+      if (active instanceof HTMLElement && refs.win.current?.contains(active)) active.focus({ preventScroll: true })
+    },
+    blocksBoardKeys: () => isOpen() && (!side || deps.focus().isTop() || sideHasFocus()),
     mount,
     boardChanged() {
       if (!isOpen()) return

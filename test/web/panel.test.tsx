@@ -9,11 +9,12 @@ import { join } from 'node:path'
 import type { ReactNode } from 'react'
 import { translator } from '../../src/core/i18n/translator.ts'
 import { App } from '../../web/src/App.tsx'
+import { MenuEngine } from '../../web/src/components/menu/menu-engine.ts'
 import { Panel } from '../../web/src/components/panel/Panel.tsx'
 import { SidePanels, type SidePanelsProps } from '../../web/src/components/SidePanels.tsx'
 import type { Schedule } from '../../web/src/hooks/useSchedule.ts'
 import { PanelProvider } from '../../web/src/state/PanelProvider.tsx'
-import { board, payload, renderInBoard } from './support/board.tsx'
+import { board, item, payload, renderInBoard } from './support/board.tsx'
 import {
   addButtonTypes,
   byId,
@@ -174,4 +175,56 @@ test('a panel’s own tools come before the place button', () => {
       n.kind === 'element' ? (n.attrs.get('id') ?? [...n.attrs.keys()].find(k => k.startsWith('data-'))) : '',
     ),
   ).toEqual(['own', 'data-layout', 'sheet-close'])
+})
+
+test('a remembered card view follows the master flag and leaves the shared panel placement alone', () => {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
+  const saved = new Map([
+    ['board.panel', '{"dock":"left"}'],
+    ['board.cardWindow.session', 'modal'],
+    ['board.cardWindow.thread', 'invalid'],
+  ])
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: { getItem: (key: string) => saved.get(key) ?? null },
+  })
+  const cards = [
+    item({ key: 'pane-w2:p1', name: 'Build %', agent: 'codex', teamMaster: true }),
+    item({
+      key: '7c5a9c0e-a2f1-4422-bb22-000000000001',
+      name: 'Сборка %',
+      agent: 'claude',
+      cwd: 'C:\\work\\My Project',
+    }),
+    item({ key: 'pane-w2:p2', name: 'Pi build', agent: 'pi' }),
+  ] as const
+  const data = payload({ items: [...cards], threads: { rev: 0, needsOwner: 0 } })
+  const view = (key: string) => {
+    const props = { ...panelsOf(false), threads: { open: false, onClose() {}, menu: new MenuEngine() } }
+    return renderInBoard(
+      <PanelProvider viewport={() => VP}>
+        <SidePanels {...props} />
+      </PanelProvider>,
+      board({ data, ui: { open: key } }),
+    )
+  }
+  try {
+    const master = view(cards[0].key)
+    expect(asideOf(master, 'sheet').attrs.get('data-dock')).toBe('left')
+    const ordinary = view(cards[1].key)
+    expect(asideOf(ordinary, 'sheet').attrs.get('data-dock')).toBe('modal')
+    expect(asideOf(ordinary, 'sheet').attrs.get('aria-modal')).toBe('true')
+    expect(asideOf(view(cards[2].key), 'sheet').attrs.get('data-dock')).toBe('modal')
+    expect(asideOf(ordinary, 'cats-sheet').attrs.get('data-dock')).toBe('left')
+    expect(asideOf(ordinary, 'threads-sheet').attrs.get('data-dock')).toBe('left')
+    saved.set('board.cardWindow.master', 'modal')
+    saved.set('board.cardWindow.session', 'panel')
+    saved.set('board.cardWindow.thread', 'modal')
+    expect(asideOf(view(cards[0].key), 'sheet').attrs.get('data-dock')).toBe('modal')
+    expect(asideOf(view(cards[1].key), 'sheet').attrs.get('data-dock')).toBe('left')
+    expect(asideOf(view(cards[1].key), 'threads-sheet').attrs.get('data-dock')).toBe('modal')
+  } finally {
+    if (previous) Object.defineProperty(globalThis, 'localStorage', previous)
+    else Reflect.deleteProperty(globalThis, 'localStorage')
+  }
 })

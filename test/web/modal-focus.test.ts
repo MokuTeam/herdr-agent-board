@@ -4,6 +4,7 @@ import { scopeOfElements } from '../../web/src/hooks/useModalFocus.ts'
 import { type FocusPress, modalFocusManager } from '../../web/src/models/modal-focus.ts'
 
 interface FakeNode {
+  className?: string | undefined
   id: string
   parent: FakeNode | null
   tabIndex: number
@@ -27,6 +28,7 @@ interface NodeOptions {
   hidden?: boolean
   inert?: boolean
   ownKeys?: boolean
+  className?: string
 }
 
 function fixture() {
@@ -44,6 +46,7 @@ function fixture() {
     const el: FakeNode = {
       id,
       parent,
+      className: options.className,
       tabIndex,
       disabled,
       hidden,
@@ -58,6 +61,7 @@ function fixture() {
         for (let x: FakeNode | null = this; x; x = x.parent) {
           if ((selector.includes('[inert]') && x.inert) || (selector.includes('[hidden]') && x.hidden)) return x
           if (selector.includes('[data-own-keys]') && x.ownKeys) return x
+          if (x.className && selector.split(', ').includes(`.${x.className}`)) return x
         }
         return null
       },
@@ -191,4 +195,48 @@ test('useModalFocus: a dialog not drawn yet takes nothing; drawn anew it takes a
   assert.equal(first.inert, false)
   assert.equal(f.doc.activeElement, origin)
   assert.equal(scope.isTop(), false)
+})
+
+test('a card modal inside the board covers its siblings and can be covered by a terminal', () => {
+  const f = fixture()
+  const root = f.node('root', null)
+  const board = f.node('board', root)
+  const card = f.node('card', board, { tabIndex: 0 })
+  const sheet = f.node('sheet', root)
+  const openTerm = f.node('open terminal', sheet, { tabIndex: 0 })
+  const terminal = f.node('terminal', null)
+  const lower = f.make(sheet, sheet)
+  const upper = f.make(terminal, terminal)
+
+  lower.open(card)
+  assert.equal(root.inert, false)
+  assert.equal(sheet.inert, false)
+  assert.equal(board.inert, true)
+  assert.equal(terminal.inert, true)
+  upper.open(openTerm)
+  assert.equal(root.inert, true)
+  upper.close()
+  assert.equal(board.inert, true)
+  assert.equal(f.doc.activeElement, openTerm)
+  lower.close()
+  assert.equal(board.inert, false)
+  assert.equal(f.doc.activeElement, card)
+})
+
+test('the Fork form can take focus from a modal card while the board remains inert', () => {
+  const f = fixture()
+  const root = f.node('root', null)
+  const board = f.node('board', root)
+  const sheet = f.node('sheet', root)
+  const button = f.node('fork button', sheet, { tabIndex: 0 })
+  f.make(sheet, sheet).open()
+
+  const fork = f.node('fork', root, { className: 'fork-pop' })
+  const name = f.node('name', fork, { tabIndex: 0 })
+  button.focus()
+  name.focus()
+  f.fire('focusin', { target: name })
+  assert.equal(f.doc.activeElement, name)
+  assert.equal(f.key(), false)
+  assert.equal(board.inert, true)
 })

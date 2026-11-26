@@ -374,6 +374,7 @@ export function ThreadsPanel({ open, onClose, menu }: ThreadsPanelProps) {
     <Panel
       id="threads-sheet"
       kind="threads"
+      cardWindow="thread"
       open={open}
       onClose={onClose}
       measure="full"

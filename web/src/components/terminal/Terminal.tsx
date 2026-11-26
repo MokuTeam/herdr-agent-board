@@ -7,6 +7,7 @@
 import { type MouseEvent, type PointerEvent, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
 import type { Item } from '../../../../src/core/types.ts'
+import { useCardWindow } from '../../hooks/useCardWindow.ts'
 import { useMediaQuery } from '../../hooks/useMediaQuery.ts'
 import type { TerminalEngine, TermRefs, TermView } from '../../hooks/useTerminal.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
@@ -16,6 +17,7 @@ import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { useStore } from '../../state/store.ts'
 import { classNames } from '../class-names.ts'
 import { Turn } from '../icons.tsx'
+import { CardWindowSwitch } from '../panel/CardWindowSwitch.tsx'
 
 /** The terminal's icon: a window with a prompt (the sheet's Terminal button has it too). */
 export const TermIcon = () => (
@@ -65,6 +67,8 @@ export interface TerminalViewProps {
   coarse: boolean
   /** A phone's width. */
   narrow: boolean
+  side?: boolean
+  onToggleView?: (() => void) | undefined
   refs?: Partial<TermRefs>
   on?: Partial<TermHandlers>
 }
@@ -145,6 +149,8 @@ export function TerminalView({
   hasShell,
   coarse,
   narrow,
+  side = false,
+  onToggleView,
   refs = {},
   on = {},
 }: TerminalViewProps) {
@@ -181,14 +187,14 @@ export function TerminalView({
   const onScreenClick = (e: MouseEvent<HTMLDivElement>) =>
     on.clickScreen?.({ target: e.target, preventDefault: () => e.preventDefault() })
   return (
-    <div className="ql term" hidden={view.hidden} ref={refs.layer}>
+    <div className={classNames('ql term', side && 'term-side')} hidden={view.hidden} ref={refs.layer}>
       {/* biome-ignore lint/a11y/noStaticElementInteractions: the dimmed board around it closes it with a click; Esc does with keys */}
       {/* biome-ignore lint/a11y/useKeyWithClickEvents: as above */}
-      <div className="ql-scrim" ref={refs.scrim} onClick={() => on.close?.()} />
+      <div className="ql-scrim" hidden={side || undefined} ref={refs.scrim} onClick={() => on.close?.()} />
       <section
         className={classNames('ql-win term-win', canInput && 'can-type')}
         role="dialog"
-        aria-modal="true"
+        aria-modal={side ? undefined : true}
         aria-labelledby="term-name"
         tabIndex={-1}
         ref={refs.win}
@@ -218,6 +224,7 @@ export function TerminalView({
               <HerdrIcon />
             </button>
           </div>
+          {onToggleView && <CardWindowSwitch view={side ? 'panel' : 'modal'} onToggle={onToggleView} />}
           <button
             type="button"
             className="icon-button ql-close term-x"
@@ -321,6 +328,9 @@ export function Terminal({ engine }: { engine: TerminalEngine }) {
   const { data, canMutate } = useBoardContext()
   const coarse = useMediaQuery('(pointer: coarse)')
   const narrow = useMediaQuery(PHONE_QUERY)
+  const choice = useCardWindow('terminal')
+  const side = choice?.view === 'panel'
+  useLayoutEffect(() => engine.setSide(side), [engine, side])
   // Just opened: drawn now, it grows out of where it came from.
   useLayoutEffect(() => engine.grow())
   if (typeof document === 'undefined') return null
@@ -333,6 +343,8 @@ export function Terminal({ engine }: { engine: TerminalEngine }) {
       hasShell={!!view.key && (data?.shells ?? []).includes(view.key)}
       coarse={coarse}
       narrow={narrow}
+      side={side}
+      onToggleView={choice?.toggle}
       refs={engine.refs}
       on={{
         close: engine.clickClose,
