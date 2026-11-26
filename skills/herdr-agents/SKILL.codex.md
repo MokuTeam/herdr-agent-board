@@ -25,7 +25,7 @@ The board's hook told you at the start how to keep your card current. Prefer the
 
 - `card` (`op`: `"doing"`, `text`: `"<3-8 words>"`) at the start of each distinct step; `cat` (`lane`, optional `text`) for your lane.
 - `card` (`op`: `"ask"`, `text`: `"<question>"`) before ending a turn that needs the user; `wait` (`text`: `"<on what>"`) when blocked outside this chat; `done` (`text`: `"<result>"`) when the task is finished.
-- Fallback when MCP is unavailable (or inside a shell script): your shell may not inherit the pane's environment, so every command names your session (`board --session <your session id> <command>`, as printed on the brief's fallback line): `board --session <sid> doing|ask|wait|done|cat`, `list` (every session on the board), `doctor` (what is set up here).
+- Fallback when MCP is unavailable: run each `board` command as a shell call of its own that starts with `board`, nothing before or after it (no `cd`, `Get-Location`, `;` or script around it): only that call is let out of Codex's sandbox to herdr (#916). Your shell may not inherit the pane's environment, so every command names your session (`board --session <your session id> <command>`, as printed on the brief's fallback line): `board --session <sid> doing|ask|wait|done|cat`, `list` (every session on the board), `doctor` (what is set up here).
 
 ## Start another session
 

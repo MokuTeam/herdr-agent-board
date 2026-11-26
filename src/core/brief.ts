@@ -14,7 +14,7 @@ export const BRIEF_VERSION = 7
 // The same for Codex sessions (entrypoints/codex-hook.ts), counted on its own: what a brief says only
 // to Codex raises this and leaves the Claude sessions as they are. It starts above BRIEF_VERSION
 // because Codex cards were stamped with that one, and they must hear the new text once.
-export const CODEX_BRIEF_VERSION = 9
+export const CODEX_BRIEF_VERSION = 10
 
 export interface BriefOptions {
   /** Whether the `agent-board` MCP server is registered for this session's harness. */
@@ -82,9 +82,14 @@ export function brief(
     .filter(Boolean)
     .join(', ')
   if (opts.mcp) {
+    // Codex lets `board` out of its sandbox only as a call of its own (#893, #916): no script around it.
+    const when =
+      agent === 'Codex'
+        ? 'if the MCP server is unavailable, run it as a shell call of its own that starts with board, nothing before or after it (no cd, Get-Location, ; or script around it):'
+        : 'if the MCP server is unavailable or inside a shell probe/script, use'
     const fallback = opts.session
-      ? `- Fallback: if the MCP server is unavailable or inside a shell probe/script, use \`board --session ${opts.session} <command>\` (\`board --help\`, \`spawn-agent\`).`
-      : '- Fallback: if the MCP server is unavailable or inside a shell probe/script, use the `board` shell command (`board --help`; `board cat|doing|ask|wait|done|remind|agents|send|thread`, `spawn-agent`).'
+      ? `- Fallback: ${when} \`board --session ${opts.session} <command>\` (\`board --help\`, \`spawn-agent\`).`
+      : `- Fallback: ${when} the \`board\` shell command (\`board --help\`; \`board cat|doing|ask|wait|done|remind|agents|send|thread\`, \`spawn-agent\`).`
     return [
       `[agent-board] The user watches every ${agent} session on a kanban board in herdr: lanes by category; columns working, needs the user, waiting on someone else, done, idle.`,
       "Working, done and terminal dialogs are detected automatically. Use the `agent-board` MCP server's tools (as this session; no need to tell the user):",
@@ -115,6 +120,10 @@ export function brief(
     "Working, done and terminal dialogs are detected automatically. Keep the rest of this session's card current with the `board` shell command (Bash or PowerShell; it prints one line; no need to tell the user):",
     `- board cat <id>: this session's lane. Now: ${now}. Known: ${known}. For a client that has none yet: board cat <new-id> "<Title>" adds it.`,
     '- board doing "<3-8 words>": when you start a distinct task, and again when you move to its next step.',
+    // Codex lets `board` out of its sandbox by a rule on the command (rules/agent-board.rules, #893), and a
+    // script around it (Get-Location; …, cd …; …) is no such command: inside, herdr refuses it (#916).
+    agent === 'Codex' &&
+      '  Run each board command as a shell call of its own that starts with board, nothing before or after it (no cd, Get-Location, ; or script around it): only that call is let out of the sandbox to herdr.',
     '- board ask "<the question, short>": before ending a turn that needs the user\'s answer or decision (approve a draft, pick an option, give data). Puts the card under "needs the user"; cleared by itself when the user replies.',
     full && decisions && decisionsBrief(decisions),
     '- board wait "<who/what>": before ending a turn blocked on something outside this chat (client reply, CI, another session, a date). The card stays in "waiting" until you run doing or done.',
