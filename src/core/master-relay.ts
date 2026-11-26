@@ -106,6 +106,10 @@ export const RELAY_TABLE: readonly RelayEntry[] = [
   { group: 'payload', method: 'GET', path: /^\/api\/board-slices$/, relayOnly: true },
   { group: 'cli', method: 'POST', path: /^\/api\/node-cli$/, relayOnly: true },
   { group: 'reveal', method: 'POST', path: /^\/api\/node-reveal$/, relayOnly: true },
+  // The NetSuite session store (#860): the master holds it; a node checks its bridge's token first
+  // (server/routes/ns-sessions.ts nsNodeGateRoute). Bodies are never logged, the path only.
+  { group: 'ns-sessions', method: 'GET', path: /^\/api\/ns-sessions\/(?:entry|list)$/ },
+  { group: 'ns-sessions', method: 'POST', path: /^\/api\/ns-sessions\/(?:entry|touch|dead|lock|unlock)$/ },
 ]
 
 /** The decisions' path (#781), whose session keys the master reads as the node's own (relayedDecisions). */

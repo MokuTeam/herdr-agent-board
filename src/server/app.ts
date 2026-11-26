@@ -49,6 +49,7 @@ import {
   relayKeyPath,
   writeLanesSeen,
 } from '../adapters/node-store.ts'
+import { createNsTokens, nsBridgeDirs } from '../adapters/ns-store-tokens.ts'
 import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
 import { knobMs, pace, pause } from '../adapters/pacing.ts'
@@ -130,6 +131,7 @@ import {
   parseNodeKey,
   pickNodeMaster,
 } from '../core/nodes.ts'
+import { createNsStore } from '../core/ns-sessions.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
 import type { BackupPayload, CalendarPayload, TimePayload } from '../core/payload.ts'
 import type { Observation } from '../core/presence.ts'
@@ -275,6 +277,7 @@ import { moveRoute } from './routes/move.ts'
 import { masterRelayRoute, nodeCallRoutes, nodeDoorRoutes } from './routes/node.ts'
 import { createNodeProxy, type NodeProxy } from './routes/node-proxy.ts'
 import { computerSetupRoutes, handoverRoutes, nodeSetupRoutes, nodesRoutes, relaySetupRoutes } from './routes/nodes.ts'
+import { nsNodeGateRoute, nsSessionRoutes } from './routes/ns-sessions.ts'
 import { pageLogRoute } from './routes/page-log.ts'
 import { pilotCallRoutes } from './routes/pilot-call.ts'
 import { presenceRoutes } from './routes/presence.ts'
@@ -418,6 +421,8 @@ export interface ServerOptions {
   presenceIntervalMs?: number
   /** Whether this computer has a desktop (adapters/idle.ts hasDesktop, #788); tests say. */
   presenceDesktop?: () => boolean
+  /** The MokuTab bridge data dirs that get a NetSuite store token (#860, adapters/ns-store-tokens.ts); tests hand in their own. */
+  nsBridgeDirs?: () => string[]
 }
 
 /** The forms that add a device to this board (Settings → Devices), a master's alone. */
@@ -436,8 +441,13 @@ export async function startServer({
   presenceObserve,
   presenceIntervalMs,
   presenceDesktop,
+  nsBridgeDirs: nsDirs,
 }: ServerOptions): Promise<BoardServer> {
   const { cfg, log } = deps
+  // The NetSuite session store (#860): values in this memory only; the master's, a pure node relays.
+  const nsStore = createNsStore()
+  const nsTokens = createNsTokens({ dirs: nsDirs ?? (() => nsBridgeDirs(homedir())), log })
+  nsTokens.refresh()
   const initialNoFileCfg = readConfigFile() === null ? structuredClone(cfg) : null
   // Crash recovery (#697): recover any incomplete handover before opening SQLite DBs or services.
   const bootHandover = readHandoverState()
@@ -1402,6 +1412,12 @@ export async function startServer({
     ...mokupilotRoutes(cfg),
     // The user's presence: read, switched and set (the page, the phone, the Android app).
     ...presenceRoutes(presence),
+    // The NetSuite session store (#860): a MokuTab bridge's; a pure node relays it to its master.
+    ...nsSessionRoutes({
+      store: () => (isNodeOnly(cfg) ? null : nsStore),
+      tokenOk: given => nsTokens.check(given),
+      log,
+    }),
     // The away journal (#489): its list and the strip's dismiss (404 while off).
     ...journalRoutes(journal, () => journalConfig(cfg.journal) !== null),
     // The peer network: roster, threads, sends (local only; nothing answers while `team` is off).
@@ -1829,7 +1845,7 @@ export async function startServer({
     const op = log ? await adminOpOf(req) : undefined
     let res: Response | undefined
     try {
-      res = await dispatch(table, req, url, path, { ...guards, remote: true })
+      res = await dispatch(table, req, url, path, { ...guards, remote: true, relayFrom: device })
       return res
     } finally {
       if (log)
@@ -2055,6 +2071,8 @@ export async function startServer({
       if (method === 'POST' && rawPath === DECISIONS_PATH && status === 200) upSlices.poke()
     })
     routes.unshift(masterRelayFirst)
+    // Before the relay (#860): the bridge's store token is checked here, where it was written.
+    routes.unshift(nsNodeGateRoute(given => nsTokens.check(given)))
     const nodeTelegram = createNodeTelegram({ cfg, profiles: () => deps.profiles(), log, refresh })
     refreshLocalPilotCallRoutes()
     const nodeLaunch = createNodeLaunch({
@@ -2949,6 +2967,7 @@ export async function startServer({
     // (a new host, say) here, and the listener's port through its onChange.
     refresh: runRefresh,
     async close() {
+      nsStore.clear()
       clearInterval(poll)
       clearTimeout(selfUpdateResume)
       clearInterval(selfUpdateTick)

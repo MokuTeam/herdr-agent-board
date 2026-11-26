@@ -38,6 +38,8 @@ export interface RouteContext {
   ownFile(target: string): boolean
   /** Whether this request arrived through a remote listener (Tailscale, serve, tunnel). */
   remote: boolean
+  /** The device whose board relayed this request up to this master (#764), as the relay names it; unset for any other. */
+  relayFrom?: string
 }
 
 /** Answers, or returns undefined to let the next route in the table answer. */
@@ -71,6 +73,8 @@ export interface GuardState {
   ownFiles?: (target: string) => boolean
   /** True when dispatching from a remote listener (Tailscale, serve, tunnel). */
   remote?: boolean
+  /** A node's relayed request (server/app.ts replayRelayed): the device that sent it. */
+  relayFrom?: string
 }
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }
@@ -182,6 +186,7 @@ export async function dispatch(
       refuse: guard => check(guard, req, url, state),
       ownFile: target => !!state.ownFiles?.(target),
       remote: state.remote === true,
+      ...(state.relayFrom && { relayFrom: state.relayFrom }),
     }
     for (const guard of route.guard ?? []) {
       const refused = ctx.refuse(guard)
