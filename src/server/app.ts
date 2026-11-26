@@ -446,12 +446,12 @@ export async function startServer({
   const { cfg, log } = deps
   // The NetSuite session store (#860): values in this memory only; the master's, a pure node relays.
   const nsStore = createNsStore()
-  // Each MokuTab bridge data dir here gets <dir>/ns-store.json { url, token, node }, written once
-  // the board listens (below) and again when a token does not match (adapters/ns-store-tokens.ts).
+  // Each MokuTab bridge state dir here gets <dir>/ns-store-token (its URL on line 2 when not the
+  // default), written once the board listens (below) and again when a token does not match
+  // (adapters/ns-store-tokens.ts).
   const nsTokens = createNsTokens({
     dirs: nsDirs ?? (() => nsBridgeDirs(homedir())),
     url: () => `http://127.0.0.1:${server.port ?? port}/api/ns-sessions`,
-    node: () => nodeConfig(cfg.node)?.id ?? nodesConfig(cfg.nodes, hostname())?.id ?? hostname(),
     log,
   })
   const initialNoFileCfg = readConfigFile() === null ? structuredClone(cfg) : null

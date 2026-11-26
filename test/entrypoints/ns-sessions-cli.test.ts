@@ -20,7 +20,6 @@ const meta = {
   origin: { machine: 'laptop', profile: 'work' },
   holders: ['laptop', 'server-2'],
   dead_reason: null,
-  dead_matched: null,
   lock: null,
   // What no store sends, and this command never prints whatever comes.
   cookies: [{ name: 'JSESSIONID', value: 'fake-cli-value-55aa' }],

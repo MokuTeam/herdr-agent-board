@@ -4,7 +4,7 @@
 // lock_id, 500 entries without ever evicting a live one, and a list that never holds a value.
 // Fake cookie values only.
 import { describe, expect, test } from 'bun:test'
-import { relayMatch, relayRequestOf } from '../../src/core/master-relay.ts'
+import { relayMatch } from '../../src/core/master-relay.ts'
 import {
   createNsStore,
   NS_ABS_MS,
@@ -176,7 +176,8 @@ describe('the store', () => {
     expect(s.dead(A, fp, 'import_bounced')).toBe(true)
     expect(s.dead(A, fp, 'import_bounced')).toBe(false)
     expect(s.take(A, U)).toEqual({ ok: false, code: 'none' })
-    expect(s.list()[0]).toMatchObject({ state: 'dead', dead_reason: 'import_bounced', dead_matched: 'none' })
+    expect(s.list()[0]).toMatchObject({ state: 'dead', dead_reason: 'import_bounced' })
+    expect(s.deadMatched(A, U)).toBe('none')
   })
 
   test('expiry: dying 20 min before the idle or absolute prediction, dead and empty past 12 h, gone after 24 h more', () => {
@@ -189,7 +190,8 @@ describe('the store', () => {
     expect(s.list()[0]?.state).toBe('dying')
     expect(s.touch(A, fp, LAPTOP).state).toBe('live')
     c.go(NS_ABS_MS)
-    expect(s.list()[0]).toMatchObject({ state: 'dead', dead_reason: 'expired', dead_matched: 'abs' })
+    expect(s.list()[0]).toMatchObject({ state: 'dead', dead_reason: 'expired' })
+    expect(s.deadMatched(A, U)).toBe('abs')
     expect(s.take(A, null)).toEqual({ ok: false, code: 'none' })
     c.go(24 * 3600_000 + 1)
     expect(s.list()).toEqual([])
@@ -204,32 +206,28 @@ describe('the store', () => {
     expect(s.list()[0]?.login_at).toBe(c.now())
   })
 
-  test('lock: one holder, extended with the same lock_id, at most 300 s, released by lock_id or a publish from the holder', () => {
+  test('lock: one holder, extended by it, at most 120 s, released by its holder or a publish from its origin', () => {
     const c = clock()
     let n = 0
     const s = createNsStore({ now: c.now, newId: () => `lock-${++n}` })
     const holder = { ...SERVER, run_id: 'run-1' }
-    expect(s.lock(A, U, holder, 900)).toEqual({ ok: true, lock_id: 'lock-1', until: c.now() + 300_000 })
-    expect(s.lock(A, U, { ...LAPTOP, run_id: 'run-9' }, 60)).toEqual({
-      ok: false,
-      code: 'locked',
-      holder,
-      until: c.now() + 300_000,
-    })
+    const other = { ...LAPTOP, run_id: 'run-9' }
+    expect(s.lock(A, U, holder, 900)).toEqual({ ok: true, lock_id: 'lock-1', until: c.now() + 120_000 })
+    expect(s.lock(A, U, other, 60)).toEqual({ ok: false, code: 'locked', holder, until: c.now() + 120_000 })
     // The same machine and profile with another run is another holder.
     expect(s.lock(A, U, { ...holder, run_id: 'run-2' }, 60).ok).toBe(false)
     expect(s.lock(A, U, holder, 30)).toEqual({ ok: true, lock_id: 'lock-1', until: c.now() + 30_000 })
-    expect(s.unlock(A, U, 'lock-x')).toBe(false)
-    expect(s.unlock(A, U, 'lock-1')).toBe(true)
-    expect(s.lock(A, U, { ...LAPTOP, run_id: 'run-9' }, 60)).toMatchObject({ ok: true, lock_id: 'lock-2' })
+    expect(s.unlock(A, U, other)).toBe(false)
+    expect(s.unlock(A, U, holder)).toBe(true)
+    expect(s.lock(A, U, other, 60)).toMatchObject({ ok: true, lock_id: 'lock-2' })
     // Expiry releases it.
     c.go(60_000)
-    expect(s.unlock(A, U, 'lock-2')).toBe(false)
+    expect(s.unlock(A, U, other)).toBe(false)
     expect(s.lock(A, U, holder, 60)).toMatchObject({ ok: true, lock_id: 'lock-3' })
     // A publish from the holder's origin releases it.
     s.publish(nsPublishOf(body(SECRET, { origin: SERVER })))
     expect(s.list()[0]?.lock).toBeNull()
-    expect(s.lock(A, U, { ...LAPTOP, run_id: 'run-9' }, 60).ok).toBe(true)
+    expect(s.lock(A, U, other, 60).ok).toBe(true)
   })
 
   test('500 entries: the oldest dead goes first, a live one never: store_full', () => {
@@ -288,37 +286,22 @@ describe('the store', () => {
   })
 })
 
-describe('the relay carries PUT and DELETE for the store only', () => {
+describe('the relay carries the store, GET and POST only', () => {
   const none = () => false
-  test("relayMatch: the store's table paths; no other path, no session of another machine", () => {
-    expect(relayMatch('PUT', '/api/ns-sessions/entry', none)).toMatchObject({
-      kind: 'table',
-      entry: { group: 'ns-sessions' },
-    })
-    expect(relayMatch('DELETE', '/api/ns-sessions/lock', none)).toMatchObject({ kind: 'table' })
-    expect(relayMatch('POST', '/api/ns-sessions/entry', none)).toMatchObject({ kind: 'table' })
-    expect(relayMatch('POST', '/api/ns-sessions/unlock', none)).toMatchObject({ kind: 'table' })
-    expect(relayMatch('GET', '/api/ns-sessions/list', none)).toMatchObject({ kind: 'table' })
-    expect(relayMatch('PUT', '/api/ns-sessions/lock', none)).toBeNull()
-    expect(relayMatch('DELETE', '/api/ns-sessions/entry', none)).toBeNull()
-    expect(relayMatch('PUT', '/api/threads', none)).toBeNull()
-    expect(relayMatch('DELETE', '/api/session/@ben:k', none)).toBeNull()
-    expect(relayMatch('POST', '/api/session/@ben:k', none)).toMatchObject({ kind: 'keyed', device: 'ben' })
-  })
-
-  test('relayRequestOf: PUT and DELETE only on a table path that names them', () => {
-    const req = (method: string, path: string) => ({
-      id: 'abcdefgh12',
-      method,
-      path,
-      headers: { 'content-type': 'application/json', 'x-ns-store-client': 'mokutab/test' },
-      who: { kind: 'owner' },
-      idem: 'k1',
-    })
-    expect(relayRequestOf(req('PUT', '/api/ns-sessions/entry'))).toMatchObject({ method: 'PUT' })
-    expect(relayRequestOf(req('DELETE', '/api/ns-sessions/lock'))).toMatchObject({ method: 'DELETE' })
-    expect(relayRequestOf(req('PUT', '/api/threads'))).toBeNull()
-    expect(relayRequestOf(req('DELETE', '/api/session/@ben:k'))).toBeNull()
-    expect(relayRequestOf(req('PATCH', '/api/ns-sessions/entry'))).toBeNull()
+  test("relayMatch: the store's paths go up; no other method", () => {
+    for (const [method, path] of [
+      ['GET', '/api/ns-sessions/entry'],
+      ['GET', '/api/ns-sessions/list'],
+      ['POST', '/api/ns-sessions/entry'],
+      ['POST', '/api/ns-sessions/touch'],
+      ['POST', '/api/ns-sessions/dead'],
+      ['POST', '/api/ns-sessions/lock'],
+      ['POST', '/api/ns-sessions/unlock'],
+    ] as const)
+      expect(relayMatch(method, path, none)).toMatchObject({ kind: 'table', entry: { group: 'ns-sessions' } })
+    expect(relayMatch('PUT', '/api/ns-sessions/entry', none)).toBeNull()
+    expect(relayMatch('DELETE', '/api/ns-sessions/lock', none)).toBeNull()
+    expect(relayMatch('GET', '/api/ns-sessions/touch', none)).toBeNull()
+    expect(relayMatch('POST', '/api/ns-sessions/list', none)).toBeNull()
   })
 })

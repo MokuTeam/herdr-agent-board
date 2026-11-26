@@ -18,7 +18,7 @@ export const NS_IDLE_MS = 3 * 3600_000
 /** An entry turns `dying` this long before either predicted expiry. */
 export const NS_DYING_MS = 20 * 60_000
 export const NS_LOCK_DEFAULT_S = 120
-export const NS_LOCK_MAX_S = 300
+export const NS_LOCK_MAX_S = 120
 /** A dead entry stays in the list (metadata only) this long, then goes. */
 export const NS_DEAD_KEPT_MS = 24 * 3600_000
 export const NS_MAX_ENTRIES = 500
@@ -82,8 +82,6 @@ export interface NsMeta {
   origin: NsWhere
   holders: string[]
   dead_reason: NsDeadReason | null
-  /** Which prediction a death matched (abs, idle or none), to tune the policies from data. */
-  dead_matched: 'abs' | 'idle' | 'none' | null
   lock: { holder: NsHolder; until: number } | null
 }
 
@@ -103,6 +101,7 @@ interface Entry {
   lastWhere: NsWhere
   deadAt: number | null
   deadReason: NsDeadReason | null
+  /** Which prediction a death matched (abs, idle or none): kept for tuning the policies (phase 3), not shown yet. */
   deadMatched: 'abs' | 'idle' | 'none' | null
   holders: Set<string>
   /** Fingerprints this key saw die, newest last. */
@@ -294,7 +293,10 @@ export interface NsStore {
   touch(account: string, fp: string, where: NsWhere): { matched: boolean; state: NsState | null }
   dead(account: string, fp: string, reason: NsDeadReason): boolean
   lock(account: string, user: string | null, holder: NsHolder, ttlS: number): NsLockResult
-  unlock(account: string, user: string | null, lockId: string): boolean
+  /** Releases the lock of (account, user) when `holder` holds it. */
+  unlock(account: string, user: string | null, holder: NsHolder): boolean
+  /** Which prediction the entry's death matched, for tests and phase 3. */
+  deadMatched(account: string, user: string | null): 'abs' | 'idle' | 'none' | null
   list(account?: string | null): NsMeta[]
   /** Every value dropped (the board stops). */
   clear(): void
@@ -489,13 +491,17 @@ export function createNsStore(o: NsStoreOptions = {}): NsStore {
       return { ok: true, lock_id: id, until }
     },
 
-    unlock(account, user, lockId) {
+    unlock(account, user, holder) {
       const t = now()
       const k = keyOf(account, user)
       const held = locks.get(k)
-      if (!held || held.id !== lockId || held.until <= t) return false
+      if (!held || held.until <= t || !sameHolder(held.holder, holder)) return false
       locks.delete(k)
       return true
+    },
+
+    deadMatched(account, user) {
+      return entries.get(keyOf(account, user))?.deadMatched ?? null
     },
 
     list(account) {
@@ -522,7 +528,6 @@ export function createNsStore(o: NsStoreOptions = {}): NsStore {
             origin: { ...e.origin },
             holders: [...e.holders].sort(),
             dead_reason: e.deadReason,
-            dead_matched: e.deadMatched,
             lock: l && l.until > t ? { holder: { ...l.holder }, until: l.until } : null,
           }
         })

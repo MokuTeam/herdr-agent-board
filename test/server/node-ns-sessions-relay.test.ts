@@ -1,12 +1,12 @@
-// The NetSuite session store through the master relay (#860, contract ns-contract-final.md) on
-// running boards: a master and one node (test/support/node-pair.ts), each with a MokuTab data dir
-// (~/.mokutab) in its home. Each board writes its bridge's ns-store.json; the node's bridge reaches
-// the master's store through its own board (PUT and DELETE too); the node checks its own token,
+// The NetSuite session store through the master relay (#860, contract ns-store-contract-v1.md) on
+// running boards: a master and one node (test/support/node-pair.ts), each with a MokuTab bridge
+// state dir (default-profile.json) in its home. Each board writes its bridge's ns-store-token; the
+// node's bridge reaches the master's store through its own board; the node checks its own token,
 // which never travels; the master's bridge takes what the node published. No cookie value or token
 // in either board's log, payload, journal or list. The link down: 503 store_unavailable. A board
 // without node keeps a store of its own and writes nothing where there is no MokuTab.
 import { expect, test } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { nsFingerprint } from '../../src/core/ns-sessions.ts'
 import { serveBoard } from '../support/board-server.ts'
@@ -20,9 +20,23 @@ const ROUTING = 'fake-relay-routing-value'
 const A = '1234567_SB1'
 const U = 'agent@example.com'
 
-const dataDir = (box: Sandbox): string => join(box.env.HOME as string, '.mokutab')
-const storeFile = (box: Sandbox): { url: string; token: string; node: string } =>
-  JSON.parse(readFileSync(join(dataDir(box), 'ns-store.json'), 'utf8'))
+/** A server node's bridge state dir, the same on every platform (docs/design/nodes/browser). */
+const bridgeDir = (box: Sandbox): string =>
+  join(box.env.HOME as string, 'browser', 'state', 'main', 'state', 'mcp-chrome-bridge')
+const makeBridge = (box: Sandbox): void => {
+  mkdirSync(bridgeDir(box), { recursive: true })
+  writeFileSync(join(bridgeDir(box), 'default-profile.json'), '{"profile":"main"}\n')
+}
+/** The token file as the bridge reads it: the token, then the URL when not the default. */
+const tokenFile = (box: Sandbox): { token: string; url: string } => {
+  const [token = '', url = 'http://127.0.0.1:12422/api/ns-sessions'] = readFileSync(
+    join(bridgeDir(box), 'ns-store-token'),
+    'utf8',
+  )
+    .split('\n')
+    .filter(Boolean)
+  return { token, url }
+}
 
 const entry = (value: string, machine: string) => ({
   account: A,
@@ -48,20 +62,20 @@ const entry = (value: string, machine: string) => ({
   seen_at: Date.now(),
 })
 
-/** A call as the bridge makes it: its ns-store.json's URL and token, no X-Board. */
+/** A call as the bridge makes it: its token file's URL and token, X-Board: 1. */
 const call = async (
   base: string,
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+  method: 'GET' | 'POST',
   path: string,
-  o: { body?: unknown; token?: string; board?: boolean } = {},
+  o: { body?: unknown; token?: string } = {},
 ): Promise<{ status: number; text: string; json: Record<string, unknown> }> => {
   const res = await fetch(`${base}/${path}`, {
     method,
     headers: {
       'content-type': 'application/json',
       'x-ns-store-client': 'mokutab/test',
+      'x-board': '1',
       ...(o.token && { 'x-ns-store-token': o.token }),
-      ...(o.board && { 'x-board': '1' }),
     },
     ...(o.body !== undefined && { body: JSON.stringify(o.body) }),
   })
@@ -88,29 +102,32 @@ test("a node's bridge reaches the master's store through its own board; values s
     count: 1,
     masterCfg: { journal: true },
     masterPanes: () => [],
-    masterSetup: box => void mkdirSync(dataDir(box), { recursive: true }),
-    nodeSetup: (_id, box) => void mkdirSync(dataDir(box), { recursive: true }),
+    masterSetup: box => makeBridge(box),
+    nodeSetup: (_id, box) => makeBridge(box),
   })
   const node = pair.nodes[0] as PairNode
   await pair.waitDevice(node.id, d => d.link?.state === 'online', 10_000)
-  // Each board wrote its own bridge's file: its own URL, token and name.
-  const onNode = storeFile(node.box)
-  const onMaster = storeFile(pair.master.box)
-  expect(onNode).toEqual({ url: `${node.url}/api/ns-sessions`, token: expect.any(String), node: node.id })
-  expect(onMaster).toEqual({ url: `${pair.master.url}/api/ns-sessions`, token: expect.any(String), node: 'laptop' })
-  const nodeToken = storeFile(node.box).token
-  const masterToken = storeFile(pair.master.box).token
+  // Each board wrote its own bridge's token file: its token, and its URL (not the default port here).
+  const onNode = tokenFile(node.box)
+  const onMaster = tokenFile(pair.master.box)
+  expect(onNode.url).toBe(`${node.url}/api/ns-sessions`)
+  expect(onMaster.url).toBe(`${pair.master.url}/api/ns-sessions`)
+  const nodeToken = onNode.token
+  const masterToken = onMaster.token
+  expect(nodeToken).toMatch(/^[A-Za-z0-9_-]{43}$/)
   expect(nodeToken).not.toBe(masterToken)
   const nodeBase = onNode.url
   const masterBase = onMaster.url
 
   // The node checks its token itself: nothing goes up without it.
-  expect((await call(nodeBase, 'PUT', 'entry', { body: entry(SECRET, 'laptop') })).json).toMatchObject({
+  expect((await call(nodeBase, 'POST', 'entry', { body: entry(SECRET, 'laptop') })).json).toMatchObject({
     code: 'unauthorized',
   })
-  expect((await call(nodeBase, 'PUT', 'entry', { body: entry(SECRET, 'laptop'), token: masterToken })).status).toBe(401)
+  expect((await call(nodeBase, 'POST', 'entry', { body: entry(SECRET, 'laptop'), token: masterToken })).status).toBe(
+    401,
+  )
   const published = await until('the node publishes through the relay', async () => {
-    const r = await call(nodeBase, 'PUT', 'entry', { body: entry(SECRET, 'laptop'), token: nodeToken })
+    const r = await call(nodeBase, 'POST', 'entry', { body: entry(SECRET, 'laptop'), token: nodeToken })
     return r.status === 200 ? r : null
   })
   expect(published.json).toEqual({ ok: true, stored: true, generation: 1, state: 'live' })
@@ -136,42 +153,34 @@ test("a node's bridge reaches the master's store through its own board; values s
   })
   expect(touched.json).toEqual({ ok: true, matched: true, state: 'live' })
 
-  // The lock is one for both machines; DELETE by lock_id goes up the relay too.
+  // The lock is one for both machines; POST /unlock by holder goes up the relay too (204).
   const held = await call(nodeBase, 'POST', 'lock', {
     body: { account: A, user: U, holder: { machine: 'laptop', profile: 'work', run_id: 'r1' }, ttl_s: 60 },
     token: nodeToken,
   })
   expect(held.status).toBe(200)
-  const lockId = held.json.lock_id as string
   const refused = await call(masterBase, 'POST', 'lock', {
     body: { account: A, user: U, holder: { machine: 'server-2', profile: 'main', run_id: 'r2' } },
     token: masterToken,
   })
   expect(refused.status).toBe(409)
   expect(refused.json).toMatchObject({ code: 'locked', holder: { machine: 'laptop' } })
-  expect(
-    (await call(nodeBase, 'DELETE', 'lock', { body: { account: A, user: U, lock_id: lockId }, token: nodeToken })).json,
-  ).toEqual({ ok: true })
+  const released = await call(nodeBase, 'POST', 'unlock', {
+    body: { account: A, user: U, holder: { machine: 'laptop', profile: 'work', run_id: 'r1' } },
+    token: nodeToken,
+  })
+  expect(released.status).toBe(204)
   const second = await call(masterBase, 'POST', 'lock', {
     body: { account: A, user: U, holder: { machine: 'server-2', profile: 'main', run_id: 'r2' } },
     token: masterToken,
   })
   expect(second.status).toBe(200)
-  // POST /unlock goes up the relay too, as DELETE /lock does.
-  expect(
-    (
-      await call(nodeBase, 'POST', 'unlock', {
-        body: { account: A, user: U, lock_id: second.json.lock_id },
-        token: nodeToken,
-      })
-    ).json,
-  ).toEqual({ ok: true })
 
   // The list, read on either board, by a bridge or as the board's own call: metadata only.
   const lists = [
     await call(nodeBase, 'GET', 'list', { token: nodeToken }),
-    await call(nodeBase, 'GET', 'list', { board: true }),
-    await call(masterBase, 'GET', 'list', { board: true }),
+    await call(nodeBase, 'GET', 'list'),
+    await call(masterBase, 'GET', 'list'),
   ]
   for (const l of lists) {
     expect(l.status).toBe(200)
@@ -191,7 +200,7 @@ test("a node's bridge reaches the master's store through its own board; values s
     token: nodeToken,
   })
   expect(dead.json).toEqual({ ok: true, matched: true })
-  const again = await call(nodeBase, 'PUT', 'entry', { body: entry(NEWER, 'laptop'), token: nodeToken })
+  const again = await call(nodeBase, 'POST', 'entry', { body: entry(NEWER, 'laptop'), token: nodeToken })
   expect(again.status).toBe(409)
   expect(again.json).toMatchObject({ ok: false, code: 'dead_fp' })
 
@@ -229,7 +238,7 @@ test("a node's bridge reaches the master's store through its own board; values s
 test('a board without node keeps its own store, and writes nothing where there is no MokuTab', async () => {
   const box = await sandbox()
   const { url } = await serveBoard(box, { language: 'en' })
-  expect(existsSync(dataDir(box))).toBe(false)
-  expect((await call(`${url}/api/ns-sessions`, 'PUT', 'entry', { body: entry(SECRET, 'laptop') })).status).toBe(401)
-  expect((await call(`${url}/api/ns-sessions`, 'GET', 'list', { board: true })).json).toEqual({ ok: true, entries: [] })
+  expect(existsSync(join(box.env.HOME as string, 'browser'))).toBe(false)
+  expect((await call(`${url}/api/ns-sessions`, 'POST', 'entry', { body: entry(SECRET, 'laptop') })).status).toBe(401)
+  expect((await call(`${url}/api/ns-sessions`, 'GET', 'list')).json).toEqual({ ok: true, entries: [] })
 }, 30_000)

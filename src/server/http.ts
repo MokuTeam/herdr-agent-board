@@ -47,7 +47,7 @@ export type Handler = (req: Request, ctx: RouteContext) => Promise<Response | un
 
 export interface Route {
   /** ANY: whatever the method (main's session block matched before it looked at the method). */
-  method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'ANY'
+  method: 'GET' | 'POST' | 'PUT' | 'ANY'
   /**
    * A string matches the whole decoded path; a RegExp is tested on the path as it came (encoded),
    * so `([^/]+)` takes a whole key even when the key has a `/`, and its groups are decoded.

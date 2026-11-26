@@ -37,8 +37,7 @@ import { keyedPath } from './node-proxy.ts'
 import { nodeKey, parseNodeKey } from './nodes.ts'
 import { hasUnprintable } from './team.ts'
 
-/** PUT and DELETE only for a table entry that names them (#860), never another machine's session. */
-export type RelayMethod = 'GET' | 'POST' | 'PUT' | 'DELETE'
+export type RelayMethod = 'GET' | 'POST'
 
 export interface RelayEntry {
   /** The feature group the path belongs to (T4 moves the others one group at a time). */
@@ -110,9 +109,7 @@ export const RELAY_TABLE: readonly RelayEntry[] = [
   // The NetSuite session store (#860): the master holds it; a node checks its bridge's token first
   // (server/routes/ns-sessions.ts nsNodeRoute). Bodies are never logged, the path only.
   { group: 'ns-sessions', method: 'GET', path: /^\/api\/ns-sessions\/(?:entry|list)$/ },
-  { group: 'ns-sessions', method: 'PUT', path: /^\/api\/ns-sessions\/entry$/ },
   { group: 'ns-sessions', method: 'POST', path: /^\/api\/ns-sessions\/(?:entry|touch|dead|lock|unlock)$/ },
-  { group: 'ns-sessions', method: 'DELETE', path: /^\/api\/ns-sessions\/lock$/ },
 ]
 
 /** The decisions' path (#781), whose session keys the master reads as the node's own (relayedDecisions). */
@@ -261,10 +258,9 @@ export type RelayMatch = { kind: 'table'; entry: RelayEntry } | { kind: 'keyed';
  * board's own when it is a master too).
  */
 export function relayMatch(method: string, rawPath: string, skip: (device: string) => boolean): RelayMatch | null {
-  if (method !== 'GET' && method !== 'POST' && method !== 'PUT' && method !== 'DELETE') return null
+  if (method !== 'GET' && method !== 'POST') return null
   const entry = RELAY_TABLE.find(e => e.method === method && e.path.test(rawPath))
   if (entry) return { kind: 'table', entry }
-  if (method !== 'GET' && method !== 'POST') return null
   const keyed = keyedPath(rawPath)
   if (keyed?.area !== 'session' || skip(keyed.device)) return null
   return { kind: 'keyed', device: keyed.device }
@@ -427,20 +423,13 @@ function whoOf(raw: unknown): RelayWho | null {
 export function relayRequestOf(raw: unknown): RelayRequest | null {
   if (!isObject(raw)) return null
   const { id, method, path, headers, who, idem, body, hasBody, bodySha } = raw
-  if (!isRelayId(id) || typeof method !== 'string') return null
+  if (!isRelayId(id) || (method !== 'GET' && method !== 'POST')) return null
   if (
     typeof path !== 'string' ||
     !path.startsWith('/api/') ||
     path.length > RELAY_PATH_MAX ||
     /[\s\0#]/.test(path) ||
     !plainPath(rawPathOf(path))
-  )
-    return null
-  // PUT and DELETE only on a table path that names them (#860).
-  if (
-    method !== 'GET' &&
-    method !== 'POST' &&
-    !((method === 'PUT' || method === 'DELETE') && relayTablePath(method, rawPathOf(path)))
   )
     return null
   const h = headersOf(headers, RELAY_REQUEST_HEADERS)

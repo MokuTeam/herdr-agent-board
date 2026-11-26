@@ -1,16 +1,18 @@
-// The NetSuite session store's routes (#860, core/ns-sessions.ts, contract ns-contract-final.md in
-// thread agent-board-149): what a MokuTab bridge calls on its own board, at the URL its
-// ns-store.json names. On the master the store answers; a node checks the bridge's token itself
+// The NetSuite session store's routes (#860, core/ns-sessions.ts, contract ns-store-contract-v1.md
+// in thread agent-board-149): what a MokuTab bridge calls on its own board, at the URL its
+// ns-store-token names (http://127.0.0.1:12422/api/ns-sessions unless its line 2 says another). On the master the store answers; a node checks the bridge's token itself
 // and relays the rest up as the owner (core/master-relay.ts, group ns-sessions), so a laptop's
 // bridge reaches the master's store. Any 503 means "no store": the bridge behaves as without one.
 //
-//   PUT    /entry   publish            token   (also POST /entry)
-//   GET    /entry   the values         token
-//   POST   /touch   activity, by fp    token
-//   POST   /dead    a death, by fp     token
-//   POST   /lock    login lock         token
-//   DELETE /lock    release by lock_id token   (also POST /unlock)
-//   GET    /list    metadata only      token, or X-Board: 1 from this computer (the board's own CLI and page)
+//   POST /entry    publish            token
+//   GET  /entry    the values         token
+//   POST /touch    activity, by fp    token
+//   POST /dead     a death, by fp     token
+//   POST /lock     login lock         token
+//   POST /unlock   release, by holder token
+//   GET  /list     metadata only      token optional (the board's own CLI and page call it without)
+//
+// X-Board: 1 on every call. The relay carries GET and POST only, so the store has no other method.
 //
 // Answers: {"ok": true, ...} or {"ok": false, "code", "message"}. Cookie values come in with a
 // publish and go out with GET /entry, and nowhere else: no log line, no error, no other answer
@@ -82,9 +84,8 @@ export interface NsRoutesDeps {
 }
 
 /**
- * Who may call: a node's relayed request (its node checked it), else a bridge's token from this
- * computer, or for the list this board's own page or CLI (X-Board: 1). A wrong token is refused
- * even where none is needed.
+ * Who may call: a node's relayed request (its node checked it); else X-Board: 1 from this computer,
+ * with a bridge's token, which only the list may go without. A wrong token is refused even there.
  */
 export function nsAuthRefusal(
   req: Request,
@@ -94,9 +95,10 @@ export function nsAuthRefusal(
 ): Response | null {
   if (ctx.relayFrom) return null
   if (ctx.remote) return nsFail('unauthorized', {}, 'not from a remote listener')
+  if (req.headers.get('x-board') !== '1') return nsFail('unauthorized', {}, 'X-Board: 1 is missing')
   const given = req.headers.get(NS_TOKEN_HEADER)
   if (given !== null) return tokenOk(given) ? null : nsFail('unauthorized')
-  return list && req.headers.get('x-board') === '1' ? null : nsFail('unauthorized')
+  return list ? null : nsFail('unauthorized')
 }
 
 const isList = (req: Request, ctx: Pick<RouteContext, 'path'>): boolean =>
@@ -113,7 +115,7 @@ export interface NsRelay {
 /**
  * On a node (#860), before the master relay: the bridge's token is checked here, where it was
  * written, and the request goes up as the owner's (the token is what keeps a page of another site
- * out, so no X-Board is asked). What the relay itself answers (the master away, a timeout, a master
+ * out, as X-Board does). What the relay itself answers (the master away, a timeout, a master
  * without the store) is 503 store_unavailable; the store's own answers pass as they came. A node
  * that does not relay leaves it to the routes below (503 there, it holds no store).
  */
@@ -155,7 +157,8 @@ async function bodyOf(req: Request): Promise<Record<string, unknown> | null> {
   }
 }
 
-const bad = (field: string): Response => nsFail('bad_request', { field }, `bad ${field}`)
+/** A bad_request naming the wrong field in its message, never its value. */
+const bad = (field: string): Response => nsFail('bad_request', {}, `bad ${field}`)
 
 export function nsSessionRoutes(deps: NsRoutesDeps): Route[] {
   function gate(req: Request, ctx: RouteContext): Response | { store: NsStore } {
@@ -185,7 +188,7 @@ export function nsSessionRoutes(deps: NsRoutesDeps): Route[] {
 
   const routes: Route[] = [
     {
-      method: 'PUT',
+      method: 'POST',
       path: entry,
       async handle(req, ctx) {
         const g = gate(req, ctx)
@@ -284,8 +287,8 @@ export function nsSessionRoutes(deps: NsRoutesDeps): Route[] {
       },
     },
     {
-      method: 'DELETE',
-      path: lock,
+      method: 'POST',
+      path: `${NS_PREFIX}/unlock`,
       async handle(req, ctx) {
         const g = gate(req, ctx)
         if (g instanceof Response) return g
@@ -293,9 +296,10 @@ export function nsSessionRoutes(deps: NsRoutesDeps): Route[] {
         if (!b) return bad('body')
         const k = keyOf(b)
         if (k instanceof Response) return k
-        const id = nsLabel(b.lock_id, 128)
-        if (!id) return bad('lock_id')
-        return g.store.unlock(k.account, k.user, id) ? ok() : ok({ released: false })
+        const holder = nsHolderOf(b.holder)
+        if (!holder) return bad('holder')
+        g.store.unlock(k.account, k.user, holder)
+        return new Response(null, { status: 204 })
       },
     },
     {
@@ -311,9 +315,5 @@ export function nsSessionRoutes(deps: NsRoutesDeps): Route[] {
       },
     },
   ]
-  // The same two under POST (review of #868): the contract's PUT /entry and DELETE /lock, and
-  // POST /entry and POST /unlock {account, user, lock_id}, answer alike; a bridge may use either.
-  const put = routes.find(r => r.method === 'PUT') as Route
-  const release = routes.find(r => r.method === 'DELETE') as Route
-  return [...routes, { ...put, method: 'POST' }, { ...release, method: 'POST', path: `${NS_PREFIX}/unlock` }]
+  return routes
 }

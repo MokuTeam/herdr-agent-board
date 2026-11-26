@@ -33,7 +33,6 @@ function metaOf(raw: unknown): NsMeta | null {
     origin: whereOf(raw.origin),
     holders: Array.isArray(raw.holders) ? raw.holders.filter((h): h is string => typeof h === 'string') : [],
     dead_reason: (typeof raw.dead_reason === 'string' ? raw.dead_reason : null) as NsMeta['dead_reason'],
-    dead_matched: (typeof raw.dead_matched === 'string' ? raw.dead_matched : null) as NsMeta['dead_matched'],
     lock: lock
       ? {
           holder: { ...whereOf(lock.holder), run_id: s(isRecord(lock.holder) ? lock.holder.run_id : '') },
