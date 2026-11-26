@@ -168,6 +168,7 @@ export const HTTP_TOOLS = [
         brief: { type: 'string', description: 'its first message' },
         profile: { type: 'string', description: 'a Claude profile id; default: yours' },
         device: { type: 'string', description: 'a device id, or local' },
+        lane: { type: 'string', description: 'its lane id' },
         agent: { type: 'string', enum: AGENT_KINDS },
         trust: { type: 'boolean', description: 'answer the folder-trust dialog with Yes' },
       },
@@ -340,6 +341,7 @@ function spawnArgv(a: Record<string, unknown>): string[] {
     throw new Bad(`agent is ${AGENT_KINDS.join(', ')}`)
   const profile = word(a.profile, 'profile')
   const device = word(a.device, 'device')
+  const lane = word(a.lane, 'lane')
   return [
     '--name',
     name,
@@ -348,6 +350,7 @@ function spawnArgv(a: Record<string, unknown>): string[] {
     ...(brief ? ['--brief', brief] : []),
     ...(profile ? ['--profile', profile] : []),
     ...(device ? ['--device', device] : []),
+    ...(lane ? ['--lane', lane] : []),
     ...(agent ? ['--agent', agent] : []),
     ...(a.trust === true ? ['--trust'] : []),
   ]

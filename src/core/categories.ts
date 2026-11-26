@@ -88,11 +88,11 @@ const norm = (p: unknown): string =>
     .toLowerCase()
 
 /** The category id configured for a folder, or null. */
-export function categoryFor(cfg: Pick<Config, 'categories'>, cwd: string): string | null {
+export function categoryFor(cfg: { categories?: readonly Category[] } | null | undefined, cwd: string): string | null {
   const dir = norm(cwd)
   let best: string | null = null
   let bestLen = -1
-  for (const c of cfg.categories) {
+  for (const c of cfg?.categories ?? []) {
     for (const p of c.paths ?? []) {
       const n = norm(p)
       if (n && (dir === n || dir.startsWith(`${n}/`)) && n.length > bestLen) {
@@ -117,4 +117,35 @@ export function laneRank(cfg: Pick<Config, 'categories'>, id: string): number {
 export function categoryInfo(cfg: Pick<Config, 'categories'>, id: string): Category & { title: string } {
   const found = cfg.categories.find(c => c.id === id)
   return { id, color: 'gray', paths: [], ...found, title: found?.title ?? builtinTitle(id) }
+}
+
+/** Lane id shape accepted by launch requests and `spawn-agent --lane`. */
+export const LANE_ID = /^[a-z0-9][a-z0-9_-]{0,31}$/
+
+/**
+ * A session's real lane from its board item (#903): null when `other` is only an unmatched folder
+ * fallback (not set on its card and not matched by a configured `other` path).
+ */
+export function itemLane(
+  item: { category?: unknown; categorySet?: unknown; cwd?: unknown } | null | undefined,
+  cfg?: { categories: readonly Category[] },
+): string | null {
+  const cat = typeof item?.category === 'string' ? item.category.trim().toLowerCase() : ''
+  if (!cat || !/^[a-z0-9_-]{1,64}$/.test(cat)) return null
+  if (
+    cat === 'other' &&
+    item?.categorySet !== true &&
+    !(cfg && typeof item?.cwd === 'string' && categoryFor(cfg, item.cwd) === 'other')
+  )
+    return null
+  return cat
+}
+
+/** Pick the lane for a spawned session (#903): explicit --lane > folder match > caller's lane. */
+export function resolveSpawnLane(o: {
+  explicit?: string | null | undefined
+  folderLane?: string | null | undefined
+  callerLane?: string | null | undefined
+}): string | undefined {
+  return o.explicit || o.folderLane || o.callerLane || undefined
 }

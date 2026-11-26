@@ -2,13 +2,14 @@
 // command it types into the new tab (a profile's start command, else `launch.claude`), and whether
 // text typed into a prompt is still on screen. The board's own launcher
 // (services/launch/launcher.ts) uses the same rules.
+import { LANE_ID } from '../categories.ts'
 import { t } from '../lang.ts'
 import { DEVICE_ID, LOCAL } from '../node-key.ts'
 import { MODEL_MAX, readModel } from './model.ts'
 import { checkName } from './names.ts'
 
 export const USAGE =
-  'spawn-agent --name <Name> --cwd <folder> [--label <tab label>] [--brief-file <file> | --brief <text>] [--workspace <herdr workspace id>] [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>] [--pane <pane id>] [--profile <id>] [--model <id or alias>] [--agent claude|pi|agy|codex] [--device <id|local>] [--trust] [--workdesk-worker] [--effort <level>] [--approval on-request|never] [--sandbox read-only|workspace-write|danger-full-access]'
+  'spawn-agent --name <Name> --cwd <folder> [--label <tab label>] [--brief-file <file> | --brief <text>] [--workspace <herdr workspace id>] [--timeout-sec 120] [--session-id <uuid> | --resume <uuid>] [--fork <uuid>] [--pane <pane id>] [--profile <id>] [--model <id or alias>] [--agent claude|pi|agy|codex] [--device <id|local>] [--lane <id>] [--trust] [--workdesk-worker] [--effort <level>] [--approval on-request|never] [--sandbox read-only|workspace-write|danger-full-access]'
 
 /** `spawn-agent --help`: the usage, then what is easy to get wrong. */
 export const HELP = `${USAGE}
@@ -26,7 +27,10 @@ config.toml. If config.json sets \`codexHome\`, the tab gets CODEX_HOME=<that fo
 
 --device <id|local> starts the session on that machine of the board's (#760): an id from the board's
 devices, or local for the board's own computer (the master). On a node the start goes to the master,
-which places it. Without it the board places the session by its rules, as before.`
+which places it. Without it the board places the session by its rules, as before.
+
+--lane <id> puts the session in that lane outright; without it, a folder matching a category wins,
+else the spawning session's own lane.`
 
 /**
  * Set by the board's own launcher on the spawn-agent it runs (services/launch/launcher.ts): that one
@@ -116,6 +120,8 @@ export interface SpawnOptions {
    * own computer (the master). Only a start the board may place takes it.
    */
   device?: string
+  /** The lane id to place the session in (#903), overriding folder category and spawner inheritance. */
+  lane?: string
   help?: never
 }
 
@@ -160,6 +166,7 @@ const OPTIONS: Record<string, Key> = {
   workdeskworker: 'workdeskWorker',
   thread: 'thread',
   device: 'device',
+  lane: 'lane',
   help: 'help',
   h: 'help',
 }
@@ -323,6 +330,9 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
     ]
     if (fixed.length) throw new Error(`--device places a new session: give it no ${fixed.join(', ')}`)
   }
+  const lane = out.lane?.trim().toLowerCase()
+  if (out.lane !== undefined && (!lane || !LANE_ID.test(lane)))
+    throw new Error(`--lane must be a lane id (letters, digits, - and _), not "${out.lane}"`)
   return {
     name,
     cwd: out.cwd ?? '',
@@ -347,6 +357,7 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
     ...(workdeskWorker && { workdeskWorker: true }),
     ...(thread && { thread }),
     ...(device !== undefined && { device }),
+    ...(lane !== undefined && { lane }),
   }
 }
 

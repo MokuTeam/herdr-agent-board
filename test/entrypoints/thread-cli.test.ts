@@ -603,3 +603,89 @@ test('#693 owner post schedules immediate wake delivery to assignee (or creator 
   expect(longEvt?.text).toContain('END_MARKER')
   expect((longEvt?.text ?? '').length).toBeGreaterThan(320)
 })
+
+test('threads follow the assignee unless the lane was set explicitly (#903)', async () => {
+  const { json } = setUp()
+  const owner: Party = { kind: 'owner' }
+  const worker: Party = { kind: 'session', key: 'worker-1', name: 'Worker' }
+  const backup: Party = { kind: 'session', key: 'backup-1', name: 'Backup' }
+  const unknown: Party = { kind: 'session', key: 'unknown-1', name: 'Unknown' }
+  const lanes: Record<string, string | null> = {
+    'worker-1': 'agent-board',
+    'backup-1': 'acme',
+    'unknown-1': null,
+  }
+  const byName: Record<string, Party> = { worker, backup, unknown, master }
+  const opts = {
+    lane: 'personal',
+    findSession: async (w: string) => byName[w] ?? null,
+    sessionLane: async (k: string) => lanes[k] ?? null,
+  }
+
+  // 1. new --to <session> (no --lane) uses the assignee's lane, and works even when creator has lane: null.
+  const created = await json(master, ['new', '--to', 'worker', 'Fix lanes'], opts)
+  expect(created.thread.lane).toBe('agent-board')
+  expect(created.thread.key).toBe('agent-board-1')
+  expect(created.entry.set.laneDefault).toBeUndefined()
+
+  const byOwner = await json(owner, ['new', '--to', 'worker', 'Owner task'], { ...opts, lane: null })
+  expect(byOwner.thread.lane).toBe('agent-board')
+  expect(byOwner.thread.key).toBe('agent-board-2')
+
+  // 2. new --lane <explicit> --to <session> keeps the explicit lane.
+  const explicitNew = await json(master, ['new', '--lane', 'personal', '--to', 'worker', 'Keep personal'], opts)
+  expect(explicitNew.thread.lane).toBe('personal')
+  expect(explicitNew.thread.key).toBe('personal-1')
+
+  // 3. Default-lane thread moves on set --assignee <session>.
+  const defThread = await json(master, ['new', 'Created in personal first'], opts)
+  expect(defThread.thread.lane).toBe('personal')
+  expect(defThread.thread.key).toBe('personal-2')
+  expect(defThread.entry.set.laneDefault).toBe(true)
+
+  const moved = await json(master, ['set', 'personal-2', '--assignee', 'worker'], opts)
+  expect(moved.thread.lane).toBe('agent-board')
+  expect(moved.thread.key).toBe('personal-2')
+
+  // 4. Explicit-lane thread does NOT move on set --assignee <session>.
+  const stayed = await json(master, ['set', 'personal-1', '--assignee', 'backup'], opts)
+  expect(stayed.thread.lane).toBe('personal')
+
+  // 5. Default thread pinned with set --lane (even to the same lane) does NOT move on later set --assignee.
+  const pinnedBase = await json(master, ['new', 'Pinned later'], opts)
+  expect(pinnedBase.thread.key).toBe('personal-3')
+  await json(master, ['set', 'personal-3', '--lane', 'personal'], opts)
+  const afterPin = await json(master, ['set', 'personal-3', '--assignee', 'worker'], opts)
+  expect(afterPin.thread.lane).toBe('personal')
+
+  // 6. set --assignee <session> --lane <explicit> uses the explicit lane.
+  const explicitSet = await json(master, ['new', 'Both flags'], opts)
+  const both = await json(master, ['set', explicitSet.thread.key, '--assignee', 'worker', '--lane', 'beta'], opts)
+  expect(both.thread.lane).toBe('beta')
+
+  // 7. set --assignee none keeps the lane unchanged.
+  const cleared = await json(master, ['set', 'personal-2', '--assignee', 'none'], opts)
+  expect(cleared.thread.lane).toBe('agent-board')
+
+  // 8. new --to when sessionLane is null falls back to creator's lane and stays default so later set moves it.
+  const fallback = await json(master, ['new', '--to', 'unknown', 'Unknown lane first'], opts)
+  expect(fallback.thread.lane).toBe('personal')
+  expect(fallback.entry.set.laneDefault).toBe(true)
+  const laterMoved = await json(master, ['set', fallback.thread.key, '--assignee', 'worker'], opts)
+  expect(laterMoved.thread.lane).toBe('agent-board')
+
+  // 9. Pre-existing thread created without laneDefault (e.g. direct createThread without flag) is untouched.
+  const db = openDb({ create: false })
+  assert.ok(db)
+  let legacyKey = ''
+  try {
+    const { createThread } = await import('../../src/adapters/work-thread-store.ts')
+    legacyKey = db.write('test', tx =>
+      createThread(tx, { lane: 'personal', title: 'Legacy thread', status: 'next', author: master, at: NOW }),
+    ).head.key
+  } finally {
+    db.close()
+  }
+  const legacyAfter = await json(master, ['set', legacyKey, '--assignee', 'worker'], opts)
+  expect(legacyAfter.thread.lane).toBe('personal')
+})

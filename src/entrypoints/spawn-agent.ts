@@ -126,6 +126,8 @@ async function startHere(
           : { claude: claudeCommand(launch.claude, launch.args) }),
     log: msg => console.error(`spawn-agent: ${msg}`),
     profiles: loadProfiles({ home }),
+    categories: cfg.categories,
+    launcherChild,
     env: process.env,
     home,
     ticketNames: launch.linkedWorkspaces === true,

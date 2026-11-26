@@ -421,3 +421,59 @@ test('--trust with another agent, a board with a launcher of its own, a hidden p
   assert.deepEqual(r.ours, r.main)
   assert.deepEqual(stale.requests, ['GET /api/board', 'POST /api/launch'])
 }, 60_000)
+
+test('with nodes: --lane overrides folder and caller; folder match wins over caller; unmatched folder inherits caller lane (#903)', async () => {
+  const queued = (who: Record<string, unknown>, extraCfg: Record<string, unknown> = {}) =>
+    fakeBoard({
+      payload: (_polls, posted) =>
+        posted
+          ? {
+              items: [who],
+              launches: [
+                own({ state: 'queued', place: { wait: { device: 'server-1', kind: 'sessions', busy: 3, max: 3 } } }),
+              ],
+            }
+          : { items: [who], launches: [] },
+      ...extraCfg,
+    })
+
+  // 1. Unmatched folder inherits caller's lane.
+  const b1 = queued({ ...caller, category: 'agent-board', categorySet: true })
+  const s1 = await startBox({ port: b1.port, nodes: {} })
+  const r1 = await runSpawn(s1.box, ['--name', 'Worker', '--cwd', s1.dir, '--workspace', 'wA'])
+  assert.equal(r1.code, 0, r1.stderr)
+  assert.equal(b1.posted()?.category, 'agent-board')
+
+  // 2. Folder category match wins over caller's lane.
+  const b2 = queued({ ...caller, category: 'personal', categorySet: true })
+  const s2 = await startBox({ port: b2.port, nodes: {} })
+  boardConfig(s2.box, {
+    language: 'en',
+    port: b2.port,
+    nodes: {},
+    categories: [{ id: 'acme', title: 'Acme', color: 'blue', paths: [s2.dir] }],
+  })
+  const r2 = await runSpawn(s2.box, ['--name', 'Worker', '--cwd', s2.dir, '--workspace', 'wA'])
+  assert.equal(r2.code, 0, r2.stderr)
+  assert.equal(b2.posted()?.category, 'acme')
+
+  // 3. Explicit --lane wins over both folder match and caller.
+  const b3 = queued({ ...caller, category: 'personal', categorySet: true })
+  const s3 = await startBox({ port: b3.port, nodes: {} })
+  boardConfig(s3.box, {
+    language: 'en',
+    port: b3.port,
+    nodes: {},
+    categories: [{ id: 'acme', title: 'Acme', color: 'blue', paths: [s3.dir] }],
+  })
+  const r3 = await runSpawn(s3.box, ['--name', 'Worker', '--cwd', s3.dir, '--workspace', 'wA', '--lane', 'agent-board'])
+  assert.equal(r3.code, 0, r3.stderr)
+  assert.equal(b3.posted()?.category, 'agent-board')
+
+  // 4. Caller in fallback `other` (categorySet: false, unmatched cwd) does not pass `category: 'other'`.
+  const b4 = queued({ ...caller, category: 'other', categorySet: false, cwd: '/tmp/unmatched' })
+  const s4 = await startBox({ port: b4.port, nodes: {} })
+  const r4 = await runSpawn(s4.box, ['--name', 'Worker', '--cwd', s4.dir, '--workspace', 'wA'])
+  assert.equal(r4.code, 0, r4.stderr)
+  assert.equal(b4.posted()?.category, undefined)
+}, 60_000)

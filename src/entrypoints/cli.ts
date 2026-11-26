@@ -193,7 +193,7 @@ import { peekAgySleepers, peekPiSleepers, wakeCodexFile } from '../adapters/wake
 import { AGY_AGENT, isAgyItem } from '../core/agy.ts'
 import { formatListLines } from '../core/board-list.ts'
 import { withBoardPaths } from '../core/board-paths.ts'
-import { categoryFor, categoryInfo } from '../core/categories.ts'
+import { categoryFor, categoryInfo, itemLane } from '../core/categories.ts'
 import { CODEX_AGENT, isCodexItem, isCodexSession } from '../core/codex.ts'
 import { DECISION_FLAGS, type DecisionView, decisionsConfig, masterHeld, orderQueue } from '../core/decisions.ts'
 import { switchedOff } from '../core/feature-switch.ts'
@@ -3552,6 +3552,7 @@ async function threadContext(c: typeof cfg = cfg): Promise<ThreadCmdContext> {
   const lane = key ? (typeof card?.category === 'string' && card.category) || categoryFor(c, cwd) || null : null
   // Fetched at most once when `nodes` is on, never when `nodes` is off.
   let boardPayload: Promise<Record<string, unknown> | null> | null = null
+  const foundLanes = new Map<string, string | null>()
   return {
     cfg: c,
     actor: key ? { kind: 'session', key, name } : { kind: 'owner' },
@@ -3579,8 +3580,10 @@ async function threadContext(c: typeof cfg = cfg): Promise<ThreadCmdContext> {
             `"${word}" names ${items.length} sessions (${items.map(i => i.pane || i.key).join(', ')}): give its pane`,
           )
         const [item] = items
-        if (item)
+        if (item) {
+          foundLanes.set(item.key, itemLane(item, c))
           return { kind: 'session' as const, key: item.key, name: item.name || item.autoName || item.key.slice(0, 8) }
+        }
         return UUID.test(word) || /^pane-\S+$/.test(word)
           ? { kind: 'session' as const, key: word, name: word.slice(0, 8) }
           : null
@@ -3619,12 +3622,20 @@ async function threadContext(c: typeof cfg = cfg): Promise<ThreadCmdContext> {
         const { ThreadError } = await import('../adapters/work-thread-store.ts')
         throw new ThreadError('ambiguous', hit.error)
       }
-      if (hit) return { kind: 'session', key: hit.target.key, name: hit.target.name }
+      if (hit) {
+        const raw = allItems.find(i => isRecord(i) && i.key === hit.target.key)
+        foundLanes.set(hit.target.key, itemLane(isRecord(raw) ? raw : null, c))
+        return { kind: 'session', key: hit.target.key, name: hit.target.name }
+      }
       if (UUID.test(word) || /^pane-\S+$/.test(word)) return { kind: 'session', key: word, name: word.slice(0, 8) }
       const at = parseNodeKey(word)
       if (at && Object.hasOwn(nodesCfg.devices, at.device) && (UUID.test(at.key) || /^pane-\S+$/.test(at.key)))
         return { kind: 'session', key: word, name: at.key.slice(0, 8) }
       return null
+    },
+    sessionLane: async key => {
+      if (foundLanes.has(key)) return foundLanes.get(key) ?? null
+      return itemLane({ category: readCard(key)?.category, categorySet: true })
     },
     sessionByKey: async word => {
       const item = (await sessions()).find(i => i.key === word || i.session === word)

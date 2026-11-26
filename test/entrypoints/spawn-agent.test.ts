@@ -1995,3 +1995,109 @@ try {
     false,
   )
 }, 60_000)
+
+test('spawn-agent inherits spawner lane when folder matches no category, respects folder match and --lane, and leaves plain/resume alone (#903)', async () => {
+  const CALLER = '7c9e6679-7425-40de-944b-e07fc1f90ae7'
+  const runIn = async (box: Sandbox, cwd: string, args: string[], extra: Record<string, string> = {}) => {
+    const proc = Bun.spawn([process.execPath, SPAWN, ...args], {
+      cwd,
+      env: { ...box.env, ...PACED, ...extra },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+    return { code: await proc.exited, stdout, stderr }
+  }
+  const spawnedCard = (box: Sandbox) => {
+    const paneRun = box
+      .calls()
+      .map(c => c.join(' '))
+      .find(c => c.startsWith('pane run wA:p9 '))
+    const m = /--session-id ([0-9a-f-]{36})/.exec(paneRun ?? '')
+    return { paneRun, sid: m?.[1] ?? null, card: m?.[1] ? cardOf(box, m[1]) : null }
+  }
+
+  // 1. Caller card category inherited when target folder matches no configured category.
+  const b1 = await profileBox()
+  const unmatched1 = join(b1.box.dir, 'unmatched-1')
+  mkdirSync(unmatched1, { recursive: true })
+  mkdirSync(b1.box.cards, { recursive: true })
+  writeFileSync(join(b1.box.cards, `${CALLER}.json`), JSON.stringify({ key: CALLER, category: 'agent-board' }))
+  const r1 = await runSpawn(b1.box, ['--name', 'Worker', '--cwd', unmatched1, '--workspace', 'wA'], {
+    CLAUDE_CODE_SESSION_ID: CALLER,
+  })
+  assert.equal(r1.code, 0, r1.stderr)
+  expect(spawnedCard(b1.box).card).toMatchObject({ category: 'agent-board', parent: CALLER })
+
+  // 2. Caller without card.category inherits lane from caller's own folder when target folder is unmatched.
+  const b2 = await profileBox()
+  const callerFolder = join(b2.box.dir, 'caller-atlas')
+  const unmatched2 = join(b2.box.dir, 'unmatched-2')
+  mkdirSync(callerFolder, { recursive: true })
+  mkdirSync(unmatched2, { recursive: true })
+  boardConfig(b2.box, {
+    language: 'en',
+    categories: [{ id: 'atlas', title: 'Atlas', color: 'blue', paths: [callerFolder] }],
+  })
+  const r2 = await runIn(b2.box, callerFolder, ['--name', 'Worker', '--cwd', unmatched2, '--workspace', 'wA'], {
+    CLAUDE_CODE_SESSION_ID: CALLER,
+  })
+  assert.equal(r2.code, 0, r2.stderr)
+  expect(spawnedCard(b2.box).card).toMatchObject({ category: 'atlas', parent: CALLER })
+
+  // 3. Explicit folder category match wins over caller's lane (does not force inherited lane).
+  const b3 = await profileBox()
+  const matched3 = join(b3.box.dir, 'matched-acme')
+  mkdirSync(matched3, { recursive: true })
+  mkdirSync(b3.box.cards, { recursive: true })
+  writeFileSync(join(b3.box.cards, `${CALLER}.json`), JSON.stringify({ key: CALLER, category: 'personal' }))
+  boardConfig(b3.box, {
+    language: 'en',
+    categories: [{ id: 'acme', title: 'Acme', color: 'blue', paths: [matched3] }],
+  })
+  const r3 = await runSpawn(b3.box, ['--name', 'Worker', '--cwd', matched3, '--workspace', 'wA'], {
+    CLAUDE_CODE_SESSION_ID: CALLER,
+  })
+  assert.equal(r3.code, 0, r3.stderr)
+  expect(spawnedCard(b3.box).card?.category).toBeUndefined()
+
+  // 4. --lane overrides both explicit folder category match and caller's lane.
+  const b4 = await profileBox()
+  const matched4 = join(b4.box.dir, 'matched-acme-4')
+  mkdirSync(matched4, { recursive: true })
+  mkdirSync(b4.box.cards, { recursive: true })
+  writeFileSync(join(b4.box.cards, `${CALLER}.json`), JSON.stringify({ key: CALLER, category: 'personal' }))
+  boardConfig(b4.box, {
+    language: 'en',
+    categories: [{ id: 'acme', title: 'Acme', color: 'blue', paths: [matched4] }],
+  })
+  const r4 = await runSpawn(
+    b4.box,
+    ['--name', 'Worker', '--cwd', matched4, '--workspace', 'wA', '--lane', 'agent-board'],
+    { CLAUDE_CODE_SESSION_ID: CALLER },
+  )
+  assert.equal(r4.code, 0, r4.stderr)
+  expect(spawnedCard(b4.box).card).toMatchObject({ category: 'agent-board', parent: CALLER })
+
+  // 5. Unaffected setups: no caller / no --lane leaves command without --session-id; --resume keeps existing lane.
+  const b5 = await profileBox()
+  const plainDir = join(b5.box.dir, 'plain-dir')
+  mkdirSync(plainDir, { recursive: true })
+  const r5 = await runSpawn(b5.box, ['--name', 'Plain', '--cwd', plainDir, '--workspace', 'wA'])
+  assert.equal(r5.code, 0, r5.stderr)
+  assert.equal(spawnedCard(b5.box).paneRun, 'pane run wA:p9 claude')
+  assert.equal(existsSync(b5.box.cards), false)
+
+  const b6 = await profileBox()
+  const resumeDir = join(b6.box.dir, 'resume-dir')
+  mkdirSync(resumeDir, { recursive: true })
+  transcript(join(b6.box.env.HOME as string, '.claude'), resumeDir)
+  mkdirSync(b6.box.cards, { recursive: true })
+  writeFileSync(join(b6.box.cards, `${CALLER}.json`), JSON.stringify({ key: CALLER, category: 'personal' }))
+  writeFileSync(join(b6.box.cards, `${SID}.json`), JSON.stringify({ key: SID, category: 'acme' }))
+  const r6 = await runSpawn(b6.box, ['--name', 'Resumed', '--cwd', resumeDir, '--workspace', 'wA', '--resume', SID], {
+    CLAUDE_CODE_SESSION_ID: CALLER,
+  })
+  assert.equal(r6.code, 0, r6.stderr)
+  expect(cardOf(b6.box, SID)).toMatchObject({ key: SID, category: 'acme' })
+}, 60_000)

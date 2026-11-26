@@ -674,6 +674,8 @@ export function createThread(
     ref?: string
     /** It asks for verification from the start (#492); `lane`: because its lane is in verify.lanes. */
     verify?: { on: true; lane: boolean }
+    /** Lane was only the creator's default (not given by --lane or --to) (#903). */
+    laneDefault?: boolean
   },
 ): { head: ThreadHead; entry: ThreadEntry } {
   const id = input.id ?? randomUUID()
@@ -701,6 +703,7 @@ export function createThread(
     title: input.title,
     status: input.status,
     lane: input.lane,
+    ...(input.laneDefault && { laneDefault: true as const }),
     ...(input.assignee && { assignee: input.assignee }),
     ...(input.parent && { parent: input.parent }),
     ...(input.summary && { summary: input.summary }),

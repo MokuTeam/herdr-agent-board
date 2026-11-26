@@ -16,6 +16,7 @@
 import { hostname } from 'node:os'
 import { isRecord } from '../../adapters/json-store.ts'
 import { pause } from '../../adapters/pacing.ts'
+import { categoryFor, resolveSpawnLane } from '../../core/categories.ts'
 import { parentProfile } from '../../core/item-profile.ts'
 import { t } from '../../core/lang.ts'
 import { type Followed, outcomeOf } from '../../core/launch/spawn-board.ts'
@@ -142,13 +143,18 @@ export async function spawnFrom(
     who.item && (nodeProfile || (profile !== undefined && parentProfile(who.item, set.list)?.id === profile))
       ? who.key
       : undefined
+  const category = resolveSpawnLane({
+    explicit: req.lane,
+    folderLane: categoryFor(d.cfg, req.cwd),
+    callerLane: who.lane,
+  })
   const body = {
     name: req.name,
     cwd: req.cwd,
     ...(req.label?.trim() && { label: req.label.trim() }),
     message: req.message,
     workspace,
-    ...(who.lane && { category: who.lane }),
+    ...(category && { category }),
     ...(profile !== undefined && { profile }),
     ...(parent && { parent }),
     ...(req.model && { model: req.model }),

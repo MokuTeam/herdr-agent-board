@@ -55,6 +55,7 @@ import {
 import { type Env, inheritedProfileDir, loadProfiles } from '../../adapters/profiles.ts'
 import { AGY_AGENT } from '../../core/agy.ts'
 import { isSidebarPane } from '../../core/board-pane.ts'
+import { categoryFor } from '../../core/categories.ts'
 import { CODEX_AGENT, CODEX_NAMING, codexHooksReview, codexInputReady, codexPromptAt } from '../../core/codex.ts'
 import {
   agyTrustDialog,
@@ -87,6 +88,7 @@ import {
   spawnEnv,
 } from '../../core/profiles.ts'
 import { scrub } from '../../core/secrets.ts'
+import type { Card, Category } from '../../core/types.ts'
 import { agyCallerOf, codexCallerOf } from '../own-session.ts'
 import { renameLeft, screenNow } from './prompt.ts'
 
@@ -349,7 +351,13 @@ function callerParent(env: Env): string {
  * the start gave it: the lane, profile and model from the start go on that card, and the card
  * written under the start id goes when it holds nothing else.
  */
-function moveStartCard(carded: string, target: string, profile: string | undefined, model: string | undefined): void {
+function moveStartCard(
+  carded: string,
+  target: string,
+  profile: string | undefined,
+  model: string | undefined,
+  forceCategory = false,
+): void {
   const prior = readCard(carded)
   const category = typeof prior?.category === 'string' && prior.category ? prior.category : undefined
   const profileWant =
@@ -358,7 +366,7 @@ function moveStartCard(carded: string, target: string, profile: string | undefin
   const parent = typeof prior?.parent === 'string' && prior.parent ? prior.parent : undefined
   const existing = readCard(target)
   const patch = {
-    ...(category && !existing?.category && { category }),
+    ...(category && (forceCategory || !existing?.category) && { category }),
     ...(profileWant && { profileWant }),
     ...(modelWant && { modelWant }),
     ...(parent && !existing?.parent && { parent }),
@@ -388,6 +396,9 @@ export async function spawnAgent(
     codexHome = null,
     log = () => {},
     profiles,
+    categories,
+    callerCwd,
+    launcherChild = false,
     env = process.env,
     home = homedir(),
     ticketNames = false,
@@ -404,6 +415,12 @@ export async function spawnAgent(
     codexHome?: string | null
     log?: (text: string) => void
     profiles?: Profile[]
+    /** Configured categories from config.json (#903): used to check whether `--cwd` matches a lane. */
+    categories?: readonly Category[]
+    /** Tests: the spawning session's folder when its card has no explicit category. */
+    callerCwd?: string
+    /** True when started by the board's own launcher (the launcher already set the card's lane). */
+    launcherChild?: boolean
     env?: Env
     home?: string
     /** The setup's ticket convention: 14404 -> case-14404. */
@@ -471,9 +488,28 @@ export async function spawnAgent(
       `launch.claude picks its own session (${program.join(' ')}), so --thread cannot tell which session to give ${o.thread}`,
     )
   // A fork is a new session: its id is the one given, else one of its own, so its card is known.
-  // So is a start on a model of its own, whose card says so; not one whose line picks its session, and not agy (no --session-id flag).
+  // So is a start on a model or lane of its own, whose card says so; not one whose line picks its session, and not agy (no --session-id flag).
   // Codex picks its own id: none is given.
-  const ownId = !isAgy && !isCodex && (!!o.fork || (!!o.model && !o.resume && !choosesSession(program)))
+  const boards = o.keepEnv || o.configDir !== undefined
+  const isBoardChild = boards || launcherChild
+  const folderLane = categories?.length ? categoryFor({ categories }, cwd) : null
+  let callerLane: string | null = null
+  if (!o.lane && !folderLane && !isBoardChild && !o.resume) {
+    const caller = callerParent(env)
+    if (caller) {
+      const cat = readCard(caller)?.category
+      if (typeof cat === 'string' && cat.trim()) callerLane = cat.trim().toLowerCase()
+      else if (env.PI_CODING_AGENT && env.HERDR_PANE_ID) {
+        const p = await paneInfo(env.HERDR_PANE_ID, 5000).catch(() => null)
+        const piCat = p?.session ? readCard(p.session)?.category : undefined
+        if (typeof piCat === 'string' && piCat.trim()) callerLane = piCat.trim().toLowerCase()
+      }
+      if (!callerLane && categories?.length) callerLane = categoryFor({ categories }, callerCwd ?? process.cwd())
+    }
+  }
+  const cardCategory = o.lane ?? (!isBoardChild && !o.resume && !folderLane && callerLane ? callerLane : undefined)
+  const ownId =
+    !isAgy && !isCodex && (!!o.fork || ((!!o.model || !!cardCategory) && !o.resume && !choosesSession(program)))
   const sessionId = ownId ? (o.sessionId ?? randomUUID()) : isAgy ? undefined : o.sessionId
   // The model goes after the profile's arguments: of two --model, Claude, pi and agy take the last.
   // Codex: the pane's env must reach the session (adapters/codex-flags.ts).
@@ -546,15 +582,17 @@ export async function spawnAgent(
   }
   // The profile it is meant to be in, for the board to check against the one its hooks report: a
   // start that leaves the env as herdr makes it too, as herdr's env may point elsewhere; a resume too.
-  const boards = o.keepEnv || o.configDir !== undefined
   const parent = !boards && !o.resume && !o.fork ? callerParent(env) : ''
   const service = isOwnerServiceKey(parent) ? ownerServices().find(s => s.key === parent) : undefined
   const by = service && ownerServiceBy(service.name)
   const carded = sessionId ?? o.sessionId ?? o.resume
   // A fork's card says whose fork it is, and since when: its copied lines are older (core/links.ts).
-  // The model it starts on, when one was asked for; and the caller that started it, if any.
-  if (carded && (profile || o.model || parent))
+  // The model and lane it starts with, when asked for or inherited; and the caller that started it, if any.
+  const writeCategory =
+    cardCategory && (o.lane || (carded ? !readCard(carded)?.category : false)) ? cardCategory : undefined
+  if (carded && (profile || o.model || parent || writeCategory))
     writeCard(carded, {
+      ...(writeCategory && { category: writeCategory }),
       ...(profile && { profileWant: profile.id }),
       ...(o.model && { modelWant: o.model }),
       ...(o.fork && forkCard(o.fork)),
@@ -628,18 +666,28 @@ export async function spawnAgent(
     }
     throw err
   }
-  if (kind === PI_AGENT && carded && isPiSessionFile(session)) moveStartCard(carded, session, profile?.id, o.model)
+  if (kind === PI_AGENT && carded && isPiSessionFile(session))
+    moveStartCard(carded, session, profile?.id, o.model, !!o.lane)
   // agy has no pre-assigned --session-id: move the start card's lane, profile and model (or save
-  // --model alone) onto its conversation card once ready without pinning card.name, so herdr agent
-  // rename and /rename keep working (#650, #663).
-  if (kind === AGY_AGENT && !o.resume && session) {
-    if (carded && carded !== session) moveStartCard(carded, session, profile?.id, o.model)
-    else if (o.model) writeCard(session, { modelWant: o.model })
+  // --model / lane) onto its conversation card once ready without pinning card.name, so herdr agent
+  // rename and /rename keep working (#650, #663, #903).
+  if (kind === AGY_AGENT && session) {
+    if (!o.resume && carded && carded !== session) moveStartCard(carded, session, profile?.id, o.model, !!o.lane)
+    else if (!o.resume && (o.model || cardCategory)) {
+      const cat = cardCategory && (o.lane || !readCard(session)?.category) ? cardCategory : undefined
+      if (o.model || cat) writeCard(session, { ...(o.model && { modelWant: o.model }), ...(cat && { category: cat }) })
+    } else if (o.resume && o.lane) writeCard(session, { category: o.lane })
   }
-  if (parent) {
+  if (parent || cardCategory) {
     const finalKey = session || `pane-${pane}`
-    if (finalKey !== carded && (!readCard(finalKey)?.parent || by))
-      writeCard(finalKey, { parent, ...(by && { serviceStartBy: by }) })
+    if (finalKey !== carded) {
+      const existing = readCard(finalKey)
+      const patch: Partial<Card> = {
+        ...(parent && (!existing?.parent || by) && { parent, ...(by && { serviceStartBy: by }) }),
+        ...(cardCategory && !(isCodex && text) && (o.lane || !existing?.category) && { category: cardCategory }),
+      }
+      if (Object.keys(patch).length) writeCard(finalKey, patch)
+    }
   }
 
   const agent = await nameInHerdr(pane, o.name, ticketNames)
@@ -731,7 +779,7 @@ export async function spawnAgent(
         `The brief did not reach ${naming.title} in ${pane}. Send it by hand: herdr agent prompt ${pane} "<brief>"`,
       )
   }
-  if (isCodex && o.model && text) await cardCodex(pane, o.model)
+  if (isCodex && (o.model || cardCategory) && text) await cardCodex(pane, o.model, cardCategory, !!o.lane)
   return { pane, name: o.name, agent, kind, session }
 }
 
@@ -797,11 +845,17 @@ async function checkEffort(model: string | undefined, effort: string): Promise<v
  * The card of a Codex session started on a model of its own: keyed by the id herdr reports, which
  * Codex has only after its first prompt, so after the brief. Never a reason to fail a start that works.
  */
-async function cardCodex(pane: string, model: string): Promise<void> {
+async function cardCodex(
+  pane: string,
+  model: string | undefined,
+  category: string | undefined,
+  forceCategory: boolean,
+): Promise<void> {
   for (let i = 0; i < 20; i++) {
     const { session } = await paneInfo(pane, 5000).catch(() => ({ session: null }))
     if (session) {
-      writeCard(session, { modelWant: model })
+      const cat = category && (forceCategory || !readCard(session)?.category) ? category : undefined
+      if (model || cat) writeCard(session, { ...(model && { modelWant: model }), ...(cat && { category: cat }) })
       return
     }
     await pause(500)

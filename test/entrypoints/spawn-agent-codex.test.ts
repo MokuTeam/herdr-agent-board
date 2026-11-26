@@ -510,3 +510,41 @@ test('a brief that was dropped is typed again; one on screen, or typed and waiti
   expect(briefsOf(waiting.box)).toHaveLength(1)
   expect(waiting.box.calls().some(a => a.join(' ').startsWith('pane send-keys wA:p9 enter'))).toBe(true)
 }, 90_000)
+
+test('spawn-agent --agent codex inherits caller lane when unmatched and respects --lane (#903)', async () => {
+  const CALLER = '7c9e6679-7425-40de-944b-e07fc1f90ae7'
+  const b1 = await codexBox()
+  mkdirSync(b1.box.cards, { recursive: true })
+  writeFileSync(join(b1.box.cards, `${CALLER}.json`), JSON.stringify({ key: CALLER, category: 'agent-board' }))
+  const r1 = await runSpawn(
+    b1.box,
+    ['--name', 'Acme invoices', '--cwd', b1.dir, '--workspace', 'wA', '--agent', 'codex', '--brief', 'Go.'],
+    { CLAUDE_CODE_SESSION_ID: CALLER },
+  )
+  assert.equal(r1.code, 0, r1.stderr)
+  expect(cardOf(b1.box, SID)).toMatchObject({ key: SID, category: 'agent-board' })
+  expect(cardOf(b1.box, 'pane-wA_p9')).toMatchObject({ parent: CALLER })
+
+  const b2 = await codexBox()
+  boardConfig(b2.box, { categories: [{ id: 'acme', title: 'Acme', color: 'blue', paths: [b2.dir] }] })
+  const r2 = await runSpawn(
+    b2.box,
+    [
+      '--name',
+      'Acme invoices',
+      '--cwd',
+      b2.dir,
+      '--workspace',
+      'wA',
+      '--agent',
+      'codex',
+      '--lane',
+      'agent-board',
+      '--brief',
+      'Go.',
+    ],
+    { CLAUDE_CODE_SESSION_ID: CALLER },
+  )
+  assert.equal(r2.code, 0, r2.stderr)
+  expect(cardOf(b2.box, SID)).toMatchObject({ key: SID, category: 'agent-board' })
+}, 60_000)

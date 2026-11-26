@@ -7,6 +7,7 @@ import { cachedCodexModels } from '../../adapters/codex-home.ts'
 import { resolvePath } from '../../adapters/files.ts'
 import { SLOW, statOf } from '../../adapters/folders.ts'
 import { isRecord } from '../../adapters/json-store.ts'
+import { LANE_ID } from '../../core/categories.ts'
 import { CODEX_AGENT } from '../../core/codex.ts'
 import { t } from '../../core/lang.ts'
 import {
@@ -27,7 +28,6 @@ import type { Item, Vars } from '../../core/types.ts'
 
 const MESSAGE_MAX = 20_000
 const WORKSPACE_ID = /^[A-Za-z0-9][\w:-]{0,39}$/
-const CATEGORY_ID = /^[a-z0-9][a-z0-9_-]{0,31}$/
 
 /** A workspace name herdr takes as a value: no control characters, no leading dash. */
 const workspaceName = (s: string, max: number): boolean =>
@@ -196,7 +196,7 @@ export async function checkRequest(
   }
   // A lane the board has (configured, or one an agent made), or "other" when none was given.
   const category = String(b.category ?? '') || 'other'
-  if (!CATEGORY_ID.test(category) || (categories && category !== 'other' && !categories.has(category)))
+  if (!LANE_ID.test(category) || (categories && category !== 'other' && !categories.has(category)))
     return fail('category', 'launch.err.category', { id: category })
   const ws = isRecord(b.workspace) ? b.workspace : {}
   let workspaceId = ''
