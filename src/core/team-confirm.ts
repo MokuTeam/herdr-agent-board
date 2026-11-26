@@ -95,6 +95,16 @@ export const unlocks = (a: OwnerAction): boolean =>
 /** The origin of the confirmation window. */
 export const confirmOrigin = (port: number): string => `http://localhost:${port}`
 
+/**
+ * Whether `origin` is a board page on localhost, whatever its port (#887): a node's own page, whose
+ * confirmation of its master's action the master takes through the relay. RP ID `localhost` has no
+ * port, so a passkey made on one machine's board signs on another's in the same browser.
+ */
+export function loopbackOrigin(origin: string): boolean {
+  const m = /^http:\/\/localhost:([1-9]\d{0,4})$/.exec(origin)
+  return !!m && Number(m[1]) <= 65535
+}
+
 /** Where the panel opens the confirmation of `id`: the board's own page, on localhost. */
 export const confirmUrl = (port: number, id: string): string => `${confirmOrigin(port)}/?confirm=${id}`
 

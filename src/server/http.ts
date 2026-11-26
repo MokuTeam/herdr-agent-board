@@ -42,6 +42,12 @@ export interface RouteContext {
   remote: boolean
   /** The device whose board relayed this request up to this master (#764), as the relay names it; unset for any other. */
   relayFrom?: string
+  /**
+   * The owner on node `relayFrom` asked for this master's own settings (#887, core/master-relay.ts
+   * MASTER_SCOPE): the routes kept for this computer's loopback answer it, and its passkey window is
+   * on the node's page.
+   */
+  masterScope?: true
 }
 
 /** Answers, or returns undefined to let the next route in the table answer. */
@@ -77,6 +83,8 @@ export interface GuardState {
   remote?: boolean
   /** A node's relayed request (server/app.ts replayRelayed): the device that sent it. */
   relayFrom?: string
+  /** Settings → The whole board from that node's page (#887). */
+  masterScope?: true
 }
 
 const JSON_HEADERS = { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }
@@ -190,6 +198,7 @@ export async function dispatch(
       ownFile: target => !!state.ownFiles?.(target),
       remote: state.remote === true,
       ...(state.relayFrom && { relayFrom: state.relayFrom }),
+      ...(state.relayFrom && state.masterScope && { masterScope: true as const }),
     }
     for (const guard of route.guard ?? []) {
       const refused = ctx.refuse(guard)

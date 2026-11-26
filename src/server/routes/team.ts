@@ -1218,8 +1218,10 @@ function confirmRoutes(
       handle(_req, ctx) {
         if (!team.view() && !ownerConfirmationOpen?.()) return undefined
         const id = ctx.params[0] ?? ''
-        if (!confirm.safe()) return json(503, { ok: false, error: 'loopback' })
-        const v = ID.test(id) ? confirm.view(id) : null
+        // A node's window (#887) is on the node's localhost: this board's [::1] is not on its way.
+        const via = ctx.masterScope ? ctx.relayFrom : undefined
+        if (via === undefined && !confirm.safe()) return json(503, { ok: false, error: 'loopback' })
+        const v = ID.test(id) ? confirm.view(id, via) : null
         if (v === null) return json(404, { ok: false, error: 'gone' })
         if (v === 'passkey') return json(403, { ok: false, error: 'passkey' })
         return json(200, { action: describe(v.action), step: v.step, options: v.options })
@@ -1234,12 +1236,15 @@ function confirmRoutes(
         if (refused) return refused
         const id = ctx.params[0] ?? ''
         if (!ID.test(id)) return json(404, { ok: false, error: 'gone' })
+        // A node's window (#887): the node checked its page's Origin before relaying it, and the
+        // passkey's client data names that page (services/team-confirm.ts checks it).
+        const via = ctx.masterScope ? ctx.relayFrom : undefined
         // The window's own origin only: WebAuthn's RP ID is localhost, which a page on 127.0.0.1
         // cannot use; it is told where to go instead.
-        if (req.headers.get('origin') !== confirm.origin())
+        if (via === undefined && req.headers.get('origin') !== confirm.origin())
           return json(403, { ok: false, error: 'origin', confirm: confirm.urlOf(id) })
-        if (!confirm.safe()) return json(503, { ok: false, error: 'loopback' })
-        const a = confirm.answer(id, await ctx.rawBody(), req.headers.get('user-agent'))
+        if (via === undefined && !confirm.safe()) return json(503, { ok: false, error: 'loopback' })
+        const a = confirm.answer(id, await ctx.rawBody(), req.headers.get('user-agent'), via)
         if (!a.ok) return json(a.error === 'gone' ? 404 : 403, a)
         if (!a.done) return json(200, { ok: true, done: false })
         const r = await perform(a.action)

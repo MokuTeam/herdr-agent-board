@@ -14,7 +14,7 @@ import { ThreadsProvider } from './hooks/useThreads.tsx'
 import { I18nProvider } from './i18n/I18nProvider.tsx'
 import { startPace } from './models/pace.ts'
 import { keptLanguage, remotePage } from './models/remote-page.ts'
-import { confirmPage } from './models/team-confirm.ts'
+import { confirmPage, confirmScope } from './models/team-confirm.ts'
 import { startPhoneApp } from './phone-app.ts'
 import { BoardProvider } from './state/BoardProvider.tsx'
 import { PanelProvider } from './state/PanelProvider.tsx'
@@ -34,7 +34,7 @@ if (root && confirming)
   createRoot(root).render(
     <StrictMode>
       <I18nProvider lang={document.documentElement.lang}>
-        <ConfirmScreen id={confirming} />
+        <ConfirmScreen id={confirming} scope={confirmScope()} />
       </I18nProvider>
     </StrictMode>,
   )

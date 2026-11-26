@@ -33,6 +33,8 @@
 //   for the master's own computer (localOnly) only the settings of the features it runs for the
 //   whole mesh (RELAY_OWNER_SETTINGS, #780), each write of them in the master's admin log.
 // - never a Team peer, nor a caller through the node's own remote listeners (403 master-relay-remote).
+// Settings → The whole board (#887) asks for the master's own settings under `/api/master/`
+// (MASTER_SCOPE): the owner's only, those paths only, the passkey's window on the node's own page.
 import { keyedPath } from './node-proxy.ts'
 import { nodeKey, parseNodeKey } from './nodes.ts'
 import { hasUnprintable } from './team.ts'
@@ -115,7 +117,68 @@ export const RELAY_TABLE: readonly RelayEntry[] = [
     method: 'POST',
     path: /^\/api\/ns-sessions\/(?:entry|touch|dead|lock|unlock|forget|notify)$/,
   },
+  // Settings → The whole board on a node's page (#887): the master's own settings under a prefix,
+  // so the node's routes of the same paths stay this computer's (MASTER_SCOPE).
+  {
+    group: 'master',
+    method: 'GET',
+    path: /^\/api\/master\/(?:board|owner-services|team\/confirm\/[\w-]{22})$/,
+    relayOnly: true,
+  },
+  {
+    group: 'master',
+    method: 'POST',
+    path: /^\/api\/master\/(?:settings|todos|owner-services|team\/confirm\/[\w-]{22})$/,
+    relayOnly: true,
+  },
 ]
+
+/**
+ * Settings → The whole board (#887): a node's page asks for its master's own settings under this
+ * prefix, which the node relays as the owner's and the master answers for a relayed owner only.
+ */
+export const MASTER_SCOPE_PREFIX = '/api/master'
+
+/** The passkey's window for the master on a node's page (#887): the node holds it while [::1] is not its own. */
+export const MASTER_CONFIRM_PATH = /^\/api\/master\/team\/confirm\//
+
+/**
+ * The master's paths the prefix reaches (#887), by method: its payload (the values Settings shows),
+ * its Board settings and Tasks, Owner services, and the passkey's window for a node's page. Held to
+ * this list on both sides, so the master never runs another path because a node named it.
+ */
+const MASTER_SCOPE: readonly { method: RelayMethod; path: RegExp }[] = [
+  { method: 'GET', path: /^\/api\/board$/ },
+  { method: 'POST', path: /^\/api\/settings$/ },
+  { method: 'POST', path: /^\/api\/todos$/ },
+  { method: 'GET', path: /^\/api\/owner-services$/ },
+  { method: 'POST', path: /^\/api\/owner-services$/ },
+  { method: 'GET', path: /^\/api\/team\/confirm\/[\w-]{22}$/ },
+  { method: 'POST', path: /^\/api\/team\/confirm\/[\w-]{22}$/ },
+]
+
+/** The master's own path a prefixed one names (#887, its query kept), or null when the prefix does not reach it. */
+export function masterScopePath(method: string, path: string): string | null {
+  const raw = rawPathOf(path)
+  if (!raw.startsWith(`${MASTER_SCOPE_PREFIX}/`)) return null
+  const inner = `/api${raw.slice(MASTER_SCOPE_PREFIX.length)}`
+  if (!MASTER_SCOPE.some(e => e.method === method && e.path.test(inner))) return null
+  return `${inner}${path.slice(raw.length)}`
+}
+
+/**
+ * Whether a body may go with the master's own path (#887): Tasks only as Settings sets them (the
+ * board-wide mode, `op: 'settings'`), never a card's tasks; the other paths take theirs as they are.
+ */
+export function masterScopeBody(innerPath: string, body: string): boolean {
+  if (innerPath !== '/api/todos') return true
+  try {
+    const parsed: unknown = JSON.parse(body)
+    return !!parsed && typeof parsed === 'object' && (parsed as { op?: unknown }).op === 'settings'
+  } catch {
+    return false
+  }
+}
 
 /** The decisions' path (#781), whose session keys the master reads as the node's own (relayedDecisions). */
 export const DECISIONS_PATH = '/api/decisions'

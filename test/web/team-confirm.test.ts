@@ -12,6 +12,8 @@ import {
   type ConfirmDeps,
   confirmed,
   confirmPage,
+  confirmPath,
+  confirmScope,
   confirmWaiting,
   forgetUnlock,
   ownerPost,
@@ -272,4 +274,22 @@ test('#377 a 428 held from away opens no window, whatever its address, and is th
     reply: { error: 'confirm', where: 'computer' },
   })
   expect(f.opened).toEqual([])
+})
+
+test("the master's action for a node's page (#887): the window opens on this page's own localhost, scoped to the master", async () => {
+  const f = fake([[428, { ok: false, error: 'confirm', id: ID, scope: 'master' }]])
+  const asked = ownerPost('/api/master/owner-services', { op: 'passkey' }, f.deps)
+  await settle()
+  expect(f.opened).toEqual([`${LOCAL}/?confirm=${ID}&scope=master`])
+  f.message(LOCAL, { type: CONFIRMED, id: ID, status: 200, reply: { ok: true, done: true } })
+  expect(await asked).toEqual({ ok: true, done: true })
+  // An id of another shape opens nothing.
+  const odd = fake([[428, { ok: false, error: 'confirm', id: '../x', scope: 'master' }]])
+  await expect(ownerPost('/api/master/owner-services', { op: 'passkey' }, odd.deps)).rejects.toBeInstanceOf(ApiError)
+  expect(odd.opened).toEqual([])
+  // The window reads and answers through the relay; this board's own as before.
+  expect(confirmScope({ search: `?confirm=${ID}&scope=master` })).toBe('master')
+  expect(confirmScope({ search: `?confirm=${ID}` })).toBeNull()
+  expect(confirmPath(ID, 'master')).toBe(`/api/master/team/confirm/${ID}`)
+  expect(confirmPath(ID)).toBe(`/api/team/confirm/${ID}`)
 })

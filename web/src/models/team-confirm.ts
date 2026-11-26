@@ -7,6 +7,12 @@
 //
 // The window's side: confirmPage() says whether this page is one (main.tsx then draws
 // ConfirmScreen instead of the board), and confirmed() tells the page that opened it.
+//
+// Settings → The whole board on a node's page (#887): the master holds the action back for this
+// node (428 with `scope: 'master'`), and the window opens here, on this board's own localhost, with
+// `&scope=master`: it reads and answers the master's confirmation through the relay
+// (/api/master/team/confirm/<id>). RP ID `localhost` has no port, so the same passkey signs.
+import { MASTER_SCOPE_PREFIX } from '../../../src/core/master-relay.ts'
 import { ApiError, isReply, type Reply, replyOf } from '../api/client.ts'
 
 /** What the window posts to the page that opened it. */
@@ -107,14 +113,17 @@ export async function ownerPost(path: string, body: unknown, deps: ConfirmDeps =
   const url = r.reply.confirm
   const id = r.reply.id
   // Held from away (#377: the owner's phone), it waits for the owner at the computer: no window here.
+  // Held by the master for this node's page (#887): its window here, on this board's localhost.
+  const scoped = r.status === 428 && r.reply.scope === 'master' && typeof id === 'string' && ID.test(id)
   if (
-    r.status === 428 &&
-    r.reply.where !== 'computer' &&
-    typeof url === 'string' &&
-    typeof id === 'string' &&
-    url.startsWith(`${deps.windowOrigin()}/`)
+    scoped ||
+    (r.status === 428 &&
+      r.reply.where !== 'computer' &&
+      typeof url === 'string' &&
+      typeof id === 'string' &&
+      url.startsWith(`${deps.windowOrigin()}/`))
   ) {
-    const win = deps.open(url)
+    const win = deps.open(scoped ? `${deps.windowOrigin()}/?confirm=${id}&scope=master` : String(url))
     r = win ? await answerOf(deps, id, win) : { status: 0, reply: { ok: false, error: 'blocked' } }
   }
   if (r.status < 200 || r.status > 299 || r.reply.ok === false) throw new ApiError(r.status, r.reply)
@@ -150,6 +159,14 @@ export function confirmPage(loc: { hostname: string; search: string } = location
   const id = new URLSearchParams(loc.search).get('confirm')
   return id && ID.test(id) ? id : null
 }
+
+/** Whose confirmation the window answers (#887): the master's for a node's page (`&scope=master`), else this board's. */
+export const confirmScope = (loc: { search: string } = location): 'master' | null =>
+  new URLSearchParams(loc.search).get('scope') === 'master' ? 'master' : null
+
+/** Where the window reads and answers confirmation `id`: this board's, or its master's through the relay (#887). */
+export const confirmPath = (id: string, scope: 'master' | null = null): string =>
+  `${scope === 'master' ? MASTER_SCOPE_PREFIX : '/api'}/team/confirm/${id}`
 
 /** Tells the page that opened this window: on the board's own origins only, never another site. */
 export function confirmed(message: Omit<Confirmed, 'type'>, port: string, opener: Window | null = window.opener): void {
