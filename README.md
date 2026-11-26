@@ -3182,7 +3182,7 @@ unmute it what came in meanwhile and is not read counts again.
 board team inbox [--unread] [--json]      # the threads, the latest first, with their unread counts
 board team thread <ref> [--json] [--read] # one thread, a peer's text framed as data from that person
 board team watch [--json] [--every <s>]   # a line per thread with new messages, as they come
-board team wait [--timeout <s>] [--json]  # until a thread this session handles has unread messages
+board team wait [--timeout <s>] [--json]  # until a thread this session handles or was addressed in has unread messages
 board team drafts                         # agents' drafts waiting for you: thread, time, file, why
 board team agents [<name>]                # the agents teammates let you address, as @name.code
 ```
@@ -3341,9 +3341,11 @@ command as that card: the same switches, lanes, limits and holds as any session'
 you share with a person its post goes out as "<you>'s agent Juno" (the card's name, whatever the
 call says); outside it the post waits as a draft. It has no pane to type a reminder into, so nothing
 is scheduled for it: it asks with `team` op `wait` (`board team wait`), which answers as soon as a
-thread it handles (one it started, or one you or the listener assigned to it) has unread messages,
+thread it handles (one it started, or one you or the listener assigned to it) or was addressed in
+by handle (team chat, channel, general or another session's thread, #880) has unread messages,
 or after the timeout (50 s by default, at most 110) that nothing came; it reads one with `thread`
-and `read: true`, which marks it read, and waits again. Through a node's `/mcp` it is the same card:
+and `read: true`, which marks it read, answers an addressed message with `reply` and `to` (`--to`),
+and waits again. Through a node's `/mcp` it is the same card:
 the node's call goes to the master's team as for any node session, and a wait from there is at most
 35 s. Removing it in the panel takes the card away; its threads go back to the listener.
 

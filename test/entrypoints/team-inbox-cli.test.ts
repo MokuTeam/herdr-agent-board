@@ -10,7 +10,7 @@ import { join } from 'node:path'
 import { generateKey, type KeyPair } from '../../src/core/team.ts'
 import type { ThreadRef } from '../../src/core/team-wire.ts'
 import { teamAgents } from '../../src/entrypoints/team-agents-cli.ts'
-import { teamInbox, teamWatch, watchFlags } from '../../src/entrypoints/team-inbox-cli.ts'
+import { teamInbox, teamWait, teamWatch, watchFlags } from '../../src/entrypoints/team-inbox-cli.ts'
 import { type Harness, question, startHarness } from '../hub/harness.ts'
 import { serveBoard } from '../support/board-server.ts'
 import { sandbox } from '../support/sandbox.ts'
@@ -179,4 +179,131 @@ test('#476: inbox and watch read their flags before a lone -- only; a word after
   // a word after the --, --every's number too, is a word left over
   for (const words of [['--', '--json'], ['--every', '5', '--', '--every', '9'], ['--every', '--', '5'], ['x']])
     expect(watchFlags(words)).toBeNull()
+})
+
+test('#880: teamWait wakes on unread addressed threads for self and keeps inbox JSON unchanged', async () => {
+  const peer = 'p'.repeat(43)
+  const mutedId = '6f1c2a4e-8b3d-4c5e-9f7a-1b2c3d4e5f61'
+  const otherId = '6f1c2a4e-8b3d-4c5e-9f7a-1b2c3d4e5f62'
+  const junoMsg = '11111111-1111-4111-8111-111111111111'
+  const paneMsg = '22222222-2222-4222-8222-222222222222'
+  const ownerSvcMsg = '33333333-3333-4333-8333-333333333333'
+  const ownerSvcKey = 'owner-service-11111111-1111-4111-8111-111111111111'
+  const claudeKey = '3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b'
+  const server = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch(req) {
+      const path = new URL(req.url).pathname
+      if (path === '/api/team/agents') return Response.json({ listener: { key: 'sess-listener', name: 'day' } })
+      if (path === '/api/team/unread') {
+        return Response.json({
+          threads: {
+            'team/general': 2,
+            [`team/${mutedId}`]: 1,
+            [`${peer}/${otherId}`]: 1,
+            [`${peer}/general`]: 0,
+          },
+        })
+      }
+      return Response.json({
+        threads: [
+          {
+            key: 'team/general',
+            scope: 'team',
+            id: 'general',
+            title: null,
+            link: null,
+            handler: null,
+            muted: false,
+            lastAt: 4000,
+            peerName: null,
+            addressed: [{ key: 'service-juno', message: junoMsg }],
+          },
+          {
+            key: `team/${mutedId}`,
+            scope: 'team',
+            id: mutedId,
+            title: 'Muted',
+            link: null,
+            handler: null,
+            muted: true,
+            lastAt: 3000,
+            peerName: null,
+            addressed: [{ key: 'service-juno', message: '44444444-4444-4444-8444-444444444444' }],
+          },
+          {
+            key: `${peer}/${otherId}`,
+            scope: peer,
+            id: otherId,
+            title: 'Other handled',
+            link: null,
+            handler: { key: 'other-session', name: 'Other' },
+            muted: false,
+            lastAt: 2000,
+            peerName: 'anna',
+            addressed: [
+              { key: 'pane-w1:p2', message: paneMsg },
+              { key: ownerSvcKey, message: ownerSvcMsg },
+            ],
+          },
+          {
+            key: `${peer}/general`,
+            scope: peer,
+            id: 'general',
+            title: null,
+            link: null,
+            handler: null,
+            muted: false,
+            lastAt: 1000,
+            peerName: 'anna',
+            addressed: [{ key: 'service-juno', message: '55555555-5555-4555-8555-555555555555' }],
+          },
+        ],
+      })
+    },
+  })
+  try {
+    const ctx = { webPort: server.port as number, roster: [{ peer, name: 'anna' }] }
+    const text = await teamWait(ctx, { json: false, timeoutMs: 1000, self: async () => ({ key: 'service-juno' }) })
+    expect(text).toContain('team · team chat · general · 2 unread · addressed to you (msg 11111111)')
+    expect(text).toContain('--to <msg>')
+    expect(text).not.toContain('Muted')
+    expect(text).not.toContain('Other handled')
+
+    const asJson = JSON.parse(
+      await teamWait(ctx, { json: true, timeoutMs: 1000, self: async () => ({ key: 'service-juno' }) }),
+    ) as { threads: Record<string, unknown>[] }
+    expect(asJson.threads).toHaveLength(1)
+    expect(asJson.threads[0]).toMatchObject({ key: 'team/general', addressed: junoMsg })
+
+    // Different session key formats: pane-<id> and owner-service-<uuid> wake; unaddressed Claude UUID does not.
+    const paneJson = JSON.parse(
+      await teamWait(ctx, { json: true, timeoutMs: 1000, self: async () => ({ key: 'pane-w1:p2' }) }),
+    ) as { threads: Record<string, unknown>[] }
+    expect(paneJson.threads).toHaveLength(1)
+    expect(paneJson.threads[0]).toMatchObject({ key: `${peer}/${otherId}`, addressed: paneMsg })
+
+    const ownerSvcJson = JSON.parse(
+      await teamWait(ctx, { json: true, timeoutMs: 1000, self: async () => ({ key: ownerSvcKey }) }),
+    ) as { threads: Record<string, unknown>[] }
+    expect(ownerSvcJson.threads).toHaveLength(1)
+    expect(ownerSvcJson.threads[0]).toMatchObject({ key: `${peer}/${otherId}`, addressed: ownerSvcMsg })
+
+    expect(
+      await teamWait(ctx, {
+        json: false,
+        timeoutMs: 100,
+        everyMs: 10,
+        sleep: async ms => void (await Bun.sleep(ms)),
+        self: async () => ({ key: claudeKey }),
+      }),
+    ).toBe('nothing new in 0 s: wait again')
+
+    // inbox --json keeps its exact fields without leaking addressed.
+    const inboxJson = JSON.parse(await teamInbox(['--json'], ctx)) as { threads: Record<string, unknown>[] }
+    expect(inboxJson.threads[0]).not.toHaveProperty('addressed')
+  } finally {
+    server.stop(true)
+  }
 })
