@@ -7,7 +7,9 @@ import type { DecisionsPayload } from './decisions.ts'
 import { deviceMarkerOf } from './device-marker.ts'
 import { BOARD_SLICE_KEYS } from './master-relay.ts'
 import { decisionsForNode, decisionsSliceOf } from './node-decisions.ts'
+import { nodeKey, parseNodeKey } from './nodes.ts'
 import type { BoardDevice, BoardPayload } from './payload.ts'
+import type { Item } from './types.ts'
 
 /** What devicesForNode reads of a device row: the payload's and GET /api/nodes' rows both have it. */
 type DeviceRow = Pick<BoardDevice, 'id' | 'kind' | 'link' | 'status' | 'selfId' | 'revoked' | 'update' | 'held'>
@@ -26,7 +28,16 @@ export type BoardSlices = Partial<
    * the node names them (#784, core/node-decisions.ts): only in the answer to a node (withNodeDecisions).
    */
   decisions?: DecisionsPayload
+  /**
+   * The other machines' sessions as the asking node names them (#904, itemsForNode): the master's
+   * own under its id, the other nodes' as the master has them; never the node's own. Only in the
+   * answer to a node.
+   */
+  items?: Item[]
 }
+
+/** More than this many sessions from the master are not one answer (a payload holds far fewer). */
+const ITEMS_MAX = 2000
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 
@@ -51,7 +62,53 @@ export function boardSlicesOf(raw: unknown): BoardSlices | null {
   const out = slicesOf(raw.slices as Partial<BoardPayload>)
   // A master since #784 gives the node's part of its decisions; an older one none (the node's own stay).
   const decisions = raw.slices.decisions === undefined ? null : decisionsSliceOf(raw.slices.decisions)
-  return decisions ? { ...out, decisions } : out
+  // A master since #904 gives the other machines' sessions; an older one none (the node shows its own).
+  const items = nodeItemsOf(raw.slices.items)
+  return { ...out, ...(decisions && { decisions }), ...(items && { items }) }
+}
+
+/** The other machines' sessions as a master's answer carries them: each keyed by its machine, or none at all. */
+function nodeItemsOf(raw: unknown): Item[] | null {
+  if (!Array.isArray(raw) || !raw.length || raw.length > ITEMS_MAX) return null
+  const ok = raw.every(
+    i =>
+      isObject(i) &&
+      typeof i.key === 'string' &&
+      typeof i.device === 'string' &&
+      parseNodeKey(i.key)?.device === i.device,
+  )
+  return ok ? (raw as Item[]) : null
+}
+
+/**
+ * The sessions node `device`'s page shows beside its own (#904): the master's (`master`, its id)
+ * keyed `@<master>:<key>` as any other machine's, the other nodes' as the master names them; the
+ * node's own (`@<device>:…`) left out, as its page has them already.
+ */
+export function itemsForNode(items: readonly Item[], device: string, master: string): Item[] {
+  const out: Item[] = []
+  for (const it of items) {
+    const at = parseNodeKey(it.key)
+    if (at) {
+      if (at.device !== device) out.push(it)
+      continue
+    }
+    if (!master || master === device) continue
+    try {
+      out.push({ ...it, key: nodeKey(master, it.key), device: master })
+    } catch {} // A key no machine's prefix can carry stays on the master's page.
+  }
+  return out
+}
+
+/** The master's answer to node `device`'s GET /api/board-slices with the other machines' sessions (#904). */
+export function withNodeItems(
+  slices: BoardSlices,
+  items: readonly Item[],
+  device: string,
+  master: string,
+): BoardSlices {
+  return { ...slices, items: itemsForNode(items, device, master) }
 }
 
 /**
@@ -111,8 +168,10 @@ export function nodeSlicesView(
   o: { self: string; ownTeam: boolean; ownDevices: boolean; online: boolean },
 ): Partial<BoardPayload> {
   // Decisions (#784) go with the node's own queue and cards (core/node-decisions.ts withMasterDecisions).
-  const { devices, deviceMarker, teamRev, teamUnread, decisions: _decisions, ...rest } = slices
+  const { devices, deviceMarker, teamRev, teamUnread, decisions: _decisions, items, ...rest } = slices
   const out: Partial<BoardPayload> = { ...rest }
+  // The other machines' sessions (#904): beside the node's own, on a node that is no master itself.
+  if (!o.ownDevices && items) out.items = items
   if (!o.ownTeam) {
     if (teamRev !== undefined) out.teamRev = teamRev
     if (teamUnread !== undefined) out.teamUnread = teamUnread
