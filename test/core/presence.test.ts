@@ -255,6 +255,7 @@ test('the file keeps the state a call returns to; the line says the user is on a
   assert.match(line, /^\[agent-board\] The user is on a call \(since 15:40\) and slow to answer/)
   assert.match(line, /board ask/)
   assert.doesNotMatch(line, /[\u2013\u2014]/)
+  assert.match(presenceLine({ state: 'call', since: at, by: 'auto' }, true), /card op ask/)
 })
 
 test('a call the user cleared by hand stays cleared across a board restart (a step with no memory)', () => {

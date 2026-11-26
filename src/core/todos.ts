@@ -271,9 +271,10 @@ const plain = (s: string): string =>
   )
 
 /** The brief's line for agents, with agents on. */
-export function todosBrief(): string {
+export function todosBrief(mcp = false): string {
+  const askRef = mcp ? 'card op ask' : 'board ask'
   return [
-    '- board todo add [--ref <ticket, file or link>] [--why "<what it waits on>"] "<text>": the user keeps a task list across sessions. Record only what you hand the user to do (a step that is theirs, data they must give) and, with --mine, a promise of your own you defer to later ("after the review I\'ll run the migration"). Nothing else: not your working steps, not questions (those are board ask). Give --ref whenever a ticket, a draft file or a link is involved. It prints the task\'s key (<lane>-<session>-<n>): name tasks by their key when you talk about them.',
+    `- board todo add [--ref <ticket, file or link>] [--why "<what it waits on>"] "<text>": the user keeps a task list across sessions. Record only what you hand the user to do (a step that is theirs, data they must give) and, with --mine, a promise of your own you defer to later ("after the review I'll run the migration"). Nothing else: not your working steps, not questions (those are ${askRef}). Give --ref whenever a ticket, a draft file or a link is involved. It prints the task's key (<lane>-<session>-<n>): name tasks by their key when you talk about them.`,
     `  ${TODO_CLOSE}`,
   ].join('\n')
 }

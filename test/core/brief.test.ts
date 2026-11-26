@@ -1,6 +1,6 @@
 import { test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { BRIEF_VERSION, brief, herdrLine, waitReminder } from '../../src/core/brief.ts'
+import { BRIEF_VERSION, brief, calendarBrief, decisionsBrief, herdrLine, waitReminder } from '../../src/core/brief.ts'
 import { t, useLanguage } from '../../src/core/lang.ts'
 import type { Config } from '../../src/core/types.ts'
 import { oldCode, oldFunction } from '../web/support/old-app.ts'
@@ -106,4 +106,75 @@ test('the calendar (#328): agents hear of board cal only while it is on; off, th
   assert.match(on, /- board cal list \[--day <d> \| --from <t> --to <t>\] \[--json\]: the owner's schedule/)
   assert.match(on, /only when the owner asked for that event: --source <id> --asked/)
   assert.doesNotMatch(brief(cfg, null, 'C:X', {}, 'Codex', null, null, [], true), /board cal/)
+})
+
+test('MCP-first brief (#911): names MCP tools first, fallback once, and stays no longer than command brief', () => {
+  const env = { HERDR_ENV: '1', HERDR_PANE_ID: 'w1:p3' }
+  const threads = { agents: true, gapSec: 60, share: true, cases: true as const }
+  const presence = { state: 'call' as const, since: 1000, by: 'auto' as const }
+  for (const agent of ['Claude', 'Codex', 'Antigravity'] as const) {
+    const cmd = brief(
+      cfg,
+      null,
+      'C:\\Clients\\Globex',
+      env,
+      agent,
+      presence,
+      { agents: true },
+      ['vault'],
+      true,
+      threads,
+      true,
+      {
+        defaults: true,
+      },
+    )
+    const mcp = brief(
+      cfg,
+      null,
+      'C:\\Clients\\Globex',
+      env,
+      agent,
+      presence,
+      { agents: true },
+      ['vault'],
+      true,
+      threads,
+      true,
+      { defaults: true },
+      { mcp: true, team: true, ...(agent === 'Claude' ? {} : { session: 'sid-1' }) },
+    )
+    assert.ok(mcp.length <= cmd.length + 180, `${agent}: mcp=${mcp.length} cmd=${cmd.length}`)
+    assert.match(mcp, /Use the `agent-board` MCP server's tools/)
+    assert.match(mcp, /- card: op `cat`.*`doing`.*`ask`.*`wait`.*`done`/)
+    assert.match(mcp, /- schedule: op `remind`.*`every`.*`list`.*`unschedule`/)
+    assert.match(mcp, /- agents: op `list`.*`send`/)
+    assert.match(mcp, /- spawn: start another session/)
+    assert.match(mcp, /- cal: read the owner's schedule/)
+    assert.match(mcp, /- threads \/ thread:/)
+    assert.match(mcp, /- team: op `roster`, `inbox`, `thread`.*`post`.*`reply`.*`react`, `wait`, `agents`/)
+    assert.match(mcp, /- Fallback: if the MCP server is unavailable/)
+    if (agent === 'Claude') {
+      assert.match(mcp, /CronCreate or ScheduleWakeup/)
+      assert.match(mcp, /board secret request/)
+      assert.match(mcp, /board todo add/)
+      assert.match(mcp, /card op ask/)
+      assert.doesNotMatch(mcp, /board --session/)
+    } else {
+      assert.match(mcp, /board --session sid-1 <command>/)
+      assert.doesNotMatch(mcp, /CronCreate/)
+    }
+    // Base brief without optional sections is strictly shorter than the command brief.
+    const cmdBase = brief(cfg, null, 'C:\\X', env, agent)
+    const mcpBase = brief(cfg, null, 'C:\\X', env, agent, null, null, [], false, null, false, null, { mcp: true })
+    assert.ok(mcpBase.length <= cmdBase.length, `${agent} base: mcp=${mcpBase.length} cmd=${cmdBase.length}`)
+  }
+  // team and cal are gated: off when false/omitted.
+  const noTeamCal = brief(cfg, null, 'C:\\X', env, 'Claude', null, null, [], false, null, false, null, { mcp: true })
+  assert.doesNotMatch(noTeamCal, /- team:/)
+  assert.doesNotMatch(noTeamCal, /- cal:/)
+  assert.match(calendarBrief(true), /board cal add/)
+  assert.match(decisionsBrief({ defaults: true }, true), /`card` op `ask`/)
+  assert.match(waitReminder({ wait: 'CI' }, true), /card op doing \/ done \/ wait/)
+  assert.match(waitReminder({ wait: 'CI' }, false), /board doing \/ done \/ wait/)
 })

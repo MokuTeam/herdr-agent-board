@@ -140,6 +140,10 @@ test('the brief block stays within 600 characters', () => {
   expect(threadsBrief()).toContain('board thread ask <key>')
   expect(threadsBrief()).toContain('board thread --help')
   expect(threadsBrief()).toContain('agent-board-threads')
+  expect(threadsBrief(null, true).length).toBeLessThanOrEqual(BRIEF_MAX)
+  expect(threadsBrief(null, true)).toContain('`threads` op `list`')
+  expect(threadsBrief(null, true)).toContain('`thread` op `new`')
+  expect(threadsBrief(null, true)).toContain('agent-board-threads')
 })
 
 test('show cuts each entry to 300 and the whole to 1,500, saying how many are not shown', () => {

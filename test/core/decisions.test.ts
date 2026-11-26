@@ -205,8 +205,14 @@ test('the brief with watches (#486) on too: both lines, each where it goes; with
   const lines = both.split('\n')
   expect(lines[lines.findIndex(l => l.startsWith('- board ask ')) + 1]).toStartWith('  With options: board ask')
   // Its block within the limit a feature's block has (core/work-threads.ts BRIEF_MAX).
-  for (const block of [decisionsBrief({ defaults: true }), decisionsBrief({ defaults: false })])
+  for (const block of [
+    decisionsBrief({ defaults: true }),
+    decisionsBrief({ defaults: false }),
+    decisionsBrief({ defaults: true }, true),
+    decisionsBrief({ defaults: false }, true),
+  ])
     expect(block.length).toBeLessThanOrEqual(BRIEF_MAX)
+  expect(decisionsBrief({ defaults: true }, true)).toContain('`card` op `ask`')
 })
 
 test("a device's card on the master (#781): its decision is carried, so the master can show its own copy of it", () => {

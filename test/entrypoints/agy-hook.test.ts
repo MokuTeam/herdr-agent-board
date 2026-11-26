@@ -182,16 +182,43 @@ test('board CLI resolves agy root identity, handles mixed Claude env, and refuse
   expect(JSON.parse(readFileSync(join(box.cards, 'claude-child.json'), 'utf8')).doing).toBe('Claude child')
 })
 
-test("Antigravity hears of the board's MCP tools (#814), unless config.json turned the registration off", async () => {
+test('Antigravity gets MCP-first brief when agent-board is in mcp_config.json (#911); boardMcp: false or no entry keeps commands', async () => {
   const box = await sandbox()
   configure(box)
+  const home = box.env.USERPROFILE as string
+  const config = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json')
   const said = async (): Promise<string> =>
     ((await hook(box, 'SessionStart')).injectSteps as { systemMessage: { systemMessage: string } }[])[0]?.systemMessage
       .systemMessage ?? ''
-  expect(await said()).toContain("the agent-board server's tools (card, schedule, agents, threads, thread, spawn, cal)")
+
+  // No entry in mcp_config.json (e.g. a Windows node without #908): command brief as before.
+  const withoutEntry = await said()
+  expect(withoutEntry).toContain('- board doing')
+  expect(withoutEntry).not.toContain("agent-board` MCP server's tools")
+
+  // Entry in ~/.gemini/config/mcp_config.json (plus Team on): MCP-first brief with --session fallback.
+  writeFileSync(config, JSON.stringify({ language: 'en', port: 9, team: { hub: 'wss://hub.example', name: 'anna' } }))
+  mkdirSync(join(home, '.gemini', 'config'), { recursive: true })
   writeFileSync(
-    join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json'),
-    '{"language":"en","port":9,"boardMcp":false}',
+    join(home, '.gemini', 'config', 'mcp_config.json'),
+    JSON.stringify({ mcpServers: { 'agent-board': { command: 'bun', args: ['/app/cli.ts', 'mcp', '--http'] } } }),
   )
-  expect(await said()).not.toContain('agent-board server')
+  const withEntry = await said()
+  expect(withEntry).toContain("Use the `agent-board` MCP server's tools")
+  expect(withEntry).toContain('- card: op `cat`')
+  expect(withEntry).toContain('- team: op `roster`')
+  expect(withEntry).toContain(`board --session ${ID} <command>`)
+  expect(withEntry).not.toContain('- board doing')
+
+  putCard(box, { briefV: BRIEF_VERSION, wait: 'CI', agyTurnSteps: 2 })
+  const waitOut = await hook(box, 'PreInvocation', { lastUserInput: 'go', invocationNum: 1, initialNumSteps: 3 })
+  const waitText = (waitOut.injectSteps as { systemMessage: { systemMessage: string } }[])[0]?.systemMessage
+    .systemMessage
+  expect(waitText).toContain('card op doing / done / wait')
+
+  // boardMcp: false reverts to command brief even with mcp_config.json entry present.
+  writeFileSync(config, '{"language":"en","port":9,"boardMcp":false}')
+  const disabled = await said()
+  expect(disabled).toContain('- board doing')
+  expect(disabled).not.toContain("agent-board` MCP server's tools")
 })

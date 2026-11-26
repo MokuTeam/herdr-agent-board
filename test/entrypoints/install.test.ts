@@ -349,6 +349,7 @@ test('the skill install copies is upstream’s, word for word, but for what `boa
   // #760: --device, in the command line and the PowerShell names, the board placing from a node too,
   // and two lines of their own.
   // #814: the board's MCP server in every agent, a line of its own.
+  // #911: MCP tools first, the `board` / `spawn-agent` commands as fallback.
   const ours = read(root, 'skills', 'herdr-agents', 'SKILL.md')
     .replace(' [--device <id|local>]', '')
     .replace(' -Device`)', '`)')
@@ -359,8 +360,37 @@ test('the skill install copies is upstream’s, word for word, but for what `boa
     .replace(/- An agent on another model than the profile's default: [^\n]*\n/, '')
     .replace(/- Where the board has other devices, [^\n]*\n/, '')
     .replace(/- A line ending in `device=<device> session=<id>` means [^\n]*\n/, '')
-    .replace(/- Other agents \(`agy`, `pi`, Codex\) and other devices: [^\n]*\n/, '')
+    .replace(/- Fallback tools and commands: in Claude Code, [^\n]*\n/, '')
     .replace(/- The board's install registers the `agent-board` MCP server [^\n]*\n/, '')
+    .replace(
+      "The agent-board hook told you at the start how to keep your card current. Prefer the `agent-board` MCP server's `card` tool (`op`: `cat`, `doing`, `ask`, `wait`, `done`), or fall back to `board` (`board cat`, `doing`, `ask`, `wait`, `done`) if the MCP server is unavailable.",
+      'The agent-board hook told you at the start how to keep your card current (`board cat`, `doing`, `ask`, `wait`, `done`).',
+    )
+    .replace(
+      "Prefer the `agent-board` MCP server's `spawn` tool (`name`, `cwd`, optional `brief`, `profile`, `device`, `lane`, `agent`, `trust`), or fall back to `spawn-agent` (also needed for CLI-only flags such as `--label`, `--workspace`, `--model`, `--brief-file`, `--thread`):\n\n",
+      '',
+    )
+    .replace(
+      'Prefer the `agent-board` MCP server\'s `agents` tool (`op: "list"` to see all sessions across harnesses and devices; `op: "send"` with `to` and `message` to reach one by name).',
+      'Use `ListAgents` to see the sessions and `SendMessage` to reach one by name.',
+    )
+    .replace(
+      '`agents` (`op: "list"`) lists the sleeping ones too, and sending a message (`agents` `op: "send"`, or `SendMessage`) wakes it first',
+      '`ListAgents` lists the sleeping ones too, and a `SendMessage` to one wakes it first',
+    )
+    .replace(
+      'Prefer the `agent-board` MCP server\'s `schedule` tool: `op: "remind"` (`when`, `text`, optional `idle: true`), `op: "every"` (`cron`, `text`, optional `idle: true`), `op: "list"`, `op: "unschedule"` (`id`). Fallback in a shell:\n\n',
+      '',
+    )
+    .replace('`schedule` (`op: "remind"`, or `board remind` as fallback)', '`board remind`')
+    .replace(
+      '`schedule` (`op: "list"` / `"unschedule"`, or `board schedule` / `board unschedule <id>`) shows or cancels it while it is on its way.',
+      '`board schedule` shows it while it is on its way, `board unschedule <id>` cancels it.',
+    )
+    .replace(
+      '`card` `op: "wait"` (or `board wait` if `agent-board` itself dropped)',
+      '`board wait "MCP <server> reconnect"`',
+    )
     .replace(
       ' Its board reminders wait with it, parked: `board schedule --session <name>` lists them, `board schedule --move <id>` moves one to you, `board unschedule <id>` removes one.',
       '',

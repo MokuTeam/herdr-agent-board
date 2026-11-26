@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, sym
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { detectAgy, detectAgyBinary, hasAgyConfigDir } from '../../src/adapters/agy-hooks.ts'
-import { registerBoardMcp, registeredLine } from '../../src/adapters/mcp-register.ts'
+import { boardMcpRegistered, registerBoardMcp, registeredLine } from '../../src/adapters/mcp-register.ts'
 import { claudeMcpEntry, stdioMcpEntry } from '../../src/core/mcp-register.ts'
 
 // Every file under a temp home of its own: no real profile, Codex, agy or pi folder is read.
@@ -334,5 +334,49 @@ describe('taking it out', () => {
     const home = homeDir()
     expect(registerBoardMcp(opts(home, { on: false }))).toEqual([])
     expect(existsSync(join(home, '.claude.json'))).toBe(false)
+  })
+})
+
+describe('boardMcpRegistered', () => {
+  test('checks per-harness registration, custom homes/profiles, symlinks and boardMcp: false', () => {
+    const home = homeDir()
+    const work = join(home, 'profiles', 'work ben')
+    mkdirSync(work, { recursive: true })
+    const agy = join(home, 'Agy дом 100%')
+    const pi = join(home, 'pi agent')
+    mkdirSync(agy, { recursive: true })
+    mkdirSync(pi, { recursive: true })
+    const codex = join(home, '.codex')
+    const dedicated = join(home, '.config', 'herdr', 'codex')
+    mkdirSync(codex, { recursive: true })
+    mkdirSync(dedicated, { recursive: true })
+    writeFileSync(join(codex, 'config.toml'), 'model = "o3"\n')
+    symlinkSync(join(codex, 'config.toml'), join(dedicated, 'config.toml'))
+    writeFileSync(join(dedicated, 'hooks.json'), '{"x":"/w/src/entrypoints/codex-hook.ts"}')
+    writeFileSync(join(agy, 'hooks.json'), '{"agent-board":{}}')
+
+    const env = { ANTIGRAVITY_CONFIG_DIR: agy, PI_CODING_AGENT_DIR: pi, CODEX_HOME: dedicated }
+    // Nothing registered yet.
+    expect(boardMcpRegistered('claude', { home, env, platform: 'linux' })).toBe(false)
+    expect(boardMcpRegistered('claude', { home, env, platform: 'linux', profileDir: work })).toBe(false)
+    expect(boardMcpRegistered('codex', { home, env })).toBe(false)
+    expect(boardMcpRegistered('agy', { home, env })).toBe(false)
+    expect(boardMcpRegistered('pi', { home, env })).toBe(false)
+
+    // Register Claude (default only), Codex, agy and pi.
+    registerBoardMcp(opts(home, { env, codexHome: dedicated }))
+    expect(boardMcpRegistered('claude', { home, env, platform: 'linux' })).toBe(true)
+    expect(boardMcpRegistered('claude', { home, env, platform: 'linux', profileDir: work })).toBe(false)
+    expect(boardMcpRegistered('codex', { home, env })).toBe(true)
+    expect(boardMcpRegistered('agy', { home, env })).toBe(true)
+    expect(boardMcpRegistered('pi', { home, env })).toBe(true)
+
+    // boardMcp: false turns it off everywhere even when entries exist.
+    for (const h of ['claude', 'codex', 'agy', 'pi'] as const)
+      expect(boardMcpRegistered(h, { home, env, platform: 'linux', rawConfig: { boardMcp: false } })).toBe(false)
+
+    // Malformed JSON never throws.
+    writeFileSync(join(agy, 'mcp_config.json'), '{broken')
+    expect(boardMcpRegistered('agy', { home, env })).toBe(false)
   })
 })

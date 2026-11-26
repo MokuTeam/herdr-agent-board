@@ -8,16 +8,17 @@ import { loadConfig, readConfigFile } from '../adapters/config-file.ts'
 import { agentGet } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { nodeMasterFlags } from '../adapters/master-flags-store.ts'
+import { boardMcpRegistered } from '../adapters/mcp-register.ts'
 import { presenceForBrief, presenceNews } from '../adapters/presence-store.ts'
 import { readStdin } from '../adapters/stdin.ts'
 import { AGY_AGENT, isAgySession } from '../core/agy.ts'
-import { BRIEF_VERSION, brief, mcpBrief, waitReminder } from '../core/brief.ts'
+import { BRIEF_VERSION, brief, waitReminder } from '../core/brief.ts'
 import { calendarConfig } from '../core/calendar.ts'
 import { decisionsConfig } from '../core/decisions.ts'
 import { briefFlags, staleFlagsLine, withMasterFlags } from '../core/master-flags.ts'
-import { boardMcpOff } from '../core/mcp-register.ts'
 import { isNotice } from '../core/notices.ts'
 import { secretsConfig, usableSinks } from '../core/secrets.ts'
+import { teamConfig } from '../core/team.ts'
 import { todosConfig, todosNews } from '../core/todos.ts'
 import { watchesConfig } from '../core/watches.ts'
 import { threadsConfig } from '../core/work-threads.ts'
@@ -103,19 +104,54 @@ async function main(): Promise<void> {
     const threads = threadsConfig(cfg.threads) ?? threadsConfig(via.threads)
     const watches = watchesConfig(gated.watches) !== null
     const decisions = decisionsConfig(gated.decisions)
-    context = [
-      brief(cfg, card, cwd, process.env, 'Antigravity', presence, todos, sinks, calendar, threads, watches, decisions),
-      `Use \`board --session ${sid} <command>\` for the commands above if a tool shell does not inherit the herdr pane environment.`,
-      // The board's MCP server, registered beside these hooks (#814), unless turned off.
-      ...(boardMcpOff(readConfigFile()) ? [] : [mcpBrief()]),
-    ].join('\n')
+    const mcp = boardMcpRegistered('agy', { rawConfig: readConfigFile() })
+    if (mcp) {
+      const team = teamConfig(cfg.team) !== null || via.team
+      context = brief(
+        cfg,
+        card,
+        cwd,
+        process.env,
+        'Antigravity',
+        presence,
+        todos,
+        sinks,
+        calendar,
+        threads,
+        watches,
+        decisions,
+        {
+          mcp: true,
+          team,
+          session: sid,
+        },
+      )
+    } else {
+      context = [
+        brief(
+          cfg,
+          card,
+          cwd,
+          process.env,
+          'Antigravity',
+          presence,
+          todos,
+          sinks,
+          calendar,
+          threads,
+          watches,
+          decisions,
+        ),
+        `Use \`board --session ${sid} <command>\` for the commands above if a tool shell does not inherit the herdr pane environment.`,
+      ].join('\n')
+    }
     const stale = presence && presence === via.presence ? staleFlagsLine(flags, Date.now()) : null
     if (stale) context = `${context}\n${stale}`
     Object.assign(patch, { briefedAt: Date.now(), briefV: BRIEF_VERSION })
     if (presence) patch.presenceSeen = presence.since
     else if (card?.presenceSeen !== undefined) patch.presenceSeen = ''
   } else if (isNewTurn) {
-    if (card?.wait) context = waitReminder(card)
+    if (card?.wait) context = waitReminder(card, boardMcpRegistered('agy', { rawConfig: readConfigFile() }))
     const news = presenceNews(card)
     if (news) {
       context = context ? `${context}\n${news.line}` : news.line

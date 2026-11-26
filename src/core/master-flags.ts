@@ -163,8 +163,9 @@ export function briefFlags(flags: MasterFlagsWire | null): {
   threads: unknown
   calendar: boolean
   presence: Presence | null
+  team: boolean
 } {
-  if (!flags) return { threads: undefined, calendar: false, presence: null }
+  if (!flags) return { threads: undefined, calendar: false, presence: null, team: false }
   const t = flags.threads
   const p = flags.on.includes('presence') ? flags.presence : undefined
   let threads: unknown
@@ -173,6 +174,7 @@ export function briefFlags(flags: MasterFlagsWire | null): {
     threads,
     calendar: flags.on.includes('calendar'),
     presence: p ? { state: p.state, since: p.since, by: p.by } : null,
+    team: flags.on.includes('team'),
   }
 }
 

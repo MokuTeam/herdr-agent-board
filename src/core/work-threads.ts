@@ -1132,7 +1132,18 @@ export const CASES_BRIEF =
   '  A case you hold: post --state "<where it stands, what next>" before you stop; board thread brief <key> reads one.'
 
 /** The brief's block while threads are on and agents take part (5.2): at most BRIEF_MAX characters. */
-export function threadsBrief(cfg?: Pick<ThreadsConfig, 'cases'> | null): string {
+export function threadsBrief(cfg?: Pick<ThreadsConfig, 'cases'> | null, mcp = false): string {
+  if (mcp) {
+    return [
+      '- threads / thread: work handed to you as a thread (a key like atlas-12) is reported there, not by messaging whoever handed it out; they hear one line.',
+      '  `threads` op `list` (mine, lane), `show` (key, last, since), `changes`; `thread` op `new`, `post` (key, status, summary, text, files), `ask` (key, text), `set`, `watch`. See the agent-board-threads skill.',
+      ...(cfg?.cases
+        ? [
+            '  A case you hold (CLI): `board thread post <key> --state "<where it stands, what next>"` before stopping; `board thread brief <key>` reads one.',
+          ]
+        : []),
+    ].join('\n')
+  }
   return [
     '- board thread: work handed to you as a thread (a key like atlas-12) is reported in that thread, not in a message to whoever handed it out; they hear one line.',
     '  board thread post <key> [--status doing|waiting|done] [--summary "<one line>"] [--file <report>] ["<note>"]: progress and results, a long report as --file. board thread ask <key> "<question>": it needs the owner. board thread --help for the rest; the agent-board-threads skill for handing work out by thread.',

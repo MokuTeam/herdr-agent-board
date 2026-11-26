@@ -307,14 +307,34 @@ test('a Codex card briefed with the Claude count is briefed again once; one at t
   expect(await hook(box, 'UserPromptSubmit', 'next task')).toBe('')
 })
 
-test("Codex hears of the board's MCP tools (#814), unless config.json turned the registration off", async () => {
+test('Codex gets MCP-first brief when agent-board is in config.toml (#911); boardMcp: false or no entry keeps commands', async () => {
   const box = await sandbox()
   configure(box)
-  const text = JSON.parse(await hook(box, 'SessionStart')).hookSpecificOutput.additionalContext
-  expect(text).toContain("the agent-board server's tools (card, schedule, agents, threads, thread, spawn, cal)")
+  const home = box.env.USERPROFILE as string
   const config = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json')
+  // No entry in config.toml: command brief as before.
+  const withoutEntry = JSON.parse(await hook(box, 'SessionStart')).hookSpecificOutput.additionalContext as string
+  expect(withoutEntry).toContain('- board doing')
+  expect(withoutEntry).not.toContain("agent-board` MCP server's tools")
+
+  // Entry in ~/.codex/config.toml (plus Team on): MCP-first brief with --session fallback and MCP waitReminder.
+  writeFileSync(config, JSON.stringify({ language: 'en', port: 9, team: { hub: 'wss://hub.example', name: 'anna' } }))
+  mkdirSync(join(home, '.codex'), { recursive: true })
+  writeFileSync(join(home, '.codex', 'config.toml'), '[mcp_servers.agent-board]\nurl = "http://127.0.0.1:9/mcp"\n')
+  const withEntry = JSON.parse(await hook(box, 'SessionStart')).hookSpecificOutput.additionalContext as string
+  expect(withEntry).toContain("Use the `agent-board` MCP server's tools")
+  expect(withEntry).toContain('- card: op `cat`')
+  expect(withEntry).toContain('- team: op `roster`')
+  expect(withEntry).toContain(`board --session ${ID} <command>`)
+  expect(withEntry).not.toContain('- board doing')
+
+  putCard(box, { briefV: CODEX_BRIEF_VERSION, wait: 'CI' })
+  const waitMsg = JSON.parse(await hook(box, 'UserPromptSubmit', 'next')).hookSpecificOutput.additionalContext as string
+  expect(waitMsg).toContain('card op doing / done / wait')
+
+  // boardMcp: false reverts to command brief even with config.toml entry present.
   writeFileSync(config, '{"language":"en","port":9,"boardMcp":false}')
-  expect(JSON.parse(await hook(box, 'SessionStart')).hookSpecificOutput.additionalContext).not.toContain(
-    'agent-board server',
-  )
+  const disabled = JSON.parse(await hook(box, 'SessionStart')).hookSpecificOutput.additionalContext as string
+  expect(disabled).toContain('- board doing')
+  expect(disabled).not.toContain("agent-board` MCP server's tools")
 })

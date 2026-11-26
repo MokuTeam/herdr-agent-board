@@ -5,13 +5,15 @@ import { loadConfig, readConfigFile } from '../adapters/config-file.ts'
 import { agentGet } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { nodeMasterFlags } from '../adapters/master-flags-store.ts'
+import { boardMcpRegistered } from '../adapters/mcp-register.ts'
 import { presenceForBrief, presenceNews } from '../adapters/presence-store.ts'
 import { readStdin } from '../adapters/stdin.ts'
-import { brief, CODEX_BRIEF_VERSION, mcpBrief, waitReminder } from '../core/brief.ts'
+import { brief, CODEX_BRIEF_VERSION, waitReminder } from '../core/brief.ts'
+import { calendarConfig } from '../core/calendar.ts'
 import { CODEX_AGENT, isCodexSession } from '../core/codex.ts'
 import { briefFlags, staleFlagsLine } from '../core/master-flags.ts'
-import { boardMcpOff } from '../core/mcp-register.ts'
 import { isNotice } from '../core/notices.ts'
+import { teamConfig } from '../core/team.ts'
 import { threadsConfig } from '../core/work-threads.ts'
 
 async function main(): Promise<void> {
@@ -41,23 +43,23 @@ async function main(): Promise<void> {
     const flags = nodeMasterFlags(cfg)
     const via = briefFlags(flags)
     const presence = presenceForBrief(cfg) ?? via.presence
-    context = [
-      brief(
-        cfg,
-        card,
-        typeof input.cwd === 'string' ? input.cwd : '',
-        process.env,
-        'Codex',
-        presence,
-        null,
-        [],
-        false,
-        threadsConfig(cfg.threads) ?? threadsConfig(via.threads),
-      ),
-      `Use \`board --session ${sid} <command>\` for the commands above, so a tool's shell targets this session even when it does not inherit the pane environment.`,
-      // The board's MCP server, registered in this Codex home with its hooks (#814), unless turned off.
-      ...(boardMcpOff(readConfigFile()) ? [] : [mcpBrief()]),
-    ].join('\n')
+    const cwd = typeof input.cwd === 'string' ? input.cwd : ''
+    const threads = threadsConfig(cfg.threads) ?? threadsConfig(via.threads)
+    const mcp = boardMcpRegistered('codex', { rawConfig: readConfigFile() })
+    if (mcp) {
+      const calendar = calendarConfig(cfg.calendar) !== null || via.calendar
+      const team = teamConfig(cfg.team) !== null || via.team
+      context = brief(cfg, card, cwd, process.env, 'Codex', presence, null, [], calendar, threads, false, null, {
+        mcp: true,
+        team,
+        session: sid,
+      })
+    } else {
+      context = [
+        brief(cfg, card, cwd, process.env, 'Codex', presence, null, [], false, threads),
+        `Use \`board --session ${sid} <command>\` for the commands above, so a tool's shell targets this session even when it does not inherit the pane environment.`,
+      ].join('\n')
+    }
     // The presence a node's master last said, when it has not been heard from for a while: its age.
     const stale = presence && presence === via.presence ? staleFlagsLine(flags, Date.now()) : null
     if (stale) context = `${context}\n${stale}`
@@ -65,7 +67,7 @@ async function main(): Promise<void> {
     if (presence) patch.presenceSeen = presence.since
     else if (card?.presenceSeen !== undefined) patch.presenceSeen = ''
   } else {
-    if (card?.wait) context = waitReminder(card)
+    if (card?.wait) context = waitReminder(card, boardMcpRegistered('codex', { rawConfig: readConfigFile() }))
     const news = presenceNews(card)
     if (news) {
       context = context ? `${context}\n${news.line}` : news.line

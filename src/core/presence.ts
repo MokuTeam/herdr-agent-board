@@ -180,19 +180,19 @@ const clock = (ms: number): string => {
 }
 
 /** The line a session is told: where its news goes now. */
-export function presenceLine(p: Presence): string {
+export function presenceLine(p: Presence, mcp = false): string {
   const at = p.since ? ` (since ${clock(p.since)})` : ''
   if (p.state === 'call')
-    return `[agent-board] The user is on a call${at} and slow to answer: go on with what you can decide yourself; a question waits on the board (board ask) until the call is over. No need to send things elsewhere (Telegram and the like).`
+    return `[agent-board] The user is on a call${at} and slow to answer: go on with what you can decide yourself; a question waits on the board (${mcp ? 'card op ask' : 'board ask'}) until the call is over. No need to send things elsewhere (Telegram and the like).`
   return p.state === 'away'
     ? `[agent-board] The user is away from the computer${at}. Anything they need to see or answer (a result, a question, a blocker) also goes where they read it away from the computer, if this session has a way (Telegram or another messenger); the board alone waits unseen.`
     : `[agent-board] The user is at the computer${at}: the board and this terminal are enough; no need to send things elsewhere (Telegram and the like).`
 }
 
 /** The brief's part on presence, for a setup that turned it on. */
-export function presenceBrief(p: Presence): string {
+export function presenceBrief(p: Presence, mcp = false): string {
   return [
     '- Presence: the board knows whether the user is at the computer or away, and a line in this context says when it changes. board presence prints it.',
-    presenceLine(p),
+    presenceLine(p, mcp),
   ].join('\n')
 }

@@ -31,7 +31,7 @@ test('the brief for Claude is byte for byte what it was, with and without thread
           expect(brief(cfg, c, 'C:\\X', e, 'Claude', presence, null, sinks, true, t)).toBe(
             old(cfg, c, 'C:\\X', e, 'Claude', presence, null, sinks, true, t),
           )
-  expect(BRIEF_VERSION).toBe(6)
+  expect(BRIEF_VERSION).toBe(7)
 })
 
 test('the brief for Codex: threads where they are on for agents, no wake from sleep promised', () => {
