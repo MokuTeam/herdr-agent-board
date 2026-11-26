@@ -6,7 +6,7 @@
 // without the token, a node's route that checks the token before the relay and turns the relay's
 // own failures into store_unavailable. No cookie value in any log line or error body.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -527,5 +527,81 @@ describe('bridge token files', () => {
     expect(tokens.check('c'.repeat(43))).toBe(false)
     expect(tokens.check(tokenIn(b))).toBe(true)
     expect(tokens.check(tokenIn(a))).toBe(true)
+  })
+
+  test('periodic rescan: writes tokens for dirs appearing later and rewrites missing files, keeping existing ones', async () => {
+    const home = temp()
+    const alpha = bridge(join(home, 'browser', 'state', 'alpha', 'state', 'mcp-chrome-bridge'))
+    const beta = join(home, 'browser', 'state', 'beta', 'state', 'mcp-chrome-bridge')
+    const gamma = join(home, 'browser', 'state', 'gamma', 'state', 'mcp-chrome-bridge')
+    const tokenIn = (d: string): string => readFileSync(join(d, NS_TOKEN_FILE), 'utf8').split('\n')[0] as string
+    const pollUntil = async (fn: () => boolean, ms = 2000): Promise<void> => {
+      const deadline = Date.now() + ms
+      while (!fn()) {
+        if (Date.now() > deadline) throw new Error('timed out waiting for rescan')
+        await Bun.sleep(10)
+      }
+    }
+
+    const tokens = createNsTokens({
+      dirs: () => nsBridgeDirs(home, {}, 'linux'),
+      url: () => NS_DEFAULT_URL,
+    })
+    try {
+      expect(tokens.refresh()).toBe(1)
+      const alphaToken = tokenIn(alpha)
+      const alphaMtime = statSync(join(alpha, NS_TOKEN_FILE)).mtimeMs
+      if (process.platform !== 'win32') expect(statSync(join(alpha, NS_TOKEN_FILE)).mode & 0o777).toBe(0o600)
+
+      tokens.start(25)
+
+      // A bridge dir appearing after start gets a token without any check() miss.
+      bridge(beta)
+      await pollUntil(() => existsSync(join(beta, NS_TOKEN_FILE)) && tokens.check(tokenIn(beta)))
+      if (process.platform !== 'win32') expect(statSync(join(beta, NS_TOKEN_FILE)).mode & 0o777).toBe(0o600)
+      expect(tokenIn(alpha)).toBe(alphaToken)
+      expect(statSync(join(alpha, NS_TOKEN_FILE)).mtimeMs).toBe(alphaMtime)
+
+      // A deleted token file in an existing dir is rewritten on the next scan.
+      rmSync(join(alpha, NS_TOKEN_FILE))
+      await pollUntil(() => existsSync(join(alpha, NS_TOKEN_FILE)) && tokens.check(tokenIn(alpha)))
+      const freshAlpha = tokenIn(alpha)
+      expect(freshAlpha).toMatch(/^[A-Za-z0-9_-]{43}$/)
+      expect(freshAlpha).not.toBe(alphaToken)
+      expect(tokens.check(alphaToken)).toBe(false)
+
+      // After stop(), new dirs are no longer scanned automatically.
+      tokens.stop()
+      bridge(gamma)
+      await Bun.sleep(80)
+      expect(existsSync(join(gamma, NS_TOKEN_FILE))).toBe(false)
+    } finally {
+      tokens.stop()
+    }
+  })
+
+  test('rescan picks up new dirs on Windows and macOS too', () => {
+    const winHome = temp()
+    const local = temp()
+    const winTokens = createNsTokens({
+      dirs: () => nsBridgeDirs(winHome, { LOCALAPPDATA: local }, 'win32'),
+      url: () => NS_DEFAULT_URL,
+    })
+    expect(winTokens.refresh()).toBe(0)
+    const winBridge = bridge(join(local, 'mcp-chrome-bridge'))
+    expect(winTokens.refresh()).toBe(1)
+    const winTok = readFileSync(join(winBridge, NS_TOKEN_FILE), 'utf8').split('\n')[0] as string
+    expect(winTokens.check(winTok)).toBe(true)
+
+    const macHome = temp()
+    const macTokens = createNsTokens({
+      dirs: () => nsBridgeDirs(macHome, {}, 'darwin'),
+      url: () => NS_DEFAULT_URL,
+    })
+    expect(macTokens.refresh()).toBe(0)
+    const macBridge = bridge(join(macHome, 'Library', 'Logs', 'mcp-chrome-bridge'))
+    expect(macTokens.refresh()).toBe(1)
+    const macTok = readFileSync(join(macBridge, NS_TOKEN_FILE), 'utf8').split('\n')[0] as string
+    expect(macTokens.check(macTok)).toBe(true)
   })
 })

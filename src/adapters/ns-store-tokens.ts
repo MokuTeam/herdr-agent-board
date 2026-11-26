@@ -7,8 +7,9 @@
 //
 // The state dirs are found, not configured: a folder that holds default-profile.json. A computer
 // without MokuTab gets nothing, and its bridge's module stays off (store_unconfigured). Written at
-// the board's start; a token that does not match rescans (at most once a minute), so a bridge
-// installed after the board started gets one too.
+// the board's start, rescanned periodically (every minute) so a dir appearing later or missing its
+// token file gets one without waiting for a miss or restart, and rescanned on a token miss (at most
+// once a minute).
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
@@ -18,7 +19,7 @@ export const NS_TOKEN_FILE = 'ns-store-token'
 export const NS_TOKEN_HEADER = 'x-ns-store-token'
 export const NS_DEFAULT_URL = 'http://127.0.0.1:12422/api/ns-sessions'
 const TOKEN = /^[A-Za-z0-9_-]{43}$/
-const RESCAN_MS = 60_000
+export const NS_TOKEN_RESCAN_MS = 60_000
 
 /** A bridge's state dir: the folder its default-profile.json is in. */
 const isBridgeDir = (p: string): boolean => existsSync(join(p, 'default-profile.json'))
@@ -87,6 +88,10 @@ export interface NsTokens {
   check(given: string | null): boolean
   /** Writes the token files of the bridges found now; returns how many there are. */
   refresh(): number
+  /** Starts periodic rescans of the bridge state dirs (default NS_TOKEN_RESCAN_MS). */
+  start(intervalMs?: number): void
+  /** Stops periodic rescans. */
+  stop(): void
 }
 
 export function createNsTokens(o: {
@@ -99,6 +104,7 @@ export function createNsTokens(o: {
   const now = o.now ?? Date.now
   let tokens: Buffer[] = []
   let scanned = Number.NEGATIVE_INFINITY
+  let timer: ReturnType<typeof setInterval> | undefined
 
   function refresh(): number {
     scanned = now()
@@ -113,15 +119,36 @@ export function createNsTokens(o: {
     return next.length
   }
 
+  function stop(): void {
+    if (!timer) return
+    clearInterval(timer)
+    timer = undefined
+  }
+
+  function start(intervalMs: number = NS_TOKEN_RESCAN_MS): void {
+    stop()
+    if (!(intervalMs > 0)) return
+    timer = setInterval(() => {
+      try {
+        refresh()
+      } catch (err) {
+        o.log?.(`ns-sessions: token rescan failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }, intervalMs)
+    timer.unref?.()
+  }
+
   const matches = (given: Buffer): boolean => tokens.some(t => t.length === given.length && timingSafeEqual(t, given))
 
   return {
     refresh,
+    start,
+    stop,
     check(given) {
       if (!given || !TOKEN.test(given)) return false
       const g = Buffer.from(given)
       if (matches(g)) return true
-      if (now() - scanned < RESCAN_MS) return false
+      if (now() - scanned < NS_TOKEN_RESCAN_MS) return false
       refresh()
       return matches(g)
     },

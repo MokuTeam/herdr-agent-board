@@ -7,7 +7,7 @@
 import { onTestFinished, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -128,5 +128,40 @@ test.skipIf(process.platform === 'win32')(
     writeFileSync(file, kept)
     assert.equal(fn(n, 'default_profile_json', [file, 'work']), '')
     assert.equal(readFileSync(file, 'utf8'), kept)
+  },
+)
+
+test.skipIf(process.platform === 'win32')(
+  'fix_bridge_scripts marks dist/*.sh executable even when npm --ignore-scripts left them 0644',
+  () => {
+    const n = node()
+    const dist = join(n.env.PKG as string, 'dist')
+    const runHost = join(dist, 'run_host.sh')
+    const helper = join(dist, 'helper.sh')
+    const nodePath = join(dist, 'node_path.txt')
+    writeFileSync(helper, '#!/bin/sh\necho ok\n')
+    writeFileSync(nodePath, '/usr/bin/node\n')
+    chmodSync(runHost, 0o644)
+    chmodSync(helper, 0o644)
+    chmodSync(nodePath, 0o644)
+
+    fn(n, 'fix_bridge_scripts', [n.env.PKG as string])
+
+    assert.notEqual(statSync(runHost).mode & 0o111, 0)
+    assert.notEqual(statSync(helper).mode & 0o111, 0)
+    assert.equal(statSync(nodePath).mode & 0o111, 0)
+
+    // The native host wrapper can now execute run_host.sh.
+    const got = startWrapper(n, 'work')
+    assert.equal(got.args, 'chrome-extension://x/')
+
+    // An empty dist/ with no *.sh files does not trip set -euo pipefail.
+    const emptyPkg = join(n.root, 'empty-pkg')
+    mkdirSync(join(emptyPkg, 'dist'), { recursive: true })
+    const emptyRes = spawnSync(bash, ['-euo', 'pipefail', '-c', '. "$0"; fix_bridge_scripts "$1"', SCRIPT, emptyPkg], {
+      env: n.env,
+      encoding: 'utf8',
+    })
+    assert.equal(emptyRes.status, 0, emptyRes.stderr)
   },
 )
