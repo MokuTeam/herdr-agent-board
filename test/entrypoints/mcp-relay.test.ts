@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createHttpRelay, httpRelayHeaders } from '../../src/entrypoints/mcp-relay.ts'
+import { serveBoard } from '../support/board-server.ts'
+import { boardConfig } from '../support/mcp-client.ts'
+import { showPanes } from '../support/node-pair.ts'
 import { root, sandbox } from '../support/sandbox.ts'
 
 // A fake board /mcp (#813's contract): JSON answers, 202 for a notification, what it was sent kept.
@@ -141,3 +144,45 @@ test('board mcp --http: stdin lines relayed to the port config.json names, as th
   ).toEqual([1, 2])
   expect(board.seen.map(s => s.headers['x-board-pane'])).toEqual(['w3:p4', 'w3:p4', 'w3:p4'])
 })
+
+test('board mcp --http against a running board (#813): the tools, and a card call as the pane it runs in', async () => {
+  const box = await sandbox()
+  showPanes(box, [
+    { pane_id: 'p7', agent: 'claude', agent_session: { value: 'cleo-1' }, agent_status: 'idle', cwd: box.dir },
+  ])
+  const { url } = await serveBoard(box, { language: 'en' })
+  boardConfig(box, url)
+  const input = [
+    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t"}}}',
+    '{"jsonrpc":"2.0","method":"notifications/initialized"}',
+    '{"jsonrpc":"2.0","id":2,"method":"tools/list"}',
+    '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"card","arguments":{"op":"doing","text":"relay check"}}}',
+    '',
+  ].join('\n')
+  const proc = Bun.spawn([process.execPath, join(root, 'src/entrypoints/cli.ts'), 'mcp', '--http'], {
+    cwd: root,
+    env: { ...box.env, HERDR_PANE_ID: 'p7', CLAUDE_CODE_SESSION_ID: '' },
+    stdin: new TextEncoder().encode(input),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  const [stdout] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
+  expect(await proc.exited).toBe(0)
+  const answers = stdout
+    .trim()
+    .split('\n')
+    .map(l => JSON.parse(l))
+  expect(answers.map(a => a.id)).toEqual([1, 2, 3])
+  expect(answers[0].result.serverInfo.name).toBe('agent-board')
+  expect(answers[1].result.tools.map((t: { name: string }) => t.name)).toEqual([
+    'card',
+    'schedule',
+    'agents',
+    'threads',
+    'thread',
+    'spawn',
+    'cal',
+  ])
+  expect(answers[2].result.isError).toBeUndefined()
+  expect(JSON.parse(readFileSync(join(box.cards, 'cleo-1.json'), 'utf8')).doing).toBe('relay check')
+}, 30_000)
