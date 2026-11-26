@@ -125,11 +125,19 @@ export interface DeskTeam {
   label: string
 }
 
+/** A plain board notice as integrations/notice-toast.ts shows it (#897). */
+export interface DeskNotice {
+  id: string
+  title: string
+  body: string
+}
+
 /** What a master posts to its desk node (POST /api/node/desk-toast). */
 export type DeskToast =
   | { kind: 'reminder'; toast: DeskReminder }
   | { kind: 'reminder-clear'; id: string }
   | { kind: 'team'; toast: DeskTeam }
+  | { kind: 'notice'; toast: DeskNotice }
 
 /** The master's post as the node shows it, or null: only these kinds, each field of its kind, bounded. */
 export function deskToastOf(raw: unknown): DeskToast | null {
@@ -185,6 +193,10 @@ export function deskToastOf(raw: unknown): DeskToast | null {
     )
       return null
     return { kind: 'team', toast: { id: t.id, thread: t.thread, title: t.title, body: t.body, label: t.label } }
+  }
+  if (raw.kind === 'notice') {
+    if (typeof t.id !== 'string' || !ID.test(t.id) || !text(t.title) || !text(t.body)) return null
+    return { kind: 'notice', toast: { id: t.id, title: t.title, body: t.body } }
   }
   return null
 }

@@ -49,6 +49,7 @@ import {
   relayKeyPath,
   writeLanesSeen,
 } from '../adapters/node-store.ts'
+import { readNsNotifyPrefs, updateNsNotifyPrefs } from '../adapters/ns-sessions-prefs.ts'
 import { createNsTokens, nsBridgeDirs } from '../adapters/ns-store-tokens.ts'
 import { omarchyTheme } from '../adapters/omarchy.ts'
 import { ownFileCheck } from '../adapters/own-files.ts'
@@ -132,6 +133,7 @@ import {
   pickNodeMaster,
 } from '../core/nodes.ts'
 import { createNsStore } from '../core/ns-sessions.ts'
+import { setAccountNotify } from '../core/ns-sessions-notify.ts'
 import { pageWithLook } from '../core/omarchy-theme.ts'
 import type { BackupPayload, CalendarPayload, TimePayload } from '../core/payload.ts'
 import type { Observation } from '../core/presence.ts'
@@ -158,6 +160,7 @@ import { threadsConfig, verifyKeptOff } from '../core/work-threads.ts'
 import { workdeskConfig } from '../core/workdesk.ts'
 import { workdeskEventsConfig } from '../core/workdesk-events.ts'
 import { childRunner, createHttpMcp } from '../entrypoints/mcp-http.ts'
+import { type NoticeDesktop, noticeDesktop } from '../integrations/notice-toast.ts'
 import { type ReminderDesktop, reminderDesktop } from '../integrations/reminder-toast.ts'
 import { type TeamDesktop, teamDesktop } from '../integrations/team-toast.ts'
 import { createAccess } from '../services/access.ts'
@@ -229,6 +232,7 @@ import { createNodeSetup, type NodeSetup } from '../services/nodes/setup.ts'
 import { createNodesTelegram } from '../services/nodes/telegram.ts'
 import { createNodeUpdater, type NodeUpdater } from '../services/nodes/update.ts'
 import { createUplinkRunner, type UplinkRunner } from '../services/nodes/uplink.ts'
+import { createNsSessionsNotify } from '../services/ns-sessions-notify.ts'
 import { tellOwnerWatchers } from '../services/owner-watch.ts'
 import { createPresence } from '../services/presence.ts'
 import { editProfile, installProfile, installThreadsSkill, wakeHooksInPlace } from '../services/profiles.ts'
@@ -817,8 +821,10 @@ export async function startServer({
   const observeHere = presenceObserve ?? (() => observeComputer())
   let ownReminders: ReminderDesktop | undefined
   let ownTeam: TeamDesktop | undefined
+  let ownNotice: NoticeDesktop | undefined
   const localReminders = (): ReminderDesktop => (ownReminders ??= reminderDesktop(log))
   const localTeam = (): TeamDesktop => (ownTeam ??= teamDesktop(log))
+  const localNotice = (): NoticeDesktop => (ownNotice ??= noticeDesktop(log))
   // A master's desks (#788, services/nodes/desks.ts): with `nodes` on, presence reads the most
   // recently active of its nodes' computers and its own (only where it has a desktop), and the
   // reminders and Team's notifications go to that one. Without `nodes` none of it is asked: the
@@ -833,7 +839,7 @@ export async function startServer({
     },
     desktopHere,
     observeHere,
-    local: { reminder: localReminders, team: localTeam },
+    local: { reminder: localReminders, team: localTeam, notice: localNotice },
     log,
   })
   // The user's presence (#172): nothing is read, asked or shown while config.json has no `presence`.
@@ -1348,6 +1354,15 @@ export async function startServer({
         : [...items],
   })
   board.publish()
+  // NetSuite session death & expiry notices (#897): fires once per session lifetime for accounts
+  // without auto-renew or toggled on; zero timers while the store holds no live/dying entries.
+  const nsNotify = createNsSessionsNotify({
+    store: nsStore,
+    prefs: () => readNsNotifyPrefs(),
+    desktop: { show: toast => (desks.on() ? desks.notice : localNotice()).show(toast) },
+    items: board.items,
+    log,
+  })
   // A pi day's task board copied into threads (#393), before each refresh: a change of pi's file is in
   // the payload's threads revision with it. Off, it returns at the config's threads key.
   const piTasks = piDayMirror({
@@ -1433,10 +1448,14 @@ export async function startServer({
     ...mokupilotRoutes(cfg),
     // The user's presence: read, switched and set (the page, the phone, the Android app).
     ...presenceRoutes(presence),
-    // The NetSuite session store (#860): a MokuTab bridge's; a pure node relays it to its master.
+    // The NetSuite session store (#860, #897): a MokuTab bridge's; a pure node relays it to its master.
     ...nsSessionRoutes({
       store: () => (isNodeOnly(cfg) ? null : nsStore),
       tokenOk: given => nsTokens.check(given),
+      prefs: {
+        get: () => readNsNotifyPrefs(),
+        set: (account, value) => updateNsNotifyPrefs(cur => setAccountNotify(cur, account, value)),
+      },
       log,
     }),
     // The away journal (#489): its list and the strip's dismiss (404 while off).
@@ -2225,7 +2244,13 @@ export async function startServer({
           },
         },
         // The owner's desk (#788): the master asks this computer's idle time and sends its notifications here.
-        desk: createNodeDesk({ desktop: desktopHere, observe: observeHere, reminder: localReminders, team: localTeam }),
+        desk: createNodeDesk({
+          desktop: desktopHere,
+          observe: observeHere,
+          reminder: localReminders,
+          team: localTeam,
+          notice: localNotice,
+        }),
         telegram: nodeTelegram,
         relayKey: async publicKey => {
           const r = activateNodeRelayKey(publicKey, nodeDir())
@@ -3050,6 +3075,7 @@ export async function startServer({
       workdeskStream?.controller.abort()
       await Promise.all([workdesk.stop(), workdeskDialog.stop(), workdeskStream?.task])
       await boardEvents.stop()
+      nsNotify.stop()
       journal.stop()
       turnResume.stop()
       compactor.stop()

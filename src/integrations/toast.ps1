@@ -275,6 +275,33 @@ function Show-TeamMessage($M) {
     [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($BoardAppId).Show($toast)
 }
 
+# A plain board notice (#897): title and body under the board's own app id.
+function Show-Notice($N) {
+    if ([string]$N.id -cnotmatch '^[\x21-\x7e]{1,200}\z') { return }
+    Register-BoardApp
+    $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+    $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
+    $esc = { param($s) [Security.SecurityElement]::Escape([string]$s) }
+    $xml = @"
+<toast>
+  <visual>
+    <binding template="ToastGeneric">
+      <text hint-maxLines="1">$(& $esc $N.title)</text>
+      <text>$(& $esc $N.body)</text>
+    </binding>
+  </visual>
+</toast>
+"@
+    $doc = New-Object Windows.Data.Xml.Dom.XmlDocument
+    $doc.LoadXml($xml)
+    $toast = [Windows.UI.Notifications.ToastNotification]::new($doc)
+    $toast.Group = "notice"
+    $tag = ([string]$N.id) -replace '[^A-Za-z0-9_.-]', '_'
+    $toast.Tag = $tag.Substring(0, [Math]::Min(64, $tag.Length))
+    if (Test-OnCall) { $toast.SuppressPopup = $true }
+    [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($BoardAppId).Show($toast)
+}
+
 function ConvertTo-PlainText([string]$Text, [int]$Max) {
     if ([string]::IsNullOrWhiteSpace($Text)) { return "" }
     $t = $Text -replace '```[\s\S]*?```', ' '
@@ -411,6 +438,12 @@ if ($Action -eq "reminder") {
 # The team's messages (#355), the same way.
 if ($Action -eq "team") {
     try { Show-TeamMessage (Read-Stdin | ConvertFrom-Json) } catch { }
+    exit 0
+}
+
+# Plain board notices (#897), the same way.
+if ($Action -eq "notice") {
+    try { Show-Notice (Read-Stdin | ConvertFrom-Json) } catch { }
     exit 0
 }
 

@@ -3,6 +3,7 @@
 // desktop; a notification goes to that one desk, once; a headless master with no desk shows none,
 // and one with a desktop is the fallback.
 import { expect, test } from 'bun:test'
+import type { NoticeDesktop, NoticeToast } from '../../src/integrations/notice-toast.ts'
 import type { ReminderDesktop, ReminderToast } from '../../src/integrations/reminder-toast.ts'
 import type { TeamDesktop, TeamToast } from '../../src/integrations/team-toast.ts'
 import { createDesks, type DesksOptions } from '../../src/services/nodes/desks.ts'
@@ -49,13 +50,15 @@ function setup(o: {
   owner?: (id: string) => boolean
   now?: () => number
 }) {
-  const shown: { reminder: ReminderToast[]; cleared: string[]; team: TeamToast[] } = {
+  const shown: { reminder: ReminderToast[]; cleared: string[]; team: TeamToast[]; notice: NoticeToast[] } = {
     reminder: [],
     cleared: [],
     team: [],
+    notice: [],
   }
   const reminder: ReminderDesktop = { show: t => shown.reminder.push(t), clear: id => shown.cleared.push(id) }
   const team: TeamDesktop = { show: t => shown.team.push(t) }
+  const notice: NoticeDesktop = { show: t => shown.notice.push(t) }
   const logs: string[] = []
   const opts: DesksOptions = {
     on: () => true,
@@ -64,7 +67,7 @@ function setup(o: {
     ownerAllowed: id => o.owner?.(id) ?? true,
     desktopHere: () => o.desktop ?? false,
     observeHere: async () => o.here ?? { idleSec: null, locked: null },
-    local: { reminder: () => reminder, team: () => team },
+    local: { reminder: () => reminder, team: () => team, notice: () => notice },
     log: t => logs.push(t),
     ...(o.now && { now: o.now }),
   }
@@ -214,4 +217,19 @@ test('a clear right after its show follows it to the same desk', async () => {
     { kind: 'reminder', toast: REMINDER },
     { kind: 'reminder-clear', id: REMINDER.id },
   ])
+})
+
+test('plain board notices route to the active desk node and fall back locally (#897)', async () => {
+  const notice: NoticeToast = { id: 'ns-1234567-0a1b2c3d', title: 'NetSuite · 1234567', body: '1234567 ends at 20:05' }
+  const nodes = { 'server-1': node(5) }
+  const remote = setup({ nodes, desktop: true, here: { idleSec: 60, locked: false } })
+  remote.desks.notice.show(notice)
+  await settle()
+  expect(nodes['server-1'].posts).toEqual([{ kind: 'notice', toast: notice }])
+  expect(remote.shown.notice).toEqual([])
+
+  const local = setup({ nodes: { 'server-1': node(600) }, desktop: true, here: { idleSec: 2, locked: false } })
+  local.desks.notice.show(notice)
+  await settle()
+  expect(local.shown.notice).toEqual([notice])
 })

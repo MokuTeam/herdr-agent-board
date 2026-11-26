@@ -2,7 +2,14 @@
 // this computer runs answers them (on a node, relayed from its master): metadata only. The store
 // never answers a value here, and this command prints only the fields it knows, whatever comes.
 import { isRecord } from '../adapters/json-store.ts'
-import { type NsMeta, type NsWhere, nsListLine } from '../core/ns-sessions.ts'
+import {
+  isNsDeadReason,
+  type NsEventKind,
+  type NsLastEvent,
+  type NsMeta,
+  type NsWhere,
+  nsListLine,
+} from '../core/ns-sessions.ts'
 
 export const NS_USAGE = 'usage: board ns-sessions list [--json]'
 
@@ -10,6 +17,17 @@ const s = (v: unknown): string => (typeof v === 'string' ? v : '')
 const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 const whereOf = (v: unknown): NsWhere =>
   isRecord(v) ? { machine: s(v.machine), profile: s(v.profile) } : { machine: '', profile: '' }
+const EVENT_KINDS: ReadonlySet<unknown> = new Set<NsEventKind>(['published', 'imported', 'activity', 'dead', 'expired'])
+
+function lastEventOf(v: unknown): NsLastEvent | null {
+  if (!isRecord(v) || !EVENT_KINDS.has(v.kind) || typeof v.at !== 'number' || !Number.isFinite(v.at)) return null
+  return {
+    kind: v.kind as NsEventKind,
+    at: v.at,
+    where: isRecord(v.where) ? whereOf(v.where) : null,
+    ...(v.reason !== undefined && { reason: isNsDeadReason(v.reason) ? v.reason : null }),
+  }
+}
 
 /** The fields an entry shows, picked one by one: nothing else of what came is printed. */
 function metaOf(raw: unknown): NsMeta | null {
@@ -32,7 +50,10 @@ function metaOf(raw: unknown): NsMeta | null {
     last_where: whereOf(raw.last_where),
     origin: whereOf(raw.origin),
     holders: Array.isArray(raw.holders) ? raw.holders.filter((h): h is string => typeof h === 'string') : [],
+    dead_at: typeof raw.dead_at === 'number' && Number.isFinite(raw.dead_at) ? raw.dead_at : null,
     dead_reason: (typeof raw.dead_reason === 'string' ? raw.dead_reason : null) as NsMeta['dead_reason'],
+    auto_renew: typeof raw.auto_renew === 'boolean' ? raw.auto_renew : null,
+    last_event: lastEventOf(raw.last_event),
     lock: lock
       ? {
           holder: { ...whereOf(lock.holder), run_id: s(isRecord(lock.holder) ? lock.holder.run_id : '') },

@@ -291,6 +291,64 @@ describe('the store', () => {
     expect(s.list()).toEqual([])
     expect(s.take(A, null)).toEqual({ ok: false, code: 'none' })
   })
+
+  test('last_event, auto_renew, dead_at, forget, nextTransitionAt and subscribe', () => {
+    const c = clock()
+    const s = createNsStore({ now: c.now })
+    const events: number[] = []
+    const unsub = s.subscribe(() => events.push(s.list().length))
+    expect(s.nextTransitionAt()).toBeNull()
+
+    expect(s.publish(nsPublishOf(body(SECRET, { auto_renew: false })))).toMatchObject({ ok: true, stored: true })
+    expect(events).toEqual([1])
+    let meta = s.list()[0]
+    expect(meta).toMatchObject({
+      auto_renew: false,
+      dead_at: null,
+      last_event: { kind: 'published', at: c.now(), where: LAPTOP },
+    })
+    // Next transition is idle dying (3h - 20m).
+    expect(s.nextTransitionAt()).toBe(c.now() + NS_IDLE_MS - NS_DYING_MS)
+
+    c.go(10_000)
+    expect(s.take(A, U, SERVER)).toMatchObject({ ok: true })
+    meta = s.list()[0]
+    expect(meta?.holders).toEqual(['laptop', 'server-2'])
+    expect(meta?.last_event).toEqual({ kind: 'imported', at: c.now(), where: SERVER })
+
+    c.go(10_000)
+    s.touch(A, nsFingerprint(SECRET), SERVER)
+    expect(s.list()[0]?.last_event).toEqual({ kind: 'activity', at: c.now(), where: SERVER })
+
+    // Advance into dying state: nextTransitionAt switches to absolute expiry.
+    c.go(NS_IDLE_MS - NS_DYING_MS)
+    expect(s.list()[0]?.state).toBe('dying')
+    expect(s.nextTransitionAt()).toBe(meta?.abs_expiry ?? null)
+
+    // Explicit dead records dead_at and where.
+    c.go(5_000)
+    expect(s.dead(A, nsFingerprint(SECRET), 'logout', LAPTOP)).toBe(true)
+    expect(s.list()[0]).toMatchObject({
+      state: 'dead',
+      dead_at: c.now(),
+      dead_reason: 'logout',
+      last_event: { kind: 'dead', at: c.now(), where: LAPTOP, reason: 'logout' },
+    })
+    expect(s.nextTransitionAt()).toBeNull()
+
+    // Forget drops entry and lock; cookies are cleared.
+    s.lock(A, U, { ...SERVER, run_id: 'r1' }, 60)
+    expect(s.forget(A, U)).toBe(true)
+    expect(s.forget(A, U)).toBe(false)
+    expect(s.list()).toEqual([])
+    expect(s.lock(A, U, { ...LAPTOP, run_id: 'r2' }, 60).ok).toBe(true)
+    expect(JSON.stringify(s.list())).not.toContain(SECRET)
+
+    unsub()
+    const before = events.length
+    s.publish(nsPublishOf(body(OTHER)))
+    expect(events.length).toBe(before)
+  })
 })
 
 describe('the relay carries the store, GET and POST only', () => {
@@ -299,16 +357,20 @@ describe('the relay carries the store, GET and POST only', () => {
     for (const [method, path] of [
       ['GET', '/api/ns-sessions/entry'],
       ['GET', '/api/ns-sessions/list'],
+      ['GET', '/api/ns-sessions/events'],
       ['POST', '/api/ns-sessions/entry'],
       ['POST', '/api/ns-sessions/touch'],
       ['POST', '/api/ns-sessions/dead'],
       ['POST', '/api/ns-sessions/lock'],
       ['POST', '/api/ns-sessions/unlock'],
+      ['POST', '/api/ns-sessions/forget'],
+      ['POST', '/api/ns-sessions/notify'],
     ] as const)
       expect(relayMatch(method, path, none)).toMatchObject({ kind: 'table', entry: { group: 'ns-sessions' } })
     expect(relayMatch('PUT', '/api/ns-sessions/entry', none)).toBeNull()
     expect(relayMatch('DELETE', '/api/ns-sessions/lock', none)).toBeNull()
     expect(relayMatch('GET', '/api/ns-sessions/touch', none)).toBeNull()
     expect(relayMatch('POST', '/api/ns-sessions/list', none)).toBeNull()
+    expect(relayMatch('POST', '/api/ns-sessions/events', none)).toBeNull()
   })
 })

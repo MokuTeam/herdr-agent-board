@@ -50,6 +50,7 @@ import {
 } from '../../models/devices.ts'
 import type { HandoverView } from '../../models/master-handover.ts'
 import type { NodeSetupView } from '../../models/node-setup.ts'
+import type { NsSessionsSnapshot } from '../../models/ns-sessions.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
 import { GripGlyph, PencilIcon } from '../icons.tsx'
@@ -60,6 +61,7 @@ import { AddComputer } from './AddComputer.tsx'
 import { AddServer, LoginLines } from './AddServer.tsx'
 import { DeviceMarkerMark } from './DeviceChip.tsx'
 import { MasterHandover } from './MasterHandover.tsx'
+import { NsSessionsSection } from './NsSessionsSection.tsx'
 
 export interface DevicesPanelProps {
   open: boolean
@@ -73,6 +75,8 @@ export interface DevicesPanelProps {
   computerSetup?: ComputerSetupView
   /** The Move master role view, for a test (components/devices/MasterHandover.tsx). */
   handover?: HandoverView
+  /** NetSuite session store snapshot, for a test that draws the panel without a server (#897). */
+  nsSessions?: NsSessionsSnapshot
 }
 
 /** How long the panel waits after the devices change before it asks for the next device again. */
@@ -81,7 +85,16 @@ const NEXT_MS = 1000
 /** POST /api/nodes; the settings it answered with, or null when it was refused (a toast says why). */
 type Send = (body: Record<string, unknown>) => Promise<PanelSettings | null>
 
-export function DevicesPanel({ open, onClose, back, initial, setup, computerSetup, handover }: DevicesPanelProps) {
+export function DevicesPanel({
+  open,
+  onClose,
+  back,
+  initial,
+  setup,
+  computerSetup,
+  handover,
+  nsSessions,
+}: DevicesPanelProps) {
   const t = useT()
   const { data, canEdit, toast, now } = useBoardContext()
   const [settings, setSettings] = useState<PanelSettings | null>(initial ?? null)
@@ -260,6 +273,7 @@ export function DevicesPanel({ open, onClose, back, initial, setup, computerSetu
             onPick={pickMarker}
           />
         )}
+        <NsSessionsSection open={open} canEdit={canEdit} {...(nsSessions && { initial: nsSessions })} />
         {!nodeOnly && <AddServer open={open} {...(setup && { initial: setup })} />}
         {!nodeOnly && (
           <AddComputer

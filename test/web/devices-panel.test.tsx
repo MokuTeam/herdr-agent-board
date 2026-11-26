@@ -963,7 +963,12 @@ describe('rename a device (#601)', () => {
               })}
             >
               <PanelProvider viewport={() => VP}>
-                <DevicesPanel open onClose={() => closed.push(1)} initial={SETTINGS} />
+                <DevicesPanel
+                  open
+                  onClose={() => closed.push(1)}
+                  initial={SETTINGS}
+                  nsSessions={{ entries: [], notify: {} }}
+                />
               </PanelProvider>
             </BoardContext.Provider>
           </I18nProvider>,
@@ -1077,7 +1082,7 @@ describe('rename a device (#601)', () => {
           <I18nProvider lang="en">
             <BoardContext.Provider value={board({ data: full(), canEdit: false, now: NOW })}>
               <PanelProvider viewport={() => VP}>
-                <DevicesPanel open onClose={() => {}} initial={SETTINGS} />
+                <DevicesPanel open onClose={() => {}} initial={SETTINGS} nsSessions={{ entries: [], notify: {} }} />
               </PanelProvider>
             </BoardContext.Provider>
           </I18nProvider>,
@@ -1104,7 +1109,7 @@ describe('rename a device (#601)', () => {
             <I18nProvider lang="en">
               <BoardContext.Provider value={board({ data: payload({ devices, categories: CATEGORIES }), now: NOW })}>
                 <PanelProvider viewport={() => VP}>
-                  <DevicesPanel open onClose={() => {}} initial={SETTINGS} />
+                  <DevicesPanel open onClose={() => {}} initial={SETTINGS} nsSessions={{ entries: [], notify: {} }} />
                 </PanelProvider>
               </BoardContext.Provider>
             </I18nProvider>,
@@ -1144,7 +1149,7 @@ describe('rename a device (#601)', () => {
           <I18nProvider lang="en">
             <BoardContext.Provider value={board({ data: full(), now: NOW })}>
               <PanelProvider viewport={() => VP}>
-                <DevicesPanel open onClose={() => {}} initial={SETTINGS} />
+                <DevicesPanel open onClose={() => {}} initial={SETTINGS} nsSessions={{ entries: [], notify: {} }} />
               </PanelProvider>
             </BoardContext.Provider>
           </I18nProvider>,
@@ -1185,7 +1190,7 @@ describe('rename a device (#601)', () => {
           <I18nProvider lang="en">
             <BoardContext.Provider value={board({ data: payload({ devices, categories: CATEGORIES }), now: NOW })}>
               <PanelProvider viewport={() => VP}>
-                <DevicesPanel open onClose={() => {}} initial={SETTINGS} />
+                <DevicesPanel open onClose={() => {}} initial={SETTINGS} nsSessions={{ entries: [], notify: {} }} />
               </PanelProvider>
             </BoardContext.Provider>
           </I18nProvider>,
@@ -1233,7 +1238,7 @@ describe('rename a device (#601)', () => {
           <I18nProvider lang="en">
             <BoardContext.Provider value={board({ data: full(), now: NOW })}>
               <PanelProvider viewport={() => VP}>
-                <DevicesPanel open onClose={() => {}} initial={SETTINGS} />
+                <DevicesPanel open onClose={() => {}} initial={SETTINGS} nsSessions={{ entries: [], notify: {} }} />
               </PanelProvider>
             </BoardContext.Provider>
           </I18nProvider>,

@@ -19,7 +19,10 @@ const meta = {
   last_where: { machine: 'server-2', profile: 'main' },
   origin: { machine: 'laptop', profile: 'work' },
   holders: ['laptop', 'server-2'],
+  dead_at: null,
   dead_reason: null,
+  auto_renew: null,
+  last_event: null,
   lock: null,
   // What no store sends, and this command never prints whatever comes.
   cookies: [{ name: 'JSESSIONID', value: 'fake-cli-value-55aa' }],
