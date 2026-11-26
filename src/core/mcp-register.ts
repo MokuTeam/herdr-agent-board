@@ -28,6 +28,21 @@ export const boardMcpUrl = (port: unknown): string => `http://127.0.0.1:${Number
 /** Whether config.json turned the registration off (`install.ts --no-mcp`): `"boardMcp": false`. */
 export const boardMcpOff = (raw: unknown): boolean => isRecord(raw) && raw.boardMcp === false
 
+/** Whether a parsed JSON config (`~/.claude.json`, `mcp_config.json`, `mcp.json`) registers `agent-board`. */
+export function hasJsonMcpEntry(config: unknown): boolean {
+  return isRecord(config) && isRecord(config.mcpServers) && isRecord(config.mcpServers[BOARD_MCP])
+}
+
+/** Whether Codex's `config.toml` registers `agent-board` (`[mcp_servers.agent-board]` or another form). */
+export function hasCodexMcpEntry(text: string | null): boolean {
+  if (!text) return false
+  try {
+    return planCodexToml(text, null) !== null
+  } catch {
+    return true
+  }
+}
+
 /** Claude Code's entry: HTTP, the pane from the session's environment, empty outside herdr. */
 export function claudeMcpEntry(url: string): Rec {
   // biome-ignore lint/suspicious/noTemplateCurlyInString: Claude Code expands it, not this code

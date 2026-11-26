@@ -24,10 +24,11 @@
 // Claude Code waits for it: an empty or broken input ends it at once, silently, with exit code 0.
 import { homedir } from 'node:os'
 import { type CardPatch, readCard, writeCard } from '../adapters/cards.ts'
-import { loadConfig } from '../adapters/config-file.ts'
+import { loadConfig, readConfigFile } from '../adapters/config-file.ts'
 import { agentGet } from '../adapters/herdr.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { nodeMasterFlags } from '../adapters/master-flags-store.ts'
+import { boardMcpRegistered } from '../adapters/mcp-register.ts'
 import { presenceForBrief, presenceNews } from '../adapters/presence-store.ts'
 import { inheritedProfileDir, loadProfiles } from '../adapters/profiles.ts'
 import { readStdin } from '../adapters/stdin.ts'
@@ -39,6 +40,7 @@ import { briefFlags, staleFlagsLine, withMasterFlags } from '../core/master-flag
 import { isNotice } from '../core/notices.ts'
 import { type Profile, profileReport } from '../core/profiles.ts'
 import { secretsConfig, usableSinks } from '../core/secrets.ts'
+import { teamConfig } from '../core/team.ts'
 import { todosConfig, todosNews } from '../core/todos.ts'
 import type { Config } from '../core/types.ts'
 import { watchesConfig } from '../core/watches.ts'
@@ -191,6 +193,8 @@ async function main(): Promise<void> {
     const sinks = cfg.secrets === undefined ? [] : usableSinks(secretsConfig(cfg.secrets, { home: homedir() }))
     // The calendar (#328), only while config.json turns it on: else the brief is as it was.
     const calendar = calendarConfig(cfg.calendar) !== null || via.calendar
+    const mcp = boardMcpRegistered('claude', { rawConfig: readConfigFile(), profileDir: dir })
+    const team = teamConfig(cfg.team) !== null || via.team
     context = brief(
       cfg,
       card,
@@ -207,6 +211,7 @@ async function main(): Promise<void> {
       watchesConfig(gated.watches) !== null,
       // Decisions (#487), likewise.
       decisionsConfig(gated.decisions),
+      { mcp, team },
     )
     // The presence a node's master last said, when it has not been heard from for a while: its age.
     const stale = presence && presence === via.presence ? staleFlagsLine(flags, Date.now()) : null
@@ -215,9 +220,12 @@ async function main(): Promise<void> {
     if (presence) patch.presenceSeen = presence.since
     else if (card?.presenceSeen !== undefined) patch.presenceSeen = ''
   } else if (event === 'UserPromptSubmit') {
-    if (boardCard?.wait) context = waitReminder(boardCard)
+    let mcp: boolean | undefined
+    const isMcp = (): boolean =>
+      (mcp ??= boardMcpRegistered('claude', { rawConfig: readConfigFile(), profileDir: dir }))
+    if (boardCard?.wait) context = waitReminder(boardCard, isMcp())
     // Presence changed since this session was told: one line. A card that never heard of it reads nothing.
-    const news = presenceNews(card)
+    const news = presenceNews(card, isMcp)
     if (news) {
       context = context ? `${context}\n${news.line}` : news.line
       patch.presenceSeen = news.seen

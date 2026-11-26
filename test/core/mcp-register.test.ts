@@ -5,6 +5,8 @@ import {
   boardMcpUrl,
   claudeMcpEntry,
   codexMcpBlock,
+  hasCodexMcpEntry,
+  hasJsonMcpEntry,
   planCodexToml,
   planMcpServers,
   stdioMcpEntry,
@@ -148,5 +150,32 @@ describe('planCodexToml', () => {
       expect(() => planCodexToml(text, URL)).toThrow('another way')
     // A server of another name in the same shapes is not ours.
     expect(planCodexToml('[mcp_servers]\nother = { url = "x" }\n', URL)).toContain('[mcp_servers.agent-board]')
+  })
+})
+
+describe('hasJsonMcpEntry and hasCodexMcpEntry', () => {
+  test('JSON configs detect only an object mcpServers.agent-board entry', () => {
+    expect(hasJsonMcpEntry({ mcpServers: { [BOARD_MCP]: claudeMcpEntry(URL) } })).toBe(true)
+    expect(hasJsonMcpEntry({ mcpServers: { [BOARD_MCP]: stdioMcpEntry('bun', 'cli.ts') } })).toBe(true)
+    for (const raw of [
+      undefined,
+      null,
+      [],
+      {},
+      { mcpServers: {} },
+      { mcpServers: { other: {} } },
+      { mcpServers: { [BOARD_MCP]: null } },
+      { mcpServers: [] },
+    ])
+      expect(hasJsonMcpEntry(raw)).toBe(false)
+  })
+  test('Codex config.toml ignores comments and multiline strings, and catches tables or inline forms', () => {
+    expect(hasCodexMcpEntry(null)).toBe(false)
+    expect(hasCodexMcpEntry('')).toBe(false)
+    expect(hasCodexMcpEntry('# [mcp_servers.agent-board]\nmodel = "o3"\n')).toBe(false)
+    expect(hasCodexMcpEntry('notes = """\n[mcp_servers.agent-board]\n"""\n')).toBe(false)
+    expect(hasCodexMcpEntry(planCodexToml('model = "o3"\n', URL))).toBe(true)
+    expect(hasCodexMcpEntry('[mcp_servers."agent-board"]\nurl = "x"\n')).toBe(true)
+    expect(hasCodexMcpEntry('[mcp_servers]\nagent-board = { url = "x" }\n')).toBe(true)
   })
 })

@@ -145,6 +145,11 @@ test('the brief tells Claude of board todo only with agents on', () => {
   assert.ok(!brief(cfg, null, '', env, 'Claude', null, null).includes('board todo'))
   assert.ok(!brief(cfg, null, '', env, 'Claude', null, { agents: false }).includes('board todo'))
   assert.ok(brief(cfg, null, '', env, 'Claude', null, { agents: true }).includes('board todo add'))
+  assert.ok(
+    brief(cfg, null, '', env, 'Claude', null, { agents: true }, [], false, null, false, null, { mcp: true }).includes(
+      'card op ask',
+    ),
+  )
   assert.ok(!brief(cfg, null, '', env, 'Codex', null, { agents: true }).includes('board todo'))
 })
 

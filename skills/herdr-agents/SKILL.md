@@ -21,9 +21,11 @@ No `HERDR_ENV=1`: you are not in herdr (a plain terminal, the cloud, `claude -p`
 
 ## Your board card
 
-The agent-board hook told you at the start how to keep your card current (`board cat`, `doing`, `ask`, `wait`, `done`). `board` with no arguments shows the card, `board list` every session on the board, `board doctor` what is set up on this computer.
+The agent-board hook told you at the start how to keep your card current. Prefer the `agent-board` MCP server's `card` tool (`op`: `cat`, `doing`, `ask`, `wait`, `done`), or fall back to `board` (`board cat`, `doing`, `ask`, `wait`, `done`) if the MCP server is unavailable. `board` with no arguments shows the card, `board list` every session on the board, `board doctor` what is set up on this computer.
 
 ## Start another session
+
+Prefer the `agent-board` MCP server's `spawn` tool (`name`, `cwd`, optional `brief`, `profile`, `device`, `lane`, `agent`, `trust`), or fall back to `spawn-agent` (also needed for CLI-only flags such as `--label`, `--workspace`, `--model`, `--brief-file`, `--thread`):
 
 ```bash
 spawn-agent --name <Name> --cwd <folder> [--label "<tab label>"] [--brief-file <utf-8 file> | --brief "<text>"] [--workspace <herdr workspace id>] [--model <id or alias>] [--device <id|local>]
@@ -44,11 +46,11 @@ PowerShell-style names work too (`-Name -Cwd -Label -BriefFile -Brief -Workspace
 
 ## Talk to another session
 
-Use `ListAgents` to see the sessions and `SendMessage` to reach one by name. A reply comes back to you as a message of its own.
+Prefer the `agent-board` MCP server's `agents` tool (`op: "list"` to see all sessions across harnesses and devices; `op: "send"` with `to` and `message` to reach one by name). A reply comes back to you as a message of its own.
 
-- Other agents (`agy`, `pi`, Codex) and other devices: in Claude Code, `ListAgents` and `SendMessage` reach them through the board; in Antigravity (`agy`), pi and Codex, use the `agent-board` MCP server's `agents` tool; from any shell, `board agents` and `board send "<name|key>" "<text>"` do the same.
-- The board's install registers the `agent-board` MCP server in every agent here (Claude Code, Codex, agy, pi): its tools `card`, `schedule`, `agents`, `threads`, `thread`, `spawn` and `cal` do what the `board` commands and `spawn-agent` do, as your own session. In Claude Code the commands stay the main way; the tools are there when a shell is not.
-- A session that sits idle for an hour is put to sleep (herdr-wake, if installed): its pane stays, marked 💤. It is still the same session. `ListAgents` lists the sleeping ones too, and a `SendMessage` to one wakes it first (10 to 30 seconds), then delivers. Do not reroute its work or call it gone.
+- The board's install registers the `agent-board` MCP server in every agent here (Claude Code, Codex, agy, pi): its tools `card`, `schedule`, `agents`, `threads`, `thread`, `team`, `spawn` and `cal` are the primary way to talk to the board as your own session. Use `board` / `spawn-agent` as fallback when MCP is not connected, inside shell probes/scripts, or for CLI-only commands (`sleep`, `restart`, `archive`, `doctor`, `secret`, `todo`).
+- Fallback tools and commands: in Claude Code, `ListAgents` and `SendMessage` also reach sessions through the board; from any shell, `board agents` and `board send "<name|key>" "<text>"` do the same.
+- A session that sits idle for an hour is put to sleep (herdr-wake, if installed): its pane stays, marked 💤. It is still the same session. `agents` (`op: "list"`) lists the sleeping ones too, and sending a message (`agents` `op: "send"`, or `SendMessage`) wakes it first (10 to 30 seconds), then delivers. Do not reroute its work or call it gone.
 - Waking without a message: `curl -s -X POST http://127.0.0.1:12421/wake -d '{"target":"<name>"}'` (herdr-wake's API; `GET /sleeping` lists who sleeps).
 - Putting sessions to sleep that you coordinate: see the next section, one call for all of them.
 - Do not type into another session's pane (`herdr pane send-text`, `send-keys`, `agent prompt`) unless the user asked for it: it lands in whatever that session or the user is typing.
@@ -71,6 +73,8 @@ board sleep --when-free Report-north Report-south
 - Without herdr-wake, `board sleep` says so and puts nothing to sleep.
 
 ## Do something later
+
+Prefer the `agent-board` MCP server's `schedule` tool: `op: "remind"` (`when`, `text`, optional `idle: true`), `op: "every"` (`cron`, `text`, optional `idle: true`), `op: "list"`, `op: "unschedule"` (`id`). Fallback in a shell:
 
 ```bash
 board remind in 30m "check the CI of PR 12 and merge it if green"
@@ -111,11 +115,11 @@ When it helps:
 - You changed settings.json, a hook, a skill, CLAUDE.md or an MCP server's config, and this session needs it: Claude Code reads them only when it starts.
 - The session acts up: tools hang or time out, a hook misfires, the terminal looks broken.
 
-What it ends: everything that lives in this Claude process. Background agents and workflows, teammates, `CronCreate` and `ScheduleWakeup` jobs die with it; a background Bash command or a `Monitor` holds it instead (the board waits for them, 10 minutes at most). Finish or stop them (`TaskStop`) before you ask, and put anything due later into `board remind`. The conversation, your card and the board's schedule stay.
+What it ends: everything that lives in this Claude process. Background agents and workflows, teammates, `CronCreate` and `ScheduleWakeup` jobs die with it; a background Bash command or a `Monitor` holds it instead (the board waits for them, 10 minutes at most). Finish or stop them (`TaskStop`) before you ask, and put anything due later into `schedule` (`op: "remind"`, or `board remind` as fallback). The conversation, your card and the board's schedule stay.
 
 - When it does not happen (herdr-wake refused three times, background tasks ran for 10 minutes), the board types `[board reminder] restart did not happen: <why>. Your note for after it: <note>` once you are free.
 - `board restart` says at once when herdr-wake is not there or does not answer, and schedules nothing. Then ask the user to restart you by hand: `/exit`, then `claude --resume <session id>` in the same pane.
-- `board schedule` shows it while it is on its way, `board unschedule <id>` cancels it. Asked again before it happens, it is still one restart, with the newer note.
+- `schedule` (`op: "list"` / `"unschedule"`, or `board schedule` / `board unschedule <id>`) shows or cancels it while it is on its way. Asked again before it happens, it is still one restart, with the newer note.
 - `--session <name>` restarts another session, once that one is free; its prompt says who asked.
 
 ## An MCP server dropped
@@ -125,7 +129,7 @@ Symptoms: a server listed as failed or disconnected, its tools gone, or calls fa
 - Restart yourself: `board restart "MCP <server> dropped; I was <doing what>, next: <what>"`, then end your turn. On start Claude Code connects every MCP server again; that is the reliable way back.
 - After the restart, check that its tools are there (`ToolSearch` with the server's name). One that is still connecting can take a few seconds more; one that fails again is broken on its side, not in this session: say so to the user.
 - Do not try to drive the `/mcp` menu yourself: your terminal is busy with you, and keys typed into a menu land in the wrong place easily.
-- Without herdr-wake (`board restart` says so): ask the user to run `/mcp` in your session and Reconnect the server (on the web board: your card, "Terminal", then "Claude"). Meanwhile carry on with what does not need it, and `board wait "MCP <server> reconnect"`.
+- Without herdr-wake (`board restart` says so): ask the user to run `/mcp` in your session and Reconnect the server (on the web board: your card, "Terminal", then "Claude"). Meanwhile carry on with what does not need it, and `card` `op: "wait"` (or `board wait` if `agent-board` itself dropped).
 
 ## Do not
 

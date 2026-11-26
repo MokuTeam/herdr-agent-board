@@ -1,6 +1,6 @@
 ---
 name: herdr-agents
-description: "How a Codex session that runs inside herdr (HERDR_PANE_ID is set) works as a master: start another session with spawn-agent, keep its board card current, hand work to a session as a thread (board thread) and hear one line when it is done, answer in a thread you were given, message another session with herdr agent prompt, schedule work for later with board remind. For the raw herdr CLI reference run `herdr --skill`."
+description: "How a Codex session that runs inside herdr (HERDR_PANE_ID is set) works as a master: use the agent-board MCP tools (card, schedule, agents, threads, thread, team, spawn, cal) first and fall back to board --session <sid> / spawn-agent / herdr agent prompt when MCP is unavailable or for CLI-only flags. For the raw herdr CLI reference run `herdr --skill`."
 ---
 
 <!-- agent-board: installed by the agent-board plugin's install action (--codex-home); it replaces this file on updates. -->
@@ -21,14 +21,15 @@ No `HERDR_ENV=1`: you are not in herdr (a plain terminal, `codex exec`). Then no
 
 ## Your board card
 
-The board's hook told you at the start how to keep your card current. Your shell may not inherit the pane's environment, so every command names your session: `board --session <your session id> <command>`. The hook's last line gives the exact form to copy.
+The board's hook told you at the start how to keep your card current. Prefer the `agent-board` MCP server's tools (`card`, `schedule`, `agents`, `threads`, `thread`, `team`, `spawn`, `cal`), which run as your session with no `--session` to pass:
 
-- `board --session <sid> doing "<3-8 words>"` at the start of each distinct step.
-- `board --session <sid> ask "<question>"` before ending a turn that needs the user. `wait "<on what>"` when you are blocked on something outside this chat. `done "<result>"` when the task is finished.
-- `board --session <sid> list` shows every session on the board, `board --session <sid> doctor` what is set up here.
-- The same through MCP: the `agent-board` server's tools (`card`, `schedule`, `agents`, `threads`, `thread`, `spawn`, `cal`) do what these commands do, as your session, with no `--session` to pass.
+- `card` (`op`: `"doing"`, `text`: `"<3-8 words>"`) at the start of each distinct step; `cat` (`lane`, optional `text`) for your lane.
+- `card` (`op`: `"ask"`, `text`: `"<question>"`) before ending a turn that needs the user; `wait` (`text`: `"<on what>"`) when blocked outside this chat; `done` (`text`: `"<result>"`) when the task is finished.
+- Fallback when MCP is unavailable (or inside a shell script): your shell may not inherit the pane's environment, so every command names your session (`board --session <your session id> <command>`, as printed on the brief's fallback line): `board --session <sid> doing|ask|wait|done|cat`, `list` (every session on the board), `doctor` (what is set up here).
 
 ## Start another session
+
+Prefer the `agent-board` MCP server's `spawn` tool (`name`, `cwd`, optional `brief`, `profile`, `device`, `lane`, `agent`, `trust`). Fallback to `spawn-agent` when MCP is unavailable or when you need CLI-only flags (`--label`, `--workspace`, `--model`, `--brief-file`, `--thread`):
 
 ```bash
 spawn-agent --name <Name> --cwd <folder> [--label "<tab label>"] [--brief-file <utf-8 file> | --brief "<text>"] [--workspace <herdr workspace id>] [--model <id or alias>] [--agent claude|pi|codex] [--device <id|local>]
@@ -40,42 +41,43 @@ It opens a tab, starts the agent the way this computer is set up to, names the s
 - `--workspace` takes the workspace id (`wP`), not its label. Without it the session lands in your workspace.
 - Do not start an agent with `herdr agent start` or a bare command in a pane: it gets no name, no brief and none of this computer's launcher settings.
 - A new folder may show a "trust this folder" dialog: spawn-agent stops and says so; the user answers it in that tab.
-- Where the board has other devices it places the new session, also when you run on a node (spawn-agent asks the master then). `--device <id>` starts it on that machine (`local` is the master itself) and fails at once when the device is unknown, offline, or the folder cannot go there.
+- Where the board has other devices it places the new session, also when you run on a node (both `spawn` and `spawn-agent` ask the master then). `--device <id>` starts it on that machine (`local` is the master itself) and fails at once when the device is unknown, offline, or the folder cannot go there.
 - A one-off session that has finished can be taken off the board with `board archive --session <name>`, but only one you started, or when the user asks.
 
 ## Hand work out by thread, hear the result in one line
 
-The board's threads (`board thread`, the agent-board-threads skill has the whole story) keep a task's progress and result outside your context. `board thread list` says whether threads are on: "threads are off" means use the other way below.
+The board's threads (`threads` and `thread` MCP tools; fallback `board thread`, the agent-board-threads skill has the whole story) keep a task's progress and result outside your context. `threads` (`op: "list"`) says whether threads are on: "threads are off" means use the other way below.
 
-```bash
-board --session <sid> thread new "<title>" --to <session name>   # a thread in your lane, given to that session
-```
-
-- Put the key in the worker's brief: "Work in thread atlas-13: post your status and result there with `board --session <its sid> thread post`, a report as `--file`; send me nothing else."
-- You watch every thread you create. When the worker finishes, a line arrives as a prompt: `[board reminder from threads] atlas-13 done: <summary>. More: board thread changes`. Read more with `board thread show <key>` only if you need it.
-- `board --session <sid> thread changes` prints what moved since you last asked. `board thread watch <key> | --lane <id> | --mine` adds a watch.
+- `thread` (`op: "new"`, `title: "<title>"`, `to: "<session name>"`) makes a thread in your lane, given to that session. Fallback: `board --session <sid> thread new "<title>" --to <session name>`.
+- Put the key in the worker's brief: "Work in thread atlas-13: post your status and result there with the `thread` MCP tool (`op: "post"`, or `board --session <its sid> thread post` as fallback), a report as `files` (`--file`); send me nothing else."
+- You watch every thread you create. When the worker finishes, a line arrives as a prompt: `[board reminder from threads] atlas-13 done: <summary>. More: board thread changes`. Read more with `threads` (`op: "show"`, `key`, or `board thread show <key>`) only if you need it.
+- `threads` (`op: "changes"`) prints what moved since you last asked; `thread` (`op: "watch"`, `key` or omit `key` for `--mine`) adds a watch (CLI fallback for `--lane <id>` or `show --full`).
 - Without threads: `herdr agent wait <pane> --until idle --until done` (add `--timeout <ms>`), then `herdr agent read <pane> --source recent-unwrapped --lines 120`. Idle does not mean the task is done: tell the worker in its brief to end with a line you can find.
 
 ## When a session handed you a thread
 
 Your brief names a key (`atlas-13`). Report there, not in a message back:
 
-- `board --session <sid> thread post atlas-13 --status doing --summary "<where it stands, one line>"` at a step worth knowing.
-- `board --session <sid> thread done atlas-13 "<the result, one line>" --file out/report.md` when you finish. The summary is the one line the others hear: make it say the result. A long report goes as `--file`.
-- `board --session <sid> thread post atlas-13 --status waiting --waiting "<on what>"` when blocked outside the board.
-- `board --session <sid> thread ask atlas-13 "<question for the owner>"` when you need the owner's answer; the thread waits on the owner and your card moves to "needs the user".
-- A flag a command does not take is refused: read the error and fix the flag.
+- `thread` (`op: "post"`, `key: "atlas-13"`, `status: "doing"`, `summary: "<where it stands, one line>"`) at a step worth knowing.
+- `thread` (`op: "post"`, `key: "atlas-13"`, `status: "done"`, `summary: "<the result, one line>"`, `files: ["out/report.md"]`) when you finish (fallback: `board --session <sid> thread done atlas-13 "<summary>" --file out/report.md`). The summary is the one line the others hear: make it say the result.
+- `thread` (`op: "post"`, `key: "atlas-13"`, `status: "waiting"`, `summary` / `text`; CLI fallback for `--waiting "<on what>"`) when blocked outside the board.
+- `thread` (`op: "ask"`, `key: "atlas-13"`, `text: "<question for the owner>"`) when you need the owner's answer; the thread waits on the owner and your card moves to "needs the user".
+- A flag or argument a call does not take is refused: read the error and fix it.
 
 ## Talk to another session
+
+Prefer the `agent-board` MCP server's `agents` tool (`op: "list"`, `op: "send"` with `to` and `message`; fallback: `board --session <sid> agents` / `board --session <sid> send`). When you need to type directly into a pane's terminal (only for a session you coordinate or when the user asked):
 
 ```bash
 herdr agent list
 herdr agent prompt <pane or name> "<text>"
 ```
 
-`herdr agent prompt` types the text and presses Enter in one go. It is rejected with `agent_blocked` while that session shows a dialog; it queues behind a turn that is running. It lands in whatever the other session or the user is typing: use it for a session you coordinate or when the user asked for it, and prefer a thread when the message is a task. A long text goes in a file, with the prompt saying where to read it.
+`herdr agent prompt` types the text and presses Enter in one go. It is rejected with `agent_blocked` while that session shows a dialog; it queues behind a turn that is running. It lands in whatever the other session or the user is typing: prefer `agents` (`op: "send"`) for safe delivery and a thread when the message is a task. A long text goes in a file, with the prompt saying where to read it.
 
 ## Do something later
+
+Prefer the `agent-board` MCP server's `schedule` tool (`op: "remind"`, `"every"`, `"list"`, `"unschedule"`). Fallback in a shell:
 
 ```bash
 board --session <sid> remind in 30m "check the CI of PR 12 and merge it if green"
@@ -85,7 +87,7 @@ board --session <sid> schedule            # this session's entries
 board --session <sid> unschedule <id>
 ```
 
-At that time the board types `[board reminder] <text>` into this session as a prompt. Write the text as an instruction to yourself. By default it arrives on time, queued behind a running turn; `--idle` waits until the session is free.
+At that time the board types `[board reminder] <text>` into this session as a prompt. Write the text as an instruction to yourself. By default it arrives on time, queued behind a running turn; `idle: true` (`--idle`) waits until the session is free.
 
 ## Sleep and restart
 

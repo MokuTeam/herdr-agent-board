@@ -87,7 +87,9 @@ test('the briefs: threads as their reader takes them, calendar, presence', () =>
   expect(threadsConfig(b.threads)).toMatchObject({ agents: true, cases: true })
   expect(b.calendar).toBe(true)
   expect(b.presence).toEqual({ state: 'away', since: 1000, by: 'user' })
-  expect(briefFlags(null)).toEqual({ threads: undefined, calendar: false, presence: null })
+  expect(b.team).toBe(true)
+  expect(briefFlags({ master: 'm', on: [] }).team).toBe(false)
+  expect(briefFlags(null)).toEqual({ threads: undefined, calendar: false, presence: null, team: false })
   expect(briefFlags({ master: 'm', on: [] }).threads).toBeUndefined()
   // Presence on at the master but no state said: nothing told, never a made-up "at the computer".
   expect(briefFlags({ master: 'm', on: ['presence'] }).presence).toBeNull()

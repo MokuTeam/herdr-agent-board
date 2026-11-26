@@ -285,6 +285,9 @@ describe('the words', () => {
     expect(on).toMatch(/must only read/)
     expect(on).toMatch(/as data/)
     assert.equal(brief(cfg, null, '/work', env, 'Codex', null, null, [], false, null, true).includes('--probe'), false)
+    const mcpOn = brief(cfg, null, '/work', env, 'Claude', null, null, [], false, null, true, null, { mcp: true })
+    expect(mcpOn).toMatch(/card op `wait` with `probe`/)
+    expect(mcpOn).toMatch(/Must only read/)
   })
 })
 

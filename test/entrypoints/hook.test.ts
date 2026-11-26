@@ -628,3 +628,55 @@ test('threads on (#379): the start brief gains their block, with agents only; a 
   writeFileSync(configFile(box), JSON.stringify({ language: 'en', threads: { agents: false } }))
   assert.ok(!(await runHook(box, sessionStart(box, 's1'))).includes('board thread'))
 })
+
+test('Claude with agent-board MCP registered (#911): MCP-first brief, team, waitReminder; boardMcp: false reverts', async () => {
+  const box = await sandbox()
+  const home = box.env.USERPROFILE as string
+  writeConfig(box, { language: 'en', team: { hub: 'wss://hub.example', name: 'anna' } })
+  writeFileSync(
+    join(home, '.claude.json'),
+    JSON.stringify({ mcpServers: { 'agent-board': { type: 'http', url: 'http://127.0.0.1:12422/mcp' } } }),
+  )
+  putCard(box, { key: 's1', wait: 'CI' })
+  useLanguage('en')
+  const start = JSON.parse(await runHook(box, sessionStart(box, 's1'))).hookSpecificOutput.additionalContext as string
+  expect(start).toContain("Use the `agent-board` MCP server's tools")
+  expect(start).toContain('- card: op `cat`')
+  expect(start).toContain('- team: op `roster`')
+  expect(start).toContain('- Fallback: if the MCP server is unavailable')
+  expect(start).not.toContain('- board doing')
+
+  // Prompt wait reminder uses MCP wording when MCP is registered.
+  const prompt = { hook_event_name: 'UserPromptSubmit', session_id: 's1', cwd: box.dir, prompt: 'go on' }
+  expect(await runHook(box, prompt)).toBe(context('UserPromptSubmit', waitReminder({ wait: 'CI' }, true)))
+
+  // Prompt presenceNews uses MCP wording (`card op ask`) when MCP is registered.
+  const presenceDir = join(box.env.LOCALAPPDATA as string, 'herdr/plugins/agent-board')
+  mkdirSync(presenceDir, { recursive: true })
+  writeFileSync(join(presenceDir, 'presence.json'), JSON.stringify({ state: 'call', since: 5000, by: 'auto' }))
+  putCard(box, { key: 's1', wait: 'CI', presenceSeen: 1000, briefV: BRIEF_VERSION })
+  const callNews = JSON.parse(await runHook(box, prompt)).hookSpecificOutput.additionalContext as string
+  expect(callNews).toContain(waitReminder({ wait: 'CI' }, true))
+  expect(callNews).toContain('card op ask')
+  expect(callNews).not.toContain('board ask')
+
+  // Custom profile without its own .claude.json keeps command brief; with it gets MCP-first brief.
+  const work = profileFolder(box, '.claude-work')
+  putCard(box, { key: 's2' })
+  const workNoMcp = JSON.parse(await runHook(box, sessionStart(box, 's2'), 'p1', { CLAUDE_CONFIG_DIR: work }))
+    .hookSpecificOutput.additionalContext as string
+  expect(workNoMcp).toContain('- board doing')
+  expect(workNoMcp).not.toContain('- card: op')
+
+  writeFileSync(join(work, '.claude.json'), JSON.stringify({ mcpServers: { 'agent-board': { type: 'http' } } }))
+  const workMcp = JSON.parse(await runHook(box, sessionStart(box, 's2'), 'p1', { CLAUDE_CONFIG_DIR: work }))
+    .hookSpecificOutput.additionalContext as string
+  expect(workMcp).toContain('- card: op `cat`')
+
+  // boardMcp: false turns MCP brief off even when .claude.json has the entry.
+  writeConfig(box, { language: 'en', boardMcp: false })
+  const off = JSON.parse(await runHook(box, sessionStart(box, 's1'))).hookSpecificOutput.additionalContext as string
+  expect(off).toContain('- board doing')
+  expect(off).not.toContain("agent-board` MCP server's tools")
+  expect(await runHook(box, prompt)).toBe(context('UserPromptSubmit', waitReminder({ wait: 'CI' }, false)))
+})

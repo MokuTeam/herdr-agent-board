@@ -86,6 +86,10 @@ test('presenceNews: a card that never heard of presence reads nothing; a change 
   clearPresence()
   expect(presenceNews({ presenceSeen: -1 })).toEqual({ line: expect.stringMatching(/at the computer/), seen: 0 })
   expect(presenceNews({ presenceSeen: 2000 })).toBeNull()
+  setPresence('call', 'auto', 'auto', 3000)
+  expect(presenceNews({ presenceSeen: 2000 })?.line).toMatch(/board ask/)
+  expect(presenceNews({ presenceSeen: 2000 }, true)?.line).toMatch(/card op ask/)
+  expect(presenceNews({ presenceSeen: 2000 }, () => true)?.line).toMatch(/card op ask/)
 })
 
 test('markSessions marks briefed cards that never heard of it; unmarkSessions takes the mark off', () => {

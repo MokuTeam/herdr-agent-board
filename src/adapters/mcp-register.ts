@@ -15,8 +15,11 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
   BOARD_MCP,
+  boardMcpOff,
   boardMcpUrl,
   claudeMcpEntry,
+  hasCodexMcpEntry,
+  hasJsonMcpEntry,
   planCodexToml,
   planMcpServers,
   stdioMcpEntry,
@@ -208,6 +211,43 @@ export function registerBoardMcp(o: McpRegisterOptions): McpRegistered[] {
       out.push(editMcpJson('pi', file, o.on ? stdioMcpEntry(o.bun, o.cli) : null))
   }
   return out
+}
+
+export interface McpCheckOptions {
+  /** Raw config.json object (`boardMcp: false` turns registration off). */
+  rawConfig?: unknown
+  /** For Claude: the session's profile folder (from inheritedProfileDir()). */
+  profileDir?: string
+  home?: string
+  env?: Env
+  platform?: string
+}
+
+/**
+ * Whether the board's `agent-board` MCP server is registered for `harness` on this computer and
+ * not turned off by `boardMcp: false` in config.json. Read-only, never throws.
+ */
+export function boardMcpRegistered(harness: Harness, o: McpCheckOptions = {}): boolean {
+  if (boardMcpOff(o.rawConfig)) return false
+  const home = o.home ?? homedir()
+  const env = o.env ?? process.env
+  const platform = o.platform ?? process.platform
+  try {
+    if (harness === 'claude') {
+      const dir = o.profileDir ?? join(home, '.claude')
+      return hasJsonMcpEntry(parsed(readText(claudeStateFile(dir, home, platform))))
+    }
+    if (harness === 'codex') {
+      const dir = env.CODEX_HOME || join(home, '.codex')
+      return hasCodexMcpEntry(readText(join(dir, 'config.toml')))
+    }
+    const dirs = harnessDirs({ home, env })
+    if (harness === 'agy') return hasJsonMcpEntry(parsed(readText(join(dirs.agy, 'mcp_config.json'))))
+    if (harness === 'pi') return hasJsonMcpEntry(parsed(readText(join(dirs.pi, 'mcp.json'))))
+    return false
+  } catch {
+    return false
+  }
 }
 
 const HARNESS: Record<Harness, string> = { claude: 'Claude', codex: 'Codex', agy: 'Antigravity CLI', pi: 'pi' }

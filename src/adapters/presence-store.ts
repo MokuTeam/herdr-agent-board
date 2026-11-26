@@ -86,12 +86,13 @@ export const presenceForBrief = (cfg: Pick<Config, 'presence'>): Presence | null
  */
 export function presenceNews(
   card: Pick<Card, 'presenceSeen'> | null | undefined,
+  mcp: boolean | (() => boolean) = false,
 ): { line: string; seen: number } | null {
   const seen = card?.presenceSeen
   if (typeof seen !== 'number') return null
   const p = readPresence() ?? (seen === -1 ? NO_PRESENCE : null)
   if (!p || p.since === seen) return null
-  return { line: presenceLine(p), seen: p.since }
+  return { line: presenceLine(p, typeof mcp === 'function' ? mcp() : mcp), seen: p.since }
 }
 
 /**

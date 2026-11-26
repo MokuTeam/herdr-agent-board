@@ -156,8 +156,9 @@ owner. A session that is running gets the tools when it starts again.
 
 Only the `agent-board` entry is written; every other server and key stays as it was. The first
 time the board changes such a file it keeps a copy beside it as `<file>.bak-agent-board`. A file
-that does not parse is left alone and the install says so. Claude sessions keep the `board`
-commands in their brief; Codex and agy sessions are told about the tools as well.
+that does not parse is left alone and the install says so. Where the entry is registered for a
+harness (and not turned off with `boardMcp: false`), its brief puts the MCP tools first and keeps
+the `board` command as fallback; where it is not registered, the brief keeps the commands.
 
 To take the entries out of every harness and keep them out: `bun src/entrypoints/install.ts
 --no-mcp` (it writes `"boardMcp": false` into config.json); `--mcp` puts them back.

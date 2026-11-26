@@ -87,6 +87,9 @@ test('the brief block: as it was without cases, one line more with them, inside 
   assert.ok(cases.startsWith(`${plain}\n`))
   assert.match(cases, /--state/)
   assert.ok(cases.length <= BRIEF_MAX, String(cases.length))
+  const mcpCases = threadsBrief(threadsConfig({ cases: true }), true)
+  assert.match(mcpCases, /--state/)
+  assert.ok(mcpCases.length <= BRIEF_MAX, String(mcpCases.length))
 })
 
 test('a reference: one line, 200 characters; matched folded, a link by the id it ends in', () => {
