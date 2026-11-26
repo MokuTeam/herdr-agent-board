@@ -23,9 +23,9 @@ Design draft for [#889](https://github.com/MokuTeam/herdr-agent-board/issues/889
 
 Today the board runs as a plugin inside `herdr` (`herdr-plugin.toml`). Every runtime call shells out via `execFile` to `HERDR_BIN_PATH || 'herdr'` (`src/adapters/herdr.ts:12,87-118`). Every agent session sits inside an interactive shell pane (`pwsh.exe` on Windows, `bash`/`zsh` on Linux and macOS) often accompanied by a `herdr-sidebar` pane. This creates four structural costs:
 
-1. **Windows memory tax (#204, #243, #888):** Interactive `pwsh.exe` shells (~30–75 MB each), `OpenConsole.exe` / `conhost.exe` pairs, and `herdr-sidebar.exe` panes linger across sleeps, leaks, and reboots — repeatedly reaching **1.5–3.4 GB** of pure shell/console overhead on the owner's Windows laptop.
+1. **Windows memory tax (#204, #243, #888):** Interactive `pwsh.exe` shells (~30-75 MB each), `OpenConsole.exe` / `conhost.exe` pairs, and `herdr-sidebar.exe` panes linger across sleeps, leaks, and reboots, repeatedly reaching **1.5-3.4 GB** of pure shell/console overhead on the owner's Windows laptop.
 2. **Headless node weight:** Remote nodes (`src/core/node-plan.ts`, `src/core/node-oneshot.ts`) must install and supervise `herdr server` just to hold agent PTYs, even though nobody ever attaches a GUI window on a VPS.
-3. **Web terminal polling:** Because `herdr` exposes no PTY output stream, `src/services/terminals.ts:472-531` polls `herdr pane read` every 120 ms–1 s, runs `herdr pane layout` every 10 s, never resizes the underlying PTY, guesses cursor coordinates (`caretSpot`), and sends input via `herdr pane send-text` argv.
+3. **Web terminal polling:** Because `herdr` exposes no PTY output stream, `src/services/terminals.ts:472-531` polls `herdr pane read` every 120 ms to 1 s, runs `herdr pane layout` every 10 s, never resizes the underlying PTY, guesses cursor coordinates (`caretSpot`), and sends input via `herdr pane send-text` argv.
 4. **Fragile screen-scraping and ID reuse:** Launch, naming, sleep, wake, and dialogs must parse shell prompts (`atPrompt`), clear shell lines (`Esc` vs `Ctrl+U`), guard against `herdr` reusing `pane_id`s across restarts (`src/adapters/profile-panes.ts`, `terminals.ts:257-268`, `services/move-out.ts:269-293`), and skip `herdr-sidebar` "furniture" when closing tabs.
 
 **The goal:** Give the board its own pseudo-terminal host (`board-host`) running each agent executable **directly with no shell in between**. **Sleep = stop the process** (0 MB, 0 processes). **Wake = start a fresh PTY with `--resume`** (or the provider's equivalent). Put both `herdr` and `board-host` behind a clean `TerminalHost` interface, and unify `claude`, `codex`, `agy`, and `pi` behind a provider-agnostic `AgentProvider` contract so every existing board feature works identically across hosts and agents.
@@ -36,11 +36,11 @@ Before committing engineering time, compare this design (**Path B**) against the
 
 | Dimension | Path A: Stay on `herdr` + fix #888 (direct-command panes) | Path B: Board-owned PTY host (`board-host`) |
 |---|---|---|
-| **Windows RAM savings** | Recovers ~1.7–2.0 GB immediately by fixing empty-shell leaks and starting agents without `pwsh.exe` in between (`pane run` direct exe + `tab close` on sleep). | Recovers ~1.8–2.1 GB (0 MB per sleeper), minus ~50–80 MB base for `board-host` + ~2–5 MB per awake headless VT buffer. |
+| **Windows RAM savings** | Recovers ~1.7-2.0 GB immediately by fixing empty-shell leaks and starting agents without `pwsh.exe` in between (`pane run` direct exe + `tab close` on sleep). | Recovers ~1.8-2.1 GB (0 MB per sleeper), minus ~50-80 MB base for `board-host` + ~2-5 MB per awake headless VT buffer. |
 | **Engineering & risk** | Small, localized changes to `wake`/`spawn-agent`/`archive`/`move-out`; zero new ConPTY surface. | Large multi-phase build; board permanently owns cross-platform PTYs, Windows ConPTY quirks, headless VT emulation, and OS daemon units. |
 | **Linux / macOS RAM** | Saves ~5 MB per shell (negligible). | Roughly neutral (saves ~5 MB/shell, adds ~60 MB `board-host` base). |
 | **Headless VPS nodes** | Still requires installing and running `herdr >= 0.9.5` + `herdr.service`. | Zero `herdr` dependency; nodes need only Bun + git + agent CLIs. |
-| **Web terminal UX** | Remains `pane read` polling (120 ms–1 s), no real PTY resize, no native cursor, `send-text` argv. | Real WebSocket + `@xterm/xterm` stream, true PTY resize, real cursor, stdin writes. |
+| **Web terminal UX** | Remains `pane read` polling (120 ms to 1 s), no real PTY resize, no native cursor, `send-text` argv. | Real WebSocket + `@xterm/xterm` stream, true PTY resize, real cursor, stdin writes. |
 | **Native desktop tiling** | Keeps `herdr`'s GPU multi-pane tiling, splits, and `herdr-sidebar` out of the box. | Web board + `board attach <session>` in any external terminal (no built-in tiling WM). |
 
 **Key decisions proposed by this design:**
@@ -61,28 +61,28 @@ Before committing engineering time, compare this design (**Path B**) against the
 
 ### Measured baseline (from #204, #243, #888, and `docs/design/nodes/README.md` §4.4)
 
-- **Windows laptop (#888, 2026-11-26):** `herdr.exe` held **69 child `pwsh.exe`** processes — 53 empty shells, 11 `herdr-sidebar` shells, 5 `cmd -> claude` — totaling **~1.7 GB**, plus **98 `conhost.exe` / `OpenConsole.exe`** processes totaling **~460 MB**: roughly **~2.0–2.2 GB** of shell/console/sidebar overhead for only 5 active Claude agents.
+- **Windows laptop (#888, 2026-11-26):** `herdr.exe` held **69 child `pwsh.exe`** processes (53 empty shells, 11 `herdr-sidebar` shells, 5 `cmd -> claude`) totaling **~1.7 GB**, plus **98 `conhost.exe` / `OpenConsole.exe`** processes totaling **~460 MB**: roughly **~2.0-2.2 GB** of shell/console/sidebar overhead for only 5 active Claude agents.
 - **Earlier Windows readings confirm the pattern:**
   - `#204` (2026-10-27): 111 `pwsh.exe` (~1.54 GB sidebar shells + ~1.32 GB empty shells + ~0.18 GB `herdr-sidebar.exe`) = **~3.0 GB** for 14 live Claude sessions.
-  - `#243` (2026-10-29, 45 min after reboot): 46 `pwsh.exe` (**3.4 GB working set / 1.3 GB private**, ~75–85 MB each because PowerShell loads the user profile) + 49 `OpenConsole.exe` (**0.51 GB**).
+  - `#243` (2026-10-29, 45 min after reboot): 46 `pwsh.exe` (**3.4 GB working set / 1.3 GB private**, ~75-85 MB each because PowerShell loads the user profile) + 49 `OpenConsole.exe` (**0.51 GB**).
   - `docs/design/nodes/README.md` §4.4 (2026-11-21): 89 `pwsh.exe` = **1.5 GB**; 15 awake `claude.exe` = **5.1 GB (~340 MB each)**.
-- **Linux master (#888, 2026-11-26):** 16 `bash` processes = **~94 MB total (~5–6 MB each)**.
-- **macOS:** `zsh`/`bash` is similarly **~4–6 MB** per shell with no per-pane `OpenConsole.exe`.
+- **Linux master (#888, 2026-11-26):** 16 `bash` processes = **~94 MB total (~5-6 MB each)**.
+- **macOS:** `zsh`/`bash` is similarly **~4-6 MB** per shell with no per-pane `OpenConsole.exe`.
 
 ### Projected footprint: `herdr` with shells vs `board-host` without shells
 
-Scenario: **10 awake sessions + 50 sleeping sessions** (assuming `claude` at ~340–400 MB each, unchanged in both modes):
+Scenario: **10 awake sessions + 50 sleeping sessions** (assuming `claude` at ~340-400 MB each, unchanged in both modes):
 
 | Component | Windows (`herdr` today) | Windows (`board-host` native) | Linux / macOS (`herdr` today) | Linux / macOS (`board-host` native) |
 |---|---|---|---|---|
-| Host daemon + UI | `herdr.exe` + board (~150 MB) | `board-host` (~60–80 MB) + `board-server` (~80 MB) | `herdr` + board (~100 MB) | `board-host` (~60–80 MB) + `board-server` (~80 MB) |
-| Headless VT buffers (awake only) | Inside `herdr` | ~2–5 MB × 10 = **~35 MB** | Inside `herdr` | ~2–5 MB × 10 = **~35 MB** |
-| Consoles (`conhost` / `OpenConsole`) | ~5 MB × 60–98 = **~300–490 MB** | ~5 MB × 10 awake = **~50 MB** | 0 | 0 |
-| Shells (`pwsh` / `bash` / `zsh`) | ~30–75 MB × 60 = **~1.7–3.0 GB** | **0 MB** (no shell for agents) | ~5 MB × 60 = **~300 MB** (or ~50 MB if panes freed) | **0 MB** |
-| Sidebars (`herdr-sidebar`) | ~15–20 MB + shell × tabs | **0 MB** | ~10 MB × tabs | **0 MB** |
-| **Sleeping sessions (50)** | **~1.5–2.2 GB** (unless panes closed) | **0 MB, 0 processes** | **~250 MB** (if panes kept) | **0 MB, 0 processes** |
-| **Awake agent processes (10)** | **~3.4–4.0 GB** (+ MCP/tools) | **~3.4–4.0 GB** (unchanged) | **~3.4–4.0 GB** | **~3.4–4.0 GB** (unchanged) |
-| **Net non-agent overhead delta** | Baseline | **Saves ~1.8–2.1 GB** (and eliminates reboot empty-shell pileup) | Baseline | **Roughly neutral** (~0–200 MB saved; win is no `herdr` on headless nodes + WS terminal, not RAM) |
+| Host daemon + UI | `herdr.exe` + board (~150 MB) | `board-host` (~60-80 MB) + `board-server` (~80 MB) | `herdr` + board (~100 MB) | `board-host` (~60-80 MB) + `board-server` (~80 MB) |
+| Headless VT buffers (awake only) | Inside `herdr` | ~2-5 MB × 10 = **~35 MB** | Inside `herdr` | ~2-5 MB × 10 = **~35 MB** |
+| Consoles (`conhost` / `OpenConsole`) | ~5 MB × 60-98 = **~300-490 MB** | ~5 MB × 10 awake = **~50 MB** | 0 | 0 |
+| Shells (`pwsh` / `bash` / `zsh`) | ~30-75 MB × 60 = **~1.7-3.0 GB** | **0 MB** (no shell for agents) | ~5 MB × 60 = **~300 MB** (or ~50 MB if panes freed) | **0 MB** |
+| Sidebars (`herdr-sidebar`) | ~15-20 MB + shell × tabs | **0 MB** | ~10 MB × tabs | **0 MB** |
+| **Sleeping sessions (50)** | **~1.5-2.2 GB** (unless panes closed) | **0 MB, 0 processes** | **~250 MB** (if panes kept) | **0 MB, 0 processes** |
+| **Awake agent processes (10)** | **~3.4-4.0 GB** (+ MCP/tools) | **~3.4-4.0 GB** (unchanged) | **~3.4-4.0 GB** | **~3.4-4.0 GB** (unchanged) |
+| **Net non-agent overhead delta** | Baseline | **Saves ~1.8-2.1 GB** (and eliminates reboot empty-shell pileup) | Baseline | **Roughly neutral** (~0-200 MB saved; win is no `herdr` on headless nodes + WS terminal, not RAM) |
 
 ---
 
@@ -212,10 +212,10 @@ Every ID minted by `board-host` uses a monotonically unique prefix (`t_<ulid>` f
 
 `board-host` spawns the agent executable (`claude`, `codex`, `agy`, `pi`) directly as the PTY child with `cwd` and `env` passed via OS `spawn`, **with no `pwsh.exe`, `bash`, or `zsh` parent**:
 
-- **Zero interactive shell memory:** Eliminates `pwsh.exe` (~30–75 MB each) and `bash`/`zsh` (~5 MB each).
+- **Zero interactive shell memory:** Eliminates `pwsh.exe` (~30-75 MB each) and `bash`/`zsh` (~5 MB each).
 - **No prompt-scraping or clear-key hacks:** `atPrompt`, `clearKeyFor` (`Esc` vs `Ctrl+U`), `board resume` typed as shell text, and `herdr pane report-agent-session` disappear completely.
-- **No env/argv leaks:** `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `nodeEnv`, and `BOARD_TERM_ID` go into the child process's `env` block directly — never via `herdr tab create --env KEY=VAL` argv (`src/services/launch/launcher.ts:176-185`) or `herdr pane send-text` argv (`README.md:1487`).
-- **Critical Windows detail — `.cmd` / `.ps1` shims:** Globally npm/bun-installed CLIs on Windows (`claude.cmd`, `codex.cmd`, `pi.cmd`, `agy.cmd`) are batch wrappers, not PE binaries, so `CreateProcess` / ConPTY cannot execute them directly without an interpreter. `board-host` resolves Windows shims at spawn time:
+- **No env/argv leaks:** `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `nodeEnv`, and `BOARD_TERM_ID` go into the child process's `env` block directly, never via `herdr tab create --env KEY=VAL` argv (`src/services/launch/launcher.ts:176-185`) or `herdr pane send-text` argv (`README.md:1487`).
+- **Critical Windows detail (`.cmd` / `.ps1` shims):** Globally npm/bun-installed CLIs on Windows (`claude.cmd`, `codex.cmd`, `pi.cmd`, `agy.cmd`) are batch wrappers, not PE binaries, so `CreateProcess` / ConPTY cannot execute them directly without an interpreter. `board-host` resolves Windows shims at spawn time:
   1. Prefer native `.exe` if present on `PATH` (e.g. native `claude.exe` / `codex.exe`).
   2. For `.cmd` shims, parse the standard npm/bun shim pattern to extract `node.exe <entry.js>` and spawn `node.exe` directly with the PTY (0 shell processes!).
   3. Only for opaque `.cmd`/`.bat` scripts that cannot be unwrapped, fall back to `cmd.exe /d /s /c ...` (~4 MB, no PowerShell profile, exits the instant the child exits). **Never** wrap an agent in `pwsh.exe`.
@@ -226,9 +226,9 @@ Every ID minted by `board-host` uses a monotonically unique prefix (`t_<ulid>` f
 |---|---|---|---|---|
 | **Dependencies & install** | **Zero** (`bun >= 1.4.3` is already required by `package.json:21`). | Native `.node` prebuilds across 6 OS×arch targets (or C++ toolchain on install). | Separate Rust binary + cross-compile/signing pipeline. | Requires `node` installed alongside `bun` + `node-pty`. |
 | **Linux & macOS POSIX PTY** | Mature (`resize`, `setRawMode`, `write`, `close`). | Mature, battle-tested. | Mature, battle-tested. | Mature, battle-tested. |
-| **Windows ConPTY** | Added recently (Bun 1.3.14+/1.4.x); young — reports exist of swallowed SGR mouse sequences (`?1000h`/`?1006h`), signal/Job Object edge cases on `close()`, and Win10 ConPTY buffer backpressure. | Battle-tested across VS Code / Electron on Win10 & Win11 (`CreatePseudoConsole` + ConPTY cleanup). | Battle-tested (`portable-pty` + Win32 Job Objects). | Battle-tested (`node-pty` on its native Node ABI). |
+| **Windows ConPTY** | Added recently (Bun 1.3.14+/1.4.x); still young, with reports of swallowed SGR mouse sequences (`?1000h`/`?1006h`), signal/Job Object edge cases on `close()`, and Win10 ConPTY buffer backpressure. | Battle-tested across VS Code / Electron on Win10 & Win11 (`CreatePseudoConsole` + ConPTY cleanup). | Battle-tested (`portable-pty` + Win32 Job Objects). | Battle-tested (`node-pty` on its native Node ABI). |
 | **Bun runtime stability** | First-party Bun API. | Depends on Bun's N-API implementation on every Bun upgrade. | Immune to JS/N-API ABI churn and JS GC pauses. | Isolated from Bun N-API. |
-| **Memory overhead** | ~60–80 MB for `board-host` (shared across all sessions). | Same (~60–80 MB) + ~2 MB addon. | Lowest (~10–20 MB for the PTY host itself). | Extra ~45 MB for a Node process. |
+| **Memory overhead** | ~60-80 MB for `board-host` (shared across all sessions). | Same (~60-80 MB) + ~2 MB addon. | Lowest (~10-20 MB for the PTY host itself). | Extra ~45 MB for a Node process. |
 
 **Recommendation:** Put a ~60-line `PtyBackend` interface inside `board-host` and **start with `Bun.Terminal` (Option 1)** because the repository already requires Bun 1.4.3 and ships zero native addons. Gate commitment on a **Phase 1 Windows ConPTY verification spike** covering all 4 agents (launch, Cyrillic/UTF-8 paste, resize, `Esc`, `Ctrl+C`, `/exit`, descendant cleanup via Win32 Job Objects, zero leaked `conhost.exe`). If `Bun.Terminal` fails any Windows ConPTY check, swap `PtyBackend` on `win32` only to **`@lydell/node-pty` (Option 2)** or a tiny Windows-only ConPTY helper (Option 3) without changing any protocol or upper layer.
 
@@ -237,9 +237,9 @@ Every ID minted by `board-host` uses a monotonically unique prefix (`t_<ulid>` f
 Raw PTY streams cannot answer "is Claude's input box empty?", "is Codex showing `Would you like to run the following command?`?", or "how many `N task(s)` are in agy's footer?". Nor can a browser opening a terminal mid-session reconstruct the screen from bytes emitted hours earlier.
 
 Therefore `board-host` attaches one **`@xterm/headless`** instance (plus **`@xterm/addon-serialize`**) per awake PTY:
-- Scrollback bounded per PTY (e.g., 3,000 lines; ~2–5 MB RAM per awake session, 0 MB when asleep).
+- Scrollback bounded per PTY (e.g., 3,000 lines; ~2-5 MB RAM per awake session, 0 MB when asleep).
 - **`readScreen(id, { source: 'visible' | 'recent', lines, ansi })`** reads rendered cells / serialized SGR directly from memory (<1 ms, zero subprocesses) so every existing parser (`inputDraft`, `codexDraft`, `agyDraft`, `piDraft`, `parseDialog`, `trustDialog`, `isExitTasksDialog`, `isChannelsWarning`, `agyFooter`, `aside`) works without rewriting.
-- **Attach snapshot:** When a web client or `board attach` connects, `board-host` sends `@xterm/addon-serialize` output as the initial screen frame, then streams live raw PTY bytes — avoiding parser drift because `@xterm/headless` and `@xterm/xterm` share the exact same VT engine.
+- **Attach snapshot:** When a web client or `board attach` connects, `board-host` sends `@xterm/addon-serialize` output as the initial screen frame, then streams live raw PTY bytes. This avoids parser drift because `@xterm/headless` and `@xterm/xterm` share the exact same VT engine.
 
 ---
 
@@ -348,7 +348,7 @@ export interface AgentProvider {
 - `💤 <name>` pane labels and `adoptPi` shell recovery (except `herdr` mode).
 - `freePane`, `giveBack`, `wake-tidy.json`, and `herdr-sidebar` tab-cleanup logic (`#204`, `#243`).
 - `resume-report.ts` (`herdr pane report-agent-session`) on `SessionStart`.
-- **Reboot recovery:** When the OS reboots, `board-host` comes up with 0 PTYs. Every previously-awake resumable session in `board-host`'s ledger automatically renders as a **0-MB sleeping card** ready to wake on click, message, reminder, or Telegram — instead of restoring 46 empty `pwsh.exe` shells (`#243`).
+- **Reboot recovery:** When the OS reboots, `board-host` comes up with 0 PTYs. Every previously-awake resumable session in `board-host`'s ledger automatically renders as a **0-MB sleeping card** ready to wake on click, message, reminder, or Telegram, instead of restoring 46 empty `pwsh.exe` shells (`#243`).
 
 ---
 
@@ -364,7 +364,7 @@ export interface AgentProvider {
 | **On-demand shell (`terminals.ts` `shell` target)** | `POST /api/term/:key/shell/open` spawns a direct shell PTY (`pwsh`/`bash`/`zsh`) in `item.cwd` inside `board-host`, destroyed cleanly on close (no `terminals.json` furniture checks). |
 | **Opening the terminal locally (desktop window & native terminal)** | 1) Keep Edge/Chrome `--app` / PWA window (`edge-window.ts`), adding macOS (`osascript`) and Linux (`wmctrl`/`xdotool`/`hyprctl`/`swaymsg`) window raising so `openWeb` raises instead of opening duplicate windows. 2) Add **`board attach <session>`** to attach any native terminal (Windows Terminal, Ghostty, iTerm2, Alacritty) straight to `board-host`'s PTY with full resize and `Ctrl+]` detach. |
 | **Tabs, workspaces & sidebar** | Workspaces live in board metadata (`id`, `label`, `cwd`); `git worktree add/list` (`src/adapters/git.ts`) replaces `herdr worktree create\|open`. Web board adds an optional **docked terminal tab strip / pop-out (`?term=<key>`)** for keeping multiple terminals visible. `herdr-sidebar` is not rebuilt (session sheet already has Files/Changes/Transcript/Threads/Todos). |
-| **Pane IDs, `own-session`, `board thread verdict`, `mcp`, `skills/`** | Native PTYs export `BOARD_TERM_ID=t_<ulid>`, `BOARD_WORKSPACE_ID`, `BOARD_HOST=1` — and **never** set `HERDR_PANE_ID` or `HERDR_ENV=1`. Entrypoints (`cli.ts`, `hook.ts`, `own-session.ts`, `work-verify.ts`, `workdesk-workers.ts`, `mcp-relay.ts`, `statusline.ts`, `spawn-agent.ts`, `core/node-env.ts`, `core/bundle.ts`) check `BOARD_TERM_ID` first, then `HERDR_PANE_ID`. MCP sends `X-Board-Term` + `X-Board-Pane`. `board-host` is the fail-closed oracle for `paneSelf` (`work-verify.ts:700-716`). Add `board term new\|run\|read\|wait\|send\|close\|list` + a `board-agents` skill replacing raw `herdr pane split/run/read` in `skills/herdr-agents/`. |
+| **Pane IDs, `own-session`, `board thread verdict`, `mcp`, `skills/`** | Native PTYs export `BOARD_TERM_ID=t_<ulid>`, `BOARD_WORKSPACE_ID`, `BOARD_HOST=1`, and **never** set `HERDR_PANE_ID` or `HERDR_ENV=1`. Entrypoints (`cli.ts`, `hook.ts`, `own-session.ts`, `work-verify.ts`, `workdesk-workers.ts`, `mcp-relay.ts`, `statusline.ts`, `spawn-agent.ts`, `core/node-env.ts`, `core/bundle.ts`) check `BOARD_TERM_ID` first, then `HERDR_PANE_ID`. MCP sends `X-Board-Term` + `X-Board-Pane`. `board-host` is the fail-closed oracle for `paneSelf` (`work-verify.ts:700-716`). Add `board term new\|run\|read\|wait\|send\|close\|list` + a `board-agents` skill replacing raw `herdr pane split/run/read` in `skills/herdr-agents/`. |
 | **Notifications** | Windows (`toast.ps1`) and macOS (`AgentBoardToast.app`) already work without `herdr`; update click-reveal to accept `--term <id>` / `--pane <id>` and suppress popups when the web board terminal is active/focused. Linux replaces `herdr notification show` with `notify-send` / D-Bus `org.freedesktop.Notifications` (plus optional browser `Notification` API later). |
 | **Nodes, placement, moves & handover** | Headless nodes install Bun + `board-host` + `board-server` only (no `herdr`). `move-out.ts` drops `samePane` label/terminal_id checks (closing an agent stops its PTY directly). `placer.ts` keeps its initial-snapshot readiness gate against `TerminalHost`. `node-proxy.ts` proxies WebSocket upgrades alongside HTTP/SSE (preserving `403 desktop` on focus). `node/update.ts` restarts `board-server` only. |
 | **Workdesk** | `workdesk-workers.ts` (`callerSid`, `link`) and `workdesk-topology.ts` (`activeWorkers`) query `TerminalHost`, keeping all fail-closed invariants: rejecting `pane-*`/`term-*` keys, cross-checking `CLAUDE_CODE_SESSION_ID`/`CODEX_THREAD_ID`, and returning `null` if any foreground Claude/Codex terminal lacks a stable native SID. |
@@ -388,19 +388,19 @@ export interface AgentProvider {
 
 ### 9.2 Phases (smallest useful first)
 
-1. **Phase 0 — Internal seams (`TerminalHost` + `AgentProvider`, no behavior change):**
+1. **Phase 0: Internal seams (`TerminalHost` + `AgentProvider`, no behavior change):**
    - Extract `HerdrHost` over `src/adapters/herdr.ts` + `src/adapters/wake-herdr.ts` and unify the 4 agents under `AgentProvider`.
    - Ship with zero config, wire, or UX changes; prove parity with the full existing test suite.
-2. **Phase 1 — Windows ConPTY spike + minimal `board-host` (`hybrid` mode):**
+2. **Phase 1: Windows ConPTY spike + minimal `board-host` (`hybrid` mode):**
    - Build `board-host` (`PtyBackend` + `@xterm/headless` + local socket/pipe RPC) and `NativeHost`.
    - Run the **Windows ConPTY acceptance spike** before proceeding further (see 9.3).
    - Enable `terminalHost: "hybrid"` so new Claude/Codex/agy/pi sessions can launch, run, sleep (process stopped = 0 MB), and wake (`--resume`) on `board-host` alongside live `herdr` panes.
-3. **Phase 2 — Native hooks, WebSocket xterm.js terminal, on-demand shell & `board attach`:**
+3. **Phase 2: Native hooks, WebSocket xterm.js terminal, on-demand shell & `board attach`:**
    - Have `hook.ts`, `codex-hook.ts`, `agy-hook.ts` report state to `board-host` (removing `herdr integration install` dependency for native sessions).
    - Ship WebSocket `/api/term/:key/(agent|shell)/ws` + `@xterm/xterm` in `web/`, native shell PTYs, and `board attach <session>`.
-4. **Phase 3 — Full native parity (`terminalHost: "native"`):**
+4. **Phase 3: Full native parity (`terminalHost: "native"`):**
    - Board-owned workspaces + `git worktree`, `board term` CLI + `board-agents` skill, dual `X-Board-Term`/`X-Board-Pane` MCP headers, native Workdesk & `paneSelf` verdict oracle, Linux `notify-send`, macOS/Linux window raising, unified sleepers store, standalone config/state paths & OS units.
-5. **Phase 4 — Herdr-free nodes & live-session migration:**
+5. **Phase 4: Herdr-free nodes & live-session migration:**
    - Support `"native"` in `node-plan.ts` and `node-oneshot.ts` so new VPS/Mac/Windows nodes never install `herdr`.
    - Add `board migrate-host` (and UI button): waits for idle herdr sessions, sleeps resumable ones, closes idle panes, and wakes them inside `board-host` via `--resume`. Keep `"herdr"` mode supported and tested in CI.
 
@@ -434,7 +434,7 @@ Phase 1 does not advance to Phase 2 until all of the following pass on a real Wi
    - *Mitigation:* Per `AGENTS.md`, `"herdr"` remains the default; `HerdrHost` takes the exact existing path with zero new daemons/processes; CI runs the `TerminalHost` contract suite against both `HerdrHost` and `NativeHost`.
 6. **Long-term maintenance surface:**
    - *Risk:* Owning PTYs, ConPTY edge cases, `@xterm/headless`, `@xterm/xterm`, WebSocket proxying, and 3 OS service installers is a large ongoing surface compared to Path A (#888).
-   - *Mitigation:* Fix #888 first if immediate Windows RAM relief is the priority, then evaluate whether herdr-free nodes + real streaming web terminals justify starting Phase 0–1.
+   - *Mitigation:* Fix #888 first if immediate Windows RAM relief is the priority, then evaluate whether herdr-free nodes + real streaming web terminals justify starting Phase 0-1.
 
 ---
 
@@ -446,16 +446,16 @@ Even after Phase 4, these capabilities stay `herdr`-only (and are **not** rebuil
 - **`herdr-plugin.toml` plugin actions & workspace/overlay placement** (`src/entrypoints/open.ts`, `src/services/nav.ts` `goBack`).
 - **Legacy `herdr-wake` plugin coexistence & takeover** (`src/services/wake/takeover.ts`, `herdr-wake/`).
 - **`herdr --remote`** (replaced by the board's own remote/tunnel/PWA terminal + `board attach` over SSH).
-- **General-purpose non-agent terminal tabs** (the board hosts agent PTYs, per-session on-demand shells, and `board term` auxiliary panes — not an arbitrary desktop terminal multiplexer).
+- **General-purpose non-agent terminal tabs** (the board hosts agent PTYs, per-session on-demand shells, and `board term` auxiliary panes, not an arbitrary desktop terminal multiplexer).
 
 ---
 
 ## 12. Open questions for the owner
 
-1. **Path A (#888) vs Path B (this design):** Ship #888's direct-command `herdr` panes first for immediate ~2 GB Windows relief, or go straight to Phase 0–1 of `board-host`? *(Recommended: fix #888 first for quick relief, then run the Phase 1 ConPTY spike before committing to Phases 2–4.)*
+1. **Path A (#888) vs Path B (this design):** Ship #888's direct-command `herdr` panes first for immediate ~2 GB Windows relief, or go straight to Phase 0-1 of `board-host`? *(Recommended: fix #888 first for quick relief, then run the Phase 1 ConPTY spike before committing to Phases 2-4.)*
 2. **PTY backend choice:** Trial `Bun.Terminal` first behind `PtyBackend` (with `@lydell/node-pty` fallback on `win32`), or start directly with `@lydell/node-pty` / a Rust sidecar? *(Recommended: `Bun.Terminal` first, gated strictly by the Phase 1 Windows ConPTY checklist in §9.3.)*
 3. **Desktop shell:** Keep Edge/Chrome `--app` / PWA (plus macOS/Linux window raising) + `board attach` in any native terminal, or invest later in a dedicated Tauri/Electron wrapper? *(Recommended: `--app`/PWA + `board attach` first.)*
 4. **Web terminal renderer:** Use `@xterm/xterm` over WebSocket for native PTYs while keeping the lightweight DOM renderer for `herdr` panes (and optional low-memory phone mode), or replace everywhere? *(Recommended: `@xterm/xterm` for native PTYs, keep DOM renderer for `herdr` panes.)*
-5. **Multi-viewer resize policy:** When desktop and phone view the same native PTY, should desktop/last-active desktop own PTY dimensions while phone scrolls/fits read-only unless toggled? *(Recommended: yes — prevents phone width from squashing desktop TUI layouts.)*
-6. **Rollout order — Windows laptop vs headless Linux nodes:** Linux VPS nodes have zero ConPTY risk and drop `herdr` from node provisioning immediately, while Windows is where the ~2 GB RAM savings live. Run the Windows ConPTY spike first so both platforms stay aligned? *(Recommended: yes.)*
+5. **Multi-viewer resize policy:** When desktop and phone view the same native PTY, should desktop/last-active desktop own PTY dimensions while phone scrolls/fits read-only unless toggled? *(Recommended: yes, this prevents phone width from squashing desktop TUI layouts.)*
+6. **Rollout order (Windows laptop vs headless Linux nodes):** Linux VPS nodes have zero ConPTY risk and drop `herdr` from node provisioning immediately, while Windows is where the ~2 GB RAM savings live. Run the Windows ConPTY spike first so both platforms stay aligned? *(Recommended: yes.)*
 7. **Standalone config/state directories:** Keep `herdr/plugins/{config,state}/agent-board` when those folders already exist, and use `~/.config/agent-board` / `~/.local/state/agent-board` (plus Windows `%APPDATA%`/`%LOCALAPPDATA%`) on fresh herdr-free installs? *(Recommended: yes, with `AGENT_BOARD_CONFIG_DIR` / `AGENT_BOARD_STATE_DIR` overrides.)*
