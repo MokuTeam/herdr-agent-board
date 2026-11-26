@@ -122,6 +122,20 @@ export function confirmLines(a: Reply, t: Translator): ConfirmLines {
         title: t('team.confirm.members', { channel: typeof a.channel === 'string' ? a.channel : '' }),
         items: Array.isArray(a.members) ? a.members.map(String) : [t('team.confirm.unknown')],
       }
+    case 'channel-delete': {
+      const channel = typeof a.channel === 'string' ? a.channel : ''
+      const names = Array.isArray(a.members) ? a.members.map(String).join(', ') : ''
+      return {
+        title: t('team.confirm.channelDelete', { channel }),
+        ...(names && { items: [t('team.confirm.channelDeleteMembers', { names })] }),
+        note: t('team.confirm.channelDeleteNote'),
+      }
+    }
+    case 'channel-leave':
+      return {
+        title: t('team.confirm.channelLeave', { channel: typeof a.channel === 'string' ? a.channel : '' }),
+        note: t('team.confirm.channelLeaveNote'),
+      }
     case 'react': {
       const emoji = typeof a.emoji === 'string' ? a.emoji : ''
       const un = a.op === 'remove'

@@ -79,6 +79,10 @@ export type OwnerAction =
    * widens what agents may post where that lane is shared. Removing one is free.
    */
   | { kind: 'service-add'; name: string; lane: string }
+  /** Delete a channel this board started (#854): removes it locally and archives it for members. */
+  | { kind: 'channel-delete'; key: string }
+  /** Leave a channel another board started (#854): removes it locally and notifies members. */
+  | { kind: 'channel-leave'; key: string }
 
 /** Asks the computer's own authenticator first (Touch ID, Windows Hello) over a phone by QR (#367). */
 export const HINTS = ['client-device']

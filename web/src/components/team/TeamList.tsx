@@ -10,6 +10,7 @@ import { useState } from 'react'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import {
   type AgentsView,
+  archivedChannelsOf,
   channelsOf,
   type DraftLine,
   scopeThreads,
@@ -74,6 +75,7 @@ export function TeamList({
   const [later, setLater] = useState<string[]>([])
   const welcoming = agents ? view.roster.find(p => pending.includes(p.peer) && !later.includes(p.peer)) : undefined
   const channels = channelsOf(threads)
+  const archivedChannels = archivedChannelsOf(threads)
   const chatMuted = agents?.peers.team?.muted === true
   // Threads with someone no longer in the roster: still there to read, and to clear their count.
   const inRoster = new Set(view.roster.map(p => p.peer))
@@ -118,7 +120,7 @@ export function TeamList({
           key={welcoming.peer}
           peer={welcoming}
           agents={agents}
-          channels={channels.filter(c => c.by === 'me')}
+          channels={channels.filter(c => c.by === 'me' && !c.archived)}
           disabled={disabled}
           onDone={w => onWelcome?.(w)}
           onLater={() => setLater(l => [...l, welcoming.peer])}
@@ -144,10 +146,20 @@ export function TeamList({
           row(
             { key: c.key, thread: c },
             { kind: 'channel' },
-            { meta: t('team.membersCount', { n: c.members?.length ?? 0 }) },
+            { meta: c.archived ? t('team.channelArchived') : t('team.membersCount', { n: c.members?.length ?? 0 }) },
           ),
         )}
       </section>
+      {archivedChannels.length > 0 && (
+        <details className="team-scope team-archive" data-channel-archive>
+          <summary>
+            <h3>{t('team.channelArchive')}</h3>
+          </summary>
+          {archivedChannels.map(c =>
+            row({ key: c.key, thread: c }, { kind: 'channel' }, { meta: t('team.channelArchived'), muted: true }),
+          )}
+        </details>
+      )}
       <section className="team-scope team-roster">
         <h3>{t('team.roster')}</h3>
         {!view.roster.length && <p className="hint">{t('team.rosterEmpty')}</p>}

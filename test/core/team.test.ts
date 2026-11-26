@@ -565,3 +565,28 @@ test('checkMessage: a channel is a team topic with its members, sorted, each onc
   assert.equal(hasChannels({ caps: ['threads', 'channels'] }), true)
   assert.equal(hasChannels({ caps: ['threads'] }), false)
 })
+
+test('checkMessage: body.channel is standalone and carries a UUID + delete|leave (#854)', () => {
+  const id = '6f1c2a4e-8b3d-4c5e-9f7a-1b2c3d4e5f60'
+  for (const op of ['delete', 'leave'] as const) {
+    const ok = checkMessage(JSON.stringify({ ...ENV, body: { text: 'channel notice', channel: { id, op } } }), A.pub)
+    assert.equal(ok.ok, true)
+    if (ok.ok) assert.deepEqual(ok.msg.body.channel, { id, op })
+  }
+  const code = (body: unknown, mode: 'board' | 'relay' = 'board') => {
+    const r = checkMessage(JSON.stringify({ ...ENV, body }), A.pub, mode)
+    return r.ok ? 'ok' : r.code
+  }
+  for (const bad of [
+    { text: 'channel notice', channel: { id: 'general', op: 'delete' } },
+    { text: 'channel notice', channel: { id, op: 'archive' } },
+    { text: 'channel notice', channel: { id, op: 'delete', extra: 1 } },
+    { text: 'channel notice', channel: { id } },
+    { text: 'channel notice', channel: { id, op: 'delete' }, via: 'agent' },
+    { text: 'channel notice', channel: { id, op: 'delete' }, thread: { id, title: 'x', group: true } },
+    { text: 'channel notice', channel: { id, op: 'delete' }, at: 'helper' },
+  ]) {
+    assert.equal(code(bad, 'board'), 'bad_frame', JSON.stringify(bad))
+    assert.equal(code(bad, 'relay'), 'ok', JSON.stringify(bad))
+  }
+})

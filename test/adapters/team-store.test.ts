@@ -3,26 +3,48 @@
 // config.json. Nothing is created by reading.
 import { expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { configFile, joinTeam, leaveTeam, loadConfig } from '../../src/adapters/config-file.ts'
-import { stateDir, teamAuditFile, teamDraftsFile, teamInboxFile } from '../../src/adapters/paths.ts'
+import {
+  stateDir,
+  teamAuditFile,
+  teamDraftsFile,
+  teamInboxFile,
+  teamOutboxFile,
+  teamReactionsFile,
+} from '../../src/adapters/paths.ts'
+import { dropRead, markRead, peekReads } from '../../src/adapters/team-reads.ts'
 import {
   AUDIT_MAX_BYTES,
+  addChannelNotices,
   addDraft,
   addInbox,
   addOutbox,
+  applyReaction,
   audit,
   changePins,
+  changeThreads,
+  dropThreadDrafts,
+  dropThreadInbox,
+  dropThreadOutbox,
+  dropThreadReactions,
   ensureKey,
   type InboxItem,
   KEEP_PER_PEER,
+  keepDraftFile,
   keepJoinedKey,
   markAcked,
+  readChannelNotices,
   readDrafts,
   readInbox,
   readKey,
   readOutbox,
   readPins,
+  readReactions,
+  readThreads,
+  refuseChannelNotice,
   releaseHeld,
+  setChannelNoticeState,
   setOutState,
   takeDraft,
 } from '../../src/adapters/team-store.ts'
@@ -203,4 +225,100 @@ test('drafts: kept by id, oldest first, refused at the cap without writing, take
   expect(takeDraft('__proto__')?.id).toBe('__proto__')
   expect(({} as Record<string, unknown>).polluted).toBeUndefined()
   expect(({} as Record<string, unknown>).text).toBeUndefined()
+})
+
+test('channel purge helpers and notice outbox (#854): remove only target thread, create nothing on no-op', async () => {
+  isolatedHome()
+  const cid = '6f1c2a4e-8b3d-4c5e-9f7a-1b2c3d4e5f60'
+  const chKey = `team/${cid}`
+  const keepKey = `team/general`
+  // No-op calls create no state files.
+  expect(dropThreadInbox(chKey)).toBe(0)
+  expect(dropThreadOutbox(chKey)).toBe(0)
+  expect(dropThreadReactions(chKey)).toBe(0)
+  expect(dropThreadDrafts(chKey)).toBe(0)
+  dropRead(chKey)
+  expect(existsSync(teamInboxFile())).toBe(false)
+  expect(existsSync(teamOutboxFile())).toBe(false)
+  expect(existsSync(teamReactionsFile())).toBe(false)
+  expect(existsSync(teamDraftsFile())).toBe(false)
+  expect(peekReads()).toBeNull()
+
+  const me = await ensureKey()
+  addInbox(item('m1', { thread: chKey }))
+  addInbox(item('m2', { thread: keepKey }))
+  const e1 = await question(me, A, 'in ch')
+  const e2 = await question(me, A, 'in keep')
+  addOutbox({ env: e1, msg: msgOf(e1), state: 'queued', at: 1, thread: chKey })
+  addOutbox({ env: e2, msg: msgOf(e2), state: 'queued', at: 2, thread: keepKey })
+  applyReaction({
+    thread: chKey,
+    target: 'm1',
+    by: 'me',
+    emoji: '👍',
+    op: 'add',
+    ts: '2026-01-02T03:04:05.000Z',
+    id: 'r1',
+  })
+  applyReaction({
+    thread: keepKey,
+    target: 'm2',
+    by: 'me',
+    emoji: '👍',
+    op: 'add',
+    ts: '2026-01-02T03:04:05.000Z',
+    id: 'r2',
+  })
+  const srcFile = join(stateDir(), 'src.txt')
+  writeFileSync(srcFile, 'secret draft')
+  const draftPath = keepDraftFile('11111111-2222-4333-8444-555555555555', srcFile)
+  addDraft(
+    {
+      id: '11111111-2222-4333-8444-555555555555',
+      to: 'team',
+      text: 'draft in ch',
+      createdAt: 1,
+      thread: { id: cid },
+      file: { path: draftPath, name: 'src.txt', size: 12 },
+    },
+    10,
+  )
+  addDraft({ id: '22222222-2222-4333-8444-555555555555', to: 'team', text: 'draft keep', createdAt: 2 }, 10)
+  markRead(chKey, 100)
+  markRead(keepKey, 200)
+
+  expect(dropThreadInbox(chKey)).toBe(1)
+  expect(readInbox(A).map(i => i.id)).toEqual(['m2'])
+  expect(dropThreadOutbox(chKey)).toBe(1)
+  expect(readOutbox(A).map(o => o.thread)).toEqual([keepKey])
+  expect(dropThreadReactions(chKey)).toBe(1)
+  expect(readReactions().map(r => r.thread)).toEqual([keepKey])
+  expect(dropThreadDrafts(chKey)).toBe(1)
+  expect(existsSync(draftPath)).toBe(false)
+  expect(readDrafts().map(d => d.text)).toEqual(['draft keep'])
+  dropRead(chKey)
+  expect(peekReads()?.threads).toEqual({ [keepKey]: 200 })
+
+  // Channel notice outbox persists alongside threads and stays forward-only.
+  changeThreads(t => {
+    t[keepKey] = {
+      scope: 'team',
+      id: 'general',
+      title: null,
+      link: null,
+      handler: null,
+      muted: false,
+      by: 'me',
+      createdAt: 1,
+      lastAt: 1,
+    }
+  })
+  const nEnv = await question(me, A, 'channel notice')
+  addChannelNotices([{ env: nEnv, id: msgOf(nEnv).id, to: A, state: 'queued', at: 1 }])
+  expect(readChannelNotices()).toHaveLength(1)
+  expect(setChannelNoticeState(msgOf(nEnv).id, 'acked', 5)).toBe(true)
+  expect(setChannelNoticeState(msgOf(nEnv).id, 'delivered', 6)).toBe(false)
+  expect(readChannelNotices()[0]?.state).toBe('acked')
+  expect(refuseChannelNotice(msgOf(nEnv).id, 'not_member', 7)).toBe(false)
+  expect(readThreads()[keepKey]?.id).toBe('general')
 })

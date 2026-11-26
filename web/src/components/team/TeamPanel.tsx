@@ -170,6 +170,9 @@ export function TeamPanel({ open, onClose, back, focus, onFocused }: TeamPanelPr
         onWelcome={w => void team.welcome(w)}
         onNewChannel={newChannel}
         onAddMembers={(k, peers) => void team.addMembers(k, peers)}
+        onDeleteChannel={k => void team.deleteChannel(k)}
+        onLeaveChannel={k => void team.leaveChannel(k)}
+        onRestoreChannel={k => void team.restoreChannel(k)}
       />
     </Panel>
   )
@@ -247,6 +250,12 @@ export interface TeamBodyProps {
   onNewChannel?(): void
   /** More members for a channel this board started (#355). */
   onAddMembers?(key: string, peers: string[]): void
+  /** Deletes a channel this board started (#854). */
+  onDeleteChannel?(key: string): void
+  /** Leaves a channel another board started (#854), or removes an archived copy. */
+  onLeaveChannel?(key: string): void
+  /** Restores an archived channel back into the active list as read-only (#854). */
+  onRestoreChannel?(key: string): void
   /** The files that go with the next message in the thread on show (#371). */
   files?: readonly Attachment[]
   onAddFiles?(files: File[]): void
@@ -307,6 +316,9 @@ export function TeamBody(props: TeamBodyProps) {
             onReply={id => props.onReply?.(id)}
             {...(props.onReact && { onReact: props.onReact })}
             {...(props.onAddMembers && { onAddMembers: props.onAddMembers })}
+            {...(props.onDeleteChannel && { onDeleteChannel: props.onDeleteChannel })}
+            {...(props.onLeaveChannel && { onLeaveChannel: props.onLeaveChannel })}
+            {...(props.onRestoreChannel && { onRestoreChannel: props.onRestoreChannel })}
             {...(props.files && { files: props.files })}
             {...(props.onAddFiles && { onAddFiles: props.onAddFiles })}
             {...(props.onRemoveFile && { onRemoveFile: props.onRemoveFile })}
