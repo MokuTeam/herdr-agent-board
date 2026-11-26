@@ -3,7 +3,9 @@
 // a list the box sends as before); People and agents shows
 // what teammates can address (read only: exposure follows the lanes shared); the directories are
 // asked only while a peer in the roster sent one.
+
 import { afterEach, describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
 import { translator } from '../../src/core/i18n/translator.ts'
 import type { TeamView } from '../../src/services/team-hub.ts'
 import { TeamComposer, type TeamComposerProps } from '../../web/src/components/team/TeamComposer.tsx'
@@ -18,6 +20,7 @@ import { type Host, hostElements } from './support/react-events.ts'
 afterEach(restoreFetch)
 
 const t = translator('en')
+const css = readFileSync(new URL('../../web/styles/team.css', import.meta.url), 'utf8')
 const text = (nodes: Node[]): string => nodes.map(n => (n.kind === 'text' ? n.text : text(n.children))).join('')
 const ANA = 'A'.repeat(43)
 const BOB = 'B'.repeat(43)
@@ -164,27 +167,40 @@ describe("the box's list after @: the teammates, then the one picked's agents (#
     expect(o.calls).toEqual(['kept Tab', 'change hi @AnnaLee.ops '])
   })
 
-  test('a teammate with no agents: the second list is the line that says why; it puts nothing in, and Enter sends as before', () => {
+  test('a teammate with no agents: the second list is the line that says why; nothing puts it in, and Enter or Tab sends nothing', () => {
     for (const [value, why, words_] of [
       ['@Cleo.', 'lane', t('team.mentionNoneLane')],
       ['@DimaK.', 'key', t('team.mentionNoneKey')],
-      ['@Echo.', 'unknown', t('team.mentionNone')],
+      ['hi @Echo.', 'unknown', t('team.mentionNone')],
     ] as const) {
+      const name = value.slice(value.indexOf('@') + 1, -1)
       const b = box(value)
       expect(b.options.map(o => [o.attrs.get('data-none'), o.attrs.get('aria-disabled'), text([o])])).toEqual([
-        [why, 'true', `@${value.slice(1, -1)}${words_}`],
+        [why, 'true', `@${name}${words_}`],
       ])
       expect(b.options[0]?.attrs.get('aria-selected')).toBe('false')
       expect(b.hosts.find(h => h.tag === 'textarea')?.props['aria-activedescendant']).toBeUndefined()
-      b.tap(value.slice(1, -1))
-      b.press('Tab')
+      b.tap(name)
+      // The arrows move the caret as before: nothing to move to in the list.
       b.press('ArrowDown')
       expect(b.calls).toEqual([])
       b.press('Enter')
-      expect(b.calls).toEqual(['kept Enter', 'send'])
+      b.press('Tab')
+      expect(b.calls).toEqual(['kept Enter', 'kept Tab'])
     }
     expect(t('team.mentionNone')).toContain('needs the update')
     expect(t('team.mentionNoneLane')).not.toContain('update')
+  })
+
+  test('every teammate is listed, however many: the list scrolls instead of cutting them', () => {
+    const many = Array.from({ length: 12 }, (_, i) =>
+      peer(String.fromCharCode(97 + i).repeat(43), `Team${String(i).padStart(2, '0')}`),
+    )
+    const b = box('@', mentionPeople([], many))
+    expect(words(b)).toEqual(many.map(p => p.name))
+    const rule = css.match(/\.team-mentions \{[^}]*\}/)?.[0] ?? ''
+    expect(rule).toContain('max-height')
+    expect(rule).toContain('overflow-y: auto')
   })
 
   test('Esc lets the list go', () => {

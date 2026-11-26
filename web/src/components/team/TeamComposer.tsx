@@ -10,9 +10,6 @@ import { sendsOnKey } from '../../models/composer.ts'
 import { MENTION_NONE_KEY, type MentionPerson, type MentionRow, mentionRows } from '../../models/team.ts'
 import type { Quote } from '../../models/team-chat.ts'
 
-/** The composer's list after `@` shows this many lines at most (#832). */
-const MAX_CHOICES = 8
-
 /** The box grows up to this height (px), then scrolls. */
 const MAX_HEIGHT = 168
 
@@ -73,9 +70,10 @@ export function TeamComposer({
   const [active, setActive] = useState(0)
   const [closed, setClosed] = useState<string | null>(null)
   const at = mentions.length ? mentionAt(value, caret) : null
-  const fits = at && closed !== value ? mentionRows(mentions, at.who, at.code).slice(0, MAX_CHOICES) : []
-  // The keys go to the list only while it holds something to put in (#842): the line that says why
-  // a teammate has no agents is all it holds then, and Enter, Tab and the arrows do as before.
+  const fits = at && closed !== value ? mentionRows(mentions, at.who, at.code) : []
+  // Every line that fits is listed, and the list scrolls (#842). The line that says why a teammate
+  // has no agents puts nothing in: while it is all the list holds, Enter and Tab do nothing (the
+  // text is not sent half written) and the arrows move the caret as before.
   const pickable = fits.some(c => c.insert)
   const current = pickable ? Math.min(active, fits.length - 1) : -1
   const pick = (c: MentionRow): void => {
@@ -192,7 +190,8 @@ export function TeamComposer({
           }}
           onSelect={e => follow(e.currentTarget)}
           onKeyDown={e => {
-            // The list after `@` (#832) takes the arrows, Enter, Tab and Esc while it shows.
+            // The list after `@` (#832) takes Enter, Tab and Esc while it shows, and the arrows while it
+            // holds something to pick.
             if (fits.length > 0 && !e.nativeEvent.isComposing) {
               const i = current
               if (pickable && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
@@ -201,7 +200,7 @@ export function TeamComposer({
                 return
               }
               const plain = !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey
-              if (pickable && ((e.key === 'Enter' && plain) || (e.key === 'Tab' && plain))) {
+              if ((e.key === 'Enter' && plain) || (e.key === 'Tab' && plain)) {
                 e.preventDefault()
                 const c = fits[i]
                 if (c) pick(c)
