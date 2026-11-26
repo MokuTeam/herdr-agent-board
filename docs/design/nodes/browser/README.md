@@ -37,10 +37,10 @@ that lets Chrome's sandbox use user namespaces (Ubuntu 23.10 and later forbid th
 
 | Profile | Display | CDP | VNC | noVNC |
 |---|---|---|---|---|
-| `bsd` (Boston SD, Centium too) | :50 | 127.0.0.1:9223 | 5950 | 127.0.0.1:6080 |
-| `bb` (Blu Banyan) | :51 | 127.0.0.1:9224 | 5951 | 127.0.0.1:6081 |
-| `pf` (Blu Banyan, Power Factors in Workato), server-2 | :52 | 127.0.0.1:9225 | 5952 | 127.0.0.1:6082 |
-| `legacy` (Blu Banyan, Legacy in Workato), server-2 | :53 | 127.0.0.1:9226 | 5953 | 127.0.0.1:6083 |
+| `bsd` (the owner's main work) | :50 | 127.0.0.1:9223 | 5950 | 127.0.0.1:6080 |
+| `bb` (a second employer) | :51 | 127.0.0.1:9224 | 5951 | 127.0.0.1:6081 |
+| `pf` (bb's client A in Workato), server-2 | :52 | 127.0.0.1:9225 | 5952 | 127.0.0.1:6082 |
+| `legacy` (bb's client B in Workato), server-2 | :53 | 127.0.0.1:9226 | 5953 | 127.0.0.1:6083 |
 
 - Chrome for Testing 155 is copied from `/opt/nanoclaw-host/browsers/` when it is there, else the same
   version is downloaded; it lives in `~/browser/chrome/`. Profiles are in `~/browser/profiles/<name>/`
@@ -72,11 +72,11 @@ fourth field in `PROFILES` (`pf:52:9225:bb`) copies `~/browser/profiles/bb` once
 stopped, and the run starts the new one with its own display, CDP port, units and mokutab name. Google
 SSO and Workato then work in the copy as they do in bb; Workato may still ask to sign in once
 (its "Google" button). Then the profile is put in its workspace once:
-`workato_switch_environment {"profile":"pf","workspace":7633674}`.
+`workato_switch_environment {"profile":"pf","workspace":<workspace id>}`.
 
 A session working on that client calls `chrome_switch_profile {"profile":"pf"}` at its start (or passes
 `profile` on each call) and checks with `workato_session_context`. Another client is one more entry,
-such as `sunpower:54:9227:bb`, and one script run.
+such as `clientc:54:9227:bb`, and one script run.
 
 Units: `agent-board-xvfb@<name>`, `agent-board-chrome@<name>`, `agent-board-mokubot-mcp`, enabled;
 `agent-board-vnc@<name>` and `agent-board-novnc@<name>`, on demand.
@@ -96,7 +96,7 @@ account:setup`, `gh auth login --web`) opens as a tab in the first profile, wher
 (for SuiteCloud: the mokutab function `netsuite.sdf_consent`). SuiteCloud's saved logins do not travel
 from a Windows laptop (its `credentials` file is bound to that machine), so each account is set up again there.
 
-Avid stays on the laptop (it needs the VPN): no profile for it here.
+A client reachable only over the laptop's VPN stays on the laptop: no profile for it here.
 
 ## Bitwarden unlocks at start and syncs every hour
 
