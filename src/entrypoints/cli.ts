@@ -146,7 +146,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
-import { homedir, userInfo } from 'node:os'
+import { homedir, hostname, userInfo } from 'node:os'
 import { join, resolve } from 'node:path'
 import { readArchiveLog } from '../adapters/archive-store.ts'
 import {
@@ -203,7 +203,7 @@ import { agyCommand, codexCommand } from '../core/launch/agents.ts'
 import { withMasterFlags } from '../core/master-flags.ts'
 import { parseMoveAny } from '../core/move-device.ts'
 import { isKeptCall, UPLINK_REFUSED } from '../core/node-uplink.ts'
-import { isNodeOnly, nodeConfig } from '../core/nodes.ts'
+import { isNodeOnly, type NodesConfig, nodeConfig, nodesConfig, parseNodeKey } from '../core/nodes.ts'
 import { isOwnerServiceKey } from '../core/owner-services.ts'
 import { isPiSessionFile, piSessionId } from '../core/pi.ts'
 import { isPresenceState, type PresenceState, presenceConfig, presenceLine } from '../core/presence.ts'
@@ -354,6 +354,8 @@ interface Session {
   cwd: string
   name?: string | undefined
   pane?: string | null | undefined
+  device?: string | null | undefined
+  remoteItem?: Record<string, unknown> | undefined
 }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
@@ -412,12 +414,109 @@ const liveSessions = (): Map<string, LiveHit> => {
   return deps.homes.liveSessions([profiles.inheritedDir, ...profiles.list.map(p => p.dir)])
 }
 
+let cachedMasterNodes: NodesConfig | null | undefined
+/** This board's `nodes` configuration when it is a master; null otherwise (cached per process). */
+function masterNodes(): NodesConfig | null {
+  if (cachedMasterNodes === undefined) cachedMasterNodes = cfg.nodes ? nodesConfig(cfg.nodes, hostname()) : null
+  return cachedMasterNodes
+}
+
+function nodeErrorLine(raw: string, device: string): string {
+  if (raw === 'node-offline') return `node "${device}" is not reachable now`
+  if (raw === 'node-api') return `node "${device}" runs an incompatible board version: update it first`
+  if (raw === 'gone') return 'that session is no longer on the board'
+  return raw
+}
+
+type MasterHit =
+  | { kind: 'remote'; key: string; device: string; name: string; cwd: string; item: Record<string, unknown> }
+  | { kind: 'local'; key: string; name: string; cwd: string; pane: string | null }
+  | { kind: 'ambiguous'; error: string }
+  | { kind: 'none' }
+
+/** Match `word` against the master board's payload (local and node sessions); returns `'none'` on non-masters. */
+async function matchMasterSession(word: string): Promise<MasterHit> {
+  const nodes = masterNodes()
+  if (!nodes || nodeConfig(cfg.node)) return { kind: 'none' }
+  const body = cfg.web === false ? null : await boardAnswer()
+  if (!body) {
+    const at = parseNodeKey(word.trim())
+    if (at && at.device !== nodes.id) throw new Error(NO_BOARD)
+    return { kind: 'none' }
+  }
+  const A = await import('../core/agent-send.ts')
+  const own = A.ownDeviceOf(body) || nodes.id
+  const rawItems = Array.isArray(body.items) ? body.items : []
+  const hit =
+    A.resolveTarget(A.targetsOf(rawItems, own), word, own) ??
+    A.resolveTarget(A.targetsOf(rawItems, own, { includePaneless: true }), word, own)
+  if (!hit) return { kind: 'none' }
+  if ('error' in hit) return { kind: 'ambiguous', error: hit.error }
+  if (hit.target.device !== null) {
+    const raw = rawItems.find(i => isRecord(i) && i.key === hit.target.key)
+    return {
+      kind: 'remote',
+      key: hit.target.key,
+      device: hit.target.device,
+      name: hit.target.name,
+      cwd: hit.target.cwd,
+      item: isRecord(raw) ? raw : {},
+    }
+  }
+  return { kind: 'local', key: hit.target.key, name: hit.target.name, cwd: hit.target.cwd, pane: hit.target.pane }
+}
+
+async function resolveMasterSession(word: string): Promise<Exclude<MasterHit, { kind: 'ambiguous' }>> {
+  const hit = await matchMasterSession(word)
+  if (hit.kind === 'ambiguous') throw new Error(hit.error)
+  return hit
+}
+
+function remoteLine(item: Record<string, unknown>, cwd: string): string {
+  const cat = (typeof item.category === 'string' && item.category) || categoryFor(cfg, cwd)
+  const parts = [cat ? `${cat}${item.category ? '' : ' (guessed)'}` : 'category: not set']
+  if (typeof item.doing === 'string' && item.doing) parts.push(`doing: ${item.doing}`)
+  if (typeof item.wait === 'string' && item.wait) parts.push(`waiting: ${item.wait}`)
+  if (typeof item.ask === 'string' && item.ask) parts.push(`asks the user: ${item.ask}`)
+  if (typeof item.result === 'string' && item.result) parts.push(`done: ${item.result}`)
+  if (item.favorite) parts.push('favorite')
+  return parts.join(' · ')
+}
+
+async function postRemoteSession(
+  key: string,
+  action: string,
+  body: Record<string, unknown>,
+  device: string,
+  name: string,
+): Promise<Record<string, unknown>> {
+  const { boardCall, relayLine } = await import('./node-remote-cli.ts')
+  const r = await boardCall(cfg.port, `/api/session/${encodeURIComponent(key)}/${action}`, {
+    method: 'POST',
+    body,
+  })
+  if (!r) throw new Error(NO_BOARD)
+  const plain = relayLine(r)
+  if (plain) throw new Error(`${name}: ${plain}`)
+  if (r.body.ok !== true) {
+    const rawErr = typeof r.body.error === 'string' && r.body.error ? r.body.error : `HTTP ${r.status}`
+    throw new Error(`${name}: ${nodeErrorLine(rawErr, device)}`)
+  }
+  return r.body
+}
+
 /**
  * { key, cwd } of the session the command is about. `archived`: a --session name or pane that
  * no session on the board has may be an archived one's (its entries wait in its record).
  */
 async function resolveSession({ archived = false }: { archived?: boolean } = {}): Promise<Session> {
   if (target) {
+    if (!nodeConfig(cfg.node) && masterNodes()) {
+      const hit = await resolveMasterSession(target)
+      if (hit.kind === 'remote')
+        return { key: hit.key, cwd: hit.cwd, name: hit.name, device: hit.device, remoteItem: hit.item }
+      if (hit.kind === 'local') return { key: hit.key, cwd: hit.cwd, name: hit.name, pane: hit.pane }
+    }
     if (UUID.test(target)) return { key: target, cwd: '' }
     const t = target.toLowerCase()
     const item = (await collect(deps)).find(i =>
@@ -718,12 +817,19 @@ async function decisionsOnNode(args: readonly string[]): Promise<void> {
  * another session.
  */
 async function entryFor(s: Session) {
+  const setter = target ? await ownSession() : null
+  if (s.device) {
+    return {
+      key: s.key,
+      name: s.name ?? '',
+      ...(setter && setter.key !== s.key && { from: setter }),
+    }
+  }
   let cwd = ''
   try {
     if (s.pane) cwd = (await paneOf(s.pane))?.cwd ?? ''
   } catch {}
   cwd ||= liveSessions().get(s.key)?.session.cwd || s.cwd || ''
-  const setter = target ? await ownSession() : null
   return {
     key: s.key,
     name: s.name ?? '',
@@ -1285,6 +1391,10 @@ async function team(): Promise<void> {
         return { key: s.key, ...(s.name && { name: s.name }), ...(target && { claimed: true }) }
       },
       find: async word => {
+        if (!nodeConfig(cfg.node) && masterNodes()) {
+          const hit = await resolveMasterSession(word)
+          if (hit.kind === 'remote' || hit.kind === 'local') return { key: hit.key, name: hit.name }
+        }
         if (UUID.test(word)) return { key: word }
         const t = word.toLowerCase()
         const item = (await collect(deps)).find(i =>
@@ -1593,6 +1703,7 @@ async function main(): Promise<void> {
   let tail = ''
   switch (cmd) {
     case 'show':
+      if (s.device) return console.log(`ok · ${remoteLine(s.remoteItem ?? {}, s.cwd)} (on node ${s.device})`)
       break
     case 'cat': {
       const id = (words[0] ?? '').toLowerCase().replace(/[^a-z0-9_-]/g, '')
@@ -1608,12 +1719,25 @@ async function main(): Promise<void> {
         // As editCategories saved it: no color given is blue, no folders.
         cfg.categories.push({ id, title, color: 'blue', paths: [] })
       }
+      if (s.device) {
+        await postRemoteSession(s.key, 'card', { category: id }, s.device, s.name ?? s.key)
+        const extraCat = !cfg.categories.some(c => c.id === id) ? ` (new lane "${categoryInfo(cfg, id).title}")` : ''
+        return console.log(
+          `ok · ${remoteLine({ ...s.remoteItem, category: id }, s.cwd)} (on node ${s.device})${extraCat}`,
+        )
+      }
       writeCard(s.key, { category: id })
       break
     }
     case 'doing':
       if (!text) throw new Error('usage: board doing <text>')
       if (decisionsOn) await withdraw(s.key, now)
+      if (s.device) {
+        await postRemoteSession(s.key, 'card', { doing: text, by: 'agent' }, s.device, s.name ?? s.key)
+        return console.log(
+          `ok · ${remoteLine({ ...s.remoteItem, doing: text, wait: '', ask: '', result: '' }, s.cwd)} (on node ${s.device})`,
+        )
+      }
       // Back at work: whatever it waited for has arrived, whatever it asked is settled.
       writeCard(s.key, { doing: text, wait: '', waitSince: '', ask: '', askSince: '', result: '', by: 'agent' })
       ended = await endWatch(s)
@@ -1641,6 +1765,10 @@ async function main(): Promise<void> {
         )
       }
       if (!text) throw new Error('usage: board wait <text>')
+      if (s.device) {
+        await postRemoteSession(s.key, 'card', { wait: text, by: 'agent' }, s.device, s.name ?? s.key)
+        return console.log(`ok · ${remoteLine({ ...s.remoteItem, wait: text }, s.cwd)} (on node ${s.device})`)
+      }
       writeCard(s.key, { wait: text, waitSince: now, by: 'agent' })
       ended = await endWatch(s)
       // Watches off (#486): --probe is words of the text, as before; said only where it was given.
@@ -1649,6 +1777,19 @@ async function main(): Promise<void> {
       break
     }
     case 'ask':
+      if (s.device) {
+        if (decisionsOn && DECISION_FLAGS.some(f => flagWords.includes(f)))
+          throw new Error(
+            "--option and --default-after are for the session's own question: ask another session's card without them",
+          )
+        if (!text) throw new Error('usage: board ask <question>')
+        const given = !decisionsOn ? DECISION_FLAGS.filter(f => flagWords.includes(f)) : []
+        const askTail = given.length
+          ? ` · note: decisions are off in config.json, so ${given.join(', ')} ${given.length > 1 ? 'are' : 'is'} part of the question and no default will answer it`
+          : ''
+        await postRemoteSession(s.key, 'card', { ask: text, by: 'agent' }, s.device, s.name ?? s.key)
+        return console.log(`ok · ${remoteLine({ ...s.remoteItem, ask: text }, s.cwd)} (on node ${s.device})${askTail}`)
+      }
       // Decisions (#487): options, a recommendation and a default, only while config.json turns them on.
       // On a node (#781) a question with options is its master's: up the uplink, and on this card with
       // the decision the master holds; a plain one stays this card's ask, as without decisions.
@@ -1679,17 +1820,33 @@ async function main(): Promise<void> {
       break
     case 'done':
       if (decisionsOn) await withdraw(s.key, now)
+      if (s.device) {
+        await postRemoteSession(s.key, 'card', { done: true, result: text, by: 'agent' }, s.device, s.name ?? s.key)
+        return console.log(
+          `ok · ${remoteLine({ ...s.remoteItem, doing: '', wait: '', ask: '', result: text }, s.cwd)} (on node ${s.device})`,
+        )
+      }
       writeCard(s.key, { doing: '', wait: '', waitSince: '', ask: '', askSince: '', result: text, by: 'agent' })
       ended = await endWatch(s)
       break
     case 'clear':
       if (decisionsOn) await withdraw(s.key, now)
+      if (s.device) {
+        await postRemoteSession(s.key, 'card', { clear: true, by: 'agent' }, s.device, s.name ?? s.key)
+        return console.log(
+          `ok · ${remoteLine({ ...s.remoteItem, doing: '', wait: '', ask: '', result: '' }, s.cwd)} (on node ${s.device})`,
+        )
+      }
       writeCard(s.key, { doing: '', wait: '', waitSince: '', ask: '', askSince: '', result: '' })
       ended = await endWatch(s)
       break
     case 'favorite': {
       const off = words[0]?.toLowerCase()
       if (off !== undefined && off !== 'off') throw new Error('usage: board favorite [off]')
+      if (s.device) {
+        await postRemoteSession(s.key, 'card', { favorite: !off }, s.device, s.name ?? s.key)
+        return console.log(`ok · ${remoteLine({ ...s.remoteItem, favorite: !off }, s.cwd)} (on node ${s.device})`)
+      }
       writeCard(s.key, { favorite: off ? '' : true })
       break
     }
@@ -1724,8 +1881,16 @@ async function main(): Promise<void> {
       return
     }
     case 'todo':
+      if (s.device)
+        throw new Error(
+          `board todo --session is for sessions on this computer; run it in the session on node ${s.device}`,
+        )
       return todo(s.key)
     case 'compact':
+      if (s.device)
+        throw new Error(
+          `board compact --session is for sessions on this computer; run it in the session on node ${s.device}`,
+        )
       return console.log(compactCli(s.key, rest, cfg))
     case 'unschedule': {
       // An id is removed above, whoever set it; here only "all" of this session's, parked ones too.
@@ -1843,6 +2008,18 @@ function wakeMissing(up: { why: string }): string {
  * restart already on its way takes the new note.
  */
 async function restart(s: Session): Promise<void> {
+  if (s.device) {
+    const res = await postRemoteSession(
+      s.key,
+      'restart',
+      { ...(text && { text }), by: 'agent' },
+      s.device,
+      s.name ?? s.key,
+    )
+    return console.log(
+      `ok · restart ${String(res.id ?? '')} (on node ${s.device})${res.again ? ' is on its way already' : ': once the session is free'}`,
+    )
+  }
   // The board's own idea of the sessions, asked once: herdr not answering is none.
   let known: Item[] | undefined
   const items = async (): Promise<Item[]> => (known ??= await collect(deps).catch((): Item[] => []))
@@ -1933,7 +2110,14 @@ async function fork(): Promise<void> {
   const up =
     node && target && !foreignTargets([target], node.id) ? (await foreignTargetsUp([target], node.id))[0] : target
   const key = node && up && foreignTargets([up], node.id) ? up : undefined
-  const s = key ? { key, name: target || key } : await resolveSession()
+  let s: { key: string; name?: string | undefined }
+  if (key) s = { key, name: target || key }
+  else if (!node && target && masterNodes()) {
+    const hit = await resolveMasterSession(target)
+    s = hit.kind === 'remote' || hit.kind === 'local' ? { key: hit.key, name: hit.name } : await resolveSession()
+  } else {
+    s = await resolveSession()
+  }
   if (cfg.web === false) throw new Error('board fork goes through the web board, and config.json turns it off')
   const res = await fetch(`http://127.0.0.1:${cfg.port ?? 12422}/api/session/${encodeURIComponent(s.key)}/fork`, {
     method: 'POST',
@@ -2103,6 +2287,32 @@ async function resumeFolder(session: string, dir: string): Promise<string | null
  * closed right away rather than after the page's undo time. The user brings it back from the
  * board's archive. In English for agents, whatever language the board speaks.
  */
+async function archiveRemote(key: string, name: string, device: string): Promise<void> {
+  const { boardCall, relayLine } = await import('./node-remote-cli.ts')
+  const r = await boardCall(cfg.port, '/api/archive', {
+    method: 'POST',
+    body: { op: 'archive', keys: [key], immediate: true },
+    ms: 60_000,
+  })
+  if (!r) throw new Error(NO_BOARD)
+  const plain = relayLine(r)
+  if (plain) throw new Error(`${name} stays on the board: ${plain}`)
+  const failed = Array.isArray(r.body.failed) ? r.body.failed.filter(isRecord) : []
+  if (r.body.ok !== true || failed.length) {
+    const rawErr = String(failed[0]?.error ?? r.body.error ?? `HTTP ${r.status}`)
+    throw new Error(`${name} stays on the board: ${nodeErrorLine(rawErr, device)}`)
+  }
+  const doneList = Array.isArray(r.body.done) ? r.body.done.filter(isRecord) : []
+  const d = doneList[0]
+  const who = typeof d?.name === 'string' && d.name ? d.name : name
+  const heldCount = typeof d?.held === 'number' ? d.held : 0
+  const held = heldCount ? ` · ${heldCount} schedule ${heldCount === 1 ? 'entry waits' : 'entries wait'} with it` : ''
+  const state = d?.closed === false ? 'its pane closes in a moment' : 'its pane is closed'
+  console.log(
+    `ok · archived ${who} (on node ${device}): ${state}; the user can bring it back from the board's archive (Archive on the toolbar)${held}`,
+  )
+}
+
 async function archive(): Promise<void> {
   if (!target)
     throw new Error(
@@ -2111,6 +2321,12 @@ async function archive(): Promise<void> {
   // On a node (#786), another machine's session by its key: archived there, through the master.
   const node = nodeConfig(cfg.node)
   if (node && (await import('./node-remote-cli.ts')).foreignTargets([target], node.id)) return archiveUp(target)
+  let localKey: string | undefined
+  if (!node && masterNodes()) {
+    const hit = await resolveMasterSession(target)
+    if (hit.kind === 'remote') return archiveRemote(hit.key, hit.name, hit.device)
+    if (hit.kind === 'local') localKey = hit.key
+  }
   // Its helpers too: one with helpers at work stays, as on the web board.
   const items = await collect(deps, { helpers: true })
   const want = target.toLowerCase()
@@ -2120,7 +2336,8 @@ async function archive(): Promise<void> {
       return !!v && String(v).toLowerCase() === want
     })
   // An id or a pane says which one exactly; a name may fit several, and then none is taken.
-  let found = items.filter(i => is(i, ['key', 'session', 'pane']))
+  let found = localKey ? items.filter(i => i.key === localKey) : []
+  if (!found.length) found = items.filter(i => is(i, ['key', 'session', 'pane']))
   if (!found.length) found = items.filter(i => is(i, ['name', 'autoName']))
   if (found.length > 1)
     throw new Error(
@@ -2283,7 +2500,10 @@ function sleepLine(o: SleepOutcome): string {
   if (o.result === 'scheduled')
     return `${who}: ${held}; goes to sleep once it is free${o.again ? ' (asked before)' : ''} · cancel: board unschedule ${o.id}`
   if (o.why === 'unknown') return `${who}: no such session on the board`
-  if (o.why === 'ambiguous') return `${who}: fits several sessions (${o.detail}); give its session id or pane`
+  if (o.why === 'ambiguous')
+    return o.detail?.includes('fits more than one session')
+      ? o.detail
+      : `${who}: fits several sessions (${o.detail}); give its session id or pane`
   return `${who}: kept up, ${held}`
 }
 
@@ -2296,7 +2516,7 @@ function sleepLine(o: SleepOutcome): string {
  */
 async function sleep(): Promise<void> {
   if (piSessionFile !== undefined) return adoptPi()
-  const targets = [...words, ...(target ? [target] : [])]
+  let targets = [...words, ...(target ? [target] : [])]
   if (!targets.length && !self)
     throw new Error(
       'usage: board sleep <id|name|pane>... [--when-free] [--self]: the sessions to put to sleep (a name with spaces in quotes; --self: this one, once its turn is over)',
@@ -2309,6 +2529,118 @@ async function sleep(): Promise<void> {
     // A bare id or name of another machine's session (#798): found through the master, put to sleep there.
     const up = await foreignTargetsUp(targets, node.id)
     if (foreignTargets(up, node.id)) return sleepUp(up)
+  }
+  if (!node && masterNodes() && targets.length) {
+    const asked = [...new Set(targets.map(s => s.trim()).filter(Boolean))]
+    const matches = new Map<string, MasterHit>()
+    for (const t of asked) matches.set(t, await matchMasterSession(t))
+    const hasRemoteOrAmbiguous = asked.some(t => {
+      const k = matches.get(t)?.kind
+      return k === 'remote' || k === 'ambiguous'
+    })
+    if (hasRemoteOrAmbiguous) {
+      const remoteKeyOf = new Map<string, string>()
+      const localEntries: { asked: string; resolved: string }[] = []
+      for (const t of asked) {
+        const hit = matches.get(t)
+        if (hit?.kind === 'remote') remoteKeyOf.set(t, hit.key)
+        else if (hit?.kind === 'local') localEntries.push({ asked: t, resolved: hit.key })
+        else if (hit?.kind === 'none') localEntries.push({ asked: t, resolved: t })
+      }
+      if (localEntries.length || self) {
+        const up = await wakeAnswers(deps)
+        if (!up.ok) throw new Error(`putting sessions to sleep needs ${wakeMissing(up)}; nothing was put to sleep`)
+      }
+      const from = await ownSession()
+      if (self && !from)
+        throw new Error(
+          'board sleep --self is for the session running it, and this is none: run it from a Claude session in herdr; nothing was put to sleep',
+        )
+      const remoteByKey = new Map<string, SleepOutcome>()
+      if (remoteKeyOf.size) {
+        const remoteKeys = [...new Set(remoteKeyOf.values())]
+        const { boardCall, relayLine } = await import('./node-remote-cli.ts')
+        const r = await boardCall(cfg.port, '/api/sleep', {
+          method: 'POST',
+          body: { targets: remoteKeys, ...(whenFree && { whenFree: true }) },
+          ms: 60_000,
+        })
+        if (!r) throw new Error(NO_BOARD)
+        const plain = relayLine(r)
+        if (plain) throw new Error(`${plain}; nothing was put to sleep`)
+        const got = (Array.isArray(r.body.results) ? r.body.results.filter(isRecord) : []) as unknown as SleepOutcome[]
+        if (!got.length) throw new Error(`the board said ${r.status}${r.body.error ? `: ${String(r.body.error)}` : ''}`)
+        for (const o of got) {
+          const at = parseNodeKey(o.target)
+          const fixed: SleepOutcome =
+            o.why === 'error' && o.detail && at ? { ...o, detail: nodeErrorLine(o.detail, at.device) } : o
+          remoteByKey.set(o.key ?? o.target, fixed)
+        }
+      }
+      const items = localEntries.length || self ? await collect(deps) : []
+      let others = localEntries
+      let me: Item[] = []
+      if (self && from) {
+        me = sessionsFor(items, from.key)
+        if (!me.length)
+          throw new Error(
+            `board sleep --self: this session (${from.key}) is not on the board; nothing was put to sleep`,
+          )
+        others = localEntries.filter(({ resolved }) => {
+          const fits = sessionsFor(items, resolved)
+          return !(fits.length === 1 && me.some(m => m.key === fits[0]?.key))
+        })
+      }
+      const localOutcomes = others.length
+        ? await sleepMany(
+            deps,
+            items,
+            others.map(e => e.resolved),
+            { whenFree, by: 'agent', ...(from && { from }) },
+          )
+        : []
+      const localByResolved = new Map(localOutcomes.map(o => [o.target, o]))
+      const selfOutcomes = self && from ? await sleepMany(deps, items, [from.key], { whenFree: true, by: 'agent' }) : []
+      const results: SleepOutcome[] = [
+        ...asked.flatMap((t): SleepOutcome[] => {
+          const hit = matches.get(t)
+          if (hit?.kind === 'ambiguous') return [{ target: t, result: 'kept', why: 'ambiguous', detail: hit.error }]
+          if (hit?.kind === 'remote') {
+            const o = remoteByKey.get(hit.key)
+            return [o ? { ...o, target: t } : { target: t, result: 'kept', why: 'error', detail: 'no answer' }]
+          }
+          const resolved = hit?.kind === 'local' ? hit.key : t
+          if (!others.some(e => e.resolved === resolved)) return []
+          const o = localByResolved.get(resolved)
+          return [o ? { ...o, target: t } : { target: t, result: 'kept', why: 'unknown' }]
+        }),
+        ...selfOutcomes,
+      ]
+      const each = [...new Map(results.map(o => [o.key ?? o.target, o.result])).values()]
+      const count = (result: SleepOutcome['result']): number => each.filter(r => r === result).length
+      const kept = count('kept')
+      const head = [
+        `${count('asleep')} put to sleep`,
+        count('already') && `${count('already')} asleep already`,
+        count('scheduled') && `${count('scheduled')} once free`,
+        kept && `${kept} kept up`,
+      ]
+      const hint =
+        !whenFree &&
+        results.some(o => o.result === 'kept' && ['busy', 'dialog', 'draft', 'tasks'].includes(o.why ?? ''))
+          ? ' · with --when-free the busy ones go to sleep once they are free'
+          : ''
+      const note = count('scheduled') ? await schedulerNote() : ''
+      const nudge = self && from ? await caseNudge(from.key) : ''
+      console.log(
+        [`ok · ${head.filter(Boolean).join(', ')}${hint}${note}${nudge}`, ...results.map(sleepLine)].join('\n'),
+      )
+      return
+    }
+    targets = targets.map(t => {
+      const hit = matches.get(t.trim())
+      return hit?.kind === 'local' ? hit.key : t
+    })
   }
   const up = await wakeAnswers(deps)
   if (!up.ok) throw new Error(`putting sessions to sleep needs ${wakeMissing(up)}; nothing was put to sleep`)
@@ -2432,18 +2764,7 @@ async function moveDevice(targets: string[], device: string, dryRun: boolean): P
  * Claude profile, keeping their conversation (services/move.ts); a line for each. In English for
  * agents, whatever language the board speaks.
  */
-async function move(): Promise<void> {
-  const asked = parseMoveAny([...rest, ...(target ? [target] : [])])
-  if (asked.device !== undefined) {
-    // On a node (#798): a bare id or name of another machine's session goes by its key, which the relay takes up.
-    const node = nodeConfig(cfg.node)
-    const targets = node ? await foreignTargetsUp(asked.targets, node.id) : asked.targets
-    return moveDevice(targets, asked.device, asked.dryRun)
-  }
-  const { targets, profile } = asked
-  const from = await ownSession()
-  const items = await collect(deps)
-  const results = await moveMany(deps, items, targets, { profile, whenFree, by: 'agent', ...(from && { from }) })
+async function printMoveResults(results: MoveOutcome[], profile: string): Promise<void> {
   const count = (result: MoveOutcome['result']): number => results.filter(o => o.result === result).length
   const head = [
     `${count('moved')} moved to ${profile}`,
@@ -2452,6 +2773,97 @@ async function move(): Promise<void> {
   ]
   const note = count('scheduled') ? await schedulerNote() : ''
   console.log([`ok · ${head.filter(Boolean).join(', ')}${note}`, ...results.map(o => moveLine(o, profile))].join('\n'))
+}
+
+async function move(): Promise<void> {
+  const asked = parseMoveAny([...rest, ...(target ? [target] : [])])
+  const node = nodeConfig(cfg.node)
+  if (asked.device !== undefined) {
+    // On a node (#798): a bare id or name of another machine's session goes by its key, which the relay takes up.
+    let targets = asked.targets
+    if (node) targets = await foreignTargetsUp(asked.targets, node.id)
+    else if (masterNodes()) {
+      targets = await Promise.all(
+        asked.targets.map(async t => {
+          const hit = await matchMasterSession(t)
+          return hit.kind === 'local' || hit.kind === 'remote' ? hit.key : t
+        }),
+      )
+    }
+    return moveDevice(targets, asked.device, asked.dryRun)
+  }
+  let { targets } = asked
+  const { profile } = asked
+  if (!node && masterNodes()) {
+    const uniqueAsked = [...new Set(targets.map(s => s.trim()).filter(Boolean))]
+    const matches = new Map<string, MasterHit>()
+    for (const t of uniqueAsked) matches.set(t, await matchMasterSession(t))
+    const hasRemoteOrAmbiguous = uniqueAsked.some(t => {
+      const k = matches.get(t)?.kind
+      return k === 'remote' || k === 'ambiguous'
+    })
+    if (hasRemoteOrAmbiguous) {
+      const remoteKeyOf = new Map<string, string>()
+      const localEntries: { asked: string; resolved: string }[] = []
+      for (const t of uniqueAsked) {
+        const hit = matches.get(t)
+        if (hit?.kind === 'remote') remoteKeyOf.set(t, hit.key)
+        else if (hit?.kind === 'local') localEntries.push({ asked: t, resolved: hit.key })
+        else if (hit?.kind === 'none') localEntries.push({ asked: t, resolved: t })
+      }
+      const remoteByKey = new Map<string, MoveOutcome>()
+      if (remoteKeyOf.size) {
+        const remoteKeys = [...new Set(remoteKeyOf.values())]
+        const { boardCall, relayLine } = await import('./node-remote-cli.ts')
+        const r = await boardCall(cfg.port, '/api/move', {
+          method: 'POST',
+          body: { targets: remoteKeys, profile, ...(whenFree && { whenFree: true }) },
+          ms: 5 * 60_000,
+        })
+        if (!r) throw new Error(NO_BOARD)
+        const plain = relayLine(r)
+        if (plain) throw new Error(`${plain}; nothing was moved`)
+        const got = (Array.isArray(r.body.results) ? r.body.results.filter(isRecord) : []) as unknown as MoveOutcome[]
+        if (!got.length) throw new Error(`the board said ${r.status}${r.body.error ? `: ${String(r.body.error)}` : ''}`)
+        for (const o of got) {
+          const at = parseNodeKey(o.target)
+          const fixed: MoveOutcome = o.why && at ? { ...o, why: nodeErrorLine(o.why, at.device) } : o
+          remoteByKey.set(o.key ?? o.target, fixed)
+        }
+      }
+      const from = localEntries.length ? await ownSession() : null
+      const items = localEntries.length ? await collect(deps) : []
+      const localOutcomes = localEntries.length
+        ? await moveMany(
+            deps,
+            items,
+            localEntries.map(e => e.resolved),
+            { profile, whenFree, by: 'agent', ...(from && { from }) },
+          )
+        : []
+      const localByResolved = new Map(localOutcomes.map(o => [o.target, o]))
+      const results: MoveOutcome[] = uniqueAsked.map((t): MoveOutcome => {
+        const hit = matches.get(t)
+        if (hit?.kind === 'ambiguous') return { target: t, result: 'refused', why: hit.error }
+        if (hit?.kind === 'remote') {
+          const o = remoteByKey.get(hit.key)
+          return o ? { ...o, target: t } : { target: t, result: 'refused', why: 'no answer' }
+        }
+        const resolved = hit?.kind === 'local' ? hit.key : t
+        const o = localByResolved.get(resolved)
+        return o ? { ...o, target: t } : { target: t, result: 'refused', why: 'no such session on the board' }
+      })
+      return printMoveResults(results, profile)
+    }
+    targets = targets.map(t => {
+      const hit = matches.get(t.trim())
+      return hit?.kind === 'local' ? hit.key : t
+    })
+  }
+  const from = await ownSession()
+  const items = await collect(deps)
+  const results = await moveMany(deps, items, targets, { profile, whenFree, by: 'agent', ...(from && { from }) })
+  return printMoveResults(results, profile)
 }
 
 /**

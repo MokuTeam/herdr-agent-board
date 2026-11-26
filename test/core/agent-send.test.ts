@@ -399,3 +399,26 @@ test('#912 planSend strips own device prefix (@<own>:<key>) for master-side sess
   })
   expect(standalone).toEqual({ error: `no session "@laptop:${A}" on the board` })
 })
+
+test('#930 resolveTarget strips own device prefix and matches bare non-UUID remote keys when unique', () => {
+  const targets = targetsOf([
+    card(A, 'master-s', { pane: 'w1:p1' }),
+    card('pane-w1:p2', 'local-pane', { session: null, pane: 'w1:p2' }),
+    card('@laptop:pane-w2:p9', 'node-pane', { device: 'laptop', session: null, pane: 'w2:p9' }),
+    card('@server-2:pane-w3:p9', 'other-node', { device: 'server-2', session: null, pane: 'w3:p9' }),
+    card('@server-3:pane-w3:p9', 'third-node', { device: 'server-3', session: null, pane: 'w3:p9' }),
+  ])
+  // Strips master's own prefix (@<own>:<key>).
+  expect(resolveTarget(targets, `@master-1:${A}`, 'master-1')).toMatchObject({ target: { key: A } })
+  expect(resolveTarget(targets, '@master-1:w1:p2', 'master-1')).toMatchObject({ target: { key: 'pane-w1:p2' } })
+  // Unique bare non-UUID remote key resolves to @<device>:<key>.
+  expect(resolveTarget(targets, 'pane-w2:p9', 'master-1')).toMatchObject({ target: { key: '@laptop:pane-w2:p9' } })
+  // Ambiguous bare non-UUID remote key across multiple nodes reports ambiguity.
+  const clash = resolveTarget(targets, 'pane-w3:p9', 'master-1')
+  expect(clash).toEqual({
+    ambiguous: true,
+    error:
+      '"pane-w3:p9" fits more than one session (other-node (key @server-2:pane-w3:p9) on node server-2, ' +
+      'third-node (key @server-3:pane-w3:p9) on node server-3): give its name with its ref, or its key',
+  })
+})
