@@ -163,6 +163,9 @@ export function planCodexToml(text: string | null, url: string | null): string |
   let out: string[]
   if (url === null) {
     out = kept
+    // Where the table stood, one blank line at most between what was before it and what follows.
+    const blank = (i: number): boolean => i >= 0 && i < out.length && !out[i]?.trim()
+    while (blank(at) && (at === 0 || blank(at - 1))) out.splice(at, 1)
     while (out.length && !out[out.length - 1]?.trim()) out.pop()
   } else if (at >= 0) out = [...kept.slice(0, at), ...codexMcpBlock(url), ...kept.slice(at)]
   else {

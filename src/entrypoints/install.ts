@@ -26,6 +26,8 @@
 //                                               the same in a CODEX_HOME of its own for the sessions
 //                                               herdr runs (default ~/.config/herdr/codex), linked to
 //                                               ~/.codex for auth and config; ~/.codex is not written
+//                                               but for the board's MCP table in config.toml, which
+//                                               goes in through that link (#814)
 //   bun src/entrypoints/install.ts --no-mcp     takes the board's MCP server out of every harness and
 //                                               keeps it out (config.json "boardMcp": false)
 //   bun src/entrypoints/install.ts --mcp        puts it back in (the default; #814)

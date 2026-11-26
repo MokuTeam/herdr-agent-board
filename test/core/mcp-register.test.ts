@@ -125,6 +125,15 @@ describe('planCodexToml', () => {
     expect(planCodexToml(text, null)).toBeNull()
     expect(planCodexToml(null, null)).toBeNull()
   })
+  test('removal from the middle or the top of the file leaves no extra blank lines', () => {
+    const middle = 'a = 1\n\n[mcp_servers.agent-board]\nurl = "x"\n\n[projects.x]\nt = 1\n'
+    expect(planCodexToml(middle, null)).toBe('a = 1\n\n[projects.x]\nt = 1\n')
+    const top = '[mcp_servers.agent-board]\nurl = "x"\n\n[projects.x]\nt = 1\n'
+    expect(planCodexToml(top, null)).toBe('[projects.x]\nt = 1\n')
+    // A comment that belongs to the next table stays, after one blank line.
+    const commented = 'a = 1\n\n[mcp_servers.agent-board]\nurl = "x"\n\n# projects\n[projects.x]\n'
+    expect(planCodexToml(commented, null)).toBe('a = 1\n\n# projects\n[projects.x]\n')
+  })
   test('a table header inside a multi-line string is not a table', () => {
     const text = 'notes = """\n[mcp_servers.agent-board]\n"""\n'
     expect(planCodexToml(text, URL)).toBe(`${text}\n${block}\n`)
