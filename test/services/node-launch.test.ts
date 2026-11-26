@@ -239,6 +239,29 @@ test('below 512 MB available the node answers full; a profile it lacks or that i
   assert.equal(n.starts.length, 0)
 })
 
+test('a Codex start is not turned away for a Claude profile the node lacks or has not logged in (#902)', async () => {
+  const root = tmp()
+  const path = { kind: 'path', cwd: root, worktree: null }
+  const n = nodeWith(root)
+  rmSync(join(n.profileDir, '.credentials.json'))
+  // A Zenbook with Codex logged in and no Claude: its `default` profile has no login.
+  const codex = await createNodeLaunch(n.deps).answer(repoBody({ source: path, agent: 'codex' }))
+  assert.equal(codex.status, 202, JSON.stringify(codex))
+  const missing = await createNodeLaunch(n.deps).answer(
+    repoBody({ id: OTHER, source: path, agent: 'codex', profile: 'work' }),
+  )
+  assert.equal(missing.status, 202, JSON.stringify(missing))
+  assert.deepEqual(
+    n.starts.map(s => s.body.agent),
+    ['codex', 'codex'],
+  )
+  // A Claude start there is turned away as before.
+  const claude = await createNodeLaunch(nodeWith(tmp(), { profiles: n.deps.profiles }).deps).answer(
+    repoBody({ id: '5d0c6a1e-1111-4222-8333-000000000002', source: path }),
+  )
+  assert.deepEqual(claude, { status: 409, body: { error: 'profile', detail: 'login' } })
+})
+
 test('a repository missing on the node is cloned under <workRoot>/<host>/<path>; a checkout with changes answers repo', async () => {
   const root = tmp()
   const { seed } = remote(root)

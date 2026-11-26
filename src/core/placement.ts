@@ -4,6 +4,7 @@
 // config.json's `nodes` gives them, each device's last status, the placer's reservations and the
 // memory gate. Nothing here asks a device or keeps a value between calls.
 
+import { CODEX_AGENT } from './codex.ts'
 import { type Lanes, laneLeaves, type Portable, type PortableWhy } from './portable.ts'
 
 /** A device's id; `local` is this computer in this board's own order. */
@@ -332,12 +333,15 @@ function unfitWhy(device: DeviceId, task: Task, view: PlacementView): Unfit | nu
         ...(state?.updating && { updating: true as const }),
       }
   }
-  // The profile map is the master's to a node's: this computer's profiles and `nodeProfile` are already target ids.
-  const profile = (device !== LOCAL && !task.nodeProfile && settings?.profiles?.[task.profile]) || task.profile
-  const there = status.profiles.find(p => p.id === profile)
-  if (!there) return { device, kind: 'no-profile', profile }
-  // null is a device that cannot tell (an agent with no login of its own to read): not a refusal.
-  if (there.loggedIn === false) return { device, kind: 'not-logged-in', profile }
+  // Codex has no Claude profile (#902): only the agent itself is asked of the device.
+  if (task.agent !== CODEX_AGENT) {
+    // The profile map is the master's to a node's: this computer's profiles and `nodeProfile` are already target ids.
+    const profile = (device !== LOCAL && !task.nodeProfile && settings?.profiles?.[task.profile]) || task.profile
+    const there = status.profiles.find(p => p.id === profile)
+    if (!there) return { device, kind: 'no-profile', profile }
+    // null is a device that cannot tell (an agent with no login of its own to read): not a refusal.
+    if (there.loggedIn === false) return { device, kind: 'not-logged-in', profile }
+  }
   if (!status.agents.includes(task.agent)) return { device, kind: 'no-agent', agent: task.agent }
   return null
 }

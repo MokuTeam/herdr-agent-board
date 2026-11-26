@@ -48,6 +48,7 @@ function sources(over: Partial<StatusSources> = {}): StatusSources {
     launch: () => undefined,
     piFound: () => false,
     agyFound: () => false,
+    codexFound: () => false,
     platform: 'linux',
     arch: 'x64',
     home: '/home/owner',
@@ -185,6 +186,16 @@ describe('its helpers', () => {
         () => true,
       ),
     ).toEqual(['claude'])
+  })
+
+  test('a node reports Codex when codex is on its PATH, so its master may place a Codex start there (#902)', async () => {
+    const none = (): boolean => false
+    expect(agentsOf(undefined, none, none, () => true)).toEqual(['claude', 'codex'])
+    expect(agentsOf(undefined, none, none, none)).toEqual(['claude'])
+    // The config's own launcher starts every session: Claude Code, Codex on PATH or not.
+    expect(agentsOf({ command: 'my-launcher {cwd}' } as never, none, none, () => true)).toEqual(['claude'])
+    expect((await createNodeStatus(sources({ codexFound: () => true })).answer())?.agents).toEqual(['claude', 'codex'])
+    expect((await createNodeStatus(sources()).answer())?.agents).toEqual(['claude'])
   })
 
   test('createNodeStatus reports agy on PATH (including Windows .exe/.cmd/.ps1) and launch.agy (#898)', async () => {

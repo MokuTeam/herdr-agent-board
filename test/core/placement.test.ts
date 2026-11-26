@@ -477,6 +477,25 @@ describe('refuse', () => {
     })
   })
 
+  test('a Codex start goes to a device that has codex, whatever its Claude profiles say; a Claude start does not (#902)', () => {
+    // server-1 is the Zenbook: Codex logged in, no Claude (its default profile not logged in).
+    const zenbook = { status: status({ profiles: [{ id: 'default', loggedIn: false }], agents: ['claude', 'codex'] }) }
+    const v = view({ config: { order: ['server-1'] }, devices: { 'server-1': zenbook } })
+    const pinned = { pin: { device: 'server-1' } }
+    assert.deepEqual(place(task({ agent: 'codex', ...pinned }), v, NOW), { on: 'server-1', why: 'room' })
+    assert.deepEqual(place(task({ agent: 'codex', profile: 'work', ...pinned }), v, NOW), {
+      on: 'server-1',
+      why: 'room',
+    })
+    // Claude there: refused as before; Codex where codex is not: refused as before.
+    assert.deepEqual(place(task(pinned), v, NOW), {
+      refuse: { kind: 'unfit', devices: [{ device: 'server-1', kind: 'not-logged-in', profile: 'default' }] },
+    })
+    assert.deepEqual(place(task({ agent: 'codex', pin: { device: 'server-2' } }), v, NOW), {
+      refuse: { kind: 'unfit', devices: [{ device: 'server-2', kind: 'no-agent', agent: 'codex' }] },
+    })
+  })
+
   test('when portability kept a task at its origin and that device is unfit, the refusal keeps why it could not leave (#600)', () => {
     const drainLocal = view({ settings: { local: { drain: true } } })
     for (const why of [

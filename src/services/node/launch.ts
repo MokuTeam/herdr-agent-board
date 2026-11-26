@@ -28,6 +28,7 @@ import { basename, join } from 'node:path'
 import { replaceFile } from '../../adapters/json-store.ts'
 import { nodeDir } from '../../adapters/node-store.ts'
 import { memAvailableMb } from '../../adapters/sysload.ts'
+import { CODEX_AGENT } from '../../core/codex.ts'
 import { type GitIdentity, identityOf } from '../../core/git-access.ts'
 import { checkBranch } from '../../core/launch/names.ts'
 import type { NodeConfig } from '../../core/nodes.ts'
@@ -234,9 +235,12 @@ export function createNodeLaunch(d: NodeLaunchDeps): NodeLaunch {
     // null: the system could not say. The master took a status that could not say as no room;
     // the node refuses only what it knows is below its floor.
     if (free !== null && free < FLOOR_MB) return turn('full')
-    const profile = d.profiles().list.find(p => p.id === r.profile)
-    if (!profile) return turn('profile', 'missing')
-    if (loggedIn(profile.dir, platform, d.exists ?? existsSync) === false) return turn('profile', 'login')
+    // Codex has no Claude profile (#902): a start of it is not turned away for this node's.
+    if (r.agent !== CODEX_AGENT) {
+      const profile = d.profiles().list.find(p => p.id === r.profile)
+      if (!profile) return turn('profile', 'missing')
+      if (loggedIn(profile.dir, platform, d.exists ?? existsSync) === false) return turn('profile', 'login')
+    }
     let cwd: string
     let label: string
     let worktree = r.source.worktree
