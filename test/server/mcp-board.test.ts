@@ -56,6 +56,7 @@ test('initialize, the tools, and two sessions through one endpoint, each as itse
     'agents',
     'threads',
     'thread',
+    'team',
     'spawn',
     'cal',
   ])

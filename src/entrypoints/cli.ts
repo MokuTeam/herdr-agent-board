@@ -1047,11 +1047,11 @@ async function presence(): Promise<void> {
 }
 
 const TEAM_USAGE =
-  'usage: board team join <invite> --hub <ws://host:7443> --name <name> | board team roster | board team draft <name|peer-id> "<text>" | board team post <name|peer-id|team> [--new "<title>"] [--link <url>] [--file <path>] "<text>" | board team reply <thread> [--to <message>] [--file <path>] "<text>" | board team react <thread> <message> <emoji> [--remove] | board team thread <thread> [--json] [--read] | board team drafts | board team inbox [--unread] [--json] | board team watch [--json] [--every <seconds>] | board team assign <thread> <session> | board team release <thread> | board team listen [off] | board team loop <name|peer-id|team> [<1-100>|default]'
+  'usage: board team join <invite> --hub <ws://host:7443> --name <name> | board team roster | board team draft <name|peer-id> "<text>" | board team post <name|peer-id|team> [--new "<title>"] [--link <url>] [--file <path>] "<text>" | board team reply <thread> [--to <message>] [--file <path>] "<text>" | board team react <thread> <message> <emoji> [--remove] | board team thread <thread> [--json] [--read] | board team drafts | board team inbox [--unread] [--json] | board team watch [--json] [--every <seconds>] | board team wait [--timeout <seconds>] [--json] | board team assign <thread> <session> | board team release <thread> | board team listen [off] | board team loop <name|peer-id|team> [<1-100>|default]'
 /** The `board team` ops of agents talking through the hub (#216), in entrypoints/team-agents-cli.ts. */
 const TEAM_AGENT_OPS = ['post', 'reply', 'react', 'thread', 'drafts', 'assign', 'release', 'listen', 'loop']
 /** What came in, read only (#355), in entrypoints/team-inbox-cli.ts. */
-const TEAM_INBOX_OPS = ['inbox', 'watch']
+const TEAM_INBOX_OPS = ['inbox', 'watch', 'wait']
 
 /**
  * When the board's port answered, but not as this install's board would (#356): the process that
@@ -1185,6 +1185,12 @@ async function team(): Promise<void> {
     const I = await import('./team-inbox-cli.ts')
     const ctx = { webPort, roster: view.roster }
     if (op === 'inbox') return console.log(await I.teamInbox(more, ctx))
+    if (op === 'wait') {
+      // A session with no pane to type a notice into (#819): it asks for its threads instead.
+      const w = I.waitFlags(more)
+      if (!w) throw new Error(TEAM_USAGE)
+      return console.log(await I.teamWait(ctx, { ...w, self: async () => ({ key: (await resolveSession()).key }) }))
+    }
     const flags = I.watchFlags(more)
     if (!flags) throw new Error(TEAM_USAGE)
     return await I.teamWatch(ctx, { ...flags, out: l => console.log(l) })

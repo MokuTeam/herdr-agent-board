@@ -3,7 +3,7 @@
 // a passkey does, through the board's routes (not against a program that edits the board's files,
 // which nothing on one machine stops). What sends as the owner, or widens what agents may do,
 // waits for one: sending (the panel's Send, a held draft), trusting a changed key, Agents on, a
-// lane added, a listener set. What narrows is never held back. A confirmed send unlocks sending for
+// lane added, a listener set, a service agent added (#819). What narrows is never held back. A confirmed send unlocks sending for
 // 30 minutes in the page that asked (services/team-confirm.ts keeps that in memory only).
 //
 // WebAuthn takes no IP as its RP ID, and the board is opened on 127.0.0.1, so a confirmation
@@ -74,6 +74,11 @@ export type OwnerAction =
   | { kind: 'thread-track'; topic: string; lane: string }
   /** A reaction to a message (#687). */
   | { kind: 'react'; thread: string; message: string; emoji: string; op: ReactionOp }
+  /**
+   * A service agent added (#819): a new card in a lane, which agents' posts are checked by, so it
+   * widens what agents may post where that lane is shared. Removing one is free.
+   */
+  | { kind: 'service-add'; name: string; lane: string }
 
 /** Asks the computer's own authenticator first (Touch ID, Windows Hello) over a phone by QR (#367). */
 export const HINTS = ['client-device']

@@ -416,6 +416,11 @@ export interface Item {
   call?: CallView | null
   /** A MokuPilot day session (#331, core/mokupilot-day.ts): it has no pane, messages go to its day's inbox. */
   day?: true
+  /**
+   * The owner's service agent (#819, core/team-services.ts): a program with no pane that writes in
+   * Team through the board's MCP as this card. Never woken, put to sleep or archived; absent for the others.
+   */
+  service?: true
   /** Its Claude process: whether it runs, since when, the pipe other sessions write to (server only). */
   alive?: boolean
   since?: number | null

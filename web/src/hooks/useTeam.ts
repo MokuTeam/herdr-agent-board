@@ -32,6 +32,7 @@ import {
   isWelcomeList,
   keyParts,
   offersTeam,
+  type ServicesChange,
   sendError,
   type TeamView,
   type ThreadLine,
@@ -100,6 +101,8 @@ export interface TeamSource {
   mute(key: string, muted: boolean): Promise<void>
   /** One change of the owner's switches (the team chat's mute among them). */
   setAgents(change: AgentsChange): Promise<void>
+  /** Adds or removes one of the owner's service agents (#819). */
+  setServices(change: ServicesChange): Promise<void>
   /** More members for a channel this board started (#355). */
   addMembers(key: string, peers: string[]): Promise<void>
   /** A new member's welcome settled: their switches and the channels they join (#355). */
@@ -299,6 +302,7 @@ export function teamSource(deps: TeamDeps): TeamSource {
       return change(`${path}/${muted ? 'mute' : 'unmute'}`, {})
     },
     setAgents: c => change('/api/team/agents', c),
+    setServices: c => change('/api/team/services', c),
     addMembers(key, peers) {
       const id = keyParts(key)?.id ?? ''
       return change(`/api/team/threads/team/${encodeURIComponent(id)}/members`, { add: peers })
@@ -353,6 +357,7 @@ export function useTeam(open: boolean): TeamNow & Omit<TeamSource, 'now' | 'sync
     discardDraft: source.discardDraft,
     mute: source.mute,
     setAgents: source.setAgents,
+    setServices: source.setServices,
     addMembers: source.addMembers,
     welcome: source.welcome,
     confirmWaiting: source.confirmWaiting,

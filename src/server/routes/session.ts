@@ -343,6 +343,12 @@ const IN_MOKUPILOT_REFUSED: ReadonlySet<string> = new Set([
   'sendnow',
 ])
 
+/**
+ * What the board does not do to a service agent (#819): it has no pane, no Claude and no transcript;
+ * it lives in its own program and reads Team through the board's MCP.
+ */
+const SERVICE_REFUSED: ReadonlySet<string> = new Set([...IN_MOKUPILOT_REFUSED, 'wake', 'message'])
+
 /** `body`: its fields, taken only by the actions that read them (as main's did, so a null body fails only there). */
 async function act(
   app: SessionApp,
@@ -357,6 +363,7 @@ async function act(
   // on as before.
   if ((item.call || item.day) && !item.pane && IN_MOKUPILOT_REFUSED.has(action))
     return { ok: false, error: t('err.noPane') }
+  if (item.service && !item.pane && SERVICE_REFUSED.has(action)) return { ok: false, error: t('err.noPane') }
   switch (action) {
     case 'focus':
       return focus(deps, item, { raise: deps.cfg.raiseTerminal !== false })

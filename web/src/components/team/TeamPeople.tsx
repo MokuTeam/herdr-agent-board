@@ -12,6 +12,7 @@ import {
   allLanesOn,
   channelsOf,
   pairThread,
+  type ServicesChange,
   seenLine,
   stateLine,
   type TeamRosterPeer,
@@ -34,6 +35,8 @@ export interface TeamPeopleProps {
   onSelect(key: string): void
   onTrust(peer: string): void
   onAgents(change: AgentsChange): void
+  /** Adds or removes one of the owner's service agents (#819); none given: not offered. */
+  onServices?(change: ServicesChange): void
 }
 
 export function TeamPeople({
@@ -46,6 +49,7 @@ export function TeamPeople({
   onSelect,
   onTrust,
   onAgents,
+  onServices,
 }: TeamPeopleProps) {
   const t = useT()
   const { now } = useBoardContext()
@@ -142,6 +146,7 @@ export function TeamPeople({
             onAgents={onAgents}
           />
         )}
+        {agents && onServices && <ServiceAgents agents={agents} disabled={disabled} onServices={onServices} />}
       </div>
     </section>
   )
@@ -280,6 +285,84 @@ function AgentSwitches({
           </div>
         )
       })}
+    </details>
+  )
+}
+
+/**
+ * The owner's service agents (#819): a program with no pane that writes in Team as the owner's
+ * agent, in the lane given here. Each shows the key it names itself by in X-Board-Session.
+ */
+function ServiceAgents({
+  agents,
+  disabled,
+  onServices,
+}: {
+  agents: AgentsView
+  disabled: boolean
+  onServices(change: ServicesChange): void
+}) {
+  const t = useT()
+  const [name, setName] = useState('')
+  const [lane, setLane] = useState(agents.lanes[0]?.id ?? '')
+  const services = agents.services ?? []
+  const titleOf = (id: string): string => agents.lanes.find(l => l.id === id)?.title ?? id
+  const add = (): void => {
+    const n = name.trim()
+    if (!n || !lane) return
+    onServices({ add: { name: n, lane } })
+    setName('')
+  }
+  return (
+    <details className="team-agents team-services" data-services>
+      <summary>
+        <h3>{t('team.services')}</h3>
+      </summary>
+      <p className="hint">{t('team.servicesAbout')}</p>
+      {services.map(s => (
+        <div key={s.key} className="team-switch-row" data-service={s.key}>
+          <span className="team-name">
+            {s.name} · {titleOf(s.lane)} <span className="todo-meta">{t('team.serviceKey', { key: s.key })}</span>
+          </span>
+          <button type="button" className="mini" disabled={disabled} onClick={() => onServices({ remove: s.key })}>
+            {t('team.serviceRemove')}
+          </button>
+        </div>
+      ))}
+      <form
+        className="team-switch-row"
+        onSubmit={e => {
+          e.preventDefault()
+          add()
+        }}
+      >
+        <input
+          type="text"
+          value={name}
+          placeholder={t('team.serviceName')}
+          aria-label={t('team.serviceName')}
+          maxLength={40}
+          disabled={disabled}
+          data-service-name
+          onChange={e => setName(e.currentTarget.value)}
+        />
+        <select
+          value={lane}
+          aria-label={t('team.serviceLane')}
+          disabled={disabled}
+          data-service-lane
+          onChange={e => setLane(e.currentTarget.value)}
+        >
+          {agents.lanes.map(l => (
+            <option key={l.id} value={l.id}>
+              {l.title}
+            </option>
+          ))}
+        </select>
+        <button type="submit" className="mini" disabled={disabled || !name.trim() || !lane}>
+          {t('team.serviceAdd')}
+        </button>
+      </form>
     </details>
   )
 }

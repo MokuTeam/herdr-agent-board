@@ -40,6 +40,8 @@ import { nodeConfig } from '../core/nodes.ts'
 import { isPiItem, isPiSessionFile, PI_AGENT, piSessionId } from '../core/pi.ts'
 import { DEFAULT_PROFILE, sessionProfile } from '../core/profiles.ts'
 import { pendingOf, requestsOf, type SecretView, secretViews } from '../core/secrets.ts'
+import { teamConfig } from '../core/team.ts'
+import { serviceAgents } from '../core/team-services.ts'
 import { numberTodos, type Todo, todosOf } from '../core/todos.ts'
 import type { AgentStatus, Attention, Card, Config, Item, Pin, ToolCall, TranscriptInfo } from '../core/types.ts'
 import { agySleeperPane } from '../core/wake/agy.ts'
@@ -348,6 +350,7 @@ type Base = Pick<
   | 'pipe'
   | 'fromFile'
   | 'day'
+  | 'service'
   | 'bgTasks'
   | 'tgKey'
 >
@@ -419,6 +422,8 @@ export async function collect(
   }
   const items: Item[] = []
   const seen = new Set<string>()
+  const services = teamConfig(cfg.team) ? serviceAgents(cfg.team) : []
+  const serviceLanes = new Map(services.map(s => [s.key, s.lane]))
   const archived = archivedFiles()
 
   // A MokuPilot call agent (#326) runs with no pane and no hook: its card is told the Claude folder
@@ -495,7 +500,9 @@ export async function collect(
     const { modelAt, ...context } = contextOf(codex || agy ? null : base.session, info, home?.root ?? null) // Codex and Antigravity have no Claude status line file.
     const name = card.name || autoName
     // A call agent goes in its parent's lane, unless its own card says another.
-    const category = card.category || parent?.category || guess || 'other'
+    // A service agent (#819) is in the lane the owner gave it in the Team panel, whatever its card says.
+    const category =
+      (base.service && serviceLanes.get(base.key)) || card.category || parent?.category || guess || 'other'
     // Its model against the rule (#429), once this start has reported one: a model read before it
     // started is the one it had before a restart or a wake.
     const fresh = !base.since || (modelAt ?? 0) >= base.since
@@ -674,6 +681,30 @@ export async function collect(
       since: numberOf(dayReg.startedAt) ?? null,
       pipe: typeof dayReg.messagingSocketPath === 'string' ? dayReg.messagingSocketPath : '',
       day: true,
+    })
+  }
+
+  // The owner's service agents (#819, core/team-services.ts): a card each with no pane, only while
+  // the team is on. Its status is idle; nothing of herdr's, Claude's or wake's is asked for it.
+  for (const s of services) {
+    if (seen.has(s.key)) continue
+    seen.add(s.key)
+    add({
+      key: s.key,
+      session: null,
+      pane: null,
+      workspace: '',
+      agent: 'service',
+      name: s.name,
+      cwd: '',
+      status: 'idle',
+      sleeping: false,
+      focused: false,
+      activity: 0,
+      alive: false,
+      since: null,
+      pipe: '',
+      service: true,
     })
   }
 

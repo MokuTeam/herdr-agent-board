@@ -170,6 +170,7 @@ function CardContent({ item, launch, folding }: { item: Item; launch: LaunchSlot
     <>
       {node && <CardDeviceCorner node={node} />}
       <CardTop item={item} node={node} />
+      {item.service && <div className="card-meter">{t('card.service')}</div>}
       {item.agent === 'codex' && item.model && item.effort && (
         <div className="card-meter">
           {item.model} · {item.effort}

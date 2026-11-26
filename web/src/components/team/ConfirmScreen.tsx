@@ -112,6 +112,11 @@ export function confirmLines(a: Reply, t: Translator): ConfirmLines {
         items: items.length ? items : [t('team.confirm.unknown')],
       }
     }
+    case 'service-add':
+      return {
+        title: t('team.confirm.serviceAdd', { name: typeof a.name === 'string' ? a.name : '' }),
+        items: [t('team.confirm.item.serviceLane', { lane: typeof a.lane === 'string' ? a.lane : '' })],
+      }
     case 'members':
       return {
         title: t('team.confirm.members', { channel: typeof a.channel === 'string' ? a.channel : '' }),

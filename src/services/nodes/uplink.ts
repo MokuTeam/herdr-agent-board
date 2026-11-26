@@ -80,6 +80,7 @@ import {
   waitsPart,
 } from '../../core/schedule-cli.ts'
 import { teamConfig } from '../../core/team.ts'
+import { serviceAgents } from '../../core/team-services.ts'
 import type { Actor } from '../../core/time.ts'
 import type { Config, Item } from '../../core/types.ts'
 import { safeName } from '../../core/upload-name.ts'
@@ -797,13 +798,16 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
 
   /** `board team …` in a session of the node (#698): runs against the master's team service; refuses owner-setup/stream ops. */
   async function teamFrom(id: string, call: UplinkCall): Promise<UplinkResult | null> {
-    const who = sessionOf(id, call.session)
+    // A service agent of this board's (#819) is the same card through any of the owner's boards:
+    // one that calls a node's MCP reaches the team here as itself, in the lane the owner gave it.
+    const service = serviceAgents(o.cfg.team).find(x => x.key === call.session)
+    const who = service ? { key: service.key, name: service.name, lane: service.lane } : sessionOf(id, call.session)
     if (!who) return refused('not a session of the node')
     const why = teamRefusal(call.argv)
     if (why) return refused(why)
     const [op = '', ...more] = call.argv
     const agentOp = ['post', 'reply', 'react', 'thread', 'drafts', 'assign', 'release', 'listen', 'loop'].includes(op)
-    const inboxOp = op === 'inbox'
+    const inboxOp = op === 'inbox' || op === 'wait'
     const folder = join(store.dir(id), 'uplink', call.id)
     try {
       const { AGENT_USAGE, teamAgents, teamDraftTo, teamFileArg, teamHeaderLine, teamRosterLines } = await import(
@@ -843,8 +847,17 @@ export function createUplinkRunner(o: UplinkRunnerOptions): UplinkRunner {
         return { code: 0, out: [teamHeaderLine(view), line], err: [] }
       }
       if (inboxOp) {
-        const { teamInbox } = await import('../../entrypoints/team-inbox-cli.ts')
-        const out = await teamInbox(argv.slice(1), { webPort: port, roster: view.roster })
+        const { teamInbox, teamWait, waitFlags, NODE_WAIT_MAX_MS } = await import('../../entrypoints/team-inbox-cli.ts')
+        const ctx = { webPort: port, roster: view.roster }
+        if (op === 'wait') {
+          // The node's call waits 45 s for its answer (entrypoints/node-call.ts): a wait from there is shorter.
+          const w = waitFlags(argv.slice(1))
+          if (!w) return failed(`usage: ${AGENT_USAGE}`)
+          const timeoutMs = Math.min(w.timeoutMs, NODE_WAIT_MAX_MS)
+          const out = await teamWait(ctx, { ...w, timeoutMs, self: async () => ({ key: who.key }) })
+          return { code: 0, out: out.split('\n'), err: [] }
+        }
+        const out = await teamInbox(argv.slice(1), ctx)
         return { code: 0, out: out.split('\n'), err: [] }
       }
       const line = await teamAgents(op, argv.slice(1), {

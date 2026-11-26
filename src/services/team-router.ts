@@ -61,6 +61,8 @@ export interface RouterItem {
   /** The name the board gave the card when it has none of its own. */
   autoName?: string
   category: string
+  /** The owner's service agent (#819): no pane to type a notice into; it waits for its threads through the MCP. */
+  service?: true
 }
 
 /** A notice in the schedule: what the router reads back and changes. */
@@ -234,6 +236,14 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
   const recentReacts = new Map<string, number[]>()
 
   const laneOf = (key: string): string | null => items().find(i => i.key === key)?.category ?? null
+  /**
+   * A service agent (#819) is what the board calls it, never what its call said: its card's name is
+   * the one its posts carry ("anna's agent Juno"). Every other session is as the caller gave it.
+   */
+  const asCalled = (session: SessionRef): SessionRef => {
+    const item = items().find(i => i.key === session.key)
+    return item?.service && item.name ? { key: session.key, name: item.name } : session
+  }
 
   /** The agent's posts kept here, one per post (a team post's copies count once), sent within `since`. */
   function agentPosts(since: number): OutboxItem[] {
@@ -289,7 +299,8 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
   }
 
   return {
-    async agentPost({ to, thread, text, session, claimed, replyTo, file, work }) {
+    async agentPost({ to, thread, text, session: given, claimed, replyTo, file, work }) {
+      const session = asCalled(given)
       const view = team.view()
       if (!view) return { ok: false, error: 'off' }
       if (to !== TEAM && !isPeerId(to)) return { ok: false, error: 'peer' }
@@ -398,7 +409,8 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       return { ...r, sent: true }
     },
 
-    async agentReact({ thread, message, emoji, op, session, claimed }) {
+    async agentReact({ thread, message, emoji, op, session: given, claimed }) {
+      const session = asCalled(given)
       const view = team.view()
       if (!view) return { ok: false, error: 'off' }
       const parts = splitKey(thread)
@@ -469,6 +481,9 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
       }
       const target = handler ?? s.listener
       if (!target) return
+      // A service agent (#819) has no pane to type a notice into: it asks for its threads through
+      // the MCP (`team` wait), which finds them by their unread count. Nothing goes in the schedule.
+      if (known.some(i => i.key === target.key && i.service)) return
       const ref = threadRef(parts.scope, parts.id)
       const base = { who, agent: e.via === 'agent', ref, team: isTeam, route: !handler }
       notify(target, e.thread, (count: number) => noticeText({ ...base, count }), t)

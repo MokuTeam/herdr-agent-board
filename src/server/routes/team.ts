@@ -40,6 +40,7 @@
 // channel), wait for the passkey as the switches do.
 import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
+import { editTeamServices } from '../../adapters/config-file.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { uploadsCheck } from '../../adapters/own-files.ts'
 import { uploadsDir } from '../../adapters/paths.ts'
@@ -59,6 +60,7 @@ import { agentLimits, splitKey, TEAM, threadKey, validLoop } from '../../core/te
 import { type OwnerAction, unlocks, widens } from '../../core/team-confirm.ts'
 import { checkMeta } from '../../core/team-file.ts'
 import { normalizeEmoji } from '../../core/team-reactions.ts'
+import { changeServices, type ServiceAgent, serviceAgents } from '../../core/team-services.ts'
 import { isThreadKey } from '../../core/team-unread.ts'
 import { MAX_MEMBERS } from '../../core/team-wire.ts'
 import type { Config } from '../../core/types.ts'
@@ -117,6 +119,8 @@ function agentsView(cfg: Pick<Config, 'categories' | 'team'>): unknown {
     // The loop pause of a peer without its own (#360).
     loopDefault: agentLimits(team.agentLimits).loopRun,
     lanes: cfg.categories.map(c => ({ id: c.id, title: categoryInfo(cfg, c.id).title })),
+    // The owner's service agents (#819): each a card with no pane, in its lane.
+    services: serviceAgents(cfg.team),
   }
 }
 
@@ -288,6 +292,36 @@ export function teamRoutes(
     })
   }
 
+  /**
+   * Service agents (#819) changed in config.json's `team.services` under its lock, checked again as
+   * the list stands then: `{ add: { name, lane } }` or `{ remove: key }`. The board's config follows
+   * at once (the watcher reads the same list back), and the change is in the team log.
+   */
+  function editServices(change: unknown): { status: number; body: Record<string, unknown> } {
+    let added: ServiceAgent | undefined
+    let removed: ServiceAgent | undefined
+    let services: ServiceAgent[] = []
+    const r = editTeamServices(now => {
+      const c = changeServices(
+        now,
+        change,
+        lanes().categories.map(x => x.id),
+      )
+      if (c.ok) {
+        ;[added, services] = [c.added, c.services]
+        removed = now.find(s => !c.services.some(x => x.key === s.key))
+      }
+      return c
+    })
+    if (!r.ok) return { status: r.error === 'off' ? 409 : 400, body: r }
+    if (cfg && typeof cfg.team === 'object' && cfg.team !== null)
+      (cfg.team as Record<string, unknown>).services = services
+    const what = added ?? removed
+    if (what) audit('service', null, { by: 'ui', op: added ? 'add' : 'remove', key: what.key, lane: what.lane })
+    onAgents?.()
+    return { status: 200, body: { ok: true, services, ...(added && { added }) } }
+  }
+
   /** Does an owner action: at once when it needs no confirmation, or once the window confirmed it. */
   async function perform(a: OwnerAction): Promise<{ status: number; body: Record<string, unknown> }> {
     if (a.kind.startsWith('thread-'))
@@ -346,6 +380,7 @@ export function teamRoutes(
       onAgents?.()
       return { status: 200, body: { ok: true } }
     }
+    if (a.kind === 'service-add') return editServices({ add: { name: a.name, lane: a.lane } })
     // A passkey added or removed: the confirmation did it.
     return { status: 200, body: { ok: true } }
   }
@@ -426,6 +461,8 @@ export function teamRoutes(
         members: a.add.map(m => team.nameOf(m)),
       }
     }
+    if (a.kind === 'service-add')
+      return { kind: a.kind, name: a.name, lane: categoryInfo(lanes(), a.lane).title || a.lane }
     if (a.kind === 'passkey-remove')
       return { kind: a.kind, label: confirm?.passkeys().find(p => p.id === a.id)?.label ?? null }
     if (a.kind === 'react') {
@@ -689,6 +726,35 @@ export function teamRoutes(
         c.apply()
         onAgents?.()
         return json(200, { ok: true })
+      },
+    },
+    {
+      // Service agents (#819, core/team-services.ts): { add: { name, lane } } or { remove: key },
+      // from the Team panel, on this computer only (localOnly). Written into config.json's
+      // `team.services`; the config watcher reloads it and the board gives the card. Registering one
+      // shares nothing: what its lane may say to whom stays the owner's switches.
+      method: 'POST',
+      path: '/api/team/services',
+      async handle(req, ctx) {
+        if (!team.view()) return undefined
+        const refused = ctx.refuse('board-header') ?? ctx.refuse('origin')
+        if (refused) return refused
+        const raw = await ctx.rawBody()
+        const body = isRecord(raw) ? raw : {}
+        // Checked first, so a wrong name or lane is said at once, not after the owner's passkey.
+        const check = changeServices(
+          serviceAgents(lanes().team),
+          raw,
+          lanes().categories.map(x => x.id),
+        )
+        if (!check.ok) return json(400, check)
+        // An added card is an agent in a lane: it widens what agents may post, so the owner confirms it.
+        if (check.added) {
+          const wait = held(req, { kind: 'service-add', name: check.added.name, lane: check.added.lane })
+          if (wait) return wait
+        }
+        const r = editServices(body)
+        return json(r.status, r.body)
       },
     },
     {

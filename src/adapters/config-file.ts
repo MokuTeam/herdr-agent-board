@@ -33,6 +33,7 @@ import { autoUpdateConfig, isEvery, isTimeOfDay } from '../core/self-update.ts'
 import type { Admin } from '../core/server-admin.ts'
 import type { SetupCase } from '../core/server-plan.ts'
 import { editedSpawnLimits } from '../core/spawn-limits.ts'
+import { type ServiceAgent, serviceAgents } from '../core/team-services.ts'
 import { projectKey } from '../core/time.ts'
 import { isTodoMode } from '../core/todos.ts'
 import { fieldProblem, type TunnelField } from '../core/tunnel.ts'
@@ -593,6 +594,24 @@ export function joinTeam(team: { hub: string; name: string }): EditResult {
   raw.team = { ...(isRecord(raw.team) ? raw.team : {}), hub: team.hub, name: team.name }
   writeRaw(raw)
   return { ok: true }
+}
+
+/**
+ * Service agents (#819, core/team-services.ts): `change` gets the list as config.json has it and
+ * gives the new one, written into `team.services` under the lock (dropped when empty). Refused when
+ * the team is off: a service agent is one of the team's.
+ */
+export function editTeamServices(
+  change: (now: ServiceAgent[]) => { ok: true; services: ServiceAgent[] } | { ok: false; error: string },
+): EditResult {
+  return editConfig(raw => {
+    if (!isRecord(raw.team)) return { ok: false, error: 'off' }
+    const r = change(serviceAgents(raw.team))
+    if (!r.ok) return r
+    const { services: _was, ...rest } = raw.team
+    raw.team = r.services.length ? { ...rest, services: r.services } : rest
+    return { ok: true }
+  })
 }
 
 /** Leave it: `team` goes out of config.json. The key and the messages stay in the state folder. */

@@ -192,7 +192,18 @@ export interface AgentsView {
   paused: Record<string, number>
   lanes: { id: string; title: string }[]
   loopDefault?: number
+  /** The owner's service agents (#819): a card each with no pane, in its lane. */
+  services?: ServiceAgentView[]
 }
+
+export interface ServiceAgentView {
+  key: string
+  name: string
+  lane: string
+}
+
+/** One change of the service agents, as POST /api/team/services takes it (#819). */
+export type ServicesChange = { add: { name: string; lane: string } } | { remove: string }
 
 const isPeerAgents = (v: unknown): boolean =>
   isObj(v) &&
@@ -212,7 +223,12 @@ export const isAgentsView = (v: unknown): v is AgentsView =>
   Object.values(v.paused).every(n => typeof n === 'number') &&
   Array.isArray(v.lanes) &&
   v.lanes.every(l => isObj(l) && typeof l.id === 'string' && typeof l.title === 'string') &&
-  (v.loopDefault === undefined || typeof v.loopDefault === 'number')
+  (v.loopDefault === undefined || typeof v.loopDefault === 'number') &&
+  (v.services === undefined ||
+    (Array.isArray(v.services) &&
+      v.services.every(
+        x => isObj(x) && typeof x.key === 'string' && typeof x.name === 'string' && typeof x.lane === 'string',
+      )))
 
 /** One change of the switches, as POST /api/team/agents takes it. */
 export type AgentsChange =

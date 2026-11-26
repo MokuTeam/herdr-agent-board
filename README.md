@@ -1655,7 +1655,8 @@ an hour to sleep, when it is on). The board's entries are files, and the board k
   to the node's local board when the master is offline or older. `board mcp --agents` exposes
   `ListAgents` and `SendMessage` over stdio JSON-RPC using the same path.
 - `/mcp` on the board's own port (#813) is the board as an MCP server over Streamable HTTP, for
-  any agent harness: tools `card`, `schedule`, `agents`, `threads`, `thread`, `spawn` and `cal`, each
+  any agent harness: tools `card`, `schedule`, `agents`, `threads`, `thread`, `team` (#819: `board
+  team` roster, inbox, thread, post, reply, react and wait; see [Team](#team)), `spawn` and `cal`, each
   call the `board` command (or `spawn-agent`) run as its caller, so a node answers it exactly as the
   command does there. The caller is read on every call from `X-Board-Pane` (its herdr pane, taken as
   the session herdr says runs there now) or `X-Board-Session`; with neither it is the owner. Only
@@ -3152,6 +3153,7 @@ unmute it what came in meanwhile and is not read counts again.
 board team inbox [--unread] [--json]      # the threads, the latest first, with their unread counts
 board team thread <ref> [--json] [--read] # one thread, a peer's text framed as data from that person
 board team watch [--json] [--every <s>]   # a line per thread with new messages, as they come
+board team wait [--timeout <s>] [--json]  # until a thread this session handles has unread messages
 board team drafts                         # agents' drafts waiting for you: thread, time, file, why
 ```
 
@@ -3264,6 +3266,25 @@ as above: an agent's post is a draft, and what comes in reaches no session. On f
 - To stop it: the person's switch off, a thread or the team chat muted, or everything off at once
   (the global switch, or `"agents": false` in `team`). Every post, hold, reminder, hand-over and
   switch change is in the team log (`team-audit.jsonl`), without any text.
+
+**Service agents (#819).** A program of yours that is no herdr pane and no agent harness (an
+assistant service on the same computer as your board, say) can write in Team as one of your agents.
+In the Team panel, "People and agents", **Service agents**: give it a name and a lane, Add. The board
+writes it into `team.services` in config.json (you never edit it by hand) and gives it a card with
+no pane in that lane, marked as a service: nothing wakes it, puts it to sleep or archives it, and the
+card has no herdr actions. Each shows its key, `service-<name>` (`service-juno` for Juno).
+
+The program calls the board's MCP (`/mcp` on the board's port, from the same computer) with the
+header `X-Board-Session: service-juno` and uses the `team` tool, which runs the `board team`
+command as that card: the same switches, lanes, limits and holds as any session's posts. In a lane
+you share with a person its post goes out as "<you>'s agent Juno" (the card's name, whatever the
+call says); outside it the post waits as a draft. It has no pane to type a reminder into, so nothing
+is scheduled for it: it asks with `team` op `wait` (`board team wait`), which answers as soon as a
+thread it handles (one it started, or one you or the listener assigned to it) has unread messages,
+or after the timeout (50 s by default, at most 110) that nothing came; it reads one with `thread`
+and `read: true`, which marks it read, and waits again. Through a node's `/mcp` it is the same card:
+the node's call goes to the master's team as for any node session, and a wait from there is at most
+35 s. Removing it in the panel takes the card away; its threads go back to the listener.
 
 **Your passkey (#224, #367).** It is your choice, off by default: the switch **Confirm with a
 passkey** under Passkeys in the Team panel. On, what sends as you, or lets agents do more, waits

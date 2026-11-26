@@ -16,6 +16,7 @@ import type {
   AgentsChange,
   AgentsView,
   DraftLine,
+  ServicesChange,
   TeamView,
   ThreadLine,
   ThreadView,
@@ -161,6 +162,7 @@ export function TeamPanel({ open, onClose, back, focus, onFocused }: TeamPanelPr
         onRemoveFile={id => files.remove(key, id)}
         onMute={(k, muted) => void team.mute(k, muted)}
         onAgents={change => void team.setAgents(change)}
+        onServices={change => void team.setServices(change)}
         pending={team.pending}
         onWelcome={w => void team.welcome(w)}
         onNewChannel={newChannel}
@@ -233,6 +235,8 @@ export interface TeamBodyProps {
   onSend(): void
   onMute(key: string, muted: boolean): void
   onAgents(change: AgentsChange): void
+  /** Adds or removes one of the owner's service agents (#819); none given: not offered. */
+  onServices?(change: ServicesChange): void
   /** Who joined and waits for a welcome (#355); none given: none offered. */
   pending?: string[]
   onWelcome?(w: Welcome): void
@@ -314,6 +318,7 @@ export function TeamBody(props: TeamBodyProps) {
             onSelect={props.onSelect}
             onTrust={props.onTrust}
             onAgents={props.onAgents}
+            {...(props.onServices && { onServices: props.onServices })}
           />
         ) : (
           <p className="hint team-pick-hint">{t('team.pickThread')}</p>

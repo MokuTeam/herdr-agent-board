@@ -26,8 +26,17 @@ const bad = (name: string, args: Record<string, unknown>): string => {
 }
 
 describe('the tools', () => {
-  test('the list: seven, the threads two as the stdio server has them', () => {
-    expect(HTTP_TOOLS.map(t => t.name)).toEqual(['card', 'schedule', 'agents', 'threads', 'thread', 'spawn', 'cal'])
+  test('the list: eight, the threads two as the stdio server has them', () => {
+    expect(HTTP_TOOLS.map(t => t.name)).toEqual([
+      'card',
+      'schedule',
+      'agents',
+      'threads',
+      'thread',
+      'team',
+      'spawn',
+      'cal',
+    ])
     expect(HTTP_TOOLS.filter(t => t.name === 'threads' || t.name === 'thread')).toEqual([...TOOLS])
     for (const t of HTTP_TOOLS) expect(t.inputSchema.additionalProperties).toBe(false)
   })
