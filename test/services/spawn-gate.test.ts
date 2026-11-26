@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { HerdrPane } from '../../src/adapters/herdr.ts'
@@ -50,14 +50,20 @@ function box(cfg: Partial<Config> = {}, env: Record<string, string> = SESSION_EN
   }
 }
 
-test('who is gated: a session (by its id or its pane), never the owner', () => {
-  expect(callerParty({})).toBeNull()
-  expect(callerParty({ CLAUDE_CODE_SESSION_ID: SID })).toEqual({ session: SID })
-  expect(callerParty({ HERDR_PANE_ID: 'w1:p4' })).toEqual({ pane: 'w1:p4' })
-  expect(callerParty({ ANTIGRAVITY_CONVERSATION_ID: 'agy-1', HERDR_PANE_ID: 'w1:p5' })).toEqual({
+test('who is gated: a session by its id, pi by its pane; never the owner nor a plain terminal', () => {
+  const noCard = () => null
+  expect(callerParty({}, noCard)).toBeNull()
+  expect(callerParty({ HERDR_PANE_ID: 'w1:p4' }, noCard)).toBeNull()
+  expect(callerParty({ HERDR_PANE_ID: 'w1:p4', PI_CODING_AGENT: 'true' }, noCard)).toEqual({ pane: 'w1:p4' })
+  expect(callerParty({ CLAUDE_CODE_SESSION_ID: SID }, noCard)).toEqual({ session: SID })
+  expect(callerParty({ ANTIGRAVITY_CONVERSATION_ID: 'agy-1', HERDR_PANE_ID: 'w1:p5' }, noCard)).toEqual({
     session: 'agy-1',
     pane: 'w1:p5',
   })
+  // A root Codex that carries the Claude id its hook recorded is the Codex session; a Claude child in it is Claude.
+  const env = { CODEX_THREAD_ID: 'cx-1', CLAUDE_CODE_SESSION_ID: 'cl-1' }
+  expect(callerParty(env, (() => ({ key: 'cx-1', codexParentClaude: 'cl-1' })) as never)).toEqual({ session: 'cx-1' })
+  expect(callerParty(env, noCard)).toEqual({ session: 'cl-1' })
 })
 
 test('what is gated: a new session; a resume, a start in a pane and a Workdesk worker are not', () => {
@@ -114,6 +120,8 @@ test('per hour: the start past the limit is refused with one line and a question
     )
     expect(b.asks).toHaveLength(1)
     expect(b.asks[0]).toContain('Acme')
+    // A rule that does not depend on which sessions run: herdr is not asked.
+    expect(b.herdrCalls).toEqual([])
     expect(readSpawns(b.file)).toHaveLength(2)
     // An hour on, it may again.
     expect(await gateSpawn(opts(), b.deps(NOW + 3600_001))).not.toBeNull()
@@ -168,16 +176,37 @@ test("depth: a session's own child's child is refused at depth 1; herdr unreacha
   }
 })
 
-test("a plain terminal pane is the owner's: past a limit it is let through and not written", async () => {
-  const b = box({ spawnLimits: { agents: false } }, { HERDR_PANE_ID: 'w1:p7' })
+test('a plain terminal is the owner: let through with nothing written and herdr not asked; pi in a pane is a session', async () => {
+  const shell = box({ spawnLimits: { agents: false } }, { HERDR_PANE_ID: 'w1:p7' })
   try {
-    b.setPanes([{ pane_id: 'w1:p7' }])
-    expect(await gateSpawn(opts(), b.deps())).toBeNull()
-    expect(existsSync(b.file)).toBe(false)
-    expect(b.asks).toEqual([])
-    // pi in that pane is a session: refused.
-    b.setPanes([{ pane_id: 'w1:p7', agent: 'pi' }])
-    await expect(gateSpawn(opts(), b.deps())).rejects.toThrow('may not start sessions')
+    expect(await gateSpawn(opts(), shell.deps())).toBeNull()
+    expect(existsSync(shell.file)).toBe(false)
+    expect(shell.herdrCalls).toEqual([])
+  } finally {
+    shell.done()
+  }
+  const pi = box({ spawnLimits: { agents: false } }, { HERDR_PANE_ID: 'w1:p7', PI_CODING_AGENT: 'true' })
+  try {
+    await expect(gateSpawn(opts(), pi.deps())).rejects.toThrow('may not start sessions')
+    expect(pi.herdrCalls).toEqual([])
+  } finally {
+    pi.done()
+  }
+})
+
+test('a ledger that cannot be written lets the start through, saying so', async () => {
+  const b = box()
+  const lines: string[] = []
+  try {
+    writeFileSync(join(b.file, '..', 'not-a-folder'), '')
+    const gate = await gateSpawn(opts(), {
+      ...b.deps(),
+      file: join(b.file, '..', 'not-a-folder', 'spawns.json'),
+      log: l => lines.push(l),
+    })
+    expect(gate).toBeNull()
+    expect(lines).toHaveLength(1)
+    expect(lines[0]).toStartWith('limits not checked: ')
   } finally {
     b.done()
   }

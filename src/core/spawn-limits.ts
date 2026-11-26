@@ -42,15 +42,18 @@ export const SPAWN_NUMBERS: readonly SpawnNumber[] = ['children', 'depth', 'perH
 export const SPAWN_MAX = 1000
 
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= SPAWN_MAX
+/** A number config.json holds: one past the largest is the largest, a wrong one the default. */
+const countOf = (v: unknown, fallback: number): number =>
+  isCount(v) ? v : typeof v === 'number' && Number.isInteger(v) && v > SPAWN_MAX ? SPAWN_MAX : fallback
 
 /** config.json's `spawnLimits` with the defaults for what it does not say or says wrongly. */
 export function spawnLimitsOf(raw: unknown): SpawnLimits {
   const r = typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {}
   return {
     agents: typeof r.agents === 'boolean' ? r.agents : SPAWN_DEFAULTS.agents,
-    children: isCount(r.children) ? r.children : SPAWN_DEFAULTS.children,
-    depth: isCount(r.depth) ? r.depth : SPAWN_DEFAULTS.depth,
-    perHour: isCount(r.perHour) ? r.perHour : SPAWN_DEFAULTS.perHour,
+    children: countOf(r.children, SPAWN_DEFAULTS.children),
+    depth: countOf(r.depth, SPAWN_DEFAULTS.depth),
+    perHour: countOf(r.perHour, SPAWN_DEFAULTS.perHour),
   }
 }
 

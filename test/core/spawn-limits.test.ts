@@ -53,14 +53,16 @@ test('the defaults leave room for a master that runs about five and starts dozen
   expect(spawnVerdict(SPAWN_DEFAULTS, entries, atlas, NOW, running)).toEqual({ ok: true, depth: 1 })
 })
 
-test('config.json values: wrong ones fall back to the default, 0 is no limit', () => {
+test('config.json values: wrong ones fall back to the default, too large is the largest, 0 is no limit', () => {
   expect(spawnLimitsOf({ agents: false, children: 0, depth: 5, perHour: 'x' })).toEqual({
     agents: false,
     children: 0,
     depth: 5,
     perHour: 30,
   })
-  expect(spawnLimitsOf({ children: -1, depth: 2.5, perHour: 5000 })).toEqual(SPAWN_DEFAULTS)
+  expect(spawnLimitsOf({ children: -1, depth: 2.5 })).toEqual(SPAWN_DEFAULTS)
+  // Past the largest: the largest, not a stricter default.
+  expect(spawnLimitsOf({ perHour: 5000 }).perHour).toBe(1000)
   expect(spawnLimitsOf([1, 2])).toEqual(SPAWN_DEFAULTS)
 })
 

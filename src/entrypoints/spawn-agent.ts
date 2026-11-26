@@ -67,6 +67,7 @@ import {
   claudeCommand,
   HELP,
   LAUNCHER_CHILD,
+  OWNER_START,
   parseArgs,
   type SpawnOptions,
   spawnLine,
@@ -86,6 +87,9 @@ const gitBash = takeGitBashArgs()
 // given, and nothing it starts inherits the mark.
 const launcherChild = process.env[LAUNCHER_CHILD] !== undefined
 delete process.env[LAUNCHER_CHILD]
+// Every launcher the board runs marks the start as the owner's (#815): no session's limits hold.
+const ownerStart = process.env[OWNER_START] !== undefined
+delete process.env[OWNER_START]
 
 /**
  * The profile's env file (#507) for the new tab, on a node or the master alike (#824): a board made
@@ -125,7 +129,11 @@ async function startHere(
     home,
     ticketNames: launch.linkedWorkspaces === true,
     ...(await nodeEnvOf()),
-    ...(kase && { onAgent: kase.onAgent }),
+    // herdr reported an agent in the new pane: a start that fails after this still runs (#815).
+    onAgent: pane => {
+      opened = pane
+      kase?.onAgent(pane)
+    },
   })
   if (register) {
     try {
@@ -143,17 +151,20 @@ async function startHere(
   }
 }
 
+/** The pane herdr reported an agent in, once a start here got that far. */
+let opened: string | null = null
+
 /**
  * The limits on a session's starts (#815, services/launch/spawn-gate.ts): null for the owner's
- * starts (no session in the env, the board's own launcher), which load none of it.
+ * starts (no session in the env, a launcher the board runs), which load none of it.
  */
 async function gateOf(o: SpawnOptions, cfg: Config): Promise<SpawnGate | null> {
-  if (launcherChild) return null
+  if (launcherChild || ownerStart) return null
   const env = process.env
-  if (!env.CLAUDE_CODE_SESSION_ID && !env.ANTIGRAVITY_CONVERSATION_ID && !env.CODEX_THREAD_ID && !env.HERDR_PANE_ID)
-    return null
+  const pi = !!env.PI_CODING_AGENT && !!env.HERDR_PANE_ID
+  if (!env.CLAUDE_CODE_SESSION_ID && !env.ANTIGRAVITY_CONVERSATION_ID && !env.CODEX_THREAD_ID && !pi) return null
   const { gateSpawn } = await import('../services/launch/spawn-gate.ts')
-  return gateSpawn(o, { env, cfg })
+  return gateSpawn(o, { env, cfg, log: line => console.error(`spawn-agent: ${line}`) })
 }
 
 /** Start it: here, placed by the board, or up to a node's master; the line to print. */
@@ -195,11 +206,12 @@ try {
     try {
       started = await start(o, cfg)
     } catch (err) {
-      gate?.settle(null)
+      // Failed after herdr reported the agent (a dialog, a brief that did not reach): it runs, so it counts.
+      gate?.settle(opened === null ? null : '', opened === null ? undefined : { pane: opened })
       throw err
     }
-    console.log(started.line)
     gate?.settle(started.line, started.child)
+    console.log(started.line)
   }
 } catch (err) {
   console.error(`spawn-agent: ${err instanceof Error ? err.message : String(err)}`)

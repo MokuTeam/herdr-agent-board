@@ -47,7 +47,7 @@ import {
 } from '../../core/launch/launcher-command.ts'
 import { modelArgs } from '../../core/launch/model.ts'
 import { slugName, ticketSlugName, uniqueSlug } from '../../core/launch/names.ts'
-import { choosesSession, claudeCommand, LAUNCHER_CHILD } from '../../core/launch/spawn-args.ts'
+import { choosesSession, claudeCommand, LAUNCHER_CHILD, OWNER_START } from '../../core/launch/spawn-args.ts'
 import { envRejected } from '../../core/profiles.ts'
 import { scrub } from '../../core/secrets.ts'
 import type { LaunchFailure, LaunchSpec, LaunchStep } from '../../core/types.ts'
@@ -514,6 +514,8 @@ async function runLauncher(l: LaunchContext, on: LaunchEvents, run: RunSpec): Pr
     const env: Record<string, string | undefined> = { ...process.env, ...run.env, HERDR_WORKSPACE_ID: l.workspaceId }
     delete env.HERDR_PANE_ID
     delete env.HERDR_TAB_ID
+    // The owner's start (#815): spawn-agent counts none of it against a session's limits.
+    env[OWNER_START] = '1'
     const r = await runTree(exe, args, { timeout: run.timeout, env, cwd: l.cwd })
     const out = parseLauncherOutput(r.stdout)
     if (out.pane) {

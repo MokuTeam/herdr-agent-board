@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { LAUNCHER_CHILD } from '../../src/core/launch/spawn-args.ts'
+import { LAUNCHER_CHILD, OWNER_START } from '../../src/core/launch/spawn-args.ts'
 import { root, type Sandbox, sandbox } from '../support/sandbox.ts'
 
 // spawn-agent's limits on a session's starts (#815) end to end, against the sandbox's fake herdr:
@@ -132,4 +132,32 @@ test("agent starts off: a session is refused; the board's own launcher is not", 
   const launcher = await runSpawn(box, args(cwd), { ...env, [LAUNCHER_CHILD]: '1' })
   expect(launcher.code).toBe(0)
   expect(ledger(box)).toBeNull()
+}, 30_000)
+
+test('a launcher the board runs and a plain herdr terminal are the owner: never gated, nothing written, no herdr call', async () => {
+  const { box, cwd } = await limitBox({ agents: false })
+  // The board's launcher on a board whose own env carries a session's id (started from one).
+  const launched = await runSpawn(box, args(cwd), { CLAUDE_CODE_SESSION_ID: SID, [OWNER_START]: '1' })
+  expect(launched.code).toBe(0)
+  const shell = await runSpawn(box, args(cwd), { HERDR_PANE_ID: 'w1:p7' })
+  expect(shell.code).toBe(0)
+  expect(ledger(box)).toBeNull()
+  expect(box.calls().some(c => c[0] === 'api')).toBe(false)
+}, 30_000)
+
+test('a start that stops at a dialog after the tab opened still counts: the session runs', async () => {
+  const { box, cwd } = await limitBox({ perHour: 1 })
+  box.state({
+    ...STATE,
+    'pane get': { result: { pane: { pane_id: 'wA:p9', agent: 'claude', agent_status: 'blocked' } } },
+  })
+  const env = { CLAUDE_CODE_SESSION_ID: SID }
+  const blocked = await runSpawn(box, args(cwd), env)
+  expect(blocked.code).toBe(1)
+  expect(blocked.stderr).toContain('waits for a dialog')
+  expect(ledger(box)).toEqual([expect.objectContaining({ by: { session: SID }, child: { pane: 'wA:p9' } })])
+  // Tried again: the limit holds.
+  const again = await runSpawn(box, args(cwd), env)
+  expect(again.code).toBe(1)
+  expect(again.stderr).toContain('the limit is 1')
 }, 30_000)

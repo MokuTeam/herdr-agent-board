@@ -1044,12 +1044,15 @@ computer its own (config.json's `spawnLimits`): whether its sessions may start s
 many sessions one session started may run at once (10), how many levels of agent starts may go
 below a session the owner started (3, counted over parents that still run), and how many starts
 one session makes in an hour (30); 0 is no limit. They hold for spawn-agent run in a session's
-pane, and for the board's MCP when it runs the command for a session it names. A refused start
-exits 1 with the reason on stderr and puts the question on the session's card. The owner's starts
-are never counted: the page, a terminal outside any session, the board's own launcher. A resume,
-a start in a pane (`--pane`) and a Workdesk worker are not gated. spawn-agent keeps the record of
-who started whom in `spawns.json` in the board's state folder, a week long, and asks herdr which of
-those sessions still run only when a limit would otherwise refuse.
+pane (a Claude, Codex or Antigravity session by its id, pi by its pane), and for the board's MCP
+when it runs the command for a session it names. A refused start exits 1 with the reason on stderr
+and puts the question on the session's card; a start that fails after its tab opened still counts.
+The owner's starts are never counted: the page, a terminal with no session in it, every launcher
+the board runs (`BOARD_OWNER_START`). A resume, a start in a pane (`--pane`) and a Workdesk worker
+are not gated. spawn-agent keeps the record of who started whom in `spawns.json` in the board's
+state folder, a week long, and asks herdr which of those sessions still run only when a limit on
+running sessions or depth would otherwise refuse; a record it cannot write lets the start through.
+The limits stop runaway starts; a process that drops its session's identity is taken as the owner.
 
 `--device <id|local>` (#760) names the machine: a device id of `nodes`, or `local` (or the
 master's own id) for the master itself. The start is posted pinned to it (`pin`), and fails at
