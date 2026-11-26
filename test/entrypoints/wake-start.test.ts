@@ -638,7 +638,7 @@ test('herdr does not answer: snapshot tried four times, exits 0 within the deadl
   expect(String(status?.error)).not.toContain('\n')
 })
 
-test('a stale wake pane beside an expired Sidebar (no tokens, label Sidebar) closes the whole tab (#888)', async () => {
+test('a stale wake pane beside an expired Sidebar (no tokens, label Sidebar) closes tab on win32 and only pane off Windows (#888)', async () => {
   const box = await wakeSandbox()
   await wakeOn(box)
   writeStatus(box, { state: 'running', at: 1, pane: 'wW:p1', pid: await deadPid(), port: 40000 })
@@ -651,21 +651,32 @@ test('a stale wake pane beside an expired Sidebar (no tokens, label Sidebar) clo
       main.agent,
     ],
   }
+  const win = process.platform === 'win32'
+  const paneOnlyClosed = {
+    workspaces: expiredSidebarSnap.workspaces,
+    tabs: expiredSidebarSnap.tabs,
+    panes: [expiredSidebarSnap.panes[1], main.agent],
+  }
   box.state({
     ...noOldPlugin,
     'api snapshot': {
       result: { snapshot: expiredSidebarSnap },
-      until: ['tab close'],
+      until: [win ? 'tab close' : 'pane close'],
       // biome-ignore lint/suspicious/noThenProperty: the fake herdr's reply after the close (test/support/fake-herdr.ts)
-      then: { result: { snapshot: wakeTabClosed } },
+      then: { result: { snapshot: win ? wakeTabClosed : paneOnlyClosed } },
     },
-    'tab close': { result: {} },
+    ...(win ? { 'tab close': { result: {} } } : { 'pane close': { result: {} } }),
     ...opensIn('wW:p9'),
   })
   const out = await runStart(box)
   expect(out.code).toBe(0)
-  expect(box.calls()).toContainEqual(['tab', 'close', 'wake-tab'])
-  expect(box.calls().some(c => c[0] === 'pane' && c[1] === 'close')).toBe(false)
+  if (win) {
+    expect(box.calls()).toContainEqual(['tab', 'close', 'wake-tab'])
+    expect(box.calls().some(c => c[0] === 'pane' && c[1] === 'close')).toBe(false)
+  } else {
+    expect(box.calls()).toContainEqual(['pane', 'close', 'wW:p1'])
+    expect(box.calls().some(c => c[0] === 'tab' && c[1] === 'close')).toBe(false)
+  }
 })
 
 test('herdr hangs: exits 0 at the deadline', async () => {

@@ -1439,8 +1439,8 @@ test('Return of an unmoved Claude session archived from a subdirectory still res
   }
 }, 30_000)
 
-test('archive closes tab when only expired Sidebar remains beside it, and checks renamed sleeping agy & Windows shell (#888)', async () => {
-  // 1) Expired Sidebar pane (label: 'Sidebar', no tokens) beside archived session -> tab close, not pane close.
+test('archive win32 gating: expired Sidebar & renamed sleeping agy/pi (#888)', async () => {
+  // 1) Expired Sidebar pane (label: 'Sidebar', no tokens) beside archived session -> tab close on win32, pane close off Windows (origin/main).
   const box = await sandbox()
   const dir = project(box)
   const state = herdrState(dir)
@@ -1458,29 +1458,43 @@ test('archive closes tab when only expired Sidebar remains beside it, and checks
   try {
     assert.equal((await b.archive()).body.ok, true)
     await until(() => record(box)?.state === 'archived', 10_000)
-    assert.ok(calls(box).includes('tab close wP:t1'), calls(box).join('\n'))
-    assert.equal(
-      calls(box).some(c => c.startsWith('pane close ')),
-      false,
-    )
+    if (process.platform === 'win32') {
+      assert.ok(calls(box).includes('tab close wP:t1'), calls(box).join('\n'))
+      assert.equal(
+        calls(box).some(c => c.startsWith('pane close ')),
+        false,
+      )
+    } else {
+      assert.ok(calls(box).includes('pane close wP:p1'), calls(box).join('\n'))
+      assert.equal(
+        calls(box).some(c => c.startsWith('tab close ')),
+        false,
+      )
+    }
   } finally {
     b.proc.kill()
     await b.proc.exited
   }
 
-  // 2) Unit check of freeToClose for Windows process table guard & renamed sleeping agy session (subprocess so HERDR_BIN_PATH is read at module load).
+  // 2) Unit check of freeToClose & tabPanes on win32 vs linux (subprocess so HERDR_BIN_PATH is read at module load).
   const box2 = await sandbox()
   const dir2 = project(box2)
-  box2.state(herdrState(dir2, { asleep: true, label: '💤 Custom Agy Name' }))
+  const st2 = herdrState(dir2, { asleep: true, label: '💤 Custom Agy Name' })
+  const panesWithExpiredSidebar = (
+    st2['pane list'] as { result: { panes: Record<string, unknown>[] } }
+  ).result.panes.map(p =>
+    p.pane_id === 'wP:p3' ? { pane_id: 'wP:p3', tab_id: 'wP:t1', workspace_id: 'wP', label: 'Sidebar' } : p,
+  )
+  box2.state({ ...st2, 'pane list': { result: { panes: panesWithExpiredSidebar } } })
   const probeScript = join(box2.dir, 'probe-free.ts')
   writeFileSync(
     probeScript,
     `
 import { translator } from ${JSON.stringify(join(import.meta.dir, '../../src/core/i18n/translator.ts'))}
-import { freeToClose } from ${JSON.stringify(join(import.meta.dir, '../../src/services/archive.ts'))}
+import { freeToClose, tabPanes } from ${JSON.stringify(join(import.meta.dir, '../../src/services/archive.ts'))}
 import { defaultDeps } from ${JSON.stringify(join(import.meta.dir, '../../src/services/deps.ts'))}
 const deps = defaultDeps({} as never)
-const subject = {
+const agy = {
   key: ${JSON.stringify(S)},
   session: ${JSON.stringify(S)},
   name: 'Custom Agy Name',
@@ -1489,21 +1503,48 @@ const subject = {
   agent: 'agy',
   pane: 'wP:p1',
 } as never
-const winIdle = await freeToClose(deps, subject, translator('en'), async () => [{ pid: 7, ppid: 1, bytes: 1024, name: 'pwsh' }])
-const winBusy = await freeToClose(deps, subject, translator('en'), async () => [
+const pi = {
+  key: ${JSON.stringify(S)},
+  session: ${JSON.stringify(S)},
+  name: 'Custom Agy Name',
+  autoName: 'Original Auto',
+  category: 'personal',
+  agent: 'pi',
+  pane: 'wP:p1',
+} as never
+const winIdle = await freeToClose(deps, agy, translator('en'), async () => [{ pid: 7, ppid: 1, bytes: 1024, name: 'pwsh' }], 'win32')
+const winBusy = await freeToClose(deps, agy, translator('en'), async () => [
   { pid: 7, ppid: 1, bytes: 1024, name: 'pwsh' },
   { pid: 99, ppid: 7, bytes: 1024, name: 'node' },
-])
-const unixIdle = await freeToClose(deps, subject, translator('en'), null)
-console.log(JSON.stringify({ winIdle: winIdle.ok, winBusy, unixIdle: unixIdle.ok }))
+], 'win32')
+const winPiIdle = await freeToClose(deps, pi, translator('en'), async () => [{ pid: 7, ppid: 1, bytes: 1024, name: 'pwsh' }], 'win32')
+const linuxAgy = await freeToClose(deps, agy, translator('en'), null, 'linux')
+const linuxPi = await freeToClose(deps, pi, translator('en'), null, 'linux')
+const winTab = await tabPanes('wP', 'wP:t1', 'win32')
+const linuxTab = await tabPanes('wP', 'wP:t1', 'linux')
+console.log(JSON.stringify({ winIdle: winIdle.ok, winBusy, winPiIdle: winPiIdle.ok, linuxAgy, linuxPi, winTab, linuxTab }))
 `,
   )
   const proc = Bun.spawn([process.execPath, probeScript], { env: box2.env, stdout: 'pipe', stderr: 'pipe' })
   const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
   assert.equal(await proc.exited, 0, err)
-  assert.deepEqual(JSON.parse(out.trim()), {
-    winIdle: true,
-    winBusy: { ok: false, why: 'archive.why.shellBusy' },
-    unixIdle: true,
-  })
+  const parsed = JSON.parse(out.trim())
+  assert.deepEqual(
+    {
+      winIdle: parsed.winIdle,
+      winBusy: parsed.winBusy,
+      winPiIdle: parsed.winPiIdle,
+      linuxAgy: parsed.linuxAgy,
+      linuxPi: parsed.linuxPi,
+    },
+    {
+      winIdle: true,
+      winBusy: { ok: false, why: 'archive.why.shellBusy' },
+      winPiIdle: true,
+      linuxAgy: { ok: false, why: 'archive.why.exited' },
+      linuxPi: { ok: false, why: 'archive.why.exited' },
+    },
+  )
+  assert.equal(parsed.winTab.find((p: { pane: string }) => p.pane === 'wP:p3')?.plugin, true)
+  assert.equal(parsed.linuxTab.find((p: { pane: string }) => p.pane === 'wP:p3')?.plugin, false)
 }, 30_000)

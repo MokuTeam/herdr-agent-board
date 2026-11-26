@@ -310,7 +310,7 @@ export function createMoveOut(o: MoveOutDeps): MoveOut {
                       .filter((x): x is NonNullable<ReturnType<typeof asPane>> => !!x && x.tab_id === live.tab_id)
                     if (
                       inTab.some(x => x.pane_id === pane.id) &&
-                      inTab.every(x => x.pane_id === pane.id || isSidebarPane(x))
+                      inTab.every(x => x.pane_id === pane.id || isSidebarPane(x, platform))
                     )
                       closeTab = true
                   }

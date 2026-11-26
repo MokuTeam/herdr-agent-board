@@ -20,7 +20,7 @@ import { sameDir } from '../../src/core/launch/names.ts'
 import { defaultProfileDir, mergeProfiles, profileSet } from '../../src/core/profiles.ts'
 import type { Item } from '../../src/core/types.ts'
 import { checkRequest } from '../../src/services/launch/request.ts'
-import { worktreeSubdir } from '../../src/services/launch/run.ts'
+import { spareWorktreeRootTab, worktreeSubdir } from '../../src/services/launch/run.ts'
 import { type Sandbox, sandbox, until } from '../support/sandbox.ts'
 import { trustScreen } from '../support/trust-screen.ts'
 
@@ -841,7 +841,11 @@ test('a launch into a checkout links its workspace with worktree open, and reuse
     false,
   )
 
-  // Brand-new linked workspace (already_open: false) whose launch opens a second tab (work profile) closes the empty first tab (#888).
+  // Brand-new linked workspace (already_open: false) whose launch opens a second tab (work profile)
+  // closes the empty first tab on Windows (#888), while Linux/macOS keep origin/main behavior.
+  assert.equal(spareWorktreeRootTab('win32'), true)
+  assert.equal(spareWorktreeRootTab('linux'), false)
+  assert.equal(spareWorktreeRootTab('darwin'), false)
   const b2 = await boardServer(
     box2 => ({
       launch: { agent: 'claude', linkedWorkspaces: true },
@@ -879,8 +883,9 @@ test('a launch into a checkout links its workspace with worktree open, and reuse
     await b2.started({ name: '14313', cwd: repo2, category: 'acme', profile: 'work', workspace: { create: '14313' } }),
   )
   assert.equal(l2.state, 'done', l2.error)
-  assert.ok(
+  assert.equal(
     b2.box.calls().some(a => a[0] === 'tab' && a[1] === 'close' && a[2] === 'w62:t1'),
+    process.platform === 'win32',
     JSON.stringify(b2.box.calls()),
   )
 }, 60_000)

@@ -175,6 +175,7 @@ async function cleanupEmptySpawnTab(
     workspace: string
   },
   processTable: (() => Promise<readonly MemRow[] | null>) | null,
+  platform: string = process.platform,
 ): Promise<string | null> {
   const cur = await paneInfo(created.pane, 5000).catch(() => null)
   if (!cur || cur.agent) return null
@@ -199,7 +200,10 @@ async function cleanupEmptySpawnTab(
     const inTab = raw
       .map(asPane)
       .filter((x): x is NonNullable<ReturnType<typeof asPane>> => !!x && x.tab_id === cur.tab)
-    if (inTab.some(x => x.pane_id === created.pane) && inTab.every(x => x.pane_id === created.pane || isSidebarPane(x)))
+    if (
+      inTab.some(x => x.pane_id === created.pane) &&
+      inTab.every(x => x.pane_id === created.pane || isSidebarPane(x, platform))
+    )
       closeTab = true
   }
   await herdr(closeTab && cur.tab ? ['tab', 'close', cur.tab] : ['pane', 'close', created.pane]).catch(() => {})
@@ -619,7 +623,7 @@ export async function spawnAgent(
       )
   } catch (err) {
     if (winPlatform === 'win32' && createdTab && !seen) {
-      const tail = await cleanupEmptySpawnTab(createdTab, winTable).catch(() => null)
+      const tail = await cleanupEmptySpawnTab(createdTab, winTable, winPlatform).catch(() => null)
       if (tail && err instanceof Error) err.message = `${err.message}\nLast terminal output:\n${tail}`
     }
     throw err

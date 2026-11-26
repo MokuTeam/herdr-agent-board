@@ -192,13 +192,18 @@ function paneOf(l: Launch): string {
   return l.pane
 }
 
+/** On Windows, a newly opened linked workspace's empty first tab is marked spare for tidy() when another tab opens (#888). */
+export const spareWorktreeRootTab = (platform: string = process.platform): boolean => platform === 'win32'
+
 /** Runs launches; `step` records a launch's step and publishes the board. */
 export function launchRunner({
   deps,
   step,
+  platform = process.platform,
 }: {
   deps: Deps
   step: (l: Launch, name: LaunchStep) => void
+  platform?: string
 }): LaunchRunner {
   const events = (l: Launch): LaunchEvents => ({
     step: name => step(l, name),
@@ -253,7 +258,7 @@ export function launchRunner({
         }
         l.workspaceId = ws.id
         l.newWorkspace = false
-        await openLaunchTab(l, ws, true)
+        await openLaunchTab(l, ws, spareWorktreeRootTab(platform))
       } else {
         // In the profile's env: what starts in its first tab runs in that profile.
         const ws = await openInProfile(l, env => workspaceCreate(l.cwd, l.workspaceLabel, env))

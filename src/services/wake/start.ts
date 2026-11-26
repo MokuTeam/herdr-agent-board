@@ -31,6 +31,8 @@ export interface StartDeps {
   bootedAt: number
   /** The plugin's folder: the new workspace's and the pane's cwd. */
   root: string
+  /** Override host platform (defaults to process.platform; tests). */
+  platform?: string
   /**
    * The takeover at wake's first start after the old plugin was removed by hand (takeover.ts
    * takeOverAtFirstStart), run once no wake runs and before its new pane opens; the wake section
@@ -101,7 +103,7 @@ const panesOf = (snap: HerdrSnapshot, tab: string) => snap.panes.filter(p => p.t
 export const workspaceOf = (snap: HerdrSnapshot, pane: HerdrPane): string | undefined =>
   pane.workspace_id ?? snap.tabs.find(t => t.tab_id === pane.tab_id)?.workspace_id
 /** herdr-sidebar's pane, which that plugin adds to every tab (as entrypoints/open.ts orphanTabs reads it). */
-const isSidebar = isSidebarPane
+const isSidebar = (p: HerdrPane, platform: string = process.platform): boolean => isSidebarPane(p, platform)
 
 /**
  * Whether a pane is what wake leaves behind: herdr-sidebar's, or one with no agent in the plugin's
@@ -109,15 +111,16 @@ const isSidebar = isSidebarPane
  * folder, a pane herdr says no folder of) is the user's. The start's leftover tabs and the board's
  * close of wake's workspace (control.ts) both go by it.
  */
-export const wakeLeftover = (p: HerdrPane, root: string): boolean => isSidebar(p) || (!p.agent && sameDir(p.cwd, root))
+export const wakeLeftover = (p: HerdrPane, root: string, platform: string = process.platform): boolean =>
+  isSidebar(p, platform) || (!p.agent && sameDir(p.cwd, root))
 
 /**
  * What closes wake's pane: its whole tab when nothing but herdr-sidebar's panes is beside it, as that
  * plugin adds its pane to every tab; else only the pane (something of the user's is in that tab).
  */
-export function closeOfPane(snap: HerdrSnapshot, pane: HerdrPane): string[] {
+export function closeOfPane(snap: HerdrSnapshot, pane: HerdrPane, platform: string = process.platform): string[] {
   const tab = pane.tab_id
-  const alone = tab !== undefined && panesOf(snap, tab).every(p => p.pane_id === pane.pane_id || isSidebar(p))
+  const alone = tab !== undefined && panesOf(snap, tab).every(p => p.pane_id === pane.pane_id || isSidebar(p, platform))
   return alone ? ['tab', 'close', tab] : ['pane', 'close', pane.pane_id]
 }
 
@@ -161,13 +164,18 @@ function stale(deps: StartDeps, status: WakeStatusFile): boolean {
 }
 
 /** Tabs of the workspace with only wake's leftovers in them (wakeLeftover); a tab with anything else is the user's. */
-function spareTabs(snap: HerdrSnapshot, workspace: string, root: string): string[] {
+function spareTabs(
+  snap: HerdrSnapshot,
+  workspace: string,
+  root: string,
+  platform: string = process.platform,
+): string[] {
   return snap.tabs
     .filter(tab => tab.workspace_id === workspace)
     .map(tab => tab.tab_id)
     .filter(id => {
       const panes = panesOf(snap, id)
-      return panes.length > 0 && panes.every(p => wakeLeftover(p, root))
+      return panes.length > 0 && panes.every(p => wakeLeftover(p, root, platform))
     })
 }
 
@@ -176,6 +184,7 @@ export async function startWake(
   o: { on: boolean; settings: WakeConfig; board: BoardPlace; again?: boolean },
 ): Promise<StartResult> {
   if (!o.on) return 'off'
+  const platform = deps.platform ?? process.platform
   const status = deps.readStatus()
   /**
    * Whether what this start writes keeps the recorded pane and supervisor: not when the record is of
@@ -215,7 +224,9 @@ export async function startWake(
     }
     if (last && status && !stale(deps, status) && !o.again) return 'present'
     if (last) {
-      await deps.herdr(closeOfPane(snap, last)).catch(err => deps.log(`closing ${last.pane_id}: ${firstLine(err)}`))
+      await deps
+        .herdr(closeOfPane(snap, last, platform))
+        .catch(err => deps.log(`closing ${last.pane_id}: ${firstLine(err)}`))
       keep = false
       snap = await snapshotTried(deps)
     }
@@ -231,7 +242,8 @@ export async function startWake(
     let firstTab: string | undefined
     const boardsWorkspace = (id: string): boolean =>
       label === o.board.label || snap.panes.some(p => p.pane_id === o.board.pane && workspaceOf(snap, p) === id)
-    const leftovers = ws && !boardsWorkspace(ws.workspace_id) ? spareTabs(snap, ws.workspace_id, deps.root) : []
+    const leftovers =
+      ws && !boardsWorkspace(ws.workspace_id) ? spareTabs(snap, ws.workspace_id, deps.root, platform) : []
     if (!ws) {
       const created = await deps.herdr<Created | null>([
         'workspace',
