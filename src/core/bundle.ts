@@ -8,8 +8,10 @@
 // services/nodes/bundle-sync.ts sends the bundle and services/node/bundle.ts applies it.
 
 import { createHash } from 'node:crypto'
+import { AGY_AGENT } from './agy.ts'
 import { type GitIdentity, identityOf } from './git-access.ts'
 import { isBoardCommand, normPath } from './install-plan.ts'
+import { agyCommand } from './launch/agents.ts'
 import { claudeCommand } from './launch/spawn-args.ts'
 import { pathsIn } from './portable.ts'
 import { isHerdrHook, SKILL, TEAM_SKILL, THREADS_SKILL } from './setup.ts'
@@ -90,14 +92,14 @@ export interface ReportEntry {
   accepted?: true
 }
 
-/** The board's own part of the node's config.json (7.2): the four keys the master owns, and launch.claude when it travels. */
+/** The board's own part of the node's config.json (7.2): the four keys the master owns, and plain `launch.claude` / `launch.agy` when they travel. */
 export interface BoardSlice {
   categories?: unknown
   language?: unknown
   models?: unknown
   /** This node's `secrets.sinks`, from `nodes.devices.<id>.sinks`. */
   sinks: unknown
-  launch?: { claude: unknown }
+  launch?: { claude?: unknown; agy?: unknown }
 }
 
 export interface BundleManifest {
@@ -846,10 +848,38 @@ function stdioServer(
   done(name, server, { verdict: unwrapped || secrets.length ? 'translated' : 'sent', why }, secrets, mcp, report)
 }
 
+function sliceLauncher(
+  raw: unknown,
+  name: 'launch.claude' | 'launch.agy',
+  expected: string,
+  parse: (setting: unknown) => string[],
+): { ok: true; value: unknown } | { ok: false; report: ReportEntry } | null {
+  if (raw === undefined || raw === null || raw === '') return null
+  if (typeof raw === 'string' && !raw.trim() && expected === AGY_AGENT) return null
+  let program = ''
+  try {
+    program = parse(raw)[0] ?? ''
+  } catch {
+    program = ''
+  }
+  if (program === expected) return { ok: true, value: clone(raw) }
+  return {
+    ok: false,
+    report: {
+      kind: 'launcher',
+      name,
+      verdict: 'not-sent',
+      why: program ? 'own-launcher' : 'invalid',
+      ...(program && { detail: program }),
+    },
+  }
+}
+
 /**
  * The board's slice for the node (9.1): `categories`, `language` and `models` as config.json has
- * them, the node's sinks, and `launch.claude` only when its program is plain `claude` (its flags
- * travel with it); a launcher of the owner's own stays on the master and the report says so.
+ * them, the node's sinks, and `launch.claude` / `launch.agy` only when their program is plain
+ * `claude` / `agy` (their flags travel with them); a launcher of the owner's own stays on the
+ * master and the report says so.
  */
 export function boardSlice(
   config: unknown,
@@ -861,23 +891,17 @@ export function boardSlice(
   for (const key of ['categories', 'language', 'models'] as const)
     if (cfg[key] !== undefined) board[key] = clone(cfg[key])
   const report: ReportEntry[] = []
-  const claude = isRecord(cfg.launch) ? cfg.launch.claude : undefined
-  if (claude !== undefined && claude !== null && claude !== '') {
-    let program = ''
-    try {
-      program = claudeCommand(claude)[0] ?? ''
-    } catch {
-      program = ''
-    }
-    if (program === 'claude') board.launch = { claude: clone(claude) }
-    else
-      report.push({
-        kind: 'launcher',
-        name: 'launch.claude',
-        verdict: 'not-sent',
-        why: program ? 'own-launcher' : 'invalid',
-        ...(program && { detail: program }),
-      })
+  const launch = isRecord(cfg.launch) ? cfg.launch : undefined
+  for (const [key, name, expected, parse] of [
+    ['claude', 'launch.claude', 'claude', (s: unknown) => claudeCommand(s)],
+    ['agy', 'launch.agy', AGY_AGENT, (s: unknown) => agyCommand(s)],
+  ] as const) {
+    const res = sliceLauncher(launch?.[key], name, expected, parse)
+    if (!res) continue
+    if (res.ok) {
+      board.launch ??= {}
+      board.launch[key] = res.value
+    } else report.push(res.report)
   }
   return { board, report: accepted(report, accept) }
 }
@@ -1342,9 +1366,9 @@ export function appliedMcp(
 
 /**
  * The node's config.json after a bundle (7.2): the four keys the master owns (`categories`,
- * `language`, `models`, `secrets.sinks`) and `launch.claude` when it is sent. A key the master
- * sent before and sends no more is removed; one it never sent stays the node's. Everything else
- * in the file is the node's and is not touched. The input is not changed.
+ * `language`, `models`, `secrets.sinks`) and `launch.claude` / `launch.agy` when sent. A key the
+ * master sent before and sends no more is removed; one it never sent stays the node's. Everything
+ * else in the file is the node's and is not touched. The input is not changed.
  */
 export function appliedSlice(config: unknown, previous: BoardSlice | null, next: BoardSlice): Record<string, unknown> {
   const out: Record<string, unknown> = isRecord(config) ? clone(config) : {}
@@ -1360,11 +1384,21 @@ export function appliedSlice(config: unknown, previous: BoardSlice | null, next:
     put(s, 'sinks', clone(sinks))
     put(out, 'secrets', s)
   }
-  if (next.launch) {
+  const nextLaunch = next.launch
+  const prevLaunch = previous?.launch
+  const hasClaude = nextLaunch?.claude !== undefined
+  const hasAgy = nextLaunch?.agy !== undefined
+  if (hasClaude || hasAgy) {
     const launch = isRecord(out.launch) ? out.launch : {}
-    put(launch, 'claude', clone(next.launch.claude))
+    if (hasClaude) put(launch, 'claude', clone(nextLaunch.claude))
+    else if (prevLaunch?.claude !== undefined) delete launch.claude
+    if (hasAgy) put(launch, 'agy', clone(nextLaunch.agy))
+    else if (prevLaunch?.agy !== undefined) delete launch.agy
     put(out, 'launch', launch)
-  } else if (previous?.launch && isRecord(out.launch)) delete out.launch.claude
+  } else if (prevLaunch && isRecord(out.launch)) {
+    if (prevLaunch.claude !== undefined) delete out.launch.claude
+    if (prevLaunch.agy !== undefined) delete out.launch.agy
+  }
   return out
 }
 

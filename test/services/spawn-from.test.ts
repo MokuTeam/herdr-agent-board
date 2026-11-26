@@ -345,6 +345,14 @@ describe('a node’s start with --trust on its master (#798)', () => {
     })
     expect(dismissed).toEqual([])
   })
+
+  test('a node start with --agent agy --trust forwards agent: agy and trust: true (#898)', async () => {
+    const trustedAgy = deps({ payload: onNode('laptop') })
+    const r = await spawnFrom('laptop', who, ask({ agent: 'agy', trust: true }), trustedAgy.d)
+    expect(r.code).toBe(0)
+    expect(trustedAgy.started[0]?.body).toMatchObject({ agent: 'agy', name: 'Atlas worker' })
+    expect(trustedAgy.started[0]?.options).toEqual({ byHand: false, origin: { device: 'laptop', facts }, trust: true })
+  })
 })
 
 test('spawnFrom lane precedence: req.lane > folder category > caller lane (#903)', async () => {

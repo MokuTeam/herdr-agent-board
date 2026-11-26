@@ -4,6 +4,7 @@
 import { describe, expect, test } from 'bun:test'
 import assert from 'node:assert/strict'
 import {
+  appliedSlice,
   type BundleContext,
   type BundleManifest,
   behindBy,
@@ -494,6 +495,43 @@ describe("9.1 the board's slice", () => {
         detail: 'C:\\tools\\claude-wrap.cmd',
       },
     ])
+  })
+
+  test('plain launch.agy travels with its flags; custom launch.agy is reported and left on master (#898)', () => {
+    const { board, report } = boardSlice({ launch: { agy: ['agy', '--dangerously-skip-permissions'] } }, undefined)
+    assert.deepEqual(board, { sinks: {}, launch: { agy: ['agy', '--dangerously-skip-permissions'] } })
+    assert.deepEqual(report, [])
+
+    const custom = boardSlice({ launch: { agy: ['/opt/custom/agy-wrap', '--x'] } }, undefined)
+    assert.deepEqual(custom.board, { sinks: {} })
+    assert.deepEqual(custom.report, [
+      {
+        kind: 'launcher',
+        name: 'launch.agy',
+        verdict: 'not-sent',
+        why: 'own-launcher',
+        detail: '/opt/custom/agy-wrap',
+      },
+    ])
+
+    // Unset launch.agy leaves the slice identical (no launch key at all).
+    assert.deepEqual(boardSlice({ launch: {} }, undefined).board, { sinks: {} })
+
+    // appliedSlice updates and removes launch.agy independently of launch.claude.
+    const prev = {
+      sinks: {},
+      launch: { claude: ['claude', '--verbose'], agy: ['agy', '--dangerously-skip-permissions'] },
+    }
+    const one = appliedSlice({ node: { id: 'n' } }, null, prev)
+    assert.deepEqual(one, {
+      node: { id: 'n' },
+      launch: { claude: ['claude', '--verbose'], agy: ['agy', '--dangerously-skip-permissions'] },
+    })
+    const dropAgy = appliedSlice(one, prev, { sinks: {}, launch: { claude: ['claude', '--verbose'] } })
+    assert.deepEqual(dropAgy, {
+      node: { id: 'n' },
+      launch: { claude: ['claude', '--verbose'] },
+    })
   })
 })
 

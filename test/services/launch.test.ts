@@ -22,7 +22,7 @@ import type { Item } from '../../src/core/types.ts'
 import { checkRequest } from '../../src/services/launch/request.ts'
 import { spareWorktreeRootTab, worktreeSubdir } from '../../src/services/launch/run.ts'
 import { type Sandbox, sandbox, until } from '../support/sandbox.ts'
-import { trustScreen } from '../support/trust-screen.ts'
+import { agyTrustScreen, trustScreen } from '../support/trust-screen.ts'
 
 // biome-ignore lint/correctness/useHookAtTopLevel: a language setter, not a React hook
 useLanguage('en')
@@ -1302,6 +1302,88 @@ test('#798: without nodes a request that says trust is as before: the card asks,
   await sleep(300)
   assert.deepEqual(keysSent(box), [])
   assert.deepEqual(promptsSent(box), [])
+}, 40_000)
+
+test('#898: a placed agy start with --trust passes --trust to spawn-agent, and run.ts handles agyTrustScreen on herdrLauncher', async () => {
+  // 1. spawnAgentLauncher passes --trust when l.trust is true and omits it when unset.
+  const builtin = await boardServer({ nodes: {}, launch: { agy: ['agy', '--dangerously-skip-permissions'] } })
+  writeConfig(builtin.box, { launch: { agy: ['agy', '--dangerously-skip-permissions'] } })
+  const dir1 = join(builtin.box.dir, 'agy-builtin')
+  mkdirSync(dir1)
+  const AGY_ID = '18fb0773-7c19-4e3d-8e9b-ceadaef29211'
+  const agyReady = {
+    result: {
+      pane: { pane_id: 'wA:p9', tab_id: 'wA:t9', agent: 'agy', agent_status: 'idle', agent_session: { value: AGY_ID } },
+    },
+  }
+  const agyBlocked = {
+    result: {
+      pane: {
+        pane_id: 'wA:p9',
+        tab_id: 'wA:t9',
+        agent: 'agy',
+        agent_status: 'blocked',
+        agent_session: { value: AGY_ID },
+      },
+    },
+  }
+  builtin.box.state({
+    ...HERDR,
+    'pane run': { result: null },
+    'pane get': { seq: [{ result: { pane: { pane_id: 'wA:p9', agent: null } } }, agyBlocked, agyReady] },
+    'pane read': { seq: [{ text: agyTrustScreen(dir1) }, { text: 'Conversation renamed to: Agy One\n' }] },
+  })
+  const l1 = await builtin.launched(
+    await builtin.started({
+      name: 'Agy One',
+      cwd: dir1,
+      category: 'acme',
+      workspace: { id: 'wA' },
+      agent: 'agy',
+      message: 'Go',
+      trust: true,
+    }),
+  )
+  assert.equal(l1.state, 'done', JSON.stringify(l1))
+  assert.ok(
+    builtin.box.calls().some(c => c.join(' ') === 'pane run wA:p9 agy --dangerously-skip-permissions'),
+    JSON.stringify(builtin.box.calls()),
+  )
+  assert.deepEqual(keysSent(builtin.box), ['wA:p9 enter'])
+  assert.deepEqual(promptsSent(builtin.box), ['wA:p9 /rename Agy One', 'wA:p9 Go'])
+
+  // 2. herdrLauncher with launch.agent: 'agy' recognizes agyTrustScreen, answers with trust: true, and retries /rename once if dropped.
+  const herdrAgy = await boardServer({ launch: { agent: 'agy' }, nodes: {} })
+  const dir2 = join(herdrAgy.box.dir, 'agy-herdr')
+  mkdirSync(dir2)
+  const nothing = Array.from({ length: 10 }, () => ({ text: 'Antigravity' }))
+  herdrAgy.box.state({
+    ...HERDR,
+    'agent start': { code: 'agent_not_ready', error: 'agent_not_ready: blocked during startup' },
+    'agent get': { result: { agent: { agent: 'agy', agent_status: 'idle', agent_session: { value: AGY_ID } } } },
+    'pane read': {
+      seq: [
+        { text: agyTrustScreen(dir2, { selected: 'no' }) },
+        { text: agyTrustScreen(dir2, { selected: 'no' }) },
+        { text: agyTrustScreen(dir2, { selected: 'yes' }) },
+        ...nothing,
+        { text: 'Conversation renamed to: Agy Two\n' },
+      ],
+    },
+  })
+  const l2 = await herdrAgy.launched(
+    await herdrAgy.started({
+      name: 'Agy Two',
+      cwd: dir2,
+      category: 'acme',
+      workspace: { id: 'wA' },
+      message: 'Hello agy',
+      trust: true,
+    }),
+  )
+  assert.equal(l2.state, 'done', JSON.stringify(l2))
+  assert.deepEqual(keysSent(herdrAgy.box), ['wA:p9 up', 'wA:p9 enter'])
+  assert.deepEqual(promptsSent(herdrAgy.box), ['wA:p9 /rename Agy Two', 'wA:p9 /rename Agy Two', 'wA:p9 Hello agy'])
 }, 40_000)
 
 // A dialog Claude draws after herdr called it ready (#602): on the owner's first node the Code Mode

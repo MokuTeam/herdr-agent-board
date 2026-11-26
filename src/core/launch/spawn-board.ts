@@ -1,6 +1,7 @@
 // spawn-agent asks the board (#505, docs/design/nodes 8.5), the logic without the network: which
 // starts the board may place, the request spawn-agent posts for one, and what the board's payload
 // says became of it, as the line spawn-agent prints. services/launch/spawn-board.ts asks.
+import { AGY_AGENT, isAgySession } from '../agy.ts'
 import { LOCAL, nodeKey, parseNodeKey } from '../nodes.ts'
 import { isPiItem, piSessionId } from '../pi.ts'
 import type { Item, LaunchView, Translator } from '../types.ts'
@@ -11,8 +12,8 @@ import type { SpawnOptions } from './spawn-args.ts'
  * Whether the placer may take this start: a new session an agent asks for. Not a resume, a fork,
  * a start in a pane, a Workdesk worker, nor a start that names its session id or its profile
  * folder (the board's own launcher calling, --session-id, --config-dir, --keep-env). --trust goes
- * with the start (#798): the board that runs it answers the folder-trust dialog for its own folder,
- * as spawn-agent does; with another agent than Claude (Antigravity's own dialog, #648) it stays here.
+ * with the start (#798, #898): the board that runs it answers the folder-trust dialog for its own
+ * folder, as spawn-agent does, for Claude and Antigravity; with pi or Codex it stays here.
  */
 export const placeable = (o: SpawnOptions): boolean =>
   o.resume === undefined &&
@@ -22,7 +23,7 @@ export const placeable = (o: SpawnOptions): boolean =>
   o.sessionId === undefined &&
   o.configDir === undefined &&
   !o.keepEnv &&
-  (!o.trust || o.agent === undefined)
+  (!o.trust || o.agent === undefined || o.agent === AGY_AGENT)
 
 /** The session that runs spawn-agent, as the board shows it: by its Claude or Antigravity id, else by its herdr pane. */
 export function callerOf(items: readonly Item[], env: Record<string, string | undefined>): Item | undefined {
@@ -196,11 +197,13 @@ export function outcomeOf(
           : own.error
       return { kind: 'failed', error: why || 'the board could not start it: see its card on the board' }
     }
-    if (DIALOG.has(own.state))
+    if (DIALOG.has(own.state)) {
+      const title = own.agent === AGY_AGENT ? 'Antigravity' : 'Claude'
       return {
         kind: 'failed',
-        error: `Claude in ${own.pane ?? 'its tab'} waits for a dialog (folder trust?). Answer it on its card on the board, which finishes the start.`,
+        error: `${title} in ${own.pane ?? 'its tab'} waits for a dialog (folder trust?). Answer it on its card on the board, which finishes the start.`,
       }
+    }
   }
   if (device && session) {
     const key = nodeKey(device, session)
@@ -208,16 +211,22 @@ export function outcomeOf(
     const theirs = launches.find(l => l.device === device && l.id === key)
     if (theirs?.state === 'failed')
       return { kind: 'failed', error: `on ${label}: ${theirs.error || 'the start failed: see its card on the board'}` }
-    if (theirs && DIALOG.has(theirs.state))
+    if (theirs && DIALOG.has(theirs.state)) {
+      const title = theirs.agent === AGY_AGENT ? 'Antigravity' : 'Claude'
       return {
         kind: 'failed',
-        error: `Claude on ${label} waits for a dialog (folder trust?). Answer it on its card on the board, which finishes the start.`,
+        error: `${title} on ${label} waits for a dialog (folder trust?). Answer it on its card on the board, which finishes the start.`,
       }
+    }
     const item = items.find(i => i.device === device && ofSession(i, session))
     if (item && (!theirs || theirs.state === 'done'))
       return { kind: 'printed', line: nodeLine(device, item.pane, session, f.name) }
     // Done there, its card not on the board yet (pi's is keyed by its file only once pi is up).
-    if (theirs?.state === 'done') return { kind: 'printed', line: nodeLine(device, theirs.pane, session, f.name) }
+    if (theirs?.state === 'done') {
+      const real = theirs.agent === AGY_AGENT ? parseNodeKey(theirs.key ?? '')?.key : undefined
+      const realSession = real && isAgySession(real) ? real : session
+      return { kind: 'printed', line: nodeLine(device, theirs.pane, realSession, f.name) }
+    }
     return { kind: 'pending', device, seen }
   }
   // On this computer: the board's own launcher ran it, and its launch says the pane once it is done.

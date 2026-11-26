@@ -323,8 +323,8 @@ export function parseArgs(argv: readonly string[]): SpawnArgs {
       ...(sessionId !== undefined ? ['--session-id'] : []),
       ...(configDir !== undefined ? ['--config-dir'] : []),
       ...(keepEnv ? ['--keep-env'] : []),
-      // --trust goes with a placed Claude start (#798); with another agent the start stays here.
-      ...(trust && (pi || agy || codex) ? ['--trust'] : []),
+      // --trust goes with a placed Claude or Antigravity start (#798, #898); with another agent the start stays here.
+      ...(trust && (pi || codex) ? ['--trust'] : []),
       ...(workdeskWorker ? ['--workdesk-worker'] : []),
       ...(thread ? ['--thread'] : []),
     ]
@@ -515,4 +515,21 @@ export function stillTyped(shown: unknown, text: unknown): boolean {
   const squeeze = (s: unknown): string => String(s ?? '').replace(/\s+/g, '')
   const head = squeeze(String(text ?? '').split('\n')[0]).slice(0, 30)
   return (!!head && squeeze(shown).includes(head)) || /Pasted text/.test(String(shown ?? ''))
+}
+
+/**
+ * Manual `herdr agent prompt` hint printed on launch/brief failure. Under Windows Git Bash
+ * (`MSYSTEM` set on win32), prefix `MSYS_NO_PATHCONV=1` so MSYS does not rewrite a leading
+ * slash (e.g. `/rename <Name>`) into a Git installation path (#898).
+ */
+export function promptHint(
+  pane: string,
+  text: string,
+  {
+    platform = process.platform,
+    env = process.env,
+  }: { platform?: string; env?: Record<string, string | undefined> } = {},
+): string {
+  const cmd = `herdr agent prompt ${pane} "${text}"`
+  return platform === 'win32' && env.MSYSTEM ? `MSYS_NO_PATHCONV=1 ${cmd}` : cmd
 }

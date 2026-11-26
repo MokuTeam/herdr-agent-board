@@ -40,13 +40,15 @@ test('a new session is placeable; a resume, a fork, a pane, a session id, a prof
     expect([more[0], placeable(opts(...more))]).toEqual([more[0], false])
 })
 
-test('--trust goes with a placed Claude start (#798); with another agent the start stays here', () => {
+test('--trust goes with a placed Claude or Antigravity start (#798, #898); with pi or codex the start stays here', () => {
   expect(placeable(opts('--trust'))).toBe(true)
   expect(placeable(opts('--trust', '--agent', 'claude'))).toBe(true)
+  expect(placeable(opts('--trust', '--agent', 'agy'))).toBe(true)
   expect(placeable(opts('--trust', '--agent', 'pi'))).toBe(false)
-  expect(placeable(opts('--trust', '--agent', 'agy'))).toBe(false)
+  expect(placeable({ ...opts('--trust'), agent: 'codex' })).toBe(false)
   const facts = { cwd: '/w', message: '', workspace: { id: 'w1' } }
   expect(launchBody(opts('--trust'), facts).trust).toBe(true)
+  expect(launchBody(opts('--trust', '--agent', 'agy'), facts)).toMatchObject({ agent: 'agy', trust: true })
   // Without it the request is as before: no trust key at all.
   expect('trust' in launchBody(opts(), facts)).toBe(false)
 })
@@ -203,5 +205,41 @@ test('outcomeOf uses renamed device titles in refusals and failure lines while k
   expect(outcomeOf(done, { ...followed, device: 'server-1' }, en)).toEqual({
     kind: 'printed',
     line: `pane=@server-1:p4 name=Acme agent=${key} device=server-1 session=${SID}`,
+  })
+})
+
+test('outcomeOf with agent agy: names Antigravity on trust dialog and uses real conversation UUID when done (#898)', () => {
+  const REAL_AGY_ID = '18fb0773-7c19-4e3d-8e9b-ceadaef29211'
+  const key = `@laptop:${SID}`
+  const devices = [{ id: 'laptop', title: 'Laptop' }]
+  const ownTrust = {
+    items: [],
+    launches: [launch({ state: 'trust', pane: 'wA:p3', agent: 'agy' })],
+  }
+  expect(outcomeOf(ownTrust, followed, en)).toEqual({
+    kind: 'failed',
+    error:
+      'Antigravity in wA:p3 waits for a dialog (folder trust?). Answer it on its card on the board, which finishes the start.',
+  })
+  const nodeTrust = {
+    items: [],
+    launches: [launch({ id: key, device: 'laptop', state: 'trust', agent: 'agy' })],
+    devices,
+  }
+  expect(outcomeOf(nodeTrust, { ...followed, device: 'laptop' }, en)).toEqual({
+    kind: 'failed',
+    error:
+      'Antigravity on Laptop waits for a dialog (folder trust?). Answer it on its card on the board, which finishes the start.',
+  })
+  const nodeDone = {
+    items: [],
+    launches: [
+      launch({ id: key, device: 'laptop', state: 'done', agent: 'agy', pane: 'p7', key: `@laptop:${REAL_AGY_ID}` }),
+    ],
+    devices,
+  }
+  expect(outcomeOf(nodeDone, { ...followed, device: 'laptop' }, en)).toEqual({
+    kind: 'printed',
+    line: `pane=@laptop:p7 name=Acme agent=@laptop:${REAL_AGY_ID} device=laptop session=${REAL_AGY_ID}`,
   })
 })

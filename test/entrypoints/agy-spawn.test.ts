@@ -448,4 +448,105 @@ describe('spawn-agent --agent agy and board CLI Antigravity identity', () => {
     expect(explicit.code, explicit.stderr).toBe(0)
     expect(cardOf(box2, AGY_ID)).toMatchObject({ key: AGY_ID, category: 'agent-board' })
   })
+
+  test('spawn-agent --agent agy --trust uses launch.agy flags from config.json and handles Windows trust path (#898)', async () => {
+    const box = await sandbox()
+    const cfgFile = join(box.env.APPDATA ?? '', 'herdr', 'plugins', 'config', 'agent-board', 'config.json')
+    mkdirSync(join(cfgFile, '..'), { recursive: true })
+    writeFileSync(cfgFile, JSON.stringify({ launch: { agy: ['agy', '--dangerously-skip-permissions'] } }))
+
+    const dir = join(box.dir, 'Win Agy')
+    mkdirSync(dir)
+    const AGY_BLOCKED = {
+      result: {
+        pane: {
+          pane_id: 'wA:p9',
+          tab_id: 'wA:t9',
+          agent: 'agy',
+          agent_status: 'blocked',
+          agent_session: { value: AGY_ID },
+        },
+      },
+    }
+    box.state({
+      ...BASE_STATE,
+      'pane get': { seq: [AGY_BLOCKED, AGY_READY] },
+      'pane read': { seq: [{ text: agyTrustScreen(dir) }, { text: 'Conversation renamed to: Win Agy\n' }] },
+    })
+
+    const r = await runScript(box, SPAWN, [
+      '--agent',
+      'agy',
+      '--trust',
+      '--name',
+      'Win Agy',
+      '--cwd',
+      dir,
+      '--workspace',
+      'wA',
+      '--brief',
+      'Ship Windows fix',
+    ])
+    expect(r.code, r.stderr).toBe(0)
+    const calls = box.calls().map(c => c.join(' '))
+    expect(calls).toContain('pane run wA:p9 agy --dangerously-skip-permissions')
+    expect(calls).toContain('pane send-keys wA:p9 enter')
+    expect(calls).toContain('agent prompt wA:p9 /rename Win Agy')
+    expect(calls).toContain('agent prompt wA:p9 Ship Windows fix')
+  })
+
+  test('spawnAgent prefixes MSYS_NO_PATHCONV=1 on prompt hints only on win32 with MSYSTEM (#898)', async () => {
+    const AGY_BLOCKED = {
+      result: {
+        pane: {
+          pane_id: 'wA:p9',
+          tab_id: 'wA:t9',
+          agent: 'agy',
+          agent_status: 'blocked',
+          agent_session: { value: AGY_ID },
+        },
+      },
+    }
+    const SPAWN_SVC = join(root, 'src', 'services', 'launch', 'spawn-agent.ts')
+    const runBlocked = async (platform: string, extraEnv: Record<string, string>) => {
+      const box = await sandbox()
+      const dir = join(box.dir, 'Blocked Agy')
+      mkdirSync(dir)
+      box.state({ ...BASE_STATE, 'pane get': AGY_BLOCKED, 'pane read': { text: agyTrustScreen(dir) } })
+      const code = `
+        import { spawnAgent } from ${JSON.stringify(SPAWN_SVC)};
+        try {
+          await spawnAgent(
+            { name: 'Win Agy', cwd: ${JSON.stringify(dir)}, workspace: 'wA', timeoutSec: 10, agent: 'agy' },
+            { platform: ${JSON.stringify(platform)}, env: process.env, home: ${JSON.stringify(box.env.HOME ?? '')} },
+          );
+        } catch (err) {
+          console.error(err instanceof Error ? err.message : String(err));
+          process.exit(1);
+        }
+      `
+      const proc = Bun.spawn([process.execPath, '-e', code], {
+        cwd: root,
+        env: { ...box.env, ...PACED, ...extraEnv },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      const stderr = await new Response(proc.stderr).text()
+      return { code: await proc.exited, stderr }
+    }
+
+    const gitBash = await runBlocked('win32', { MSYSTEM: 'MINGW64' })
+    expect(gitBash.code).toBe(1)
+    expect(gitBash.stderr).toContain('MSYS_NO_PATHCONV=1 herdr agent prompt wA:p9 "/rename Win Agy"')
+
+    const pwsh = await runBlocked('win32', {})
+    expect(pwsh.code).toBe(1)
+    expect(pwsh.stderr).toContain('herdr agent prompt wA:p9 "/rename Win Agy"')
+    expect(pwsh.stderr).not.toContain('MSYS_NO_PATHCONV=1')
+
+    const linux = await runBlocked('linux', { MSYSTEM: 'MINGW64' })
+    expect(linux.code).toBe(1)
+    expect(linux.stderr).toContain('herdr agent prompt wA:p9 "/rename Win Agy"')
+    expect(linux.stderr).not.toContain('MSYS_NO_PATHCONV=1')
+  })
 })
