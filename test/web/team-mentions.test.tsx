@@ -1,7 +1,7 @@
 // Addressing a peer's agent on the page (#832, #842): after `@` the box lists the teammates, Enter or
 // Tab puts `@Name.` in and lists their agents (or why there are none), and then `@Name.handle ` (without
 // a list the box sends as before); People and agents shows
-// what teammates can address (read only: exposure follows the lanes shared); the directories are
+// what teammates can address (exposure follows the lanes shared); the directories are
 // asked only while a peer in the roster sent one.
 
 import { afterEach, describe, expect, test } from 'bun:test'
@@ -97,6 +97,26 @@ describe("the box's list after @: the teammates, then the one picked's agents (#
   }
   const words = (b: { options: Node[] }) =>
     b.options.map(o => (o.kind === 'element' ? o.attrs.get('data-mention') : ''))
+
+  test('a unique published alias is offered and picked as a canonical address; clashes keep the handles', () => {
+    const alias = { code: 'helper', alias: 'Reports' }
+    const directories = [{ peer: ANA, name: 'Anna Lee', agents: [alias], ts: '' }]
+    const listed = mentionPeople(directories, ROSTER)
+    const b = box('@rep', listed)
+    expect(words(b)).toEqual(['Reports'])
+    b.press('Enter')
+    expect(b.calls).toEqual(['kept Enter', 'change @AnnaLee.helper '])
+    const duplicates = mentionPeople(
+      [...directories, { peer: BOB, name: 'bob', ts: '', agents: [{ code: 'reviewer', alias: 'REPORTS' }] }],
+      ROSTER,
+    )
+    expect(mentionRows(duplicates, 'rep', null)).toEqual([])
+    expect(mentionRows(duplicates, 'annalee', 'h').map(r => r.word)).toEqual(['AnnaLee.helper'])
+    const reserved = mentionPeople(directories, [...ROSTER, peer('R'.repeat(43), 'Re ports')])
+    expect(box('@rep', reserved).options.every(o => o.kind !== 'element' || o.attrs.get('data-kind') !== 'alias')).toBe(
+      true,
+    )
+  })
 
   test('every teammate in the roster, by name, with or without agents; their agents by code name', () => {
     expect(people.map(p => [p.word, p.agents.map(a => a.code), p.none ?? null])).toEqual([
@@ -303,7 +323,7 @@ describe('what teammates can address, shown in People and agents', () => {
     ...over,
   })
 
-  test('each handle as @Me.handle, its lane, its session and who reaches it; nothing to switch', () => {
+  test('each handle as @Me.handle, its lane, its session, who reaches it and the alias editor', () => {
     const nodes = renderInBoard(<TeamBody {...props()} />, board())
     const rows = findAll(nodes, el => el.attrs.has('data-expose'))
     expect(rows.map(r => r.attrs.get('data-expose'))).toEqual(['acme-work'])
@@ -312,7 +332,8 @@ describe('what teammates can address, shown in People and agents', () => {
     expect(row).toContain('Work')
     expect(row).toContain('Acme work')
     expect(row).toContain('Reached by Anna Lee, bob')
-    expect(findAll(rows, el => el.tag === 'button' || el.tag === 'input')).toEqual([])
+    expect(findAll(rows, el => el.tag === 'input').map(el => el.attrs.get('name'))).toEqual(['alias'])
+    expect(findAll(rows, el => el.tag === 'button').map(el => text(el.children))).toEqual(['Save alias'])
   })
 
   test('nothing reachable (or an older board): no section at all', () => {

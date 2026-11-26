@@ -34,7 +34,7 @@ import {
   type WorkPost,
 } from '../core/team.ts'
 import { type BoxKeyPair, generateBoxKey } from '../core/team-box.ts'
-import { readDirectory, validCode } from '../core/team-directory.ts'
+import { readDirectory, validAlias, validCode } from '../core/team-directory.ts'
 import type { DirectoryEntry } from '../core/team-wire.ts'
 import type { Alg } from '../core/webauthn.ts'
 import { isRecord, readJson, updateJson } from './json-store.ts'
@@ -864,6 +864,7 @@ export interface DirectoryState {
   got: Record<string, DirectoryGot>
   /** This board's handles, by session key: kept, so an address stays the session's. */
   handles: Record<string, string>
+  aliases: Record<string, string>
 }
 type DirectoryFile = { v: 1 } & Partial<DirectoryState>
 const isDirectoryFile = (v: unknown): v is DirectoryFile => isRecord(v) && v.v === 1
@@ -873,8 +874,9 @@ function directoryFrom(f: DirectoryFile | null): DirectoryState {
   const sent = bare<DirectorySent>({})
   const got = bare<DirectoryGot>({})
   const handles = bare<string>({})
+  const aliases = bare<string>({})
   for (const [peer, s] of Object.entries(isRecord(f?.sent) ? f.sent : {})) {
-    const list = isRecord(s) ? readDirectory(s.list) : null
+    const list = isRecord(s) ? readDirectory(s.list, true) : null
     if (!list || !isRecord(s) || typeof s.mark !== 'string' || typeof s.id !== 'string') continue
     const state = SENT_STATES.find(x => x === s.state) ?? 'sent'
     const at = typeof s.at === 'number' ? s.at : 0
@@ -882,12 +884,14 @@ function directoryFrom(f: DirectoryFile | null): DirectoryState {
     sent[peer] = { mark: s.mark, list, id: s.id, state, at, misses }
   }
   for (const [peer, g] of Object.entries(isRecord(f?.got) ? f.got : {})) {
-    const list = isRecord(g) ? readDirectory(g.list) : null
+    const list = isRecord(g) ? readDirectory(g.list, true) : null
     if (list && isRecord(g) && typeof g.ts === 'string' && typeof g.id === 'string')
       got[peer] = { list, ts: g.ts, id: g.id }
   }
   for (const [key, h] of Object.entries(isRecord(f?.handles) ? f.handles : {})) if (validCode(h)) handles[key] = h
-  return { sent, got, handles }
+  for (const [key, alias] of Object.entries(isRecord(f?.aliases) ? f.aliases : {}))
+    if (validAlias(alias)) aliases[key] = alias
+  return { sent, got, handles, aliases }
 }
 
 /** The directories sent and received, and the handles; empty while there is no file. Creates nothing. */

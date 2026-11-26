@@ -7,7 +7,14 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { archiveDir, teamAgentsFile, teamDirectoryFile } from '../../src/adapters/paths.ts'
-import { changeAgents, changePins, readDirectoryState, readInbox, readThreads } from '../../src/adapters/team-store.ts'
+import {
+  changeAgents,
+  changeDirectoryState,
+  changePins,
+  readDirectoryState,
+  readInbox,
+  readThreads,
+} from '../../src/adapters/team-store.ts'
 import { ackBytes, type Envelope, generateKey, type KeyPair, type Message, sign } from '../../src/core/team.ts'
 import { backoffMs } from '../../src/core/tunnel.ts'
 import {
@@ -171,6 +178,26 @@ describe('the directory this board sends: what the lanes shared reach', () => {
     expect(w.router.exposed([w.P.pub, w.Q.pub])).toEqual([
       { code: 'acme-work', session: { key: 'sess-acme', name: 'acme-work' }, lane: 'acme', reaches: [w.P.pub] },
     ])
+  })
+
+  test('aliases travel only to peers who reach the session, in signed directory text with the original entry shape', async () => {
+    const w = await world()
+    shareWithAnna(w)
+    changeDirectoryState(d => {
+      Object.assign(d, { aliases: { 'sess-acme': 'Reports', 'sess-globex': 'Private' } })
+    })
+    expect(await w.router.syncDirectory()).toBe(1)
+    const [d] = sent(w.ws)
+    expect(d?.to).toBe(w.P.pub)
+    expect(d?.body).toEqual({
+      text: 'agent directory aliases/1 ["Reports"]',
+      agents: [{ code: 'acme-work' }],
+    })
+    archive('sess-acme')
+    await word(w, d?.id, 'acked', w.P)
+    await until(() => readDirectoryState().sent[w.P.pub]?.state === 'acked', 'acked')
+    expect(await w.router.syncDirectory()).toBe(1)
+    expect(sent(w.ws)[1]?.body).toEqual({ text: 'agent directory', agents: [] })
   })
 
   test('one at a time: the next change goes once her board acked the last; unchanged, nothing goes', async () => {

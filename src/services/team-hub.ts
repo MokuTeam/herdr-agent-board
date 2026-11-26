@@ -132,7 +132,14 @@ import {
 } from '../core/team.ts'
 import { inboundKey, legacyText, splitKey, TEAM, threadKey } from '../core/team-agents.ts'
 import { NONCE_BYTES, TAG_BYTES, usableBox, wrapSecret } from '../core/team-box.ts'
-import { DIRECTORY_TEXT, directoryMark, leadingMention, peerOfWord } from '../core/team-directory.ts'
+import {
+  directoryAliases,
+  directoryBody,
+  directoryMark,
+  leadingMention,
+  peerOfWord,
+  publishedAliases,
+} from '../core/team-directory.ts'
 import { checkMeta, fileContext, mimeOf, sealFile } from '../core/team-file.ts'
 import { MAX_REACTIONS_PER_MSG, validEmoji } from '../core/team-reactions.ts'
 import type { DirectoryEntry } from '../core/team-wire.ts'
@@ -987,7 +994,7 @@ export function createTeam({
     } else if (msg.body.react) {
       keepReaction(msg, thread, held)
     } else if (msg.body.agents) {
-      keepDirectory(msg, msg.body.agents)
+      keepDirectory(msg, directoryAliases(msg.body.text, msg.body.agents))
     } else {
       keep(msg, thread, held)
       if (msg.body.file) files.kick()
@@ -1112,7 +1119,7 @@ export function createTeam({
       reply_to: null,
       ts: new Date(now).toISOString(),
       ttl_s: DEFAULT_TTL_S,
-      body: { text: DIRECTORY_TEXT, agents: list },
+      body: directoryBody(list),
     }
     const env = await sealEnvelope(key, msg)
     if (!checkEnvelope(env).ok || !checkMessage(env.payload, env.from).ok) return false
@@ -2164,7 +2171,15 @@ export function createTeam({
         if (d?.list.length && pins[p.peer]?.status !== 'changed')
           out.push({ peer: p.peer, name: p.name, agents: d.list, ts: d.ts })
       }
-      return out
+      if (!out.some(d => d.agents.some(a => a.alias))) return out
+      const aliases = publishedAliases(roster, out)
+      return out.map(d => ({
+        ...d,
+        agents: d.agents.map(({ alias, ...a }) => {
+          const hit = alias && aliases.get(alias.toLowerCase())
+          return hit ? { ...a, alias: hit.alias } : a
+        }),
+      }))
     },
     directorySent() {
       return config() ? Object.keys(readDirectoryState().sent) : []

@@ -197,7 +197,7 @@ test('registered in the panel, it posts in its lane as the owner agent, is held 
 })
 
 /** config.json with the team on, followed as it changes, and the board's key where it keeps it. */
-async function teamBoard(box: Sandbox, me: KeyPair): Promise<string> {
+async function teamBoard(box: Sandbox, me: KeyPair, name = 'owner2'): Promise<string> {
   const state = join(box.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board')
   mkdirSync(state, { recursive: true })
   writeFileSync(join(state, 'team-key.json'), JSON.stringify({ v: 1, ...me }), { mode: 0o600 })
@@ -206,7 +206,7 @@ async function teamBoard(box: Sandbox, me: KeyPair): Promise<string> {
     categories: [{ id: 'home', title: 'Home', color: 'green' }],
     wakeUrl: null,
     refreshSec: 1,
-    team: { hub: hub.url.replace(/\/v1$/, ''), name: 'owner2' },
+    team: { hub: hub.url.replace(/\/v1$/, ''), name },
   }
   const file = join(box.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json')
   mkdirSync(join(file, '..'), { recursive: true })
@@ -291,4 +291,74 @@ test('with "Confirm with a passkey" on, adding a service agent waits for the own
     expect.objectContaining({ by: 'ui', op: 'add', key: 'service-juno', lane: 'home' }),
     expect.objectContaining({ by: 'ui', op: 'remove', key: 'service-juno', lane: 'home' }),
   ])
+})
+
+test('a published alias reaches the exposed service over the hub and is withdrawn without changing its canonical address', async () => {
+  const owner = await generateKey()
+  const peer = await generateKey()
+  const other = await generateKey()
+  ;(await hub.join(owner, 'Ops Board', undefined, ['threads'])).close()
+  ;(await hub.join(peer, 'Peer Board', undefined, ['threads'])).close()
+  const outsider = await hub.join(other, 'Outside Board', undefined, ['threads'])
+  try {
+    const ownerUrl = await teamBoard(await sandbox(), owner, 'Ops Board')
+    const peerUrl = await teamBoard(await sandbox(), peer, 'Peer Board')
+    const change = (body: unknown) => post(ownerUrl, '/api/team/agents', body)
+    expect((await change({ peer: peer.pub, on: true, lanes: ['home'] })).status).toBe(200)
+    expect((await post(ownerUrl, '/api/team/services', { add: { name: 'Report Service', lane: 'home' } })).status).toBe(
+      200,
+    )
+    const directory = async () => {
+      const res = await fetch(`${peerUrl}/api/team/directory`)
+      const { peers } = (await res.json()) as { peers: { peer: string; agents: { code: string; alias?: string }[] }[] }
+      return peers.find(p => p.peer === owner.pub)?.agents ?? []
+    }
+    const code = 'report-service'
+    await waitFor(directory, entries => entries.some(a => a.code === code), 'canonical handle')
+    const alias = (name: string | null) => change({ publishAlias: { key: 'service-report-service', name } })
+    expect((await alias('invalid.alias')).status).toBe(400)
+    expect((await change({ publishAlias: { key: 'service-missing', name: 'Reports' } })).status).toBe(400)
+    expect((await alias('Reports')).status).toBe(200)
+    await waitFor(directory, entries => entries.some(a => a.alias === 'Reports'), 'published alias')
+    const send = await post(peerUrl, '/api/team/send', { to: 'team', text: '@rEpOrTs prepare the report' })
+    expect(send.status).toBe(200)
+    const { thread: key } = (await send.json()) as { thread: string }
+    const thread = key.slice(key.indexOf('/') + 1)
+    const incoming = async () => {
+      const res = await fetch(`${ownerUrl}/api/team/threads/${peer.pub}/${thread}`)
+      return (await res.json()) as { thread?: { handler?: { key: string } }; lines?: { text: string }[] }
+    }
+    const got = await waitFor(incoming, v => !!v.thread?.handler, 'service handles direct topic')
+    expect(got.thread?.handler?.key).toBe('service-report-service')
+    expect(got.lines?.some(l => l.text === '@OpsBoard.report-service prepare the report')).toBe(true)
+    const reply = await post(ownerUrl, '/api/team/post', {
+      to: peer.pub,
+      thread: { id: thread },
+      session: { key: 'service-report-service' },
+      text: 'Report ready',
+    })
+    expect(reply.status).toBe(200)
+    const echoed = async () => {
+      const res = await fetch(`${peerUrl}/api/team/threads/${key}`)
+      return (await res.json()) as { lines?: { from: string; text: string; via?: string; agent?: string }[] }
+    }
+    const answered = await waitFor(echoed, v => !!v.lines?.some(l => l.text === 'Report ready'), 'service reply')
+    expect(answered.lines?.find(l => l.text === 'Report ready')).toMatchObject({
+      from: owner.pub,
+      via: 'agent',
+      agent: 'Report Service',
+    })
+    expect((await outsider.settle(100)).filter(f => f.t === 'deliver')).toEqual([])
+    expect((await alias('OutsideBoard')).status).toBe(200)
+    await waitFor(directory, entries => entries.some(a => a.code === code && !a.alias), 'roster collision')
+    expect((await alias('Reports')).status).toBe(200)
+    await waitFor(directory, entries => entries.some(a => a.alias === 'Reports'), 'alias republished')
+    expect((await alias(null)).status).toBe(200)
+    await waitFor(directory, entries => entries.some(a => a.code === code && !a.alias), 'alias removed')
+    expect(
+      (await post(peerUrl, '/api/team/send', { to: 'team', text: '@OpsBoard.report-service follow up' })).status,
+    ).toBe(200)
+  } finally {
+    outsider.close()
+  }
 })

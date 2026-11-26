@@ -3,7 +3,7 @@
 // services/team-hub.ts's), the owner's agent switches (GET /api/team/agents), and the lines the
 // panel draws from them. The panel exists only on the local board's page and the owner's own phone
 // or login (#355), while the payload carries `teamRev` (config.json's `team` is on).
-import { mentionWord } from '../../../src/core/team-directory.ts'
+import { mentionWord, publishedAliases } from '../../../src/core/team-directory.ts'
 
 export { mentionWord }
 
@@ -215,6 +215,7 @@ export interface AgentsView {
  */
 export interface ExposedAgent {
   code: string
+  alias?: string
   session: { key: string; name?: string }
   lane: string
   reaches: string[]
@@ -223,6 +224,7 @@ export interface ExposedAgent {
 const isExposedAgent = (v: unknown): v is ExposedAgent =>
   isObj(v) &&
   typeof v.code === 'string' &&
+  (v.alias === undefined || typeof v.alias === 'string') &&
   isSession(v.session) &&
   typeof v.lane === 'string' &&
   Array.isArray(v.reaches) &&
@@ -232,7 +234,7 @@ const isExposedAgent = (v: unknown): v is ExposedAgent =>
 export interface PeerDirectory {
   peer: string
   name: string
-  agents: { code: string; about?: string }[]
+  agents: { code: string; about?: string; alias?: string }[]
   ts: string
 }
 
@@ -246,7 +248,11 @@ export const isDirectoryList = (v: unknown): v is { peers: PeerDirectory[] } =>
       typeof p.name === 'string' &&
       Array.isArray(p.agents) &&
       p.agents.every(
-        a => isObj(a) && typeof a.code === 'string' && (a.about === undefined || typeof a.about === 'string'),
+        a =>
+          isObj(a) &&
+          typeof a.code === 'string' &&
+          (a.about === undefined || typeof a.about === 'string') &&
+          (a.alias === undefined || typeof a.alias === 'string'),
       ),
   )
 
@@ -263,7 +269,7 @@ export interface MentionPerson {
   name: string
   /** The name as written after `@`: without spaces, dots and `@`. */
   word: string
-  agents: { code: string; about?: string }[]
+  agents: { code: string; about?: string; alias?: string }[]
   /** No agents to address: why. Absent with agents, and for a peer whose list the page could not fetch. */
   none?: MentionNone
 }
@@ -301,7 +307,7 @@ export function mentionPeople(
  * teammate has no agents to address, which puts nothing in.
  */
 export interface MentionRow {
-  kind: 'person' | 'agent' | 'none'
+  kind: 'person' | 'agent' | 'alias' | 'none'
   key: string
   /** What the line shows after `@`. */
   word: string
@@ -318,10 +324,18 @@ export interface MentionRow {
  */
 export function mentionRows(people: readonly MentionPerson[], who: string, code: string | null): MentionRow[] {
   const w = who.toLowerCase()
-  if (code === null)
-    return people
+  if (code === null) {
+    const rows: MentionRow[] = people
       .filter(p => p.word.toLowerCase().startsWith(w))
       .map(p => ({ kind: 'person', key: p.peer, word: p.word, insert: `@${p.word}.` }))
+    if (people.some(p => p.agents.some(a => a.alias))) {
+      for (const [key, a] of publishedAliases(people, people)) {
+        if (!key.startsWith(w)) continue
+        rows.push({ kind: 'alias', key: `alias:${key}`, word: a.alias, insert: `${a.canonical} `, about: a.canonical })
+      }
+    }
+    return rows
+  }
   return people
     .filter(p => p.word.toLowerCase() === w)
     .flatMap((p): MentionRow[] => {
@@ -382,6 +396,7 @@ export const isAgentsView = (v: unknown): v is AgentsView =>
 
 /** One change of the switches, as POST /api/team/agents takes it. */
 export type AgentsChange =
+  | { publishAlias: { key: string; name: string | null } }
   | { off: boolean }
   | { listener: null }
   | { peer: string; on?: boolean; lanes?: string[]; allLanes?: boolean; muted?: boolean; loop?: number | null }

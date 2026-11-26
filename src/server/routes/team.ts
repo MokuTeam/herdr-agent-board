@@ -47,6 +47,7 @@ import { uploadsDir } from '../../adapters/paths.ts'
 import {
   audit,
   changeAgents,
+  changeDirectoryState,
   readAgents,
   readDirectoryState,
   readDrafts,
@@ -59,7 +60,14 @@ import { categoryInfo } from '../../core/categories.ts'
 import { isMessageId, isPeerId, isThreadId, MAX_TEXT, type ReactionOp, validName } from '../../core/team.ts'
 import { agentLimits, splitKey, TEAM, threadKey, validLoop } from '../../core/team-agents.ts'
 import { type OwnerAction, unlocks, widens } from '../../core/team-confirm.ts'
-import { type AddressTarget, addressTarget, leadingMention } from '../../core/team-directory.ts'
+import {
+  type AddressTarget,
+  addressTarget,
+  expandAlias,
+  leadingMention,
+  publishedAliases,
+  validAlias,
+} from '../../core/team-directory.ts'
 import { checkMeta } from '../../core/team-file.ts'
 import { normalizeEmoji } from '../../core/team-reactions.ts'
 import { changeServices, type ServiceAgent, serviceAgents } from '../../core/team-services.ts'
@@ -123,11 +131,15 @@ function addressed(team: TeamService, text: string, target: AddressTarget): Retu
   })
 }
 
+function expandedAlias(team: TeamService, text: string): string {
+  return expandAlias(text, () => publishedAliases(team.view()?.roster ?? [], team.directories()))
+}
+
 /**
  * What teammates can address on this board (#832), for the owner's panel: each session with a
  * handle someone can reach now, its lane and whom. Nothing is read without a peer whose Agents are on.
  */
-function exposedView(team: TeamService, router: TeamRouter | undefined): unknown[] {
+function exposedView(team: TeamService, router: TeamRouter | undefined) {
   // A peer whose key changed gets no directory until the owner trusts it: not shown as reaching.
   const peers = (team.view()?.roster ?? []).filter(p => p.pin !== 'changed').map(p => p.peer)
   return router?.exposed(peers) ?? []
@@ -563,7 +575,8 @@ export function teamRoutes(
         const file = uploadFrom(body.file)
         if (file === null) return json(400, { ok: false, error: 'file' })
         // What the send would refuse is refused before it waits for a passkey.
-        const words = body.text.trim()
+        const text = expandedAlias(team, body.text)
+        const words = text.trim()
         if ((!words && !file) || words.length > MAX_TEXT) return json(400, { ok: false, error: 'text' })
         // A reply (#370): a line of the thread it goes to, by its id; the send finds it there.
         if (body.replyTo !== undefined && !isMessageId(body.replyTo)) return json(400, { ok: false, error: 'reply' })
@@ -574,7 +587,7 @@ export function teamRoutes(
         const action: OwnerAction = {
           kind: 'send',
           to: a.to,
-          text: body.text,
+          text,
           ...(a.thread && { thread: a.thread }),
           ...(a.replyTo && { replyTo: a.replyTo }),
           ...(file && { file }),
@@ -701,13 +714,14 @@ export function teamRoutes(
         const file = agentFileFrom(body.file)
         if (file === null) return json(400, { ok: false, error: 'file' })
         // `@Name.code` first (#832): a peer's agent, in its own topic when this thread is not theirs.
-        const a = addressed(team, body.text, { to: body.to, ...(thread && { thread }), ...(replyTo && { replyTo }) })
+        const text = expandedAlias(team, body.text)
+        const a = addressed(team, text, { to: body.to, ...(thread && { thread }), ...(replyTo && { replyTo }) })
         if (!a.ok) return json(400, a)
         const r = await router.agentPost({
           to: a.to,
           ...(a.thread && { thread: a.thread }),
           ...(a.replyTo && { replyTo: a.replyTo }),
-          text: body.text,
+          text,
           session,
           ...(body.claimed === true && { claimed: true }),
           ...(file && { file }),
@@ -787,6 +801,22 @@ export function teamRoutes(
         if (refused) return refused
         const raw = await ctx.rawBody()
         const change = isRecord(raw) ? raw : {}
+        if (Object.hasOwn(change, 'publishAlias')) {
+          const alias = change.publishAlias
+          if (!isRecord(alias) || typeof alias.key !== 'string' || (alias.name !== null && !validAlias(alias.name)))
+            return json(400, { ok: false, error: 'name' })
+          const key = alias.key
+          if (!exposedView(team, router).some(e => e.session.key === key))
+            return json(400, { ok: false, error: 'agent' })
+          changeDirectoryState(d => {
+            if (validAlias(alias.name)) d.aliases[key] = alias.name
+            else delete d.aliases[key]
+          })
+          audit('directory_alias', null, { key, op: alias.name === null ? 'remove' : 'set' })
+          onAgents?.()
+          syncDirectory()
+          return json(200, { ok: true })
+        }
         const c = agentsChange(lanes(), change)
         if (!c.ok) return json(400, c)
         // Narrowing is never held back; widening waits for the owner's passkey.

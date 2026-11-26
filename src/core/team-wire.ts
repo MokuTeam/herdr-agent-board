@@ -217,6 +217,7 @@ export const MAX_DIRECTORY = 64
 export interface DirectoryEntry {
   code: string
   about?: string
+  alias?: string
 }
 
 /** Reaction operations carried in `body.react` (#687). */
