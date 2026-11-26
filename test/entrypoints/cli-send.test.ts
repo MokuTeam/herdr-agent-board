@@ -226,13 +226,17 @@ test('#628 board agents lists local and node sessions (including agy), marks sel
     expect(viaMaster.code).toBe(0)
     expect(viaMaster.stdout.trim()).toBe('Laptop Work [3e4f5a6b]  ·  claude  ·  laptop  ·  working')
 
-    for (const fallback of [
-      { state: 'answered', code: 126, out: [], err: ['board agents is not taken from a node'] },
-      { state: 'unreachable' },
-    ]) {
+    for (const [fallback, expectedErr] of [
+      [
+        { state: 'answered', code: 126, out: [], err: ['board agents is not taken from a node'] },
+        'board agents is not taken from a node',
+      ],
+      [{ state: 'unreachable' }, "the board's computer did not answer: showing this computer's sessions only"],
+    ] as const) {
       answer = fallback
       const localFallback = await runCli(box, ['agents', '--session', AGY])
       expect(localFallback.code).toBe(0)
+      expect(localFallback.stderr).toContain(expectedErr)
       expect(localFallback.stdout.trim().split('\n')).toEqual([
         'Agent-board Master [3e4f5a6b]  ·  claude  ·  done',
         'Gemini-dev [509dfc37]  ·  agy  ·  working  ·  (this session)',
@@ -349,10 +353,13 @@ test('#912 board agents without a session on a node goes via /api/node-cli, and 
     expect(JSON.parse(noSessJson.stdout)).toMatchObject([{ key: ME, name: 'Master Session' }])
     expect(calls.at(-1)).toEqual({ path: '/api/node-cli', body: { cmd: 'agents', argv: ['--json'] } })
 
-    // Offline master on /api/node-cli (503 node-master-offline): falls back to local board.
+    // Offline master on /api/node-cli (503 node-master-offline): falls back to local board with a note on stderr.
     cliAnswer = { status: 503, body: { ok: false, error: 'node-master-offline' } }
     const offlineFallback = await runCli(box, ['agents'])
     expect(offlineFallback.code, offlineFallback.stderr).toBe(0)
+    expect(offlineFallback.stderr).toContain(
+      "the board's computer did not answer: showing this computer's sessions only",
+    )
     expect(offlineFallback.stdout.trim()).toBe('Pane Worker [509dfc37]  ·  claude  ·  working')
 
     // In a herdr pane when HERDR_BIN_PATH is broken/missing from PATH: falls back to /api/board for pane resolution.
@@ -377,12 +384,15 @@ test('#912 board agents without a session on a node goes via /api/node-cli, and 
       body: { cmd: 'send', argv: ['Master Session', 'hello from pane'], session: PANE_SID, lane: null, files: [] },
     })
 
-    // Standalone board (no `node`): never touches /api/node/call or /api/node-cli.
+    // Standalone board (no `node`): never touches /api/node/call or /api/node-cli, and never uses paneOf /api/board fallback.
     calls.length = 0
     config(box, { port: server.port })
     const standalone = await runCli(box, ['agents'])
     expect(standalone.code, standalone.stderr).toBe(0)
+    expect(standalone.stderr).toBe('')
     expect(standalone.stdout.trim()).toBe('Pane Worker [509dfc37]  ·  claude  ·  working')
+    const standaloneSend = await runCli(box, ['send', 'Master Session', 'hello'], undefined, brokenHerdrEnv)
+    expect(standaloneSend.code).not.toBe(0)
     expect(calls).toEqual([])
   } finally {
     server.stop(true)

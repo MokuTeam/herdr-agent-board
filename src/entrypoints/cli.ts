@@ -361,7 +361,7 @@ const paneOf = async (pane: string): Promise<HerdrPane | undefined> => {
   try {
     return (await snapshot()).panes.find(x => x.pane_id === pane)
   } catch (err) {
-    if (cfg.web !== false) {
+    if (nodeConfig(cfg.node) && cfg.web !== false) {
       const body = await boardAnswer()
       const items = Array.isArray(body?.items) ? body.items : null
       const it = items?.find(x => isRecord(x) && !x.device && x.sleeping !== true && x.pane === pane)
@@ -421,7 +421,10 @@ async function resolveSession({ archived = false }: { archived?: boolean } = {})
     if (UUID.test(target)) return { key: target, cwd: '' }
     const t = target.toLowerCase()
     const item = (await collect(deps)).find(i =>
-      [i.name, i.autoName, i.pane, i.session, i.key].some(v => v && v.toLowerCase() === t),
+      (nodeConfig(cfg.node)
+        ? [i.name, i.autoName, i.pane, i.session, i.key]
+        : [i.name, i.autoName, i.pane, i.session]
+      ).some(v => v && v.toLowerCase() === t),
     )
     if (item) return { key: item.key, cwd: item.cwd, name: item.name, pane: item.pane }
     const r = archived
@@ -862,7 +865,7 @@ async function runAgents({
     const s = target ? await resolveSession() : await ownSession()
     selfKey = s?.key ?? ''
   } catch {}
-  const { nodeConfig } = await import('../core/nodes.ts')
+  let fallbackErr: string[] = []
   if (nodeConfig(config.node)) {
     const { callBoard, callBoardAsOwner } = await import('./node-call.ts')
     const argv = json ? ['--json'] : []
@@ -870,6 +873,9 @@ async function runAgents({
       ? await callBoard(config.port)({ cmd: 'agents', argv, session: selfKey, lane: null, files: [] })
       : await callBoardAsOwner(config.port)({ cmd: 'agents', argv })
     if (answer?.state === 'answered' && answer.code === 0) return { code: 0, out: answer.out, err: answer.err }
+    const reason =
+      answer?.state === 'answered' && answer.err.length ? answer.err.join('; ') : "the board's computer did not answer"
+    fallbackErr = [`note: ${reason}: showing this computer's sessions only`]
   }
   const body = config.web === false ? null : fresh ? await fetchBoard(config.port) : await boardAnswer()
   const items = body ? body.items : await collect(fresh ? defaultDeps(config) : deps)
@@ -877,9 +883,9 @@ async function runAgents({
   const own = body ? A.ownDeviceOf(body) : ''
   const targets = A.targetsOf(items, own)
   const offline = body ? A.offlineDevices(body) : new Set<string>()
-  if (json) return { code: 0, out: [JSON.stringify(A.agentViewsOf(targets, { selfKey, offline }))], err: [] }
+  if (json) return { code: 0, out: [JSON.stringify(A.agentViewsOf(targets, { selfKey, offline }))], err: fallbackErr }
   const lines = A.formatAgentLines(targets, { selfKey, offline, own, now: Date.now() })
-  return { code: 0, out: lines.length ? lines : ['no sessions on the board'], err: [] }
+  return { code: 0, out: lines.length ? lines : ['no sessions on the board'], err: fallbackErr }
 }
 
 /** `board agents [--json]` (#628): every reachable session on the board, with its ref and agent kind. */
