@@ -3,6 +3,8 @@
 // - Stays local with the quiet banner when master is offline or has no URL.
 // - Keeps ?local=1 for the tab in sessionStorage and offers "Open shared board" link.
 // - Leaves standalone, master, and remote boards unchanged (no banner, no redirect).
+// - Takes the page's deep link along (#837): #thread=<key> as it is, a notification's #session=<key>
+//   as the master knows the node's session (@<node>:<key>); no query, no other hash or path.
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { JSDOM } from 'jsdom'
 import { act, StrictMode } from 'react'
@@ -16,6 +18,9 @@ let support: typeof import('./support/board.tsx')
 let nodeMasterAction: typeof import('../../web/src/models/node-master.ts').nodeMasterAction
 let readStayLocal: typeof import('../../web/src/models/node-master.ts').readStayLocal
 let STAY_LOCAL_KEY: typeof import('../../web/src/models/node-master.ts').STAY_LOCAL_KEY
+let masterDeepLink: typeof import('../../web/src/models/node-master.ts').masterDeepLink
+let threadInHash: typeof import('../../web/src/models/work-threads.ts').threadInHash
+let sessionInHash: typeof import('../../web/src/models/reveal.ts').sessionInHash
 
 const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', {
   url: 'http://127.0.0.1:12422/',
@@ -53,7 +58,11 @@ beforeAll(async () => {
   ;({ NodeMasterBanner } = await import('../../web/src/components/devices/NodeMasterBanner.tsx'))
   ;({ I18nProvider } = await import('../../web/src/i18n/I18nProvider.tsx'))
   ;({ BoardContext } = await import('../../web/src/state/BoardProvider.tsx'))
-  ;({ nodeMasterAction, readStayLocal, STAY_LOCAL_KEY } = await import('../../web/src/models/node-master.ts'))
+  ;({ nodeMasterAction, readStayLocal, STAY_LOCAL_KEY, masterDeepLink } = await import(
+    '../../web/src/models/node-master.ts'
+  ))
+  ;({ threadInHash } = await import('../../web/src/models/work-threads.ts'))
+  ;({ sessionInHash } = await import('../../web/src/models/reveal.ts'))
   support = await import('./support/board.tsx')
 })
 
@@ -87,6 +96,7 @@ function mountBanner(
     search?: string
     store?: ReturnType<typeof memoryStore>
     strict?: boolean
+    opened?: { pathname: string; hash: string } | null | undefined
   } = {},
 ) {
   const el = dom.window.document.getElementById('root')
@@ -100,6 +110,7 @@ function mountBanner(
           navigate={options.navigate}
           search={options.search ?? ''}
           sessionStore={options.store ?? null}
+          opened={options.opened}
         />
       </BoardContext.Provider>
     </I18nProvider>
@@ -339,5 +350,110 @@ describe('NodeMasterBanner before the payload (#797)', () => {
     mountBanner(null, { navigate: url => went.push(url), store: memoryStore() })
     expect(went).toEqual([])
     expect(dom.window.document.getElementById('node-master-banner')).toBeNull()
+  })
+})
+
+describe('the deep link goes along with the redirect (#837)', () => {
+  const view = { nodeId: 'server-1', name: 'atlas', url: 'https://board.atlas.test/', online: true }
+  const at = (hash: string, pathname = '/') => ({ pathname, hash })
+  const redirectOf = (opened: { pathname: string; hash: string } | null, url = view.url) =>
+    nodeMasterAction({ ...view, url }, { currentOrigin: 'http://127.0.0.1:12422', opened })
+
+  test('a thread link lands on the same thread on the master, which its page reads back', () => {
+    const r = redirectOf(at('#thread=bb-19'))
+    expect(r).toEqual({ kind: 'redirect', url: 'https://board.atlas.test/#thread=bb-19' })
+    if (r?.kind !== 'redirect') throw new Error('no redirect')
+    expect(threadInHash(new URL(r.url).hash)).toBe('bb-19')
+    // a peer's thread key, upper case as a chat may write it: the key the board reads
+    expect(redirectOf(at('#thread=Atlas-12@peer_1'))).toEqual({
+      kind: 'redirect',
+      url: 'https://board.atlas.test/#thread=atlas-12%40peer_1',
+    })
+  })
+
+  test("a notification's session lands on the node's session as the master keys it", () => {
+    for (const key of [
+      '0f3c2a1e-5b7d-4e8f-9a0b-1c2d3e4f5a6b',
+      'pane-17',
+      'C:\\Users\\Some One\\.pi\\sessions\\a b.jsonl',
+      'сессия 100%',
+    ]) {
+      const r = redirectOf(at(`#session=${encodeURIComponent(key)}`))
+      if (r?.kind !== 'redirect') throw new Error('no redirect')
+      expect(new URL(r.url).origin + new URL(r.url).pathname).toBe('https://board.atlas.test/')
+      expect(sessionInHash(new URL(r.url).hash)).toBe(`@server-1:${key}`)
+    }
+  })
+
+  test("the master's own path stays and its hash gives way", () => {
+    expect(redirectOf(at('#thread=bb-19'), 'https://atlas.test/board/?x=1#old')).toEqual({
+      kind: 'redirect',
+      url: 'https://atlas.test/board/?x=1#thread=bb-19',
+    })
+  })
+
+  test('nothing else goes along: a foreign hash, another path, a key from elsewhere, the query', () => {
+    const bare = { kind: 'redirect' as const, url: 'https://board.atlas.test/' }
+    for (const opened of [
+      null,
+      at(''),
+      at('#'),
+      at('#evil=1'),
+      at('#thread=not a key'),
+      at('#thread=../../x-1'),
+      at('#session='),
+      at('#session=%40server-2%3Aabc'),
+      at(`#session=${encodeURIComponent('a\u0000b')}`),
+      at(`#session=${'k'.repeat(513)}`),
+      at('#thread=bb-19', '/other'),
+      at('#thread=bb-19', '/index.html'),
+      at('#session=abc', '//evil.test/'),
+    ])
+      expect(redirectOf(opened)).toEqual(bare)
+    expect(masterDeepLink(at('#session=abc'), 'local')).toBe('')
+    expect(masterDeepLink(at('#session=abc'), 'Bad:Id')).toBe('')
+  })
+
+  test('the component redirects with the deep link, read as the page opened though the hash is gone by then', () => {
+    dom.window.history.replaceState(null, '', '/?local=0#thread=bb-19')
+    try {
+      const went: string[] = []
+      const store = memoryStore()
+      mountBanner(null, { navigate: url => went.push(url), store })
+      // the board came in and forgot the address (hooks/useThreadLinks.ts) before the payload named the master
+      dom.window.history.replaceState(null, '', '/')
+      mountBanner(support.payload({ nodeMaster: view }), {
+        navigate: url => went.push(url),
+        search: '?local=0',
+        store,
+      })
+      expect(went).toEqual(['https://board.atlas.test/#thread=bb-19'])
+    } finally {
+      dom.window.history.replaceState(null, '', '/')
+    }
+  })
+
+  test("a notification's session survives the redirect in the component", () => {
+    const went: string[] = []
+    mountBanner(support.payload({ nodeMaster: view }), {
+      navigate: url => went.push(url),
+      store: memoryStore(),
+      opened: at('#session=pane-17'),
+    })
+    expect(went).toEqual(['https://board.atlas.test/#session=%40server-1%3Apane-17'])
+  })
+
+  test('?local=1 still stays local, with the bare link in the banner', () => {
+    const went: string[] = []
+    mountBanner(support.payload({ nodeMaster: view }), {
+      navigate: url => went.push(url),
+      search: '?local=1',
+      store: memoryStore(),
+      opened: at('#thread=bb-19'),
+    })
+    expect(went).toEqual([])
+    expect(dom.window.document.querySelector('#node-master-banner a')?.getAttribute('href')).toBe(
+      'https://board.atlas.test/',
+    )
   })
 })
