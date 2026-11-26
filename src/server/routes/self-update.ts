@@ -1,6 +1,6 @@
 // Settings → Updates… (#617, services/self-update.ts): how the board's update of itself from git
-// stands, its switch and schedule, and Check now; `board update` asks the same. This computer only:
-// every remote listener refuses /api/self-update (core/remote.ts localOnly).
+// stands, its switch and schedule, and Check now; `board update` asks the same. Paired nodes
+// use the master's settings through the owner relay.
 import { editAutoUpdate, loadConfig } from '../../adapters/config-file.ts'
 import { isRecord } from '../../adapters/json-store.ts'
 import { t } from '../../core/lang.ts'
@@ -14,6 +14,7 @@ export interface SelfUpdateApp {
   /** The checkout's branch and commit now (null: no checkout). */
   checkout(): Promise<{ branch: string | null; commit: string } | null>
   node(): boolean
+  masterId?(): string | undefined
   canRestart: boolean
   changed(): void
 }
@@ -23,12 +24,14 @@ export function selfUpdateRoutes(app: SelfUpdateApp): Route[] {
     const config = autoUpdateConfig(loadConfig().autoUpdate)
     const state = app.load()
     const st = standing(config, state, Date.now())
+    const masterId = app.masterId?.()
     return {
       config,
       state,
       standing: st && { level: st.level, text: standingText(st, t) },
       checkout: await app.checkout(),
       node: app.node(),
+      ...(masterId && { masterId }),
       canRestart: app.canRestart,
       running: app.updater.running(),
     }

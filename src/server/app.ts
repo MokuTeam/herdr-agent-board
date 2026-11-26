@@ -1102,6 +1102,12 @@ export async function startServer({
   const workdesk = createWorkdeskWatcher({
     cfg,
     items: () => (board.stale() ? null : board.items()),
+    nodeItems: () => {
+      const part = nodeAggregate?.part()
+      if (!part) return []
+      const connected = new Set(part.devices.filter(device => device.link?.state === 'online').map(device => device.id))
+      return part.items.filter(item => item.device && connected.has(item.device))
+    },
     observation: () => board.observation(),
     streamDriven,
     stageTracking: boardEvents.enabled,
@@ -1511,7 +1517,7 @@ export async function startServer({
       onNode: () => isNodeOnly(cfg),
       masterName: masterNameHere,
     }),
-    // Settings → Updates… (#617): the board's update of itself from git; this computer only.
+    // Settings → Updates… (#617): one schedule on the master, also shown on its paired nodes.
     ...selfUpdateRoutes({
       updater: selfUpdate,
       load: readSelfUpdate,
@@ -1524,6 +1530,7 @@ export async function startServer({
         return { branch: branch.ok ? branch.out.trim() : null, commit: commit.out.trim() }
       },
       node: () => nodeConfig(cfg.node) !== null,
+      masterId: () => nodesConfig(cfg.nodes, hostname())?.id,
       canRestart: typeof process.send === 'function',
       changed: () => board.publish(),
     }),

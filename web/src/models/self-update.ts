@@ -12,6 +12,7 @@ export interface UpdatesView {
   /** The checkout's branch (null: a detached HEAD) and commit; null: not a git checkout. */
   checkout: { branch: string | null; commit: string } | null
   node: boolean
+  masterId?: string
   canRestart: boolean
   running: boolean
 }
@@ -26,7 +27,8 @@ export function isUpdatesView(v: unknown): v is UpdatesView {
     isObject(v.state) &&
     (v.standing === null || isObject(v.standing)) &&
     (v.checkout === null || isObject(v.checkout)) &&
-    typeof v.node === 'boolean'
+    typeof v.node === 'boolean' &&
+    (v.masterId === undefined || typeof v.masterId === 'string')
   )
 }
 

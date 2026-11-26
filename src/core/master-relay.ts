@@ -87,6 +87,8 @@ export const RELAY_TABLE: readonly RelayEntry[] = [
   { group: 'decisions', method: 'GET', path: /^\/api\/decisions$/ },
   { group: 'decisions', method: 'POST', path: /^\/api\/decisions$/ },
   { group: 'settings', method: 'POST', path: /^\/api\/feature-settings$/ },
+  { group: 'settings', method: 'GET', path: /^\/api\/self-update$/ },
+  { group: 'settings', method: 'POST', path: /^\/api\/self-update$/ },
   { group: 'settings', method: 'GET', path: /^\/api\/threads-settings$/ },
   { group: 'settings', method: 'POST', path: /^\/api\/threads-settings$/ },
   { group: 'settings', method: 'POST', path: /^\/api\/categories$/ },
@@ -235,6 +237,7 @@ export const RELAY_OWNER_SETTINGS: ReadonlySet<string> = new Set([
   '/api/time-settings',
   '/api/calendar-settings',
   '/api/feature-settings',
+  '/api/self-update',
   '/api/threads-settings',
 ])
 

@@ -91,6 +91,12 @@ test('on, once a day: the time field; a check running says so and holds the butt
   expect(r.buttons).toEqual(['Checking…'])
 })
 
+test('a master view names the board whose schedule the controls edit', () => {
+  const r = render({ view: { ...VIEW, masterId: 'hermes' } })
+  expect(r.all).toContain('These settings apply to the master board (hermes).')
+  expect(r.switches).toHaveLength(1)
+})
+
 test('a problem first, in red; what came in last time as a list', () => {
   const r = render({
     view: {

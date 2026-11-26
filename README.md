@@ -2919,6 +2919,12 @@ thread for the Workdesk ID and uses the regular reminder and wake path to tell i
 The thread includes the card's executor model. The master uses Codex by default or Claude Opus
 when selected, reports each stage to Workdesk, and sends the result for the owner's acceptance.
 
+For a master with connected Board nodes, set `workdesk.routeNodeMasters` to `true` on the master
+and run the Workdesk watcher there. The watcher also looks for the named project master on online
+nodes, keeps the thread in the master's database, and delivers its reminder over the node link.
+Keep the Workdesk watcher off on the nodes when routing centrally, so they cannot claim and create
+their own threads. The topology heartbeat still describes only this device.
+
 For a scoped acceptance test, set `onlyTaskId` to the positive Workdesk ID of the test card.
 The board polls the catalogue and only claims and dispatches that card. Remove `workdesk` to
 pause the watcher, or remove `onlyTaskId` to process the full queue.
@@ -4645,7 +4651,8 @@ dictionary there plus its plural rule; a test checks that every dictionary has e
   any code change, and the new board runs the install again when hooks, skills or launchers changed
   (a dated copy of each `settings.json` first, in `self-update/settings` in the state folder). A
   board that does not come back within 3 minutes is a red line in the panel and in `board doctor`.
-  A node follows its master's version instead. Each update is a line in `web.log`.
+  A node follows its master's version. Settings → Updates on a paired node manages that master's
+  schedule. Each update is a line in `web.log`.
 
 Code: `src/server/`, `web/src/` (React; no build step: the server bundles `web/src/main.tsx` in
 memory with Bun; springs in `web/src/models/spring.ts`, the sheet's place in

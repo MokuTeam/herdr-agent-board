@@ -103,9 +103,26 @@ test("a node's page and its sessionless terminal reach the master's time, calend
   )
   expect(masterFile.watches).toBeTruthy()
   expect((masterFile.categories as { id: string }[]).map(c => c.id)).toContain('atlas')
+  const updates = await post(`${node.url}/api/self-update`, { op: 'settings', on: false, every: 'day', at: '06:40' })
+  expect(updates.status).toBe(200)
+  const masterUpdates = await getJson(`${master}/api/self-update`)
+  const nodeUpdates = await getJson(`${node.url}/api/self-update`)
+  expect(nodeUpdates).toEqual(masterUpdates)
+  expect(masterUpdates.body).toMatchObject({
+    masterId: expect.any(String),
+    node: false,
+    config: { on: false, every: 'day', at: '06:40' },
+  })
+  const nodeFile = Bun.file(join(node.box.env.APPDATA as string, 'herdr/plugins/config/agent-board/config.json'))
+  expect((await nodeFile.exists()) ? (await nodeFile.json()).autoUpdate : undefined).toBeUndefined()
   // The settings write is in the master's admin log, as the node's owner's.
   const log = (await getJson(`${master}/api/links/log`)).body as { edges?: Record<string, unknown>[] }
   expect(log.edges?.find(e => e.kind === 'admin' && e.path === '/api/feature-settings')).toMatchObject({
+    via: 'relay',
+    from: node.id,
+    status: 200,
+  })
+  expect(log.edges?.find(e => e.kind === 'admin' && e.path === '/api/self-update')).toMatchObject({
     via: 'relay',
     from: node.id,
     status: 200,
@@ -120,6 +137,8 @@ test("a node's page and its sessionless terminal reach the master's time, calend
   })
   const settingsBySession = await fetch(`${node.url}/api/time-settings`, { headers: asSession })
   expect(settingsBySession.status).toBe(403)
+  const updatesBySession = await fetch(`${node.url}/api/self-update`, { headers: asSession })
+  expect(updatesBySession.status).toBe(403)
   const cliBySession = await fetch(`${node.url}/api/node-cli`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-board': '1', ...asSession },

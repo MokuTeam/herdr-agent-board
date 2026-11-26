@@ -153,6 +153,41 @@ describe('a node in the master payload', () => {
     expect((await board(pair.master.url)).items.find(i => i.key === remoteKey)?.device).toBe('server-1')
   }, 60_000)
 
+  test('opt-in Workdesk routing keeps the thread on the master and delivers it to the online node', async () => {
+    const fake = mcp(mkdtempSync(join(tmpdir(), 'node-workdesk-routing-')))
+    fake.write({ tasks: [task(31)], topology: true })
+    const pair = await nodePair({
+      panes: (_id, box) => [{ ...claudePane(box, REMOTE, NODE_PANE), terminal_title_stripped: 'Remote-master' }],
+      masterPanes: box => [claudePane(box, LOCAL, '2')],
+      masterCfg: {
+        threads: true,
+        workdesk: {
+          ...fake.config,
+          masters: { Board: 'Remote-master' },
+          intervalSec: 1,
+          topology: { deviceId: 'test-master' },
+          routeNodeMasters: true,
+        },
+      },
+    })
+    const [node] = pair.nodes
+    if (!node) throw new Error('no node')
+    const masterDb = join(stateFolder(pair.master.box), 'board.db')
+    await until(() => rows(masterDb).length === 1, 10_000)
+    const [thread] = rows(masterDb)
+    if (!thread) throw new Error('no Workdesk thread')
+    expect(JSON.parse(thread.assignee).key).toBe(`@server-1:${REMOTE}`)
+    const view = await fetch(`${pair.master.url}/api/threads/${thread.key}`)
+    expect(view.status).toBe(200)
+    await until(() => node.proxy.requests.includes(`POST /api/session/${REMOTE}/message`), 10_000)
+    expect(fake.calls('claim_task').map(call => call.params.arguments)).toEqual([
+      { task_id: 31, executor: 'Remote-master' },
+    ])
+    expect(rows(join(stateFolder(node.box), 'board.db'))).toHaveLength(0)
+    expect(JSON.stringify(fake.calls('board_heartbeat'))).not.toContain(REMOTE)
+    expect(pair.master.box.calls().flat().join('\n')).not.toContain(NODE_PANE)
+  }, 60_000)
+
   test('the offline copy shows the node cards after a restart; its fsToken is nowhere', async () => {
     const pair = await nodePair()
     const [node] = pair.nodes
