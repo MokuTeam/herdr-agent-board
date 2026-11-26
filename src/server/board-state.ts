@@ -48,6 +48,7 @@ import { DEFAULT_PROFILE, type Profile, profileLabel } from '../core/profiles.ts
 import type { RemoteView } from '../core/remote.ts'
 import { heldByDevice, type ScheduleEntry } from '../core/schedule-rules.ts'
 import type { SetupSummary } from '../core/setup.ts'
+import { spawnLimitsOf } from '../core/spawn-limits.ts'
 import { todosConfig } from '../core/todos.ts'
 import { turnResumeConfig } from '../core/turn-resume.ts'
 import type { Item } from '../core/types.ts'
@@ -508,6 +509,8 @@ export function createBoardState({
       foldWaiting: foldModeOf(cfg.foldWaiting),
       // Auto-compact's default (#378), '' for off: Settings shows it checked.
       compactDefault: compactDefaultText(cfg.compact),
+      // Agent starts (#815): the limits on the starts this computer's sessions make, for Settings.
+      spawnLimits: spawnLimitsOf(cfg.spawnLimits),
       // Continue after restart (#633): absent while on (default), false while off.
       ...(!turnResumeConfig(cfg.turnResume).on && { turnResume: false as const }),
       // Node housekeeping (#652, #682): absent while both memory guard and tab sweep are off.

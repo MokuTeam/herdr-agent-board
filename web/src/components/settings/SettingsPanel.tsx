@@ -6,6 +6,7 @@ import { type ReactNode, useLayoutEffect, useRef, useState } from 'react'
 import { FOLD_MODES, type FoldMode } from '../../../../src/core/fold-mode.ts'
 import { LANGUAGES } from '../../../../src/core/i18n/translator.ts'
 import { PRESENCE_MODES, type PresenceMode } from '../../../../src/core/presence.ts'
+import { SPAWN_CHOICES, SPAWN_NUMBERS, type SpawnNumber } from '../../../../src/core/spawn-limits.ts'
 import { TODO_MODES, type TodoMode, todoModeOf } from '../../../../src/core/todos.ts'
 import { THREAD_MODES } from '../../../../src/core/work-threads.ts'
 import { api, errorText } from '../../api/client.ts'
@@ -15,11 +16,13 @@ import {
   chooseFold,
   chooseLanguage,
   choosePresence,
+  chooseSpawnLimits,
   chooseTurnResume,
   endLogin,
   type FeatureSetting,
   offersDevices,
   type PresenceSetting,
+  type SpawnLimitsSetting,
   type ThreadsSetting,
 } from '../../hooks/useSettingsMenu.ts'
 import type { SetupNoteState } from '../../hooks/useSetupNote.ts'
@@ -76,6 +79,12 @@ const crossFade = (): ((apply: () => void) => unknown) | undefined =>
   typeof document !== 'undefined' && typeof document.startViewTransition === 'function' && !reducedMotion.matches
     ? apply => document.startViewTransition(apply)
     : undefined
+
+/** What a limit on agent starts offers (#815): Settings' choices, and the one config.json holds if it is another. */
+const spawnChoices = (key: SpawnNumber, now: number): number[] => {
+  const list: number[] = [...SPAWN_CHOICES[key]]
+  return list.includes(now) ? list : [now, ...list]
+}
 
 function Switch({
   checked,
@@ -224,6 +233,8 @@ export function SettingsPanel({
         : featuresNow(data)
       : null
   const compact = data?.compactDefault
+  // Agent starts (#815): this computer's own limits; a board before them sends none.
+  const spawnLimits = data?.spawnLimits
   const turnResumeOn = data?.turnResume !== false
   const compactChoices =
     compact && !COMPACT_CHOICES.includes(compact as (typeof COMPACT_CHOICES)[number])
@@ -258,6 +269,9 @@ export function SettingsPanel({
   }
   const pickTurnResume = (on: boolean) => {
     void chooseTurnResume(on, { t, canEdit, save: body => api.post('/api/settings', body), toast })
+  }
+  const pickSpawn = (change: SpawnLimitsSetting) => {
+    void chooseSpawnLimits(change, { t, canEdit, save: body => api.post('/api/settings', body), toast })
   }
   const pickPresence = (body: PresenceSetting) => {
     void choosePresence(body, { t, canEdit, save: b => api.post('/api/presence', b), toast })
@@ -547,6 +561,44 @@ export function SettingsPanel({
                       onToggle={() => pickTurnResume(!turnResumeOn)}
                     />
                   </div>
+                )}
+                {spawnLimits && (
+                  <>
+                    <div className="set-row">
+                      <div className="set-lbl">
+                        <b>{t('set.spawn')}</b>
+                        <small>{t('set.spawn.note')}</small>
+                        {hereMark}
+                      </div>
+                      <Switch
+                        checked={spawnLimits.agents}
+                        disabled={!canEdit}
+                        label={t('set.spawn')}
+                        onToggle={() => pickSpawn({ agents: !spawnLimits.agents })}
+                      />
+                    </div>
+                    {spawnLimits.agents &&
+                      SPAWN_NUMBERS.map(key => (
+                        <div className="set-row" key={key}>
+                          <div className="set-lbl">
+                            <b>{t(`set.spawn.${key}`)}</b>
+                          </div>
+                          <select
+                            className="set-select"
+                            aria-label={t(`set.spawn.${key}`)}
+                            disabled={!canEdit}
+                            value={spawnLimits[key]}
+                            onChange={e => pickSpawn({ [key]: Number(e.currentTarget.value) })}
+                          >
+                            {spawnChoices(key, spawnLimits[key]).map(n => (
+                              <option key={n} value={n}>
+                                {n === 0 ? t('set.spawn.none') : n}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      ))}
+                  </>
                 )}
                 {/* Where Features is not shown (#797): with it, Tasks are there only. */}
                 {isRemote && !canAdmin && todosRow}

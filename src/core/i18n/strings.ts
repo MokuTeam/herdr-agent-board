@@ -30,6 +30,7 @@ import { SECRET_STRINGS } from './secret-strings.ts'
 import { SERVER_STRINGS } from './server-strings.ts'
 import { SETUP_STRINGS } from './setup-strings.ts'
 import { SLASH_STRINGS } from './slash-strings.ts'
+import { SPAWN_STRINGS } from './spawn-strings.ts'
 import { SPEND_STRINGS } from './spend-strings.ts'
 import { TEAM_STRINGS } from './team-strings.ts'
 import { TERMINAL_STRINGS } from './terminal-strings.ts'
@@ -1597,3 +1598,4 @@ for (const code of Object.keys(TURN_RESUME_STRINGS) as Lang[]) Object.assign(STR
 for (const code of Object.keys(SPEND_STRINGS) as Lang[]) Object.assign(STRINGS[code], SPEND_STRINGS[code])
 // And background task tracking (#676).
 for (const code of Object.keys(BG_TASK_STRINGS) as Lang[]) Object.assign(STRINGS[code], BG_TASK_STRINGS[code])
+for (const code of Object.keys(SPAWN_STRINGS) as Lang[]) Object.assign(STRINGS[code], SPAWN_STRINGS[code])

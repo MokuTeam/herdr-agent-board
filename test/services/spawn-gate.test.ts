@@ -1,0 +1,195 @@
+import { expect, test } from 'bun:test'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import type { HerdrPane } from '../../src/adapters/herdr.ts'
+import { readSpawns } from '../../src/adapters/spawn-ledger.ts'
+import { parseArgs, type SpawnOptions } from '../../src/core/launch/spawn-args.ts'
+import type { Config } from '../../src/core/types.ts'
+import { callerParty, type GateDeps, gated, gateSpawn } from '../../src/services/launch/spawn-gate.ts'
+
+// spawn-agent's gate (#815): the limits checked against the ledger, the start written there.
+const NOW = 1_800_000_000_000
+const SID = 'atlas-sid'
+const SESSION_ENV = { CLAUDE_CODE_SESSION_ID: SID, HERDR_PANE_ID: 'w1:p1' }
+const opts = (...more: string[]): SpawnOptions => {
+  const o = parseArgs(['--name', 'Acme', '--cwd', tmpdir(), ...more])
+  if ('help' in o && o.help) throw new Error('not a start')
+  return o as SpawnOptions
+}
+
+function box(cfg: Partial<Config> = {}, env: Record<string, string> = SESSION_ENV) {
+  const dir = mkdtempSync(join(tmpdir(), 'spawn-gate-'))
+  const file = join(dir, 'spawns.json')
+  const herdrCalls: string[] = []
+  const asks: string[] = []
+  let panes: HerdrPane[] = []
+  const deps = (now = NOW): GateDeps => ({
+    env,
+    cfg: cfg as Config,
+    now,
+    file,
+    panes: async () => {
+      herdrCalls.push('snapshot')
+      return panes
+    },
+    items: async () => null,
+    ask: async text => {
+      asks.push(text)
+    },
+  })
+  return {
+    file,
+    deps,
+    herdrCalls,
+    asks,
+    setPanes(p: HerdrPane[]) {
+      panes = p
+    },
+    done: () => rmSync(dir, { recursive: true, force: true }),
+  }
+}
+
+test('who is gated: a session (by its id or its pane), never the owner', () => {
+  expect(callerParty({})).toBeNull()
+  expect(callerParty({ CLAUDE_CODE_SESSION_ID: SID })).toEqual({ session: SID })
+  expect(callerParty({ HERDR_PANE_ID: 'w1:p4' })).toEqual({ pane: 'w1:p4' })
+  expect(callerParty({ ANTIGRAVITY_CONVERSATION_ID: 'agy-1', HERDR_PANE_ID: 'w1:p5' })).toEqual({
+    session: 'agy-1',
+    pane: 'w1:p5',
+  })
+})
+
+test('what is gated: a new session; a resume, a start in a pane and a Workdesk worker are not', () => {
+  expect(gated(opts())).toBe(true)
+  expect(gated(opts('--resume', '0f8fad5b-d9cb-469f-a165-70867728950e'))).toBe(false)
+  expect(gated(opts('--pane', 'w1:p1'))).toBe(false)
+})
+
+test('the owner: nothing read, nothing written, herdr not asked', async () => {
+  const b = box({ spawnLimits: { agents: false } }, {})
+  try {
+    expect(await gateSpawn(opts(), b.deps())).toBeNull()
+    expect(existsSync(b.file)).toBe(false)
+    expect(b.herdrCalls).toEqual([])
+  } finally {
+    b.done()
+  }
+})
+
+test("a session's start under the limits: written, herdr not asked, settled with the session it became", async () => {
+  const b = box()
+  try {
+    const gate = await gateSpawn(opts(), b.deps())
+    expect(gate).not.toBeNull()
+    expect(b.herdrCalls).toEqual([])
+    const [e] = readSpawns(b.file)
+    expect(e?.by).toEqual({ session: SID, pane: 'w1:p1' })
+    expect(e?.name).toBe('Acme')
+    expect(e?.child).toBeUndefined()
+    gate?.settle('pane=wA:p9 name=Acme agent=acme', { pane: 'wA:p9', session: 'child-sid' })
+    expect(readSpawns(b.file)[0]?.child).toEqual({ pane: 'wA:p9', session: 'child-sid' })
+  } finally {
+    b.done()
+  }
+})
+
+test('a start that failed is taken out of the ledger', async () => {
+  const b = box()
+  try {
+    const gate = await gateSpawn(opts(), b.deps())
+    gate?.settle(null)
+    expect(readSpawns(b.file)).toEqual([])
+  } finally {
+    b.done()
+  }
+})
+
+test('per hour: the start past the limit is refused with one line and a question for the owner', async () => {
+  const b = box({ spawnLimits: { perHour: 2 } })
+  try {
+    for (let i = 0; i < 2; i++) (await gateSpawn(opts(), b.deps(NOW + i)))?.settle(`pane=wA:p${i} name=Acme agent=a`)
+    await expect(gateSpawn(opts(), b.deps(NOW + 5))).rejects.toThrow(
+      'this session started 2 sessions in the last hour, the limit is 2',
+    )
+    expect(b.asks).toHaveLength(1)
+    expect(b.asks[0]).toContain('Acme')
+    expect(readSpawns(b.file)).toHaveLength(2)
+    // An hour on, it may again.
+    expect(await gateSpawn(opts(), b.deps(NOW + 3600_001))).not.toBeNull()
+  } finally {
+    b.done()
+  }
+})
+
+test('children: sessions that ended do not count, by what herdr says', async () => {
+  const b = box({ spawnLimits: { children: 2 } })
+  try {
+    for (let i = 0; i < 2; i++) (await gateSpawn(opts(), b.deps(NOW + i)))?.settle(`pane=wA:p${i} name=Acme agent=a`)
+    const later = NOW + 30 * 60_000
+    // Both still run: refused, after one look at herdr.
+    b.setPanes([
+      { pane_id: 'w1:p1', agent: 'claude' },
+      { pane_id: 'wA:p0', agent: 'claude' },
+      { pane_id: 'wA:p1', agent: 'claude' },
+    ])
+    await expect(gateSpawn(opts(), b.deps(later))).rejects.toThrow('2 sessions this session started still run')
+    expect(b.herdrCalls).toEqual(['snapshot'])
+    // One ended (its pane gone): room for one.
+    b.setPanes([
+      { pane_id: 'w1:p1', agent: 'claude' },
+      { pane_id: 'wA:p1', agent: 'claude' },
+    ])
+    expect(await gateSpawn(opts(), b.deps(later + 1))).not.toBeNull()
+  } finally {
+    b.done()
+  }
+})
+
+test("depth: a session's own child's child is refused at depth 1; herdr unreachable lets it through", async () => {
+  const b = box({ spawnLimits: { depth: 1 } })
+  try {
+    ;(await gateSpawn(opts(), b.deps()))?.settle('pane=wA:p9 name=Acme agent=a', { pane: 'wA:p9', session: 'ben-sid' })
+    const ben: GateDeps = {
+      ...b.deps(NOW + 60_000),
+      env: { CLAUDE_CODE_SESSION_ID: 'ben-sid', HERDR_PANE_ID: 'wA:p9' },
+    }
+    b.setPanes([
+      { pane_id: 'w1:p1', agent: 'claude' },
+      { pane_id: 'wA:p9', agent: 'claude' },
+    ])
+    await expect(gateSpawn(opts(), ben)).rejects.toThrow('2 levels of agent starts deep, the limit is 1')
+    // herdr does not answer: never in the owner's way.
+    await expect(
+      gateSpawn(opts(), { ...ben, panes: async () => Promise.reject(new Error('no herdr')) }),
+    ).resolves.not.toBeNull()
+  } finally {
+    b.done()
+  }
+})
+
+test("a plain terminal pane is the owner's: past a limit it is let through and not written", async () => {
+  const b = box({ spawnLimits: { agents: false } }, { HERDR_PANE_ID: 'w1:p7' })
+  try {
+    b.setPanes([{ pane_id: 'w1:p7' }])
+    expect(await gateSpawn(opts(), b.deps())).toBeNull()
+    expect(existsSync(b.file)).toBe(false)
+    expect(b.asks).toEqual([])
+    // pi in that pane is a session: refused.
+    b.setPanes([{ pane_id: 'w1:p7', agent: 'pi' }])
+    await expect(gateSpawn(opts(), b.deps())).rejects.toThrow('may not start sessions')
+  } finally {
+    b.done()
+  }
+})
+
+test('the ledger on disk is JSON with the entries only', async () => {
+  const b = box()
+  try {
+    await gateSpawn(opts(), b.deps())
+    const raw = JSON.parse(readFileSync(b.file, 'utf8'))
+    expect(Object.keys(raw)).toEqual(['entries'])
+  } finally {
+    b.done()
+  }
+})

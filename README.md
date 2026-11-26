@@ -1039,6 +1039,18 @@ session=<id>` when it runs on a node, or `queued=<launch id> name=<Name> waiting
 the owner's own (`launch.command`, `launch.agent`), it starts the session itself as above. The
 spawn-agent the board runs as its launcher never asks the board back.
 
+A session's own starts have limits (#815), set in Settings → Board & Agents → Agent starts, each
+computer its own (config.json's `spawnLimits`): whether its sessions may start sessions at all, how
+many sessions one session started may run at once (10), how many levels of agent starts may go
+below a session the owner started (3, counted over parents that still run), and how many starts
+one session makes in an hour (30); 0 is no limit. They hold for spawn-agent run in a session's
+pane, and for the board's MCP when it runs the command for a session it names. A refused start
+exits 1 with the reason on stderr and puts the question on the session's card. The owner's starts
+are never counted: the page, a terminal outside any session, the board's own launcher. A resume,
+a start in a pane (`--pane`) and a Workdesk worker are not gated. spawn-agent keeps the record of
+who started whom in `spawns.json` in the board's state folder, a week long, and asks herdr which of
+those sessions still run only when a limit would otherwise refuse.
+
 `--device <id|local>` (#760) names the machine: a device id of `nodes`, or `local` (or the
 master's own id) for the master itself. The start is posted pinned to it (`pin`), and fails at
 once when the board does not list that device or its link is not online, or when the board cannot

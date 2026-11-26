@@ -12,6 +12,7 @@ import type { PresenceView } from './presence.ts'
 import type { RemoteView } from './remote.ts'
 import type { ScheduleEntry } from './schedule-rules.ts'
 import type { SetupSummary } from './setup.ts'
+import type { SpawnLimits } from './spawn-limits.ts'
 import type { TodosConfig } from './todos.ts'
 import type { ColumnId, Item, Lang, LaunchView } from './types.ts'
 import type { WakeView } from './wake/view.ts'
@@ -135,6 +136,8 @@ export interface BoardPayload {
   compactDefault?: string
   /** Continue mid-turn Claude sessions after a restart (#633): absent when on (the default), false when off. */
   turnResume?: false
+  /** The limits on agent starts on this computer (#815, core/spawn-limits.ts); a board before them sent none. */
+  spawnLimits?: SpawnLimits
   /** Node housekeeping switches (#652, #682): memory guard and tab sweep; absent while both are off. */
   housekeeping?: HousekeepingPayload
   /** The remote mode (core/remote.ts), only while it is on. */

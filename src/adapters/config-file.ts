@@ -32,6 +32,7 @@ import {
 import { autoUpdateConfig, isEvery, isTimeOfDay } from '../core/self-update.ts'
 import type { Admin } from '../core/server-admin.ts'
 import type { SetupCase } from '../core/server-plan.ts'
+import { editedSpawnLimits } from '../core/spawn-limits.ts'
 import { projectKey } from '../core/time.ts'
 import { isTodoMode } from '../core/todos.ts'
 import { fieldProblem, type TunnelField } from '../core/tunnel.ts'
@@ -272,6 +273,14 @@ export function editSettings(body: unknown): EditResult {
       } else {
         raw.turnResume = Object.keys(rest).length ? { ...rest, on: false } : false
       }
+    }
+    // Agent starts (#815, core/spawn-limits.ts): the limits on the starts sessions make.
+    const spawnLimits = isRecord(body) ? body.spawnLimits : undefined
+    if (spawnLimits !== undefined) {
+      const next = editedSpawnLimits(raw.spawnLimits, spawnLimits)
+      if (next === null) return { ok: false, error: t('err.spawnLimits') }
+      if (next === undefined) delete raw.spawnLimits
+      else raw.spawnLimits = next
     }
     const bgTaskStuckMin = isRecord(body) ? body.bgTaskStuckMin : undefined
     if (bgTaskStuckMin !== undefined) {

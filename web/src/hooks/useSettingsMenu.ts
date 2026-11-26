@@ -12,6 +12,7 @@ import { useEffect, useState } from 'react'
 import type { FoldMode } from '../../../src/core/fold-mode.ts'
 import { LANGUAGES, translator } from '../../../src/core/i18n/translator.ts'
 import type { PresenceMode } from '../../../src/core/presence.ts'
+import type { SpawnLimits } from '../../../src/core/spawn-limits.ts'
 import { type TodoMode, todoModeOf } from '../../../src/core/todos.ts'
 import type { Translator } from '../../../src/core/types.ts'
 import type { ThreadMode, VerifySettingsPatch } from '../../../src/core/work-threads.ts'
@@ -340,6 +341,29 @@ export async function chooseTurnResume(
   if (!canEdit) return toast(t('live.off'), true)
   try {
     await save({ turnResume: on })
+  } catch (err) {
+    toast(errorText(err, t), true)
+  }
+}
+
+/** A change to the limits on agent starts on this computer (#815, config.json's `spawnLimits`). */
+export type SpawnLimitsSetting = Partial<SpawnLimits>
+
+/** One limit on agent starts changed (#815): POST /api/settings { spawnLimits }. */
+export async function chooseSpawnLimits(
+  change: SpawnLimitsSetting,
+  {
+    t,
+    canEdit,
+    save,
+    toast,
+  }: Pick<LanguageDeps, 't' | 'canEdit' | 'toast'> & {
+    save(body: { spawnLimits: SpawnLimitsSetting }): Promise<unknown>
+  },
+): Promise<void> {
+  if (!canEdit) return toast(t('live.off'), true)
+  try {
+    await save({ spawnLimits: change })
   } catch (err) {
     toast(errorText(err, t), true)
   }

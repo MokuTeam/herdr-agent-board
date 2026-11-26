@@ -285,6 +285,8 @@ export interface Config {
   turnResume?: unknown
   /** Minutes before a running background task is flagged as potentially stuck (#676); default 30, 0 disables. */
   bgTaskStuckMin?: unknown
+  /** Limits on the starts sessions make (#815, an object): read through core/spawn-limits.ts spawnLimitsOf. */
+  spawnLimits?: unknown
   [extra: string]: unknown
 }
 

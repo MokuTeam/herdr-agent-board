@@ -186,6 +186,26 @@ test("editSettings keeps auto-compact's default (#378): a limit or off, its inst
   assert.deepEqual(saved().compact, { at: '400k' })
 })
 
+test('editSettings keeps the limits on agent starts (#815): defaults not written, a wrong value refused', () => {
+  isolatedHome()
+  useLanguage('en')
+  seed({ language: 'en' })
+  assert.deepEqual(editSettings({ spawnLimits: { children: 5, agents: false } }), { ok: true })
+  assert.deepEqual(saved().spawnLimits, { children: 5, agents: false })
+  assert.deepEqual(editSettings({ spawnLimits: { perHour: 0 } }), { ok: true })
+  assert.deepEqual(saved().spawnLimits, { children: 5, agents: false, perHour: 0 })
+  for (const bad of [{ children: -1 }, { depth: 'x' }, { agents: 1 }, {}, { other: 2 }, 'x'])
+    assert.equal(editSettings({ spawnLimits: bad }).ok, false)
+  assert.deepEqual(saved().spawnLimits, { children: 5, agents: false, perHour: 0 })
+  // Back to the defaults: the key goes, config.json as it was.
+  assert.deepEqual(editSettings({ spawnLimits: { children: 10, agents: true, perHour: 30 } }), { ok: true })
+  assert.equal('spawnLimits' in saved(), false)
+  // Other settings leave it as it was.
+  seed({ language: 'en', spawnLimits: { depth: 2 } })
+  assert.deepEqual(editSettings({ foldWaiting: 'over' }), { ok: true })
+  assert.deepEqual(saved().spawnLimits, { depth: 2 })
+})
+
 test('editCategories creates, updates, orders and deletes; unknown fields survive', () => {
   isolatedHome()
   seed({
