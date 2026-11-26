@@ -29,7 +29,7 @@ import {
   type SessionRef,
 } from '../adapters/team-store.ts'
 import { categoryInfo } from '../core/categories.ts'
-import { resolveBoardKey } from '../core/nodes.ts'
+import { parseNodeKey, resolveBoardKey } from '../core/nodes.ts'
 import { isOwnerServiceKey } from '../core/owner-services.ts'
 import {
   DEFAULT_MAX_FILE_BYTES,
@@ -798,8 +798,12 @@ export function createTeamRouter({ team, cfg, items, schedule, now = Date.now, l
     if (named && typeof text === 'function') namedNotice.set(mark, text)
     if (isOwnerServiceKey(target.key)) return
     try {
-      const mine = schedule.list().filter(e => e.key === target.key && typeof e.teamThread === 'string' && !e.claim)
-      const pending = mine.find(e => e.teamThread === thread)
+      const bareKey = parseNodeKey(target.key)?.key
+      const sameSession = (key: string): boolean =>
+        key === target.key || (!!bareKey && !bareKey.startsWith('pane-') && key === bareKey)
+      const mine = schedule.list().filter(e => sameSession(e.key) && typeof e.teamThread === 'string' && !e.claim)
+      const pending =
+        mine.find(e => e.teamThread === thread && e.key === target.key) ?? mine.find(e => e.teamThread === thread)
       const said = named ? undefined : namedNotice.get(mark)
       const words = (n: number): string => (said ? said(n) : typeof text === 'string' ? text : text(n))
       if (pending) {

@@ -850,4 +850,20 @@ describe('node listener and handler key resolution (#869)', () => {
     expect(w.schedule.entries[0]?.key).toBe('sess-listener')
     expect(readAgents().listener?.key).toBe('sess-listener')
   })
+
+  test('notify() dedupes a pre-upgrade bare-key notice for the same thread instead of adding a duplicate (#869)', async () => {
+    const w = await world()
+    w.items.push({ key: FULL, name: 'node-day', category: 'personal' })
+    changeAgents(x => {
+      x.peers[w.P.pub] = { on: true, lanes: ['acme'] }
+      x.listener = { key: FULL, name: 'node-day' }
+    })
+    const id = crypto.randomUUID()
+    const threadKey = `${w.P.pub}/${id}`
+    w.schedule.entries.push({ id: 'pre1', key: BARE, text: 'pre-upgrade', teamThread: threadKey, teamCount: 1 })
+
+    await deliver(w, w.P, 'second message on same thread', { via: 'agent', thread: { id, title: 'Same thread' } })
+    expect(w.schedule.entries).toHaveLength(1)
+    expect(w.schedule.entries[0]).toMatchObject({ id: 'pre1', key: BARE, teamThread: threadKey, teamCount: 2 })
+  })
 })

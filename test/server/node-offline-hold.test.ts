@@ -573,4 +573,49 @@ describe('one-time recovery of bare node keys held as gone (#869)', () => {
       Object.assign(process.env, savedEnv)
     }
   })
+
+  test('answered bare decision entry held as gone on a nodes board drops immediately via defaultDue (#869)', async () => {
+    const box = await sandbox()
+    showPanes(box, [])
+    const savedEnv = { ...process.env }
+    Object.assign(process.env, box.env)
+    const cfg = {
+      language: 'en',
+      categories: [{ id: 'other', title: 'Other', color: 'gray' }],
+      decisions: true,
+      scheduleTickSec: 0.2,
+      scheduleWaitMin: 60,
+      nodes: { id: 'master', devices: { 'server-1': { link: { kind: 'direct', url: 'http://127.0.0.1:1' } } } },
+    }
+    const proxy = {
+      deviceState: () => 'online' as const,
+      async send() {
+        return { ok: true as const }
+      },
+    }
+    const now = Date.now()
+    // Bare key does not match any node in remoteItems, so defaultDue runs and cancels the answered decision immediately.
+    putEntry(box, {
+      id: 'a86907',
+      key: '66666666-7777-4888-8999-000000000010',
+      text: 'go with option 1',
+      decision: 'dec-answered',
+      why: 'gone',
+      next: now - 1000,
+    })
+    const sched = startScheduler({
+      deps: defaultDeps(cfg as never),
+      remote: () => proxy,
+      remoteItems: () => [],
+    })
+    try {
+      await until(() => readRuns(box).length === 1, 10_000)
+      expect(readEntry(box, 'a86907')).toBeNull()
+      expect(readRuns(box)[0]).toMatchObject({ id: 'a86907', result: 'cancelled', why: 'answered' })
+    } finally {
+      sched.stop()
+      for (const k of Object.keys(process.env)) if (!(k in savedEnv)) delete process.env[k]
+      Object.assign(process.env, savedEnv)
+    }
+  })
 })

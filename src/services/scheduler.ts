@@ -317,8 +317,17 @@ export function startScheduler({
         }
         const at = parseNodeKey(entry.key)
         const via = at || (entry.why === 'gone' && remoteItems) ? (remote?.() ?? null) : null
+        const retargetKey =
+          !at &&
+          via &&
+          remoteItems &&
+          entry.why === 'gone' &&
+          (!entry.kind || entry.kind === 'telegram') &&
+          !entry.receipt
+            ? matchNodeKey(entry.key, [...items, ...remoteItems()])
+            : null
         // A decision's default (#487, services/decisions.ts): only while its question is still open.
-        if (entry.decision !== undefined && !(entry.why === 'gone' && !at && via && remoteItems)) {
+        if (entry.decision !== undefined && !retargetKey) {
           // A node session's (#781): against its card as the master sees it, only while there are nodes.
           const theirs = at && remoteItems ? remoteItems() : null
           const open = defaultDue(entry, cfg, Date.now(), theirs ? { item: k => theirs.find(i => i.key === k) } : {})
@@ -337,33 +346,22 @@ export function startScheduler({
         const { item, other } = targetOf(entry, items, profileIdOf)
         // One-time recovery (#869): an entry held as "gone" under a node session's bare key is
         // retargeted to its full `@<node>:<key>` once, when uniquely matched on the aggregate.
-        if (
-          !item &&
-          !other &&
-          via &&
-          remoteItems &&
-          entry.why === 'gone' &&
-          (!entry.kind || entry.kind === 'telegram') &&
-          !entry.receipt
-        ) {
-          const matched = matchNodeKey(entry.key, [...items, ...remoteItems()])
-          if (matched) {
-            const retargeted = updateEntry(entry.id, e => {
-              if (e.key !== entry.key || e.why !== 'gone' || e.claim) return undefined
-              const { why: _w, tried: _t, waited: _wa, gone: _g, ...rest } = e
-              return { ...rest, key: matched }
-            })
-            if (retargeted) {
-              log(`schedule ${entry.id}: retargeted bare key ${entry.key} -> ${matched}`)
-              changed = true
-              if (retargeted.decision !== undefined) {
-                plan(0)
-                continue
-              }
-              const nextAt = parseNodeKey(retargeted.key)
-              if (nextAt) dispatchRemote(retargeted, via, nextAt.device)
+        if (!item && !other && via && retargetKey) {
+          const retargeted = updateEntry(entry.id, e => {
+            if (e.key !== entry.key || e.why !== 'gone' || e.claim) return undefined
+            const { why: _w, tried: _t, waited: _wa, gone: _g, ...rest } = e
+            return { ...rest, key: retargetKey }
+          })
+          if (retargeted) {
+            log(`schedule ${entry.id}: retargeted bare key ${entry.key} -> ${retargetKey}`)
+            changed = true
+            if (retargeted.decision !== undefined) {
+              plan(0)
               continue
             }
+            const nextAt = parseNodeKey(retargeted.key)
+            if (nextAt) dispatchRemote(retargeted, via, nextAt.device)
+            continue
           }
         }
         // An entry that does not wake (`noWake`, a thread's event, services/work-threads.ts): a
