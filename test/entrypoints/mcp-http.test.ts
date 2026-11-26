@@ -3,8 +3,18 @@
 // caller), the caller's variables in the child's env with the board's own taken out, and the
 // JSON-RPC around it with the caller passed per call.
 import { describe, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { TOOLS } from '../../src/entrypoints/mcp.ts'
-import { callerEnv, createHttpMcp, HTTP_TOOLS, type Runner, toolRun } from '../../src/entrypoints/mcp-http.ts'
+import {
+  callerEnv,
+  childRunner,
+  createHttpMcp,
+  HTTP_TOOLS,
+  type Runner,
+  toolRun,
+} from '../../src/entrypoints/mcp-http.ts'
 
 const bad = (name: string, args: Record<string, unknown>): string => {
   try {
@@ -225,6 +235,54 @@ describe('the caller in the env', () => {
       HERDR_PANE_ID: '3',
       CLAUDE_CODE_SESSION_ID: 'ünïcødé 100%',
     })
+  })
+
+  test("the caller's Claude folder and workspace replace the board's", () => {
+    expect(callerEnv(board, { pane: 'w2:p7', configDir: 'C:\\Users\\anna\\.claude-work', workspace: 'w2' })).toEqual({
+      PATH: '/bin',
+      HERDR_ENV: '1',
+      APPDATA: '/cfg',
+      HERDR_PANE_ID: 'w2:p7',
+      CLAUDE_CONFIG_DIR: 'C:\\Users\\anna\\.claude-work',
+      HERDR_WORKSPACE_ID: 'w2',
+    })
+  })
+})
+
+describe('the child', () => {
+  test("herdr is asked for the pane's workspace for spawn only, and only with a pane", async () => {
+    // Stand-ins for the two programs: each prints what it got.
+    const root = mkdtempSync(join(tmpdir(), 'mcp-child-'))
+    try {
+      const dir = join(root, 'src', 'entrypoints')
+      mkdirSync(dir, { recursive: true })
+      const print =
+        "console.log([process.env.HERDR_PANE_ID, process.env.HERDR_WORKSPACE_ID, process.env.CLAUDE_CONFIG_DIR, process.argv.slice(2).join(' ')].join('|'))"
+      writeFileSync(join(dir, 'cli.ts'), print)
+      writeFileSync(join(dir, 'spawn-agent.ts'), print)
+      const asked: string[] = []
+      const run = childRunner({
+        root,
+        env: () => ({ PATH: process.env.PATH, HERDR_WORKSPACE_ID: 'board-own', CLAUDE_CONFIG_DIR: '/board' }),
+        cwd: root,
+        exists: () => false,
+        workspaceOf: async pane => {
+          asked.push(pane)
+          return 'wA'
+        },
+      })
+      const spawn = { program: 'spawn-agent' as const, argv: ['--name', 'cleo'] }
+      const caller = { pane: 'p1', configDir: '/home/anna/.claude-work' }
+      expect((await run(spawn, caller)).out).toEqual(['p1|wA|/home/anna/.claude-work|--name cleo'])
+      expect((await run({ program: 'board', argv: ['agents'] }, caller)).out).toEqual([
+        'p1||/home/anna/.claude-work|agents',
+      ])
+      expect((await run(spawn, { session: 'ben-1' })).out).toEqual(['|||--name cleo'])
+      expect((await run(spawn, null)).out).toEqual(['|||--name cleo'])
+      expect(asked).toEqual(['p1'])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 

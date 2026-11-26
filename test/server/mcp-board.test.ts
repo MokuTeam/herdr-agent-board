@@ -8,7 +8,7 @@
 // - What is not this computer's own client is refused: another site's page, a GET, a body that
 //   does not say it is JSON.
 import { expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { serveBoard } from '../support/board-server.ts'
 import { boardConfig, rpc, tool } from '../support/mcp-client.ts'
@@ -112,3 +112,57 @@ test("refused: another site's page, a GET, a body that is not JSON, a header tha
   // The board's own page may.
   expect((await post({ 'content-type': 'application/json', origin: url })).status).toBe(200)
 }, 30_000)
+
+// spawn as spawn-agent run in the caller's session: a tab in its pane's workspace (#813 review: no
+// workspace failed every start), in its profile (its card's Claude folder) unless it names one.
+test("spawn through /mcp: a new tab in the caller's workspace and profile", async () => {
+  const box = await sandbox()
+  const home = box.env.HOME as string
+  const work = join(home, '.claude-work')
+  for (const dir of [join(home, '.claude'), work]) mkdirSync(dir, { recursive: true })
+  const project = join(box.dir, 'Acme project')
+  mkdirSync(project)
+  const ready = { result: { pane: { pane_id: 'wA:p9', tab_id: 'wA:t9', agent: 'claude', agent_status: 'idle' } } }
+  box.state({
+    'api snapshot': {
+      result: {
+        snapshot: { panes: [{ ...claude(box, 'p1', 'anna-1'), workspace_id: 'wA' }], tabs: [], workspaces: [] },
+      },
+    },
+    'tab create': { result: { tab: { tab_id: 'wA:t9' }, root_pane: { pane_id: 'wA:p9', terminal_id: 'term-9' } } },
+    'tab rename': { result: null },
+    'pane run': { result: null },
+    'pane get': { seq: [{ result: { pane: { pane_id: 'wA:p9', agent: null } } }, ready] },
+    'agent list': { result: { agents: [{ pane_id: 'wA:p9' }] } },
+    'agent rename': { result: null },
+    'agent prompt': { result: null },
+    'pane read': { text: 'Session renamed to: Acme invoices' },
+    'pane send-keys': { result: null },
+  })
+  mkdirSync(box.cards, { recursive: true })
+  writeFileSync(join(box.cards, 'anna-1.json'), JSON.stringify({ profileDir: work }))
+  const profiles = [
+    { id: 'default', title: 'Private', dir: join(home, '.claude'), color: 'indigo', hidden: false },
+    { id: 'work', title: 'Work', dir: work, color: 'teal', hidden: false },
+  ]
+  const { url } = await serveBoard(box, { language: 'en', profiles }, { BOARD_TEST_PACE: '0.02' })
+  boardConfig(box, url, { profiles })
+
+  const r = await tool(url, 'spawn', { name: 'Acme invoices', cwd: project, brief: 'start' }, { 'x-board-pane': 'p1' })
+  expect(r, r.text).toMatchObject({ error: false })
+  expect(r.text).toContain('pane=wA:p9')
+  const created = box.calls().find(c => c[0] === 'tab' && c[1] === 'create')
+  expect(created).toEqual([
+    'tab',
+    'create',
+    '--workspace',
+    'wA',
+    '--cwd',
+    project,
+    '--label',
+    'Acme invoices',
+    '--env',
+    `CLAUDE_CONFIG_DIR=${work}`,
+    '--no-focus',
+  ])
+}, 60_000)

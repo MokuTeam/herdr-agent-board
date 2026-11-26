@@ -8,7 +8,10 @@
 // (X-Board-Pane) or its session (X-Board-Session), and the child gets that in the variables the
 // command reads its own session from (HERDR_PANE_ID, CLAUDE_CODE_SESSION_ID), with the board's own
 // taken out. A pane resolves to the session herdr says runs in it now, as the command resolves it.
-// No caller: the owner, as the command run outside a session.
+// The session's Claude folder (its card's profileDir) comes along as CLAUDE_CONFIG_DIR, so `spawn`
+// keeps the caller's profile as spawn-agent run in that session would, and `spawn` gets the pane's
+// herdr workspace (HERDR_WORKSPACE_ID) for its new tab. No caller: the owner, as the command run
+// outside a session.
 //
 // The tool list is fixed and short: it is part of every session's cached prefix.
 import { join } from 'node:path'
@@ -34,6 +37,10 @@ export interface Caller {
   session?: string
   /** The folder the child runs in: the session's, when the board knows it. */
   cwd?: string
+  /** The session's Claude folder as its hooks reported it: its profile, which `spawn` keeps. */
+  configDir?: string
+  /** The herdr workspace of its pane, where `spawn` opens the new tab. */
+  workspace?: string
 }
 
 /** What one call runs: the board command or spawn-agent, with these arguments. */
@@ -118,7 +125,7 @@ export const HTTP_TOOLS = [
         name: { type: 'string' },
         cwd: { type: 'string', description: 'its folder' },
         brief: { type: 'string', description: 'its first message' },
-        profile: { type: 'string', description: 'a Claude profile id' },
+        profile: { type: 'string', description: 'a Claude profile id; default: yours' },
         device: { type: 'string', description: 'a device id, or local' },
         agent: { type: 'string', enum: AGENT_KINDS },
         trust: { type: 'boolean', description: 'answer the folder-trust dialog with Yes' },
@@ -344,6 +351,8 @@ export function callerEnv(
   for (const k of CALLER_ENV) delete env[k]
   if (caller?.pane) env.HERDR_PANE_ID = caller.pane
   if (caller?.session) env.CLAUDE_CODE_SESSION_ID = caller.session
+  if (caller?.configDir) env.CLAUDE_CONFIG_DIR = caller.configDir
+  if (caller?.workspace) env.HERDR_WORKSPACE_ID = caller.workspace
   return env
 }
 
@@ -365,9 +374,19 @@ export function childRunner(o: {
   /** The child's folder when the caller's is not known. */
   cwd: string
   exists: (dir: string) => boolean
+  /**
+   * The herdr workspace of a pane, asked only for `spawn`, which opens its tab there (spawn-agent
+   * needs one); undefined when herdr does not say.
+   */
+  workspaceOf?: (pane: string) => Promise<string | undefined>
   runMs?: Partial<Record<BoardRun['program'], number>>
 }): Runner {
-  return async (run, caller) => {
+  return async (run, given) => {
+    let caller = given
+    if (run.program === 'spawn-agent' && caller?.pane && !caller.workspace && o.workspaceOf) {
+      const workspace = await o.workspaceOf(caller.pane).catch(() => undefined)
+      if (workspace) caller = { ...caller, workspace }
+    }
     const file = join(o.root, 'src', 'entrypoints', PROGRAM_FILE[run.program])
     const cwd = caller?.cwd && o.exists(caller.cwd) ? caller.cwd : o.cwd
     const ms = o.runMs?.[run.program] ?? RUN_MS[run.program]

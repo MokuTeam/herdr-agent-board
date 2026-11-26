@@ -18,7 +18,9 @@ function routes() {
     },
   }
   const find = (ref: { pane?: string; session?: string }) =>
-    ref.session === 'anna-1' || ref.pane === 'p1' ? { pane: 'p1', cwd: '/work/anna' } : null
+    ref.session === 'anna-1' || ref.pane === 'p1'
+      ? { pane: 'p1', cwd: '/work/anna', configDir: '/home/anna/.claude-work' }
+      : null
   return { table: mcpRoutes({ mcp, find }), seen }
 }
 
@@ -50,8 +52,8 @@ describe('/mcp', () => {
     await send(table, req({ 'x-board-session': 'pane-w2:p9' }))
     await send(table, req())
     expect(seen).toEqual([
-      { pane: 'p1', cwd: '/work/anna' },
-      { pane: 'p1', session: 'anna-1', cwd: '/work/anna' },
+      { pane: 'p1', cwd: '/work/anna', configDir: '/home/anna/.claude-work' },
+      { pane: 'p1', session: 'anna-1', cwd: '/work/anna', configDir: '/home/anna/.claude-work' },
       { session: 'pane-w2:p9' },
       null,
     ])

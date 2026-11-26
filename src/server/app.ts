@@ -9,9 +9,9 @@
 import { randomBytes, randomUUID } from 'node:crypto'
 import { existsSync, type FSWatcher, mkdirSync, mkdtempSync, readFileSync, rmSync, watch } from 'node:fs'
 import { hostname, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { localAgyLimits } from '../adapters/agy-limits.ts'
-import { allCards } from '../adapters/cards.ts'
+import { allCards, readCard } from '../adapters/cards.ts'
 import {
   editNodes,
   editNodesAdding,
@@ -32,7 +32,7 @@ import {
   shippedStateMoved,
   writeHandoverState,
 } from '../adapters/handover-store.ts'
-import { workspaceList } from '../adapters/herdr.ts'
+import { snapshot, workspaceList } from '../adapters/herdr.ts'
 import { hasDesktop, observe as observeComputer } from '../adapters/idle.ts'
 import { isRecord } from '../adapters/json-store.ts'
 import { activateNodeRelayKey, createNodeJoinStore, stageNodeRelayKey } from '../adapters/node-join-store.ts'
@@ -1528,7 +1528,13 @@ export async function startServer({
     ...mcpRoutes({
       mcp: createHttpMcp({
         version: PLUGIN_VERSION || 'dev',
-        run: childRunner({ root: ROOT, env: () => process.env, cwd: ROOT, exists: existsSync }),
+        run: childRunner({
+          root: ROOT,
+          env: () => process.env,
+          cwd: ROOT,
+          exists: existsSync,
+          workspaceOf: async pane => (await snapshot()).panes.find(p => p.pane_id === pane)?.workspace_id ?? undefined,
+        }),
       }),
       find: ref => {
         const items = board.items()
@@ -1536,7 +1542,15 @@ export async function startServer({
           (ref.session && items.find(i => i.key === ref.session || i.session === ref.session)) ||
           (ref.pane && items.find(i => i.pane === ref.pane)) ||
           null
-        return it && { ...(it.pane && { pane: it.pane }), ...(it.cwd && { cwd: it.cwd }) }
+        // Its Claude folder as its hooks reported it: the profile a session's own command runs in.
+        const dir = readCard(it?.key ?? ref.session ?? '')?.profileDir
+        const configDir = typeof dir === 'string' && isAbsolute(dir) ? dir : undefined
+        if (!it && !configDir) return null
+        return {
+          ...(it?.pane && { pane: it.pane }),
+          ...(it?.cwd && { cwd: it.cwd }),
+          ...(configDir && { configDir }),
+        }
       },
     }),
     // The Omarchy theme's colors for the Terminal style, on a computer with Omarchy.

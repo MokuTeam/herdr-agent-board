@@ -25,8 +25,14 @@ const LOOPBACK = (peer: string): boolean =>
 const rpcError = (status: number, message: string): Response =>
   json(status, { jsonrpc: '2.0', id: null, error: { code: -32600, message } })
 
-/** The session the board knows by this pane or key: its folder, and its pane when it runs on this computer. */
-export type FindCaller = (ref: { pane?: string; session?: string }) => { pane?: string; cwd?: string } | null
+/**
+ * The session the board knows by this pane or key: its folder, its Claude folder, and its pane when
+ * it runs on this computer.
+ */
+export type FindCaller = (ref: {
+  pane?: string
+  session?: string
+}) => { pane?: string; cwd?: string; configDir?: string } | null
 
 /** Who the request says it is from; a string when what it says cannot be read. */
 export function callerOf(req: Request, find: FindCaller): Caller | null | string {
@@ -41,6 +47,7 @@ export function callerOf(req: Request, find: FindCaller): Caller | null | string
     ...(ownPane && { pane: ownPane }),
     ...(session && { session }),
     ...(known?.cwd && { cwd: known.cwd }),
+    ...(known?.configDir && { configDir: known.configDir }),
   }
 }
 

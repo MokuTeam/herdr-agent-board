@@ -286,6 +286,8 @@ const CLASSIFIED: Record<string, [method: string, raw: string, door: 'door' | 'r
   'GET /api/team/threads': [['GET', '/api/team/threads', 'refused']],
   'GET ^\\/api\\/team\\/threads\\/([^/]+)\\/([^/]+)$': [['GET', '/api/team/threads/team/general', 'refused']],
   'POST /api/team/post': [['POST', '/api/team/post', 'refused']],
+  'POST /api/team/react': [['POST', '/api/team/react', 'refused']],
+  'POST /api/team/agent-react': [['POST', '/api/team/agent-react', 'refused']],
   'POST ^\\/api\\/team\\/threads\\/([^/]+)\\/([^/]+)\\/(assign|release|mute|unmute)$': [
     ['POST', '/api/team/threads/team/general/mute', 'refused'],
   ],
