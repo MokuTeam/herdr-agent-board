@@ -47,7 +47,7 @@ import {
 } from '../../core/launch/names.ts'
 import type { NodeFolderFacts } from '../../core/launch/spawn-node.ts'
 import { forkCard } from '../../core/links.ts'
-import { nodeConfig, nodesConfig } from '../../core/nodes.ts'
+import { nodesConfig } from '../../core/nodes.ts'
 import { PI_AGENT } from '../../core/pi.ts'
 import type { LaunchPlace } from '../../core/placement.ts'
 import type { Item, LaunchFailure, LaunchState, LaunchStep } from '../../core/types.ts'
@@ -222,9 +222,10 @@ export function launchRunner({
   const agentSlug = (l: Launch): string => (l.ticketNames ? ticketSlugName(l.name) : slugName(l.name))
 
   async function runLaunch(l: Launch): Promise<void> {
-    // On a node, its profile's env file (#507): each tab, workspace and launcher opened for it gets
-    // those variables. Read on a board with `node` only.
-    if (nodeConfig(deps.cfg.node) !== null) l.nodeEnv = readNodeEnv(l.profile, deps.log)
+    // The profile's env file (#507): each tab, workspace and launcher opened for it gets those
+    // variables. Read on every board, node or master: a node made the master by a handover keeps the
+    // file and its sessions still need it (#824). No file, nothing changes.
+    l.nodeEnv = readNodeEnv(l.profile, deps.log)
     // A resumed one has its id and its card already; the card is told the profile it is meant to
     // run in, as for any start.
     if (l.resume) {

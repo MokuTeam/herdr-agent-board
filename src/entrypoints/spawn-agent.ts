@@ -86,13 +86,10 @@ const launcherChild = process.env[LAUNCHER_CHILD] !== undefined
 delete process.env[LAUNCHER_CHILD]
 
 /**
- * On a node (#507), the profile's env file for the new tab. Without `node` in config.json nothing
- * of it is loaded or read.
+ * The profile's env file (#507) for the new tab, on a node or the master alike (#824): a board made
+ * the master by a handover keeps its node's files. No file, no variables.
  */
-async function nodeEnvOf(cfg: Config): Promise<Pick<Parameters<typeof spawnAgent>[1] & object, 'nodeEnv'>> {
-  if (cfg.node === undefined || cfg.node === null || cfg.node === false) return {}
-  const { nodeConfig } = await import('../core/nodes.ts')
-  if (nodeConfig(cfg.node) === null) return {}
+async function nodeEnvOf(): Promise<Pick<Parameters<typeof spawnAgent>[1] & object, 'nodeEnv'>> {
   const { readNodeEnv } = await import('../adapters/node-env.ts')
   return { nodeEnv: profile => readNodeEnv(profile, msg => console.error(`spawn-agent: ${msg}`)) }
 }
@@ -124,7 +121,7 @@ async function startHere(
     env: process.env,
     home,
     ticketNames: launch.linkedWorkspaces === true,
-    ...(await nodeEnvOf(cfg)),
+    ...(await nodeEnvOf()),
     ...(kase && { onAgent: kase.onAgent }),
   })
   if (register) {

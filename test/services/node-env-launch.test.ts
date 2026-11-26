@@ -2,8 +2,9 @@
 // on a board with `node`. A start through the launch pipeline (as a start from the master runs, in
 // this process against a sandbox's fake herdr, with the board's own spawn-agent as the launcher)
 // gets its variables in the new tab's env, never on the line typed into it; `board resume` gives them
-// to Claude (the fake on PATH). A name the board sets itself is left out and said by name. Without
-// `node`, with the same file there, a start's tab and a resume's env and arguments are main's.
+// to Claude (the fake on PATH). A name the board sets itself is left out and said by name. A master
+// that has the file (a node made the master, #824) applies it the same way; a board without the file,
+// master or node, starts and resumes as main does.
 import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
@@ -44,6 +45,9 @@ const HERDR = {
     result: { snapshot: { panes: [], tabs: [], workspaces: [{ workspace_id: 'wA', label: 'Alpha' }] } },
   },
   'tab create': { result: { tab: { tab_id: 'wA:t9' }, root_pane: { pane_id: 'wA:p9' } } },
+  'workspace create': {
+    result: { workspace: { workspace_id: 'wA' }, tab: { tab_id: 'wA:t9' }, root_pane: { pane_id: 'wA:p9' } },
+  },
   'tab rename': { result: null },
   'pane get': { result: { pane: { pane_id: 'wA:p9', tab_id: 'wA:t9', agent: 'claude', agent_status: 'idle' } } },
   'pane run': { result: null },
@@ -74,7 +78,11 @@ async function boardBox(o: { node: boolean; envFile: boolean }): Promise<Sandbox
 }
 
 /** One start through the launch pipeline: herdr's calls, and what the board logged. */
-async function start(box: Sandbox, node: boolean): Promise<{ calls: string[][]; logged: string[]; dir: string }> {
+async function start(
+  box: Sandbox,
+  node: boolean,
+  workspace: { id: string; label: string } | { create: string } = { id: 'wA', label: 'Alpha' },
+): Promise<{ calls: string[][]; logged: string[]; dir: string }> {
   into(box)
   const dir = join(box.dir, 'Gamma')
   mkdirSync(dir, { recursive: true })
@@ -93,10 +101,7 @@ async function start(box: Sandbox, node: boolean): Promise<{ calls: string[][]; 
     typeof createLaunches
   >[0]['deps']
   const launches = createLaunches({ deps })
-  const r = await launches.start(
-    { name: 'Gamma job', cwd: dir, category: 'acme', workspace: { id: 'wA', label: 'Alpha' }, message: 'Go.' },
-    [],
-  )
+  const r = await launches.start({ name: 'Gamma job', cwd: dir, category: 'acme', workspace, message: 'Go.' }, [])
   expect(r.ok).toBe(true)
   await until(() => ['done', 'failed'].includes(launches.list()[0]?.state ?? ''), 20_000)
   const l = launches.list()[0]
@@ -184,14 +189,102 @@ test("on a node board resume gives Claude the env file's variables, the board's 
   expect(r.stderr).not.toContain('c4n4ry')
 }, 40_000)
 
-test("without `node`, the same env file there: a start's tab and a resume's env and arguments are main's", async () => {
-  // A node without the file: main's too.
+/** `spawn-agent` run as a command in the sandbox: the new tab's `tab create` and its stderr. */
+async function spawnHere(box: Sandbox): Promise<{ tab: string[] | undefined; stderr: string; code: number | null }> {
+  const dir = join(box.dir, 'Delta')
+  mkdirSync(dir, { recursive: true })
+  const proc = Bun.spawn(
+    [
+      process.execPath,
+      join(root, 'src/entrypoints/spawn-agent.ts'),
+      '-Name',
+      'Delta job',
+      '-Cwd',
+      dir,
+      '-Workspace',
+      'wA',
+    ],
+    { cwd: root, env: { ...box.env, BOARD_TEST_PACE: '0.02' }, stdout: 'pipe', stderr: 'pipe' },
+  )
+  const stderr = await new Response(proc.stderr).text()
+  await proc.exited
+  return { tab: tabCreate(box.calls()), stderr, code: proc.exitCode }
+}
+
+/** A start into a new workspace: the board opens it itself (services/launch/run.ts), the launcher takes its pane. */
+async function intoNewWorkspace(
+  box: Sandbox,
+): Promise<{ create: string[] | undefined; logged: string[]; dir: string }> {
+  const first = { result: { pane: { pane_id: 'wA:p9', tab_id: 'wA:t9', agent: null } } }
+  box.state({ ...HERDR, 'pane get': { seq: [first, HERDR['pane get']] } })
+  const { calls, logged, dir } = await start(box, false, { create: 'Fresh' })
+  return { create: calls.find(a => a[0] === 'workspace' && a[1] === 'create'), logged, dir }
+}
+
+const envArgs = ['--env', `MCP_DOCS_AUTHORIZATION=${CANARY}`, '--env', 'GIT_TERMINAL_PROMPT=0']
+
+test("a master that keeps a profile's env file (a node made the master, #824): a start, spawn-agent and board resume get its variables, never on the typed line", async () => {
+  const box = await boardBox({ node: false, envFile: true })
+  const { calls, logged, dir } = await start(box, false)
+  const tab = mainTab(dir)
+  expect(tabCreate(calls)).toEqual([...tab.slice(0, -1), ...envArgs, '--no-focus'])
+  const typed = calls.filter(a => a[0] === 'pane' && a[1] === 'run').map(a => a.join(' '))
+  expect(typed.length).toBeGreaterThan(0)
+  expect(typed.join('\n')).not.toContain('c4n4ry')
+  expect(logged).toEqual([
+    'node env: PATH in default.env is set by the board itself: left out',
+    'node env: HERDR_EVIL in default.env is set by the board itself: left out',
+  ])
+  expect(logged.join('\n')).not.toContain('c4n4ry')
+
+  const r = await resume(box)
+  expect(r.code).toBe(0)
+  expect(r.log).toMatchObject({
+    args: ['--resume', SID],
+    env: { MCP_DOCS_AUTHORIZATION: CANARY, GIT_TERMINAL_PROMPT: '0', HERDR_EVIL: null },
+  })
+  expect(r.stderr).not.toContain('c4n4ry')
+
+  const spawned = await boardBox({ node: false, envFile: true })
+  const s = await spawnHere(spawned)
+  expect(s.code).toBe(0)
+  expect(s.tab).toEqual([
+    'tab',
+    'create',
+    '--workspace',
+    'wA',
+    '--cwd',
+    join(spawned.dir, 'Delta'),
+    '--label',
+    'Delta job',
+    ...envArgs,
+    '--no-focus',
+  ])
+  expect(s.stderr).not.toContain('c4n4ry')
+
+  const fresh = await intoNewWorkspace(await boardBox({ node: false, envFile: true }))
+  expect(fresh.create).toEqual([
+    'workspace',
+    'create',
+    '--cwd',
+    fresh.dir,
+    '--label',
+    'Fresh',
+    ...envArgs,
+    '--no-focus',
+  ])
+  expect(fresh.logged.join('\n')).not.toContain('c4n4ry')
+}, 60_000)
+
+test("without the env file, on a master or a node: a start's tab, spawn-agent's tab and a resume's env and arguments are main's", async () => {
+  // A node without the file.
   const bare = await boardBox({ node: true, envFile: false })
   const noFile = await start(bare, true)
   expect(tabCreate(noFile.calls)).toEqual(mainTab(noFile.dir))
   expect(noFile.logged).toEqual([])
 
-  const box = await boardBox({ node: false, envFile: true })
+  // A master without the file.
+  const box = await boardBox({ node: false, envFile: false })
   const { calls, logged, dir } = await start(box, false)
   expect(tabCreate(calls)).toEqual(mainTab(dir))
   expect(logged).toEqual([])
@@ -206,6 +299,25 @@ test("without `node`, the same env file there: a start's tab and a resume's env 
     },
   ])
   expect(r.stderr).toBe('')
+
+  const spawned = await boardBox({ node: false, envFile: false })
+  const s = await spawnHere(spawned)
+  expect(s.code).toBe(0)
+  expect(s.tab).toEqual([
+    'tab',
+    'create',
+    '--workspace',
+    'wA',
+    '--cwd',
+    join(spawned.dir, 'Delta'),
+    '--label',
+    'Delta job',
+    '--no-focus',
+  ])
+
+  const fresh = await intoNewWorkspace(await boardBox({ node: false, envFile: false }))
+  expect(fresh.create).toEqual(['workspace', 'create', '--cwd', fresh.dir, '--label', 'Fresh', '--no-focus'])
+  expect(fresh.logged).toEqual([])
 }, 60_000)
 
 test("the env a tab, a workspace or launch.command gets: the env file's variables beside CLAUDE_CONFIG_DIR, none without them", async () => {

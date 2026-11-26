@@ -1,6 +1,7 @@
 // A node's env file per profile (#507, docs/design/nodes 7.2, 10 item 4): `<state>/node/env/<profile>.env`,
-// written by a file sink in `env` format, read for a launch, spawn-agent and `board resume` on a board
-// with `node`. Values are never logged: a refused name is said by its name alone.
+// written by a file sink in `env` format, read for a launch, spawn-agent and `board resume` on every
+// board that has it, node or master (#824: a node made the master keeps its files). Values are never
+// logged: a refused name is said by its name alone.
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { type EnvMap, parseEnvFile } from '../core/node-env.ts'

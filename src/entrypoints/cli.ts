@@ -1848,17 +1848,12 @@ async function resume(): Promise<void> {
   const [file = 'claude', ...argv] = plan.argv
   const dir = plan.dir ?? resolveProfileDir(process.env.CLAUDE_CONFIG_DIR, homedir())
   let env = plan.env
-  // On a node (#507), the profile's env file; without `node` nothing of it is loaded or read.
-  if (cfg.node !== undefined && cfg.node !== null && cfg.node !== false) {
-    const { nodeConfig } = await import('../core/nodes.ts')
-    if (nodeConfig(cfg.node) !== null) {
-      const { readNodeEnv } = await import('../adapters/node-env.ts')
-      env = withNodeEnv(
-        env,
-        readNodeEnv(resumeProfileId(input), msg => console.error(`board resume: ${msg}`)),
-      )
-    }
-  }
+  // The profile's env file (#507), on a node or the master alike (#824); no file, env as it was.
+  const { readNodeEnv } = await import('../adapters/node-env.ts')
+  env = withNodeEnv(
+    env,
+    readNodeEnv(resumeProfileId(input), msg => console.error(`board resume: ${msg}`)),
+  )
   const ran = await runHere(file, argv, env, (await resumeFolder(o.session, dir)) ?? undefined)
   if (ran.error) throw new Error(`${file} did not start: ${messageOf(ran.error)}`)
   process.exit(ran.code)
