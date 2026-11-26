@@ -16,7 +16,7 @@ import {
   type AgentsChange,
   type AgentsView,
   type DraftLine,
-  mentionChoices,
+  mentionPeople,
   type PeerDirectory,
   type ServicesChange,
   type TeamView,
@@ -310,7 +310,7 @@ export function TeamBody(props: TeamBodyProps) {
             {...(props.files && { files: props.files })}
             {...(props.onAddFiles && { onAddFiles: props.onAddFiles })}
             {...(props.onRemoveFile && { onRemoveFile: props.onRemoveFile })}
-            {...(view.roster.length > 0 && { mentions: mentionChoices(props.directory ?? [], view.roster) })}
+            {...(view.roster.length > 0 && { mentions: mentionPeople(props.directory ?? [], view.roster) })}
             work={topicWork(props.threads.find(x => x.key === selected))}
           />
         ) : people ? (

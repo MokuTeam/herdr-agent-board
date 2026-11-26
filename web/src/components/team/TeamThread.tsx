@@ -21,7 +21,7 @@ import {
   draftWhy,
   isChannel,
   keyParts,
-  type MentionChoice,
+  type MentionPerson,
   safeLink,
   seenLine,
   type TeamRosterPeer,
@@ -84,8 +84,8 @@ export interface TeamThreadProps {
   onAddMembers?(key: string, peers: string[]): void
   /** The files that go with the next message (#371): uploading, ready or failed. */
   files?: readonly Attachment[]
-  /** The peers' agents that may be addressed as `@Name.code` (#832), for the box's list. */
-  mentions?: readonly MentionChoice[]
+  /** The teammates and their agents that may be addressed as `@Name.code` (#832, #842), for the box's list. */
+  mentions?: readonly MentionPerson[]
   /** Files picked, pasted or dropped; none given: the thread takes no files. */
   onAddFiles?(files: File[]): void
   onRemoveFile?(id: number): void
