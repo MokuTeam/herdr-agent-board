@@ -487,7 +487,8 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
     forgetArchived()
     await rememberPi(seen.snap)
     await rememberAgy(seen.snap)
-    await rememberCodex(seen.snap)
+    // Keep the wake ordering for setups without Codex sleepers.
+    if (Object.keys(codexes).length) await rememberCodex(seen.snap)
     return seen
   }
 
