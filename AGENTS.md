@@ -73,6 +73,6 @@ that stays held, a wake that stays slow) has a knob of its own: `BOARD_LOCK_TIME
 `BOARD_WAKE_ANSWER_MS`, `BOARD_NAMED_WAIT_MS`, `BOARD_TEAM_JOIN_MS`,
 `BOARD_WAKE_START_DEADLINE_MS`, `BOARD_WAKE_ROUND_MS`, `BOARD_NODE_KEPT_MS`, `BOARD_NODE_READ_MS`,
 `BOARD_DIALOG_WAIT_MS`, `BOARD_NODE_GUARD_MS`, `BOARD_NODE_SPAWN_MS`, `BOARD_NODE_SLICES_MS`,
-`BOARD_REVEAL_UP_MS`.
+`BOARD_REVEAL_UP_MS`, `BOARD_NODE_SEND_MS`.
 Unset in production; set them only in tests.
 The test-only variables of a new wait go through `adapters/pacing.ts` (`pause`, `knobMs`).
