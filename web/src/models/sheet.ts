@@ -57,6 +57,39 @@ export function detailOnBoard({ before, board, key, stamp, status }: BoardTurn):
   return now !== stamp || recovered || status === 'missing' ? { kind: 'load', stamp: now } : null
 }
 
+/** How often the open sheet reads a node session's live thread again (#938). */
+export const NODE_LIVE_POLL_MS = 3000
+/** How long after a message sent to it, or its newest turn, a node session's thread counts as live. */
+export const NODE_LIVE_MS = 3 * 60_000
+/** As long, while its last turn waits for an answer (a user line, a tool at work): a long step. */
+export const NODE_TURN_MS = 30 * 60_000
+
+export interface NodeLive {
+  /** The open session's card. */
+  item: Pick<Item, 'device'> | undefined
+  /** When the sheet was last asked to read it again (a message sent, Retry); 0: never. */
+  nudgedAt: number
+  /** Its detail's newest moment (outbox.ts newestAt); 0: none read yet. */
+  newest: number
+  /** The role of its detail's last turn; '' when none. */
+  lastRole: string
+  now: number
+}
+
+/**
+ * Whether the open sheet reads the detail again on its own (#938). A card of another device may say
+ * nothing new while it answers (a Codex session on a Windows node keeps its activity, status and
+ * column), so detailOnBoard never asks: the reply showed only on reopening, and the message sent
+ * went from the thread once the outbox stopped waiting for it. So: a node's card, while its thread is
+ * live: a message sent or a turn of late, or a last turn still waiting for its answer (a tool at work
+for minutes says nothing). A card of this computer never is: its stamp moves with its turns.
+ */
+export function nodeLivePoll({ item, nudgedAt, newest, lastRole, now }: NodeLive): boolean {
+  if (!item?.device) return false
+  const quiet = now - Math.max(nudgedAt, newest)
+  return quiet < (lastRole === 'user' || lastRole === 'tool' ? NODE_TURN_MS : NODE_LIVE_MS)
+}
+
 // ---------------------------------------------------------------- the head
 
 export type StatusPill = { kind: 'missing' } | { kind: 'asleep' } | { kind: 'column' }

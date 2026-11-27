@@ -16,6 +16,9 @@ import {
   headButtons,
   liveEdit,
   NO_HEAD_BUTTONS,
+  NODE_LIVE_MS,
+  NODE_TURN_MS,
+  nodeLivePoll,
   sessionMissing,
   sheetAvailability,
   sheetHead,
@@ -77,6 +80,23 @@ describe('a new board and the open session’s detail', () => {
     expect(detailOnBoard({ ...turn, board: { stale: false, items: [] } })).toEqual({ kind: 'missing' })
     expect(detailOnBoard({ ...turn, board: { stale: true, items: [] } })).toBe(null)
   })
+})
+
+test("a node session's thread reads itself again while live: a message sent, a turn of late, a turn waiting (#938)", () => {
+  const node = { device: 'win-laptop' }
+  const at = (fields: Partial<Parameters<typeof nodeLivePoll>[0]>) =>
+    nodeLivePoll({ item: node, nudgedAt: 0, newest: 0, lastRole: 'assistant', now: NOW, ...fields })
+  expect(at({ nudgedAt: NOW - 1000, newest: NOW - 3_600_000 })).toBe(true)
+  expect(at({ newest: NOW - 10_000 })).toBe(true)
+  expect(at({ newest: NOW - NODE_LIVE_MS })).toBe(false)
+  expect(at({})).toBe(false)
+  // A reply after 3 min: while its last turn waits (a user line, a tool at work), up to 30 min.
+  expect(at({ nudgedAt: NOW - 10 * 60_000, newest: NOW - 5 * 60_000, lastRole: 'tool' })).toBe(true)
+  expect(at({ nudgedAt: NOW - 10 * 60_000, lastRole: 'user' })).toBe(true)
+  expect(at({ newest: NOW - NODE_TURN_MS, lastRole: 'tool' })).toBe(false)
+  // A card of this computer, or one gone: never.
+  expect(at({ item: {}, nudgedAt: NOW, newest: NOW })).toBe(false)
+  expect(at({ item: undefined, nudgedAt: NOW, newest: NOW })).toBe(false)
 })
 
 describe('the head', () => {

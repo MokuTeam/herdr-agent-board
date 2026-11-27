@@ -1,14 +1,15 @@
 // The open session's detail (models/detail-resource.ts over GET /api/session/<key>): read when
 // the sheet opens it, read again when its card says something new, when the board's data is fresh
-// again, when the connection is back or when a session that was gone returns; dropped once the
-// sheet closes. A finished result read here counts as viewed.
+// again, when the connection is back, when a session that was gone returns, and every few seconds
+// while a node session's thread is live (#938); dropped once the sheet closes. A finished result read here counts as viewed.
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Translator } from '../../../src/core/types.ts'
 import { ApiError, api, type BoardPayload, type SessionDetail } from '../api/client.ts'
 import { useT } from '../i18n/I18nProvider.tsx'
 import { resultToken } from '../models/attention.ts'
 import { type DetailValue, detailResource } from '../models/detail-resource.ts'
-import { detailOnBoard } from '../models/sheet.ts'
+import { newestAt } from '../models/outbox.ts'
+import { detailOnBoard, NODE_LIVE_POLL_MS, nodeLivePoll } from '../models/sheet.ts'
 import { useBoardContext } from '../state/BoardProvider.tsx'
 import { useLatest } from './useLatest.ts'
 
@@ -61,6 +62,8 @@ export function useSessionDetail(shown: string | null): SessionDetailApi {
   const current = useRef(snapshot)
   // What the card said when the detail was last asked for; '' right after opening.
   const stamp = useRef('')
+  // When a read again was last asked for from outside (a message sent, Retry); 0 since opening.
+  const nudged = useRef(0)
 
   const [resource] = useState(() =>
     detailResource<SessionDetail>({
@@ -97,6 +100,7 @@ export function useSessionDetail(shown: string | null): SessionDetailApi {
     current.current = fresh
     setSnapshot(fresh)
     stamp.current = ''
+    nudged.current = 0
     load(open)
   }, [open, opened, resource, load])
 
@@ -130,5 +134,34 @@ export function useSessionDetail(shown: string | null): SessionDetailApi {
     if (returned && key !== null) load(key)
   }, [connected, latest, load])
 
-  return { value: snapshot.key === shown ? snapshot : emptyDetail(shown), load }
+  // A node session's live thread: read again on a timer, its card may say nothing new (models/sheet.ts
+  // nodeLivePoll). Only while a node's card is open: a card of this computer gets no timer at all.
+  const node = open !== null && !!itemIn(data, open)?.device
+  useEffect(() => {
+    if (!node || open === null) return
+    const timer = setInterval(() => {
+      const { board } = latest.current
+      if (board.ui.open !== open || document.hidden) return
+      const read = current.current.key === open ? current.current.data : null
+      const live = nodeLivePoll({
+        item: itemIn(board.data, open),
+        nudgedAt: nudged.current,
+        newest: newestAt(read),
+        lastRole: read?.conversation.at(-1)?.role ?? '',
+        now: Date.now(),
+      })
+      if (live) load(open)
+    }, NODE_LIVE_POLL_MS)
+    return () => clearInterval(timer)
+  }, [node, open, latest, load])
+
+  const nudge = useCallback(
+    (key: string) => {
+      nudged.current = Date.now()
+      load(key)
+    },
+    [load],
+  )
+
+  return { value: snapshot.key === shown ? snapshot : emptyDetail(shown), load: nudge }
 }

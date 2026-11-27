@@ -8,7 +8,15 @@
 import type { Item, Translator } from '../../../src/core/types.ts'
 import { type Attachment, canSubmit, isUploading, sentText, uploadedPaths } from './composer.ts'
 import type { Draft, DraftBook } from './drafts.ts'
-import { newestAt, type OutState, type ShownThread, sentKey, unsettled } from './outbox.ts'
+import {
+  KEEP_SENT_MS,
+  NODE_KEEP_SENT_MS,
+  newestAt,
+  type OutState,
+  type ShownThread,
+  sentKey,
+  unsettled,
+} from './outbox.ts'
 import { draftKey } from './sheet.ts'
 
 /** `code: 'stale'`: herdr says a dialog holds the session, its screen shows none (#164). */
@@ -104,6 +112,8 @@ export interface ComposerSession {
 export const RELOAD_AFTER_SEND_MS = 800
 /** A message sent and still unseen in the transcript by then goes all the same (outbox.ts KEEP_SENT_MS). */
 export const REDRAW_AFTER_SEND_MS = 31_000
+/** The same for a session of another device (outbox.ts NODE_KEEP_SENT_MS). */
+export const NODE_REDRAW_AFTER_SEND_MS = NODE_KEEP_SENT_MS + 1000
 /** "Write" opens the sheet, then the box takes the focus. */
 export const COMPOSE_FOCUS_MS = 50
 
@@ -148,7 +158,8 @@ export function composerSession(deps: ComposerDeps): ComposerSession {
   /** What the thread of `key` shows of its outbox: the open session's settles against its detail. */
   function shown(key: string, openKey: string | null, detail: ShownThread | null): readonly OutboxEntry[] {
     const list = entries(key)
-    return openKey === key ? unsettled(list, detail ?? {}, deps.now()) : list
+    const keep = deps.page().item(key)?.device ? NODE_KEEP_SENT_MS : KEEP_SENT_MS
+    return openKey === key ? unsettled(list, detail ?? {}, deps.now(), keep) : list
   }
 
   /** A message gone for good: its previews, unless the box shows them again. */
@@ -196,9 +207,12 @@ export function composerSession(deps: ComposerDeps): ComposerSession {
         if (deps.page().open === key) deps.reload(key)
       }, RELOAD_AFTER_SEND_MS)
       // Still unseen in the transcript by then, it goes all the same.
-      deps.later(() => {
-        if (deps.page().open === key) deps.changed()
-      }, REDRAW_AFTER_SEND_MS)
+      deps.later(
+        () => {
+          if (deps.page().open === key) deps.changed()
+        },
+        it.device ? NODE_REDRAW_AFTER_SEND_MS : REDRAW_AFTER_SEND_MS,
+      )
     } else {
       const error = r.ok ? '' : r.error
       patch(key, id, { state: 'failed', error, anyway: !r.ok && r.code === 'stale' ? true : undefined })

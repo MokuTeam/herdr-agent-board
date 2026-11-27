@@ -60,6 +60,11 @@ export interface ShownThread {
 
 /** A message sent but never seen in the transcript goes after this long. */
 export const KEEP_SENT_MS = 30_000
+/**
+ * The same for a session of another device (#938): its transcript comes through the master, and a
+ * node session at work may write the message only once it takes it, later than 30 s.
+ */
+export const NODE_KEEP_SENT_MS = 3 * 60_000
 
 /**
  * The board's messages still to show: a failed one until the user retries or takes it back,
