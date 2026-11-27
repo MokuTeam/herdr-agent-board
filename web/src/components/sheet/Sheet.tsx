@@ -49,6 +49,7 @@ import { DecisionButtons } from '../decisions/DecisionButtons.tsx'
 import { DecisionRecord } from '../decisions/DecisionRecord.tsx'
 import { HelpersStrip } from '../helpers/HelpersStrip.tsx'
 import { CheckGlyph } from '../icons.tsx'
+import { plainWebLinks } from '../PlainWebLinks.tsx'
 import { Panel } from '../panel/Panel.tsx'
 import { AskedCompact } from './AskedCompact.tsx'
 import { Composer, type SessionButtons } from './Composer.tsx'
@@ -520,7 +521,7 @@ function Asked({ item, disabled, onDismiss }: { item: Item; disabled: boolean; o
   return (
     <div className="asked">
       <b>{asked.why}</b>
-      {asked.text}
+      {plainWebLinks(asked.text) ?? asked.text}
       {asked.dismiss && (
         <button
           type="button"

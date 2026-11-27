@@ -675,6 +675,7 @@ body.panel-resizing, body.panel-resizing * { cursor: var(--grab-cursor) !importa
 .asked { margin-top: 14px; padding: 12px 14px; border-radius: 12px; background: color-mix(in srgb, var(--orange) 14%, transparent); font-size: 13.5px; }
 .asked b { display: block; margin-bottom: 4px; font-size: 12px; color: var(--orange); letter-spacing: 0.02em; }
 .asked-dismiss { display: flex; margin-top: 10px; height: 28px; background: color-mix(in srgb, var(--surface) 70%, transparent); }
+.ask-link { color: var(--accent); text-decoration: underline; overflow-wrap: anywhere; }
 .ask b { font-weight: 600; color: var(--orange); }
 .screen {
   margin: 10px 0 0;

@@ -99,6 +99,7 @@ export function Board({
   }
 
   function onCardClick(e: MouseEvent<HTMLElement>, key: string): void {
+    if (e.target instanceof Element && e.target.closest('a.ask-link')) return
     if (getSelection()?.isCollapsed === false) return
     if (drag.justDragged(key)) return
     // A starting session's own buttons; its card opens nothing.

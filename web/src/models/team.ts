@@ -461,17 +461,6 @@ export function scopeThreads(
   ]
 }
 
-/** A thread's link, only when it is http(s): a peer's word is never a script to run. */
-export function safeLink(link: string | null | undefined): string | null {
-  if (!link) return null
-  try {
-    const u = new URL(link)
-    return u.protocol === 'https:' || u.protocol === 'http:' ? u.href : null
-  } catch {
-    return null
-  }
-}
-
 /** The peer a thread's key is with; null for the team's own threads. */
 export const peerOfThread = (thread: string): string | null => {
   const scope = thread.split('/')[0] ?? ''

@@ -130,7 +130,8 @@
 .asked-clip[data-moving] { overflow: hidden; }
 .asked-compact b { display: inline; margin: 0 5px 0 0; font-size: 11px; }
 .asked-compact .asked-text .chevron { flex: none; width: 16px; height: 16px; margin-top: 1px; fill: none; stroke: var(--label-3); stroke-width: 1.8; transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1); }
-.asked-compact .asked-text[aria-expanded="true"] .chevron { transform: rotate(180deg); }
+.asked-compact .asked-link-toggle { display: flex; padding: 0; border: 0; background: none; cursor: pointer; }
+.asked-compact [aria-expanded="true"] .chevron { transform: rotate(180deg); }
 #sheet .asked-compact .asked-dismiss { margin: 0; height: 28px; }
 
 /* ---------------------------------------------------------------- the footer */

@@ -23,7 +23,6 @@ import {
   isChannel,
   keyParts,
   type MentionPerson,
-  safeLink,
   seenLine,
   type TeamRosterPeer,
   type TeamView,
@@ -40,6 +39,7 @@ import {
   quoteOf,
 } from '../../models/team-chat.ts'
 import { confirmError, ownerPost } from '../../models/team-confirm.ts'
+import { safeLink } from '../../models/web-link.ts'
 import type { TopicWork } from '../../models/work-share.ts'
 import { statusColor } from '../../models/work-threads.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
