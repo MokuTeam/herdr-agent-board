@@ -65,7 +65,7 @@ import {
 } from '../../models/panel-motion.ts'
 import { type PointerSample, reducedMotion, rubberband, Spring, velocityOf } from '../../models/spring.ts'
 import { Store } from '../../state/store.ts'
-import type { About, PanelPlace, PlacedPanel } from './place.ts'
+import type { About, PanelPlace, PanelTool, PlacedPanel } from './place.ts'
 
 /** What React draws from a panel. */
 export interface PanelState {
@@ -168,6 +168,7 @@ export class PanelMotion implements PlacedPanel {
   constructor(
     readonly place: PanelPlace,
     readonly chat = false,
+    readonly tool?: PanelTool,
   ) {
     const spring = (precision: number) =>
       new Spring({
@@ -183,12 +184,25 @@ export class PanelMotion implements PlacedPanel {
     this.h = spring(0.3)
     this.p = spring(0.002)
     this.p.value = this.p.target = 1
-    this.mode = place.modeNow()
+    this.mode = place.modeNow(this.layout)
     this.state = new Store<PanelState>({
       shown: false,
-      chrome: panelChrome(this.mode, place.layout, place.viewport()),
+      chrome: panelChrome(this.mode, this.layout, place.viewport()),
       over: false,
     })
+  }
+
+  get layout(): PanelLayout {
+    return this.place.layoutFor(this.tool)
+  }
+
+  private setLayout(layout: PanelLayout, save = false): void {
+    if (this.tool) this.place.setToolLayout(this.tool, layout, save)
+    else this.place.setLayout(layout, save)
+  }
+
+  contains(target: Element | null): boolean {
+    return this.el?.contains(target) ?? false
   }
 
   /** Takes the panel's element: its gestures, and its place among the panels. */
@@ -249,7 +263,7 @@ export class PanelMotion implements PlacedPanel {
   /** Where it rests in its place, or (`off`) where it comes in from and leaves to. */
   rest(off = false): Place {
     const now = { w: this.w.value, h: this.h.value }
-    return restPlace(this.mode, this.place.layout, this.place.viewport(), off, this.el?.offsetWidth ?? 0, now)
+    return restPlace(this.mode, this.layout, this.place.viewport(), off, this.el?.offsetWidth ?? 0, now)
   }
 
   jump(to: Place): void {
@@ -308,7 +322,7 @@ export class PanelMotion implements PlacedPanel {
 
   /** The handles and the menu button for the place it is in. */
   syncChrome(): void {
-    const chrome = panelChrome(this.mode, this.place.layout, this.place.viewport())
+    const chrome = panelChrome(this.mode, this.layout, this.place.viewport())
     const now = this.state.get()
     if (!sameChrome(chrome, now.chrome)) this.state.set({ ...now, chrome })
   }
@@ -323,7 +337,7 @@ export class PanelMotion implements PlacedPanel {
     if (this.isOpen) return false
     this.isOpen = true
     this.place.activate(this)
-    const mode = this.place.modeNow()
+    const mode = this.place.modeNow(this.layout)
     const fresh = !this.shown || this.mode !== mode
     this.setShown(true)
     this.setMode(mode)
@@ -350,21 +364,22 @@ export class PanelMotion implements PlacedPanel {
 
   /** To another place, from where it is now. */
   setDock(dock: Dock): void {
-    if (dock === this.place.layout.dock || !DOCKS.includes(dock)) return
-    this.place.setLayout({ ...this.place.layout, dock }, true)
+    if (dock === this.layout.dock || !DOCKS.includes(dock)) return
+    this.setLayout({ ...this.layout, dock }, true)
+    if (this.isOpen) this.place.activate(this)
     this.placeIn({ response: 0.42, fade: true })
   }
 
   /** Back to the default size of its place (a floating one: also the default spot). */
   resetSize(): void {
     if (this.mode === 'mobile') return
-    this.place.setLayout(resetLayout(this.place.layout), true)
+    this.setLayout(resetLayout(this.layout), true)
     this.placeIn({ response: 0.34 })
   }
 
   /** Into the current layout from wherever it is, the board along. */
   placeIn({ velocity = {}, damping = 1, response = 0.4, fade = false }: GoOptions & { fade?: boolean } = {}): void {
-    this.setMode(this.place.modeNow())
+    this.setMode(this.place.modeNow(this.layout))
     if (!this.isOpen) return
     this.go(this.rest(), { velocity, damping, response })
     if (fade) fadeIn(this.el)
@@ -374,7 +389,7 @@ export class PanelMotion implements PlacedPanel {
   /** The window changed size: the panel keeps to its place (a spring caught midway keeps going there). */
   reflow(): void {
     if (!this.shown || this.g) return
-    const mode = this.place.modeNow()
+    const mode = this.place.modeNow(this.layout)
     if (mode !== this.mode) {
       this.setMode(mode)
       this.jump(this.rest(!this.isOpen))
@@ -417,7 +432,7 @@ export class PanelMotion implements PlacedPanel {
       at,
       samples: [sample(e)],
       mode: null,
-      before: { ...this.place.layout },
+      before: { ...this.layout },
       base: 0,
       size: 0,
       fx: 0,
@@ -491,8 +506,8 @@ export class PanelMotion implements PlacedPanel {
     }
     g.ox = catchUp(now.x - (g.px - g.fx * now.w))
     g.oy = catchUp(now.y - (g.py - g.gy))
-    const size = clampFloat(this.place.layout.float ?? defaultFloat(vp), vp)
-    this.place.setLayout({ ...this.place.layout, dock: 'float' }) // the drop decides what is kept
+    const size = clampFloat(this.layout.float ?? defaultFloat(vp), vp)
+    this.setLayout({ ...this.layout, dock: 'float' }) // the drop decides what is kept
     this.setMode('float')
     this.w.to(size.w, { damping: 1, response: 0.32 })
     this.h.to(size.h, { damping: 1, response: 0.32 })
@@ -547,10 +562,7 @@ export class PanelMotion implements PlacedPanel {
     const dock = dockFromThrow({ x: g.px, y: g.py }, v, vp, g.target)
     const w = this.w.target
     const h = this.h.target
-    this.place.setLayout(
-      thrownLayout(this.place.layout, dock, { x: g.px - g.fx * w, y: g.py - g.gy, w, h }, v, vp),
-      true,
-    )
+    this.setLayout(thrownLayout(this.layout, dock, { x: g.px - g.fx * w, y: g.py - g.gy, w, h }, v, vp), true)
     const fast = Math.hypot(v.x, v.y) > FAST_THROW
     this.placeIn({ velocity: { x: v.x, y: v.y }, damping: fast ? 0.82 : 1, response: 0.42, fade: true })
   }
@@ -573,7 +585,7 @@ export class PanelMotion implements PlacedPanel {
       samples: [sample(e)],
       moved: false,
       raw: 0,
-      before: { ...this.place.layout },
+      before: { ...this.layout },
     }
     handle.setPointerCapture(e.pointerId)
     handle.classList.add('active')
@@ -595,7 +607,7 @@ export class PanelMotion implements PlacedPanel {
     g.raw = draggedSize(mode, g.at, dx, dy)
     const size = soft(g.raw, sizeLimits(mode, vp))
     // The board follows the edge 1:1, unless at this size the panel lies over it.
-    const sized = { ...this.place.layout, dock: mode, [sizeField(mode)]: size }
+    const sized = { ...this.layout, dock: mode, [sizeField(mode)]: size }
     const lies = overlays(sized, vp)
     this.jump({ ...dockRect(mode, size, vp), p: 1 })
     this.setOver(lies)
@@ -614,7 +626,7 @@ export class PanelMotion implements PlacedPanel {
     const mode = this.mode
     if (mode === 'float') {
       const r = clampFloat(this.at(), vp)
-      this.place.setLayout({ ...this.place.layout, float: r }, true)
+      this.setLayout({ ...this.layout, float: r }, true)
       this.go({ ...r, p: 1 }, { velocity: floatResizeVelocity(g.edge, v), damping: 0.85, response: 0.32 })
       return
     }
@@ -627,7 +639,7 @@ export class PanelMotion implements PlacedPanel {
       return
     }
     const size = Math.round(Math.max(lim.min, Math.min(lim.max, mode === 'bottom' ? this.h.value : this.w.value)))
-    this.place.setLayout({ ...this.place.layout, [sizeField(mode)]: size }, true)
+    this.setLayout({ ...this.layout, [sizeField(mode)]: size }, true)
     this.go(this.rest(), { velocity: resizeVelocity(mode, vs), damping: 0.85, response: 0.32 })
     this.place.syncRoom({ velocity: { [mode]: vs }, response: 0.32, about: this.about })
     this.syncChrome()
@@ -650,7 +662,7 @@ export class PanelMotion implements PlacedPanel {
       g.ox?.stop()
       g.oy?.stop()
     }
-    this.place.setLayout(g.before)
+    this.setLayout(g.before)
     this.placeIn({ damping: 1, response: 0.34, fade: true })
   }
 
@@ -658,17 +670,17 @@ export class PanelMotion implements PlacedPanel {
     const mode = this.mode
     if (mode === 'mobile' || e.altKey || e.ctrlKey || e.metaKey) return
     const vp = this.place.viewport()
-    const layout = this.place.layout
+    const layout = this.layout
     if (mode === 'float') {
       const r = keyFloat(rectFor(layout, vp), e.key, e.shiftKey, vp)
       if (!r) return
       e.preventDefault()
-      this.place.setLayout({ ...layout, float: r }, true)
+      this.setLayout({ ...layout, float: r }, true)
     } else {
       const size = keySize(mode, dockSize(layout, mode, vp), e.key, e.shiftKey, sizeLimits(mode, vp))
       if (size == null) return
       e.preventDefault()
-      this.place.setLayout({ ...layout, [sizeField(mode)]: size }, true)
+      this.setLayout({ ...layout, [sizeField(mode)]: size }, true)
     }
     this.placeIn({ response: 0.26 })
   }

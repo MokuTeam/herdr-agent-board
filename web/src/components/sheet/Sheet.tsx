@@ -18,7 +18,7 @@ import type { SheetPick } from '../../hooks/useContextMenus.ts'
 import { useDecisions } from '../../hooks/useDecisions.ts'
 import { useFileDrop } from '../../hooks/useFileDrop.ts'
 import { useGoToSession } from '../../hooks/useGoToSession.ts'
-import type { HelperRef, HelpersUi } from '../../hooks/useHelpers.ts'
+import type { HelpersUi } from '../../hooks/useHelpers.ts'
 import { useKeepFocus } from '../../hooks/useKeepFocus.ts'
 import { type OpenLaunch, useNewSession } from '../../hooks/useNewSession.ts'
 import { useSessionActions } from '../../hooks/useSessionActions.ts'
@@ -26,7 +26,6 @@ import { type DetailSnapshot, useSessionDetail } from '../../hooks/useSessionDet
 import { useSheetDensity } from '../../hooks/useSheetDensity.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { inTurn } from '../../models/card.ts'
-import { sessionWindowKind } from '../../models/card-window.ts'
 import { ConversationScroll } from '../../models/conversation-scroll.ts'
 import { nodeLook } from '../../models/devices.ts'
 import { helpersChip } from '../../models/helper-model.ts'
@@ -55,7 +54,6 @@ import { AskedCompact } from './AskedCompact.tsx'
 import { Composer, type SessionButtons } from './Composer.tsx'
 import type { ScheduleActions } from './ScheduleRow.tsx'
 import { SheetHead } from './SheetHead.tsx'
-import { useSheetId } from './sheet-ids.ts'
 import { Thread, Waiting } from './Thread.tsx'
 import type { ThreadLinks } from './ThreadLinks.tsx'
 
@@ -117,16 +115,7 @@ function useShown(open: string | null, item: Item | undefined): { key: string | 
   return { key, item: item ?? (kept?.key === key ? kept : null) }
 }
 
-export function Sheet(
-  slots: SheetSlots & {
-    foreground?: boolean
-    forcePanel?: boolean | undefined
-    onShowModal?: (() => void) | undefined
-    onClose?: () => void
-  },
-) {
-  const { foreground = true, forcePanel, onShowModal, onClose } = slots
-  const id = useSheetId()
+export function Sheet(slots: SheetSlots) {
   const {
     question,
     upgradeFiles,
@@ -181,19 +170,11 @@ export function Sheet(
   }, [scroll, composer.outbox.foot])
   // The helpers window lists what the open session's detail says.
   const fed = open !== null && detail.value.key === open ? detail.value.data : null
-  useLayoutEffect(() => {
-    if (helpers && (helpers.open ? helpers.engine.view.get().key === open : foreground))
-      helpers.engine.feed({ key: open, data: fed })
-  }, [foreground, helpers, open, fed])
+  useLayoutEffect(() => helpers?.engine.feed({ key: open, data: fed }), [helpers, open, fed])
   const goToSession = useGoToSession()
-  const showHelper = (ref: HelperRef, el: HTMLElement) => {
-    if (!helpers || !open) return
-    helpers.engine.feed({ key: open, data: fed })
-    helpers.engine.open(open, ref, el)
-  }
   const links: SheetLinks = {
-    onHelper: (id, el) => showHelper({ id }, el),
-    onList: (run, el) => showHelper({ list: true, run }, el),
+    onHelper: (id, el) => helpers?.show({ id }, el),
+    onList: (run, el) => helpers?.show({ list: true, run }, el),
     onSession: goToSession,
     // Tasks only while the board has them on: no 📌 otherwise.
     ...(onPin && data?.todos && open && { onPin: (turn: AssistantTurn, el: HTMLElement) => onPin(open, turn, el) }),
@@ -206,7 +187,7 @@ export function Sheet(
   useLayoutEffect(() => {
     if (body.current && drawn) upgradeFiles?.(body.current, cwd, shown.key)
   }, [detail.value.data, drawn, shown.key, cwd, t, upgradeFiles])
-  const form = foreground && shown.item ? question?.(shown.item, detail.value.data) : null
+  const form = shown.item ? question?.(shown.item, detail.value.data) : null
   const hasForm = form !== null && form !== undefined && form !== false
   // Once its paths are chips: a conversation drawn anew (what upstream's renderSheetBody draws it
   // from) stays at the bottom if it was there; any other render leaves its scroll alone.
@@ -240,14 +221,11 @@ export function Sheet(
   }
   return (
     <Panel
-      id={id('sheet')}
-      sessionKey={open ?? undefined}
+      id="sheet"
       kind="session"
-      cardWindow={sessionWindowKind(shown.item)}
-      forcePanel={forcePanel}
-      onShowModal={onShowModal}
+      cardWindow="session"
       open={open !== null}
-      onClose={onClose ?? (() => dispatch({ type: 'open', key: null }))}
+      onClose={() => dispatch({ type: 'open', key: null })}
       about={() => cardOf(open)}
       className={classNames(drop.dropping && 'dropping', density.compact && 'sheet-compact')}
       drop={drop.handlers}
@@ -271,7 +249,7 @@ export function Sheet(
           fold={{
             compact: density.compact,
             onToggle: density.toggle,
-            helpers: chip ? { ...chip, onOpen: el => showHelper({ list: true, run: null }, el) } : undefined,
+            helpers: chip ? { ...chip, onOpen: el => void helpers?.show({ list: true, run: null }, el) } : undefined,
           }}
         />
       }
@@ -333,7 +311,6 @@ export interface SheetViewProps {
 /** The sheet under its head, as drawn for one state. */
 export function SheetView(props: SheetViewProps) {
   const { open, item, detail, form, composer, buttons, compact = false } = props
-  const id = useSheetId()
   const t = useT()
   const { data, connected, canMutate, canEdit, now } = useBoardContext()
   // A redraw of the conversation keeps the focus on what opens the same thing (a helper's line).
@@ -366,7 +343,7 @@ export function SheetView(props: SheetViewProps) {
   const asking = !hasForm && item?.column === 'me'
   return (
     <>
-      <div className="sheet-question" id={id('sheet-question')} hidden={!hasForm && !asking}>
+      <div className="sheet-question" id="sheet-question" hidden={!hasForm && !asking}>
         {hasForm
           ? form
           : asking &&
@@ -388,14 +365,14 @@ export function SheetView(props: SheetViewProps) {
       />
       <div
         className={classNames('sheet-body', !!notice.text && 'has-detail-state')}
-        id={id('sheet-body')}
+        id="sheet-body"
         ref={props.bodyRef}
         onScroll={props.onBodyScroll}
         {...keepFocus}
       >
         {item && (
           <>
-            <div className="detail-status" id={id('sheet-detail-state')} role="status" hidden={!notice.text}>
+            <div className="detail-status" id="sheet-detail-state" role="status" hidden={!notice.text}>
               <span>
                 {notice.text}
                 {notice.stamp && <small>{notice.stamp}</small>}

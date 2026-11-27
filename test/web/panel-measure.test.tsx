@@ -30,7 +30,7 @@ const rule = (sheet: string, selector: string): string => {
   return at < 0 ? '' : sheet.slice(sheet.indexOf('{', at) + 1, sheet.indexOf('}', at))
 }
 /** A panel's rule: every one leaves the session sheet alone and weighs no more than its own selector. */
-const panel = (selector: string) => `:where(.sheet:not(:is(#sheet, #sidebar-sheet))) ${selector}`
+const panel = (selector: string) => `:where(.sheet:not(#sheet)) ${selector}`
 
 function inPanels(node: ReactNode) {
   return renderInBoard(<PanelProvider viewport={() => ({ w: 2560, h: 1440 })}>{node}</PanelProvider>, board())
@@ -86,9 +86,7 @@ test('a wide panel keeps one column under its head, over upstream’s two; the s
   for (const s of selectors)
     expect([
       s,
-      s.startsWith(':where(.sheet:not(:is(#sheet, #sidebar-sheet))) ') ||
-        s.startsWith('.sheet') ||
-        s === ':where(.sheet) *',
+      s.startsWith(':where(.sheet:not(#sheet)) ') || s.startsWith('.sheet') || s === ':where(.sheet) *',
     ]).toEqual([s, true])
   // linked after upstream's sheets and the board's own, before the Terminal style
   const page = readFileSync(join(web, 'index.html'), 'utf8')

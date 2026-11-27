@@ -5,7 +5,6 @@
 // edited keeps what is typed while the board moves on. A Claude session's auto-compact (#378):
 // its own limit and what its summary keeps, with the board's last /compact, shown while the card
 // is open or once anything is set (models/compact.ts).
-
 import { type KeyboardEvent, useState } from 'react'
 import type { Item } from '../../../../src/core/types.ts'
 import { useSessionActions } from '../../hooks/useSessionActions.ts'
@@ -23,7 +22,6 @@ import { doingLabel, type FieldEdit, type FieldScene, liveEdit, typing } from '.
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { RelationsRow } from '../helpers/RelationsRow.tsx'
 import { type ScheduleActions, ScheduleRow } from './ScheduleRow.tsx'
-import { useSheetId } from './sheet-ids.ts'
 
 export interface SheetCardProps {
   item: Item
@@ -240,7 +238,6 @@ interface CardFieldProps {
  * text: a line break pasted in is a space.
  */
 function CardField({ item, field, saved, placeholder, disabled }: CardFieldProps) {
-  const id = useSheetId()
   const t = useT()
   const { toast } = useBoardContext()
   const actions = useSessionActions()
@@ -273,7 +270,7 @@ function CardField({ item, field, saved, placeholder, disabled }: CardFieldProps
   return (
     <textarea
       className="row-value"
-      id={id(field)}
+      id={field}
       rows={1}
       value={shown}
       title={shown || undefined}

@@ -29,7 +29,6 @@ import { board, item, payload, renderInBoard } from './support/board.tsx'
 import { CATEGORIES } from './support/board-scene.tsx'
 import { byClass, byId, canonical, findAll, hasClass, type Node } from './support/markup.ts'
 import { composerOf } from './support/sheet-scene.tsx'
-import { foregroundSheetCss } from './support/stylesheets.ts'
 
 const t = translator('en')
 
@@ -336,9 +335,10 @@ describe('a flow outside the sheet asking for its fold', () => {
 })
 
 describe('what the stylesheet does with the folded states', () => {
-  const css = foregroundSheetCss(
-    readFileSync(join(import.meta.dir, '..', '..', 'web', 'styles', 'sheet-compact.css'), 'utf8'),
-  ).replace(/\/\*[\s\S]*?\*\//g, '')
+  const css = readFileSync(join(import.meta.dir, '..', '..', 'web', 'styles', 'sheet-compact.css'), 'utf8').replace(
+    /\/\*[\s\S]*?\*\//g,
+    '',
+  )
   /** The declarations of the rule whose selector is exactly `selector`. */
   const rule = (selector: string): string => {
     const at = css.indexOf(`${selector} {`)

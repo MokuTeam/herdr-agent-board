@@ -238,17 +238,17 @@ button.link-line:focus-visible, .link-line > summary:focus-visible { outline: 2p
 /* ---------------------------------------------------------------- layouts */
 /* The card's fields and the helpers give way before the conversation does: it keeps a third of
    the sheet (they scroll instead). */
-:is(#sheet, #sidebar-sheet) .sheet-body { min-height: max(96px, min(36cqh, 280px)); }
+#sheet .sheet-body { min-height: max(96px, min(36cqh, 280px)); }
 /* Side by side (a wide, low sheet): the helpers go above the conversation, beside the card. */
 @container sheet (min-width: 680px) and (min-aspect-ratio: 5 / 4) {
-  :is(#sheet, #sidebar-sheet) .sheet-inner { grid-template-rows: auto auto auto minmax(0, 1fr) auto; }
-  :is(#sheet, #sidebar-sheet) .sheet-card { grid-row: 2 / 6; }
-  :is(#sheet, #sidebar-sheet) .sheet-helpers { grid-column: 2; grid-row: 3; padding-left: 8px; }
-  :is(#sheet, #sidebar-sheet) .sheet-body { grid-row: 4; min-height: 0; }
-  :is(#sheet, #sidebar-sheet) .composer { grid-row: 5; }
+  #sheet .sheet-inner { grid-template-rows: auto auto auto minmax(0, 1fr) auto; }
+  #sheet .sheet-card { grid-row: 2 / 6; }
+  #sheet .sheet-helpers { grid-column: 2; grid-row: 3; padding-left: 8px; }
+  #sheet .sheet-body { grid-row: 4; min-height: 0; }
+  #sheet .composer { grid-row: 5; }
 }
 @media (max-width: 760px) {
-  :is(#sheet, #sidebar-sheet) .sheet-helpers { max-height: 24vh; padding: 0 16px 8px; }
+  #sheet .sheet-helpers { max-height: 24vh; padding: 0 16px 8px; }
   .helper-row { min-height: 48px; }
   .helpers .helper-thread { padding: 12px 12px 20px; }
 }

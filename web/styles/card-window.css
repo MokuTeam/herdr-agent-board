@@ -24,6 +24,7 @@
   outline: none;
   box-shadow: 0 0 0 1px var(--separator), 0 16px 54px rgba(0, 0, 0, .34);
 }
+#sheet[data-dock="modal"] { z-index: 62; }
 .sheet-tools [data-card-window] svg,
 .term-head [data-card-window] svg { width: 20px; height: 20px; }
 
@@ -43,4 +44,13 @@
   height: var(--term-vh, 100dvh);
   border-radius: 0;
   pointer-events: auto;
+}
+
+/* Keep the rail accessible beside a left-docked tool, and the bottom schedule between the docks. */
+:is(#threads-sheet, #team-sheet, #sched-sheet)[data-dock="left"] {
+  translate: var(--rail-w, 0px) 0;
+}
+#sched-sheet[data-dock="bottom"] {
+  translate: var(--dialog-left) 0;
+  width: calc(100vw - var(--dialog-left) - var(--card-right)) !important;
 }

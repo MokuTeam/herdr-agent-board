@@ -347,8 +347,3 @@ export function styledBy(el: Element, name: string, tree: Tree): boolean {
   pageReads ??= attributeReads(pageStyleRules())
   return pageReads.some(read => read.attr.name === name && selectorCould(read.upTo, el, tree))
 }
-
-/** Focus the selector comparison on the original sheet while both IDs have the same specificity. */
-export function foregroundSheetCss(css: string): string {
-  return css.replace(/:is\(#([\w-]+), #sidebar-\1\)/g, '#$1')
-}

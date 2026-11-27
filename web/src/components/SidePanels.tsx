@@ -1,4 +1,4 @@
-// The side panels in their shared place: the session sheet, the categories,
+// The side panels, one open at a time in their shared place: the session sheet, the categories,
 // the schedule, the archive and, with more than one Claude profile folder found, the profiles; sleep
 // and wake while the payload carries its state line; the phones while the remote mode is on;
 // MokuPilot always; tasks while the board has them on (#202); the calendar while it is on (#328); Team while
@@ -7,14 +7,11 @@
 // the board seen from another device. A session sheet that fails to draw says so on its own and leaves the
 // board; opening another session tries again.
 import type { Archive } from '../hooks/useArchive.ts'
-import { useMediaQuery } from '../hooks/useMediaQuery.ts'
-import { PHONE_QUERY } from '../models/panel-motion.ts'
 import { offersProfiles } from '../models/profiles.ts'
 import { remotePage } from '../models/remote-page.ts'
 import { offersTeam } from '../models/team.ts'
 import { isWakeView } from '../models/wake.ts'
-import { BoardContext, useBoardContext } from '../state/BoardProvider.tsx'
-import type { SheetSlot } from '../state/board-ui.ts'
+import { useBoardContext } from '../state/BoardProvider.tsx'
 import { AccessPanel, type AccessPanelProps } from './access/AccessPanel.tsx'
 import { ArchivePanel } from './archive/ArchivePanel.tsx'
 import { BackupPanel, type BackupPanelProps } from './backup/BackupPanel.tsx'
@@ -32,7 +29,6 @@ import { ProfilesPanel, type ProfilesPanelProps } from './profiles/ProfilesPanel
 import { SchedulePanel, type SchedulePanelProps } from './schedule/SchedulePanel.tsx'
 import { SettingsPanel, type SettingsPanelProps } from './settings/SettingsPanel.tsx'
 import { Sheet, type SheetSlots } from './sheet/Sheet.tsx'
-import { SheetIds } from './sheet/sheet-ids.ts'
 import { SpendPanel, type SpendPanelProps } from './spend/SpendPanel.tsx'
 import { TeamPanel, type TeamPanelProps } from './team/TeamPanel.tsx'
 import { ThreadsPanel, type ThreadsPanelProps } from './threads/ThreadsPanel.tsx'
@@ -120,11 +116,12 @@ export function SidePanels({
   devices,
   settings,
 }: SidePanelsProps) {
-  const { data } = useBoardContext()
+  const { data, ui, dispatch } = useBoardContext()
   return (
     <>
-      <SessionSheet slot={0} sheet={sheet} />
-      <SessionSheet slot={1} sheet={sheet} />
+      <ErrorBoundary scope="panel" resetKey={ui.open} onClose={() => dispatch({ type: 'open', key: null })}>
+        <Sheet {...sheet} />
+      </ErrorBoundary>
       <CategoriesPanel {...categories} />
       <SchedulePanel {...schedule} />
       {archive && <ArchivePanel archive={archive} />}
@@ -149,36 +146,5 @@ export function SidePanels({
       {devices && <DevicesPanel {...devices} />}
       {settings && <SettingsPanel {...settings} />}
     </>
-  )
-}
-
-/** Keep a docked sheet's component state while the foreground sheet reads a different session. */
-function SessionSheet({ slot, sheet }: { slot: SheetSlot; sheet: SheetSlots | undefined }) {
-  const board = useBoardContext()
-  const phone = useMediaQuery(PHONE_QUERY)
-  const { ui, dispatch } = board
-  const foreground = (ui.sheetSlot ?? 0) === slot
-  const side = foreground ? undefined : ui.sidebarSheet
-  if (slot === 1 && ui.sheetSlot === undefined) return null
-  const open = foreground ? ui.open : phone ? null : (side?.key ?? null)
-  const close = () => dispatch({ type: 'closeSheet', slot })
-  const localBoard = {
-    ...board,
-    ui: foreground ? ui : { ...ui, open, opened: side?.opened ?? ui.opened, compose: side?.compose ?? false },
-  }
-  return (
-    <BoardContext.Provider value={localBoard}>
-      <SheetIds.Provider value={foreground ? '' : 'sidebar-'}>
-        <ErrorBoundary scope="panel" resetKey={open} onClose={close}>
-          <Sheet
-            {...sheet}
-            foreground={foreground}
-            forcePanel={foreground ? ui.forcePanel : side?.forcePanel}
-            onShowModal={foreground ? () => dispatch({ type: 'showSessionDialog' }) : undefined}
-            onClose={close}
-          />
-        </ErrorBoundary>
-      </SheetIds.Provider>
-    </BoardContext.Provider>
   )
 }

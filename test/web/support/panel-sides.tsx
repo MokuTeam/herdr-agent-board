@@ -304,7 +304,11 @@ export async function newSide(options: SideOptions): Promise<ReactSide> {
   const inI18n = (node: ReactNode) => first(reactMarkup(<I18nProvider lang={lang}>{node}</I18nProvider>))
   const views = options.ids.map(id => {
     const kind = KINDS[id] ?? 'categories'
-    const motion = new PanelMotion(place, kind === 'session')
+    const motion = new PanelMotion(
+      place,
+      kind === 'session',
+      id === 'team-sheet' ? 'team' : id === 'threads-sheet' ? 'threads' : id === 'sched-sheet' ? 'schedule' : undefined,
+    )
     motion.onClose = () => closes.push(id)
     const draw = () => {
       const { shown, chrome, over } = motion.state.get()

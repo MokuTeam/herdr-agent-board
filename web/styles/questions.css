@@ -192,9 +192,9 @@ button.qa-opt:active:not(:disabled) { background: var(--fill); }
 
 /* ---------------------------------------------------------------- narrow windows */
 @media (max-width: 760px) {
-  :is(#sheet, #sidebar-sheet) .sheet-question:has(.qa) { max-height: 56vh; }
-  :is(#sheet, #sidebar-sheet) .asked.qa { padding: 10px; font-size: 13.5px; }
-  :is(#sheet, #sidebar-sheet) .asked.qa > b { display: block; margin-bottom: -4px; }
+  #sheet .sheet-question:has(.qa) { max-height: 56vh; }
+  #sheet .asked.qa { padding: 10px; font-size: 13.5px; }
+  #sheet .asked.qa > b { display: block; margin-bottom: -4px; }
   .qa-opt { min-height: 48px; }
   .qa-send { min-height: 36px; }
 }

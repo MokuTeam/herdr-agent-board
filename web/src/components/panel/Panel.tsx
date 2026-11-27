@@ -2,11 +2,10 @@
 // aside with a grip, the head and the panel's content, and the edges that resize it. Where it sits,
 // how it moves and which panels can share the screen are the shared place's (components/panel/place.ts
 // and motion.ts); `open` asks for it, `onClose` hears when it closed itself or gave way to another.
-import { type ReactNode, type Ref, useLayoutEffect, useState } from 'react'
+import { type ReactNode, type Ref, useLayoutEffect } from 'react'
 import { useCardWindow } from '../../hooks/useCardWindow.ts'
 import type { DropHandlers } from '../../hooks/useFileDrop.ts'
 import { usePanel } from '../../hooks/usePanel.ts'
-import { usePanelPlace } from '../../hooks/usePanelLayout.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import type { CardWindowKind } from '../../models/card-window.ts'
 import type { Edge } from '../../models/panel-layout.ts'
@@ -73,7 +72,6 @@ const KINDS: Record<PanelKind, { label: string; closeId?: string }> = {
 
 interface ShellProps {
   id: string
-  sessionKey?: string | undefined
   kind: PanelKind
   /** Back control left of the title (#679). */
   back?: PanelBack | undefined
@@ -97,44 +95,28 @@ interface ShellProps {
 export interface PanelProps extends ShellProps {
   open: boolean
   cardWindow?: CardWindowKind
-  forcePanel?: boolean | undefined
-  onShowModal?: (() => void) | undefined
   onClose(): void
   /** The element the panel is about (the session's card): kept in its place on screen while the board makes room. */
   about?: () => Element | null
 }
 
-export function Panel({ open, onClose, about, cardWindow, forcePanel, onShowModal, ...shell }: PanelProps) {
-  const place = usePanelPlace()
+export function Panel({ open, onClose, about, cardWindow, ...shell }: PanelProps) {
   const choice = useCardWindow(cardWindow)
-  const [opening, setOpening] = useState({ open, alongside: open && !!place.centeredPanel() })
-  if (opening.open !== open) setOpening({ open, alongside: open && !!place.centeredPanel() })
-  const modal = !forcePanel && !opening.alongside && choice?.view === 'modal'
-  const panel = usePanel({ open, modal, chat: shell.kind === 'session', onClose, about })
+  const modal = choice?.view === 'modal'
+  const tool = shell.kind === 'team' || shell.kind === 'threads' || shell.kind === 'schedule' ? shell.kind : undefined
+  const panel = usePanel({ open, modal, chat: shell.kind === 'session', tool, onClose, about })
   const { ref, shown } = panel
   useLayoutEffect(() => {
     if (open && modal && shown && !ref.current?.contains(document.activeElement))
       ref.current?.focus({ preventScroll: true })
   }, [open, modal, shown, ref])
-  const toggle = () => {
-    if (!modal && place.centeredPanel()) return
-    if (!modal) {
-      setOpening({ open, alongside: false })
-      if (forcePanel) onShowModal?.()
-      if (choice?.view === 'modal') return
-    }
-    choice?.toggle?.()
-  }
-
   return (
     <PanelView
       {...shell}
       tools={
         <>
           {shell.tools}
-          {(open || panel.shown) && choice?.toggle && (
-            <CardWindowSwitch view={modal ? 'modal' : 'panel'} onToggle={toggle} />
-          )}
+          {(open || panel.shown) && choice?.toggle && <CardWindowSwitch view={choice.view} onToggle={choice.toggle} />}
         </>
       }
       modal={modal}
@@ -166,7 +148,6 @@ export interface PanelViewProps extends ShellProps {
 export function PanelView(props: PanelViewProps) {
   const {
     id,
-    sessionKey,
     kind,
     back,
     title,
@@ -190,7 +171,6 @@ export function PanelView(props: PanelViewProps) {
     <aside
       className={classNames('sheet', shown && 'open', over && 'over', className)}
       id={id}
-      data-session-key={sessionKey}
       aria-hidden={!shown}
       aria-label={t(label)}
       role={modal ? 'dialog' : undefined}
@@ -209,7 +189,7 @@ export function PanelView(props: PanelViewProps) {
           glyph={chrome.glyph}
           menuOpen={menuOpen}
           hidePlace={modal}
-          closeId={kind === 'session' && id !== 'sheet' ? 'sidebar-sheet-close' : closeId}
+          closeId={closeId}
           onPlace={onPlace}
           onClose={onClose}
         />

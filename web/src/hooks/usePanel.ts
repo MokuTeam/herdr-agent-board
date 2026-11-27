@@ -5,6 +5,7 @@
 // makes room. Both are read when the panel moves, from the latest render.
 import { type RefObject, useLayoutEffect, useRef, useState } from 'react'
 import { PanelMotion } from '../components/panel/motion.ts'
+import type { PanelTool } from '../components/panel/place.ts'
 import type { PanelChrome } from '../models/panel-motion.ts'
 import { useStore } from '../state/store.ts'
 import { useLatest } from './useLatest.ts'
@@ -14,6 +15,7 @@ export interface PanelOptions {
   open: boolean
   modal?: boolean
   chat?: boolean
+  tool?: PanelTool | undefined
   onClose(): void
   about?: (() => Element | null) | undefined
 }
@@ -30,12 +32,12 @@ export interface PanelControls {
   close(): void
 }
 
-export function usePanel({ open, modal = false, chat = false, onClose, about }: PanelOptions): PanelControls {
+export function usePanel({ open, modal = false, chat = false, tool, onClose, about }: PanelOptions): PanelControls {
   const place = usePanelPlace()
   // Updated in this component's layout effects, before the one below that opens or closes it.
   const latest = useLatest({ onClose, about })
   const [motion] = useState(() => {
-    const m = new PanelMotion(place, chat)
+    const m = new PanelMotion(place, chat, tool)
     m.onClose = () => latest.current.onClose()
     m.about = () => latest.current.about?.() ?? null
     return m

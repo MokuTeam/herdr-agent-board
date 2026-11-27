@@ -198,7 +198,7 @@ describe('Card checklist rendering (#637)', () => {
 
     expect(cardsCss).toContain('.card-todo-track')
     expect(cardsCss).toContain('.card-todo-fill { transition: none; }')
-    expect(headCss).toContain(':is(#sheet, #sidebar-sheet) .sheet-card .checklist-bar-fill { transition: none; }')
+    expect(headCss).toContain('#sheet .sheet-card .checklist-bar-fill { transition: none; }')
     expect(termCss).toContain(':root[data-look="terminal"] .card-todo-track')
   })
 })

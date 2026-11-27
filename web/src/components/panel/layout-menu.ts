@@ -8,6 +8,7 @@ import { Spring } from '../../models/spring.ts'
 
 /** The panel whose button opened the menu: what a pick does to it. */
 export interface MenuOwner {
+  readonly layout?: PanelLayout
   setDock(dock: Dock): void
   resetSize(): void
 }
@@ -88,7 +89,7 @@ export class LayoutMenuMotion {
     if (!el) return
     this.owner = owner
     this.button = button
-    const dock = this.layout().dock
+    const dock = (owner.layout ?? this.layout()).dock
     this.checked = dock
     this.view({ expanded: owner, checked: dock })
     el.hidden = false

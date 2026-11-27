@@ -235,3 +235,27 @@ test('Team and other side panels replace each other while the separate session d
     side.dispose()
   }
 })
+
+test('a centered card leaves Team, Threads and the bottom schedule in their own saved places', async () => {
+  const ids = ['team-sheet', 'threads-sheet', 'sched-sheet', 'sheet']
+  const side = await newSide({ viewport: { w: 1900, h: 1000 }, ids })
+  try {
+    side.panel('sched-sheet').setDock('bottom')
+    side.panel('threads-sheet').setDock('left')
+    for (const id of ids.slice(0, 3)) await side.open(id)
+    const card = side.panel('sheet')
+    card.setModal(true)
+    await side.open('sheet')
+    expect(ids.map(id => side.panel(id).isOpen)).toEqual([true, true, true, true])
+    expect(ids.slice(0, 3).map(id => side.panel(id).mode)).toEqual(['right', 'left', 'bottom'])
+    expect(side.shared.room.bottom.target).toBeGreaterThan(0)
+    expect(side.world.storage.get('board.panel.schedule')).toContain('bottom')
+    expect(side.world.storage.get('board.panel.threads')).toContain('left')
+    expect(side.world.storage.get('board.panel')).toBeUndefined()
+    card.close()
+    expect(ids.slice(0, 3).every(id => side.panel(id).isOpen)).toBe(true)
+  } finally {
+    await side.world.settle()
+    side.dispose()
+  }
+})

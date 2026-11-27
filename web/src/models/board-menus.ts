@@ -216,13 +216,11 @@ export function menuFor(target: unknown, at: Point, board: BoardMenuDeps): Board
   }
   if (el.closest('.ql, .launch, .limits-pop, .rename, .menu')) return null
   // The head's own menu is the card's; its card fields keep the sheet's (none), as under the head.
-  const head = el.closest('#sheet .sheet-head, #sidebar-sheet .sheet-head')
+  const head = el.closest('#sheet .sheet-head')
   if (head && !el.closest('.sheet-card')) {
-    const key = head.closest<HTMLElement>('[data-session-key]')?.dataset.sessionKey ?? board.state().open
+    const key = board.state().open
     const it = key ? board.item(key) : undefined
-    return key && it
-      ? forCard(board, key, it, head.querySelector('#sheet-name, #sidebar-sheet-name') ?? head, at)
-      : null
+    return key && it ? forCard(board, key, it, head.querySelector('#sheet-name') ?? head, at) : null
   }
   if (el.closest('.sheet')) return null
   const card = el.closest<HTMLElement>('.card[data-key]')
@@ -498,7 +496,7 @@ export function sheetMoreMenu(
           label: (el.textContent ?? '').trim(),
           disabled: el.disabled,
           reason: el.disabled
-            ? !canMutate && HERDR_MORE.includes(el.id.replace(/^sidebar-/, ''))
+            ? !canMutate && HERDR_MORE.includes(el.id)
               ? t('mobile.readOnly')
               : el.title || t('mobile.readOnly')
             : '',

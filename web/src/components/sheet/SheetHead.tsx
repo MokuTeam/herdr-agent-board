@@ -6,7 +6,6 @@
 // workspace there on a click, where the page can), and the card's fields that say something. The fold
 // is open or folded as the sheet's density says (#345, models/sheet-density.ts). Before a session was
 // ever open, the empty places of the page.
-
 import { Fragment, type KeyboardEvent, type MouseEvent, useRef } from 'react'
 import { bgTaskActive } from '../../../../src/core/bg-task.ts'
 import type { SessionSpend } from '../../../../src/core/spend.ts'
@@ -27,7 +26,6 @@ import { ChevronGlyph, MoonGlyph, StarGlyph, UpDownGlyph, WriteGlyph } from '../
 import { SheetThreads } from '../threads/bits.tsx'
 import type { ScheduleActions } from './ScheduleRow.tsx'
 import { SheetCard } from './SheetCard.tsx'
-import { useSheetId } from './sheet-ids.ts'
 
 /** The card's part of the head: its pills' menus and its fields. */
 export interface HeadCard {
@@ -86,7 +84,6 @@ function Fact({
   part: string | WorkspaceFact
   onRenameWorkspace: ((name: HTMLElement) => void) | undefined
 }) {
-  const id = useSheetId()
   const t = useT()
   if (typeof part === 'string') return <span>{part}</span>
   const { before, name, after } = part
@@ -97,7 +94,7 @@ function Fact({
       <button
         type="button"
         className="sheet-workspace"
-        id={id('sheet-workspace')}
+        id="sheet-workspace"
         title={t('menu.renameWorkspace')}
         onClick={e => onRenameWorkspace(e.currentTarget)}
       >
@@ -126,7 +123,6 @@ export function SheetHead({
   card = NO_CARD,
   fold: shape = WHOLE,
 }: SheetHeadProps) {
-  const id = useSheetId()
   const t = useT()
   const { data, ui, now } = useBoardContext()
   const details = useRef<HTMLDivElement>(null)
@@ -142,10 +138,10 @@ export function SheetHead({
   if (!item)
     return (
       <>
-        <span className="status-pill" id={id('sheet-status')} />
+        <span className="status-pill" id="sheet-status" />
         {/* biome-ignore lint/a11y/noNoninteractiveTabindex: the name is where it is renamed, as before */}
-        <h2 id={id('sheet-name')} tabIndex={0} {...rename} />
-        <p className="sheet-meta" id={id('sheet-meta')} />
+        <h2 id="sheet-name" tabIndex={0} {...rename} />
+        <p className="sheet-meta" id="sheet-meta" />
       </>
     )
   const lane = categoryInfo(data?.categories ?? [], catOf(ui.moves, item))
@@ -187,14 +183,14 @@ export function SheetHead({
       <div className="sheet-headline">
         <div className="sheet-pills">
           {head.pill.kind === 'missing' ? (
-            <span className="status-pill" id={id('sheet-status')}>
+            <span className="status-pill" id="sheet-status">
               {t('detail.missingShort')}
             </span>
           ) : (
             <button
               type="button"
               className="status-pill"
-              id={id('sheet-status')}
+              id="sheet-status"
               style={{ '--c': color }}
               title={t('menu.status')}
               aria-haspopup="menu"
@@ -219,7 +215,7 @@ export function SheetHead({
           <button
             type="button"
             className="lane-pill"
-            id={id('sheet-lane')}
+            id="sheet-lane"
             style={{ '--lane': lane.color }}
             title={t('menu.category')}
             aria-haspopup="menu"
@@ -233,9 +229,9 @@ export function SheetHead({
           <button
             type="button"
             className="sheet-properties-toggle"
-            id={id('sheet-properties-toggle')}
+            id="sheet-properties-toggle"
             aria-expanded={card.open}
-            aria-controls={id('sheet-card')}
+            aria-controls="sheet-card"
             title={t('sheet.properties')}
             aria-label={t('sheet.properties')}
             onClick={() => card.onToggle?.()}
@@ -245,7 +241,7 @@ export function SheetHead({
           <button
             type="button"
             className="sheet-favorite"
-            id={id('sheet-favorite')}
+            id="sheet-favorite"
             aria-pressed={!!item.favorite}
             title={t(item.favorite ? 'menu.unfavorite' : 'menu.favorite')}
             aria-label={t(item.favorite ? 'menu.unfavorite' : 'menu.favorite')}
@@ -256,14 +252,14 @@ export function SheetHead({
           </button>
         </div>
         {/* biome-ignore lint/a11y/noNoninteractiveTabindex: the name is where it is renamed, as before */}
-        <h2 id={id('sheet-name')} tabIndex={0} title={head.name} {...rename}>
+        <h2 id="sheet-name" tabIndex={0} title={head.name} {...rename}>
           {head.name}
         </h2>
         {helpers && (
           <button
             type="button"
             className="sheet-helpers-chip"
-            id={id('sheet-helpers-chip')}
+            id="sheet-helpers-chip"
             title={helpers.label}
             aria-label={helpers.label}
             onClick={e => helpers.onOpen(e.currentTarget)}
@@ -278,9 +274,9 @@ export function SheetHead({
         <button
           type="button"
           className="sheet-compact-toggle"
-          id={id('sheet-compact-toggle')}
+          id="sheet-compact-toggle"
           aria-expanded={!shape.compact}
-          aria-controls={['sheet-details', 'sheet-helpers', 'sheet-actions'].map(id).join(' ')}
+          aria-controls="sheet-details sheet-helpers sheet-actions"
           title={t(shape.compact ? 'sheet.detailsShow' : 'sheet.detailsHide')}
           aria-label={t('sheet.details')}
           onClick={() => shape.onToggle?.()}
@@ -288,14 +284,9 @@ export function SheetHead({
           <ChevronGlyph />
         </button>
       </div>
-      <div
-        className="sheet-details"
-        id={id('sheet-details')}
-        ref={details}
-        data-folded={shape.compact ? '' : undefined}
-      >
+      <div className="sheet-details" id="sheet-details" ref={details} data-folded={shape.compact ? '' : undefined}>
         <div className="sheet-details-inner">
-          <p className="sheet-meta" id={id('sheet-meta')} title={head.metaTitle}>
+          <p className="sheet-meta" id="sheet-meta" title={head.metaTitle}>
             {node && (
               <span className="sheet-device">
                 <DeviceFacts node={node} />
@@ -315,7 +306,7 @@ export function SheetHead({
           {spend && spend.total.total > 0 && (
             <p
               className="sheet-spend"
-              id={id('sheet-spend')}
+              id="sheet-spend"
               title={spendSheetTooltip(spend, localToday(data?.time?.date), t)}
             >
               {spendSheetLine(spend, localToday(data?.time?.date), t)}
@@ -325,14 +316,14 @@ export function SheetHead({
             type="button"
             className="sheet-fold"
             aria-expanded={card.open}
-            aria-controls={id('sheet-card')}
+            aria-controls="sheet-card"
             onClick={() => card.onToggle?.()}
           >
             <span className="sheet-fold-label">{fold.label}</span>
             <span className="sheet-fold-text">{fold.text}</span>
             <ChevronGlyph />
           </button>
-          <div className="sheet-card" id={id('sheet-card')} hidden={!fields} data-folded={card.open ? undefined : ''}>
+          <div className="sheet-card" id="sheet-card" hidden={!fields} data-folded={card.open ? undefined : ''}>
             {/* Each session's card fields start afresh: nothing typed for one shows in another's. */}
             <SheetCard
               key={item.key}

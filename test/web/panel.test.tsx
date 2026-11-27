@@ -177,11 +177,12 @@ test('a panel’s own tools come before the place button', () => {
   ).toEqual(['own', 'data-layout', 'sheet-close'])
 })
 
-test('a remembered card view follows the master flag and leaves the shared panel placement alone', () => {
+test('a single remembered card view applies to master, ordinary Claude and pi sessions', () => {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
   const saved = new Map([
     ['board.panel', '{"dock":"left"}'],
     ['board.cardWindow.session', 'modal'],
+    ['board.cardWindow.master', 'panel'],
     ['board.cardWindow.thread', 'invalid'],
   ])
   Object.defineProperty(globalThis, 'localStorage', {
@@ -210,7 +211,7 @@ test('a remembered card view follows the master flag and leaves the shared panel
   }
   try {
     const master = view(cards[0].key)
-    expect(asideOf(master, 'sheet').attrs.get('data-dock')).toBe('left')
+    expect(asideOf(master, 'sheet').attrs.get('data-dock')).toBe('modal')
     const ordinary = view(cards[1].key)
     expect(asideOf(ordinary, 'sheet').attrs.get('data-dock')).toBe('modal')
     expect(asideOf(ordinary, 'sheet').attrs.get('role')).toBe('dialog')
@@ -221,9 +222,12 @@ test('a remembered card view follows the master flag and leaves the shared panel
     saved.set('board.cardWindow.master', 'modal')
     saved.set('board.cardWindow.session', 'panel')
     saved.set('board.cardWindow.thread', 'modal')
-    expect(asideOf(view(cards[0].key), 'sheet').attrs.get('data-dock')).toBe('modal')
+    expect(asideOf(view(cards[0].key), 'sheet').attrs.get('data-dock')).toBe('left')
     expect(asideOf(view(cards[1].key), 'sheet').attrs.get('data-dock')).toBe('left')
     expect(asideOf(view(cards[1].key), 'threads-sheet').attrs.get('data-dock')).toBe('modal')
+    saved.delete('board.cardWindow.session')
+    expect(asideOf(view(cards[0].key), 'sheet').attrs.get('data-dock')).toBe('modal')
+    expect(asideOf(view(cards[1].key), 'sheet').attrs.get('data-dock')).toBe('modal')
   } finally {
     if (previous) Object.defineProperty(globalThis, 'localStorage', previous)
     else Reflect.deleteProperty(globalThis, 'localStorage')

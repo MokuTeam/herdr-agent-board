@@ -389,8 +389,7 @@ export function App() {
     panelOpen: () => !!panels.place.openPanel(),
     closePanel: () => {
       if (backToSettings()) return
-      if (document.activeElement?.closest('.sheet[data-dock="modal"]')) panels.place.centeredPanel()?.close()
-      else panels.place.sidebarPanel()?.close()
+      ;(panels.place.focusedPanel(document.activeElement) ?? panels.place.sidebarPanel())?.close()
     },
     rename: rename.start,
     sessionPanelOpen: () => !!panels.place.openPanel(),

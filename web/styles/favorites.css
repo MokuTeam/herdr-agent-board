@@ -4,7 +4,7 @@
 .card-top .favorite { display: flex; flex: none; color: var(--orange); }
 .card-top .favorite svg { width: 12px; height: 12px; fill: currentColor; stroke-width: 1.2; stroke-linejoin: round; }
 
-:is(#sheet, #sidebar-sheet) .sheet-favorite {
+#sheet .sheet-favorite {
   display: grid;
   place-items: center;
   width: 22px;
@@ -14,12 +14,12 @@
   background: none;
   color: var(--label-3);
 }
-:is(#sheet, #sidebar-sheet) .sheet-favorite svg { width: 14px; height: 14px; stroke-linejoin: round; transition: fill 150ms ease; }
-:is(#sheet, #sidebar-sheet) .sheet-favorite:not(:disabled):hover { background: var(--fill-2); color: var(--label-2); }
-:is(#sheet, #sidebar-sheet) .sheet-favorite[aria-pressed="true"] { color: var(--orange); }
-:is(#sheet, #sidebar-sheet) .sheet-favorite[aria-pressed="true"] svg { fill: currentColor; }
-:is(#sheet, #sidebar-sheet) .sheet-favorite:disabled { opacity: 0.5; }
+#sheet .sheet-favorite svg { width: 14px; height: 14px; stroke-linejoin: round; transition: fill 150ms ease; }
+#sheet .sheet-favorite:not(:disabled):hover { background: var(--fill-2); color: var(--label-2); }
+#sheet .sheet-favorite[aria-pressed="true"] { color: var(--orange); }
+#sheet .sheet-favorite[aria-pressed="true"] svg { fill: currentColor; }
+#sheet .sheet-favorite:disabled { opacity: 0.5; }
 
 @media (max-width: 760px) {
-  :is(#sheet, #sidebar-sheet) .sheet-favorite { width: 26px; height: 26px; }
+  #sheet .sheet-favorite { width: 26px; height: 26px; }
 }
