@@ -2,6 +2,10 @@
 // file (#371, services/team-files.ts): letters, digits, dot and dash, so it is safe on disk and in
 // a URL on every platform.
 
+export const TEAM_FILE_PATH = /^\/api\/team\/files\/([^/]+)\/([^/]+)\/([^/]+)\/([^/]+)$/
+
+export const MAX_UPLOAD = 30 << 20
+
 /** A file name that is safe on disk and in a URL: letters, digits, dot and dash. */
 export function safeName(name: unknown): string {
   const clean = (

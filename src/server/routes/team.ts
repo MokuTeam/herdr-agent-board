@@ -40,6 +40,7 @@
 // channel), wait for the passkey as the switches do.
 
 import { readFileSync, realpathSync, statSync } from 'node:fs'
+import { realpath } from 'node:fs/promises'
 import { isAbsolute, join } from 'node:path'
 import { writeCard } from '../../adapters/cards.ts'
 import { editTeamServices } from '../../adapters/config-file.ts'
@@ -77,13 +78,13 @@ import { changeServices, type ServiceAgent, serviceAgents } from '../../core/tea
 import { isThreadKey } from '../../core/team-unread.ts'
 import { MAX_MEMBERS } from '../../core/team-wire.ts'
 import type { Config } from '../../core/types.ts'
-import { safeName } from '../../core/upload-name.ts'
+import { safeName, TEAM_FILE_PATH } from '../../core/upload-name.ts'
 import type { TeamConfirm } from '../../services/team-confirm.ts'
 import type { PostFile, PostTarget, TeamService } from '../../services/team-hub.ts'
 import type { TeamRouter } from '../../services/team-router.ts'
 import type { WorkHub } from '../../services/work-hub.ts'
 import { json, type Route } from '../http.ts'
-import { MAX_UPLOAD } from '../uploads.ts'
+import { MAX_UPLOAD, receiveUpload, uploadResponse } from '../uploads.ts'
 import { describeThreadAction, performThreadAction } from './threads.ts'
 
 const isTarget = (v: unknown): v is string => v === TEAM || isPeerId(v)
@@ -742,12 +743,56 @@ export function teamRoutes(
         const thread = team.threads().find(t => t.key === key)
         // A topic that is a shared thread says so (#394), as its row in the list does.
         const shared = thread && work?.on() ? work.topics()[key] : undefined
-        if (thread)
-          return json(200, { thread: shared ? { ...thread, work: shared } : thread, lines: team.threadLines(key) })
+        if (thread) {
+          const lines = team.threadLines(key).map(line => {
+            const file = line.file
+            if (!ctx.relayFrom || !file?.url) return line
+            // The node has no copy of the master's uploads. Its Team relay serves this line's file.
+            const name = file.url.split('/').at(-1)
+            const url = `/api/team/files/${encodeURIComponent(scope)}/${encodeURIComponent(id)}/${encodeURIComponent(line.id)}/${name}`
+            return { ...line, file: { ...file, url } }
+          })
+          return json(200, { thread: shared ? { ...thread, work: shared } : thread, lines })
+        }
         // Nothing written in it yet, but an agent's draft waits there (#370): the draft, no thread.
         const drafts = team.threadLines(key).filter(l => l.dir === 'draft')
         if (!drafts.length) return json(404, { ok: false, error: 'thread' })
         return json(200, { thread: null, lines: drafts })
+      },
+    },
+    {
+      method: 'POST',
+      path: '/api/team/upload',
+      async handle(req, ctx) {
+        if (!team.view()) return undefined
+        const refused = ctx.refuse('board-header') ?? ctx.refuse('origin')
+        if (refused) return refused
+        let name: string
+        try {
+          name = decodeURIComponent(req.headers.get('x-filename') ?? 'file')
+        } catch {
+          return json(400, { ok: false, error: 'file_name' })
+        }
+        const upload = await receiveUpload(req, name, true)
+        return json(upload.ok ? 200 : 413, upload)
+      },
+    },
+    {
+      method: 'GET',
+      path: TEAM_FILE_PATH,
+      async handle(_req, ctx) {
+        if (!team.view()) return undefined
+        const [scope = '', id = '', message = '', name = ''] = ctx.params
+        const missing = () => json(404, { error: 'not found' })
+        if (!isTarget(scope) || !isThreadId(id) || !isMessageId(message)) return missing()
+        const file = team.threadLines(threadKey(scope, id)).find(line => line.id === message)?.file
+        if (!file?.url || !['ready', 'up', 'uploading'].includes(file.state)) return missing()
+        const saved = /^\/uploads\/(\d{4}-\d{2}-\d{2})\/([^/]+)$/.exec(file.url)
+        if (!saved || saved[2] !== encodeURIComponent(name)) return missing()
+        const upload = uploadFrom({ upload: `${saved[1]}/${name}` })
+        if (!upload) return missing()
+        const path = await realpath(upload.path).catch(() => null)
+        return path && uploadsCheck()(path) ? uploadResponse(path, name) : missing()
       },
     },
     {

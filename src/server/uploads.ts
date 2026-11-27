@@ -1,14 +1,14 @@
 // Files and screenshots sent to sessions from the board; the message carries their paths. They
 // live in uploads/<day>/ and go after keepUploadsDays.
+import { randomUUID } from 'node:crypto'
 import { mkdirSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { extname, join } from 'node:path'
 import { uploadsDir } from '../adapters/paths.ts'
 import { t } from '../core/lang.ts'
-import { safeName } from '../core/upload-name.ts'
+import { MAX_UPLOAD, safeName } from '../core/upload-name.ts'
 import { json, type Route } from './http.ts'
 
-export const MAX_UPLOAD = 30 << 20
 const IMAGE_TYPES: Record<string, string> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -17,7 +17,7 @@ const IMAGE_TYPES: Record<string, string> = {
   '.webp': 'image/webp',
 }
 
-export { safeName }
+export { MAX_UPLOAD, safeName }
 
 export type UploadResult =
   | { ok: true; path: string; name: string; size: number; url: string }
@@ -37,13 +37,13 @@ export function pruneUploads(days: number): void {
 }
 
 /** Stores the request's body as `<time>-<safe name>` under today's folder; over 30 MB is refused. */
-export async function receiveUpload(req: Request, name: string): Promise<UploadResult> {
+export async function receiveUpload(req: Request, name: string, unique = false): Promise<UploadResult> {
   const now = new Date()
   const day = now.toISOString().slice(0, 10)
   const stamp = now.toTimeString().slice(0, 8).replace(/:/g, '')
   const dir = join(uploadsDir(), day)
   mkdirSync(dir, { recursive: true })
-  const file = `${stamp}-${safeName(name)}`
+  const file = unique ? safeName(`${stamp}-${randomUUID()}-${safeName(name).slice(-70)}`) : `${stamp}-${safeName(name)}`
   const path = join(dir, file)
   // Held in memory (30 MB at most) and written once: a refused or broken upload leaves no file.
   const chunks: Uint8Array[] = []
@@ -86,19 +86,23 @@ export function uploadRoutes(): Route[] {
       async handle(_req, { params: [day = '', name = ''] }) {
         // Raster images show inline; anything else only downloads, so no uploaded page can run here.
         if (safeName(name) !== name) return json(404, { error: 'not found' })
-        const body = await readFile(join(uploadsDir(), day, name)).catch(() => null)
-        if (!body) return json(404, { error: 'not found' })
-        const type = IMAGE_TYPES[extname(name).toLowerCase()]
-        return new Response(body, {
-          headers: {
-            'content-type': type ?? 'application/octet-stream',
-            'content-disposition': type ? 'inline' : `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
-            'content-security-policy': "default-src 'none'",
-            'x-content-type-options': 'nosniff',
-            'cache-control': 'private, max-age=86400',
-          },
-        })
+        return uploadResponse(join(uploadsDir(), day, name), name)
       },
     },
   ]
+}
+
+export async function uploadResponse(path: string, name: string): Promise<Response> {
+  const body = await readFile(path).catch(() => null)
+  if (!body) return json(404, { error: 'not found' })
+  const type = IMAGE_TYPES[extname(name).toLowerCase()]
+  return new Response(body, {
+    headers: {
+      'content-type': type ?? 'application/octet-stream',
+      'content-disposition': type ? 'inline' : `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
+      'content-security-policy': "default-src 'none'",
+      'x-content-type-options': 'nosniff',
+      'cache-control': 'private, max-age=86400',
+    },
+  })
 }

@@ -1,5 +1,5 @@
 // Files on the board's local API (#371), against a hub in this process: the panel puts a file in
-// the uploads (/api/upload), its Send names it (`file: { upload }`) and the member gets it sealed
+// the uploads (/api/team/upload), its Send names it (`file: { upload }`) and the member gets it sealed
 // to their box; a session's post with a file (`file: { path }`) goes as its text would (#415), so
 // with the switches off it is held, and the thread list names the draft with its file; a name
 // outside the uploads is refused. The board runs in a sandbox.
@@ -59,7 +59,7 @@ afterAll(() => hub.stop())
 test("the panel's Send with a file from the uploads: anna gets it sealed to her box, and opens it", async () => {
   const shot = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4])
   const up = (await (
-    await fetch(`${url}/api/upload`, {
+    await fetch(`${url}/api/team/upload`, {
       method: 'POST',
       headers: { 'x-board': '1', 'x-filename': 'shot.png' },
       body: shot,

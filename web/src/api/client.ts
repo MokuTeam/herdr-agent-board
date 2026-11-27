@@ -219,6 +219,10 @@ async function sessionCommands(key: string, signal: AbortSignal): Promise<SlashC
  */
 async function upload(name: string, file: Blob, key?: string | null): Promise<string> {
   const url = key && parseNodeKey(key) ? `/api/upload?key=${encodeURIComponent(key)}` : '/api/upload'
+  return uploadTo(url, name, file)
+}
+
+async function uploadTo(url: string, name: string, file: Blob): Promise<string> {
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -239,7 +243,16 @@ export function pageLog(text: string): void {
   void postJson('/api/log', { text }).catch(() => {})
 }
 
-export const api = { board, get, post, session, sessionCommands, sessionMeter, upload }
+export const api = {
+  board,
+  get,
+  post,
+  session,
+  sessionCommands,
+  sessionMeter,
+  upload,
+  uploadTeam: (name: string, file: Blob) => uploadTo('/api/team/upload', name, file),
+}
 
 // ---------------------------------------------------------------- the archive
 

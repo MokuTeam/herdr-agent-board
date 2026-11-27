@@ -38,6 +38,9 @@
 import { keyedPath } from './node-proxy.ts'
 import { nodeKey, parseNodeKey } from './nodes.ts'
 import { hasUnprintable } from './team.ts'
+import { MAX_UPLOAD, TEAM_FILE_PATH } from './upload-name.ts'
+
+const TEAM_UPLOAD_PATH = '/api/team/upload'
 
 export type RelayMethod = 'GET' | 'POST'
 
@@ -95,6 +98,7 @@ export const RELAY_TABLE: readonly RelayEntry[] = [
   { group: 'settings', method: 'POST', path: /^\/api\/threads-settings$/ },
   { group: 'settings', method: 'POST', path: /^\/api\/categories$/ },
   // T4b (#786): Team, Devices, starts and moves.
+  { group: 'team', method: 'GET', path: TEAM_FILE_PATH, stream: true },
   { group: 'team', method: 'GET', path: /^\/api\/team(?:\/[^/]+)*$/ },
   { group: 'team', method: 'POST', path: /^\/api\/team(?:\/[^/]+)*$/ },
   { group: 'devices', method: 'GET', path: /^\/api\/nodes(?:\/(?:setup|relay\/setup|computer\/setup))?$/ },
@@ -342,6 +346,7 @@ export const RELAY_REQUEST_HEADERS: readonly string[] = [
   'accept',
   'last-event-id',
   'x-board',
+  'x-filename',
   // The MokuTab bridge's client line for the store's log (#860); never its token.
   'x-ns-store-client',
 ]
@@ -350,6 +355,7 @@ export const RELAY_REQUEST_HEADERS: readonly string[] = [
 export const RELAY_ANSWER_HEADERS: readonly string[] = [
   'content-type',
   'content-disposition',
+  'content-security-policy',
   'cache-control',
   'x-content-type-options',
   'retry-after',
@@ -364,6 +370,9 @@ export const IDEMPOTENCY_HEADER = 'idempotency-key'
 export const RELAY_INLINE_BYTES = 64 * 1024
 /** The largest request body the node takes (the master's routes take 192 KB). */
 export const RELAY_BODY_MAX = 1024 * 1024
+
+export const relayBodyMax = (method: string, raw: string): number =>
+  method === 'POST' && raw === TEAM_UPLOAD_PATH ? MAX_UPLOAD : RELAY_BODY_MAX
 /** The largest answer that is not a stream. */
 export const RELAY_ANSWER_MAX = 4 * 1024 * 1024
 /** The largest stream chunk, before base64. */

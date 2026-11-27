@@ -4,6 +4,7 @@
 // panel draws from them. The panel exists only on the local board's page and the owner's own phone
 // or login (#355), while the payload carries `teamRev` (config.json's `team` is on).
 import { mentionWord, publishedAliases } from '../../../src/core/team-directory.ts'
+import { TEAM_FILE_PATH } from '../../../src/core/upload-name.ts'
 
 export { mentionWord }
 
@@ -183,7 +184,8 @@ const isLineFile = (v: unknown): boolean =>
   typeof v.state === 'string' &&
   (v.name === undefined || typeof v.name === 'string') &&
   (v.size === undefined || typeof v.size === 'number') &&
-  (v.url === undefined || (typeof v.url === 'string' && v.url.startsWith('/uploads/'))) &&
+  (v.url === undefined ||
+    (typeof v.url === 'string' && (v.url.startsWith('/uploads/') || TEAM_FILE_PATH.test(v.url)))) &&
   (v.why === undefined || typeof v.why === 'string') &&
   (v.progress === undefined || typeof v.progress === 'number')
 
