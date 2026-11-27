@@ -33,11 +33,10 @@ import { storage } from '../../state/storage.ts'
 import { Store } from '../../state/store.ts'
 import { DockPreviewMotion } from './dock-preview.ts'
 import { LayoutMenuMotion, type MenuView } from './layout-menu.ts'
-import type { PanelKind } from './Panel.tsx'
 
 /** The viewer's layout in localStorage (format: panel-layout.ts serializeLayout). */
 export const LAYOUT_KEY = 'board.panel'
-export type PanelTool = Exclude<PanelKind, 'session'>
+export type PanelTool = 'team' | 'threads' | 'schedule'
 const toolKey = (tool: PanelTool) => `${LAYOUT_KEY}.${tool}`
 
 /** What the place needs of a panel. */
@@ -197,7 +196,7 @@ export class PanelPlace {
       const sameCenter = panel.modal && other.modal && !!panel.chat === !!other.chat
       const sameDock =
         !panel.modal && !other.modal && (panel.layout ?? this.layout).dock === (other.layout ?? this.layout).dock
-      if (sameCenter || sameDock || (this.isPhone() && !panel.modal && !other.modal)) other.close()
+      if (this.isPhone() || sameCenter || sameDock) other.close()
     }
   }
 

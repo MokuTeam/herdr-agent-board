@@ -54,12 +54,3 @@
   translate: var(--dialog-left) 0;
   width: calc(100vw - var(--dialog-left) - var(--card-right)) !important;
 }
-
-@media (max-width: 760px) {
-  #sheet[data-dock="modal"] {
-    top: 50%;
-    left: 50%;
-    width: calc(100vw - 16px) !important;
-    height: calc(100dvh - 16px) !important;
-  }
-}
