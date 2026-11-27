@@ -3,6 +3,7 @@
 // Motion and dragging are the board's (hooks/useFlip.ts, hooks/useCardDrag.ts); the card only says
 // what it is. One asleep in "Waiting" folds down to its name, what it waits for and its time, and
 // unfolds in place while pointed at, as the board's Settings say (hooks/useFold.ts, styles/fold.css).
+
 import {
   type FocusEvent,
   type KeyboardEvent,
@@ -66,6 +67,7 @@ import {
   WriteGlyph,
 } from './icons.tsx'
 import { ModelTag } from './ModelTag.tsx'
+import { plainWebLinks } from './PlainWebLinks.tsx'
 import { ProfileTag } from './ProfileTag.tsx'
 import { ProviderMark } from './ProviderMark.tsx'
 import { StopButton } from './StopButton.tsx'
@@ -130,6 +132,7 @@ export function Card(props: CardProps) {
       data-col={item.column}
       data-busy={busy}
       onPointerDown={(e: PointerEvent<HTMLElement>) => {
+        if (e.target instanceof Element && e.target.closest('a.ask-link')) return
         fold.onPointerDown(e)
         onPointerDown(e)
       }}
@@ -560,7 +563,7 @@ function CardAsk({ item }: { item: Item }) {
       <div className="ask qa-card">
         <div className="qa-card-q">
           <b>{t('att.ask')}:</b> {line.header && <span className="qa-tag">{line.header}</span>}
-          {line.question}
+          {plainWebLinks(questions[0]?.question ?? '') ?? line.question}
         </div>
         <div className="qa-card-opts">
           {line.options}
@@ -573,7 +576,7 @@ function CardAsk({ item }: { item: Item }) {
   return (
     <>
       <div className="ask">
-        <b>{ask.label}:</b> {ask.text}
+        <b>{ask.label}:</b> {plainWebLinks(item.question ?? '') ?? ask.text}
       </div>
       {/* Decisions (#487): its options, the default and Hold; nothing for an ask without them. */}
       {item.decision && <CardDecision item={item} />}

@@ -8,6 +8,7 @@ import { useCollapse } from '../../hooks/useCollapse.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { askedView } from '../../models/sheet.ts'
 import { CheckGlyph, ChevronGlyph } from '../icons.tsx'
+import { plainWebLinks } from '../PlainWebLinks.tsx'
 
 /**
  * Whether the text, folded to its two lines, is cut: looked at again when the banner's size changes (a
@@ -59,15 +60,31 @@ export function AskedCompact({
   const text = useRef<HTMLSpanElement>(null)
   useCollapse(text, !open, { fade: false })
   const cut = useCut(banner, text, !open, said)
+  const links = plainWebLinks(asked.text)
   const body = (
     <span className="asked-clip" ref={text} data-folded={open ? undefined : ''}>
       <b>{asked.why}</b>
-      {asked.text}
+      {links ?? asked.text}
     </span>
   )
   return (
     <div className="asked asked-compact" ref={banner}>
-      {cut || open ? (
+      {links ? (
+        <div className="asked-text">
+          {body}
+          {(cut || open) && (
+            <button
+              type="button"
+              className="asked-link-toggle"
+              aria-expanded={open}
+              aria-label={t(open ? 'asked.less' : 'asked.more')}
+              onClick={() => setOpened({ for: said, open: !open })}
+            >
+              <ChevronGlyph />
+            </button>
+          )}
+        </div>
+      ) : cut || open ? (
         <button
           type="button"
           className="asked-text asked-toggle"

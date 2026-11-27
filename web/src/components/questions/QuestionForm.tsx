@@ -18,6 +18,7 @@ import {
 } from '../../models/questions.ts'
 import { classNames } from '../class-names.ts'
 import { Turn } from '../icons.tsx'
+import { plainWebLinks } from '../PlainWebLinks.tsx'
 
 /** What the form does with the user's clicks and keys (the desk). */
 export type FormActions = Pick<QuestionDesk, 'click' | 'type' | 'enter' | 'peekAt' | 'unpeek'>
@@ -193,7 +194,7 @@ function Question({ i, shown, form, peek, canMutate, on }: QuestionProps) {
         )}
       </div>
       <p className="qa-text" id={id}>
-        {q.question}
+        {plainWebLinks(q.question) ?? q.question}
       </p>
       {/* biome-ignore lint/a11y/useAriaPropsSupportedByRole: a group or a radiogroup, by the question's kind: both take a label */}
       <div className="qa-opts" role={q.multiSelect ? 'group' : 'radiogroup'} aria-labelledby={id}>
