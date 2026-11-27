@@ -10,6 +10,7 @@ import { asideQuestion } from '../../models/aside.ts'
 import { markdown } from '../../models/markdown.ts'
 import { BoardContext } from '../../state/BoardProvider.tsx'
 import { classNames } from '../class-names.ts'
+import { useSheetId } from './sheet-ids.ts'
 
 /** What the message box does about side questions (components/sheet/Composer.tsx). */
 export interface AsideBox {
@@ -77,12 +78,13 @@ export const AsideIcon = () => (
 
 /** The message box's switch: the next message goes aside. */
 export function AsideToggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+  const id = useSheetId()
   const t = useT()
   return (
     <button
       type="button"
       className={classNames('aside-toggle', on && 'on')}
-      id="aside-toggle"
+      id={id('aside-toggle')}
       aria-pressed={on}
       title={t('aside.toggleHint')}
       aria-label={t('aside.toggle')}

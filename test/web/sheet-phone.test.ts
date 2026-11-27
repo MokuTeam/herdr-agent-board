@@ -11,6 +11,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { markdown } from '../../web/src/models/markdown.ts'
+import { foregroundSheetCss } from './support/stylesheets.ts'
 
 const WEB = join(import.meta.dir, '..', '..', 'web')
 const read = (path: string) => readFileSync(join(WEB, path), 'utf8')
@@ -82,7 +83,7 @@ const rulesOf = (css: string, phone = false): Rule[] => {
 
 /** The sheets the page links, in its order; a phone's own page adds pwa.css after them (core/pwa.ts). */
 const PAGE_SHEETS = [...read('index.html').matchAll(/href="styles\/([^"]+\.css)"/g)].map(m => m[1] as string)
-const cascade = (sheets: string[]) => sheets.flatMap(sheet => rulesOf(read(join('styles', sheet))))
+const cascade = (sheets: string[]) => sheets.flatMap(sheet => rulesOf(foregroundSheetCss(read(join('styles', sheet)))))
 
 /** What wins for `prop` on an element the `selectors` reach: on a phone, or at a desktop's width. */
 const value = (rules: Rule[], selectors: string[], prop: string, phone: boolean): string | undefined => {

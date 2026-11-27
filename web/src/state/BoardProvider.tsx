@@ -13,11 +13,14 @@ import {
   useState,
 } from 'react'
 import { type LiveBoard, useBoard } from '../api/useBoard.ts'
+import { useLatest } from '../hooks/useLatest.ts'
 import { useLanguage } from '../i18n/I18nProvider.tsx'
 import { withEdits } from '../models/board-edits.ts'
+import { readCardWindow, sessionWindowKind } from '../models/card-window.ts'
 import { knowDevices } from '../models/devices.ts'
 import { lanesText } from '../models/lane-picks.ts'
 import { type BoardAction, type BoardUi, boardUi, initialUi, type ToastOptions } from './board-ui.ts'
+import { PanelContext } from './PanelProvider.tsx'
 import { storage } from './storage.ts'
 import { usePersisted } from './usePersisted.ts'
 
@@ -49,7 +52,8 @@ function useTick(ms: number): number {
 
 export function BoardProvider({ children }: { children: ReactNode }) {
   const live = useBoard()
-  const [ui, dispatch] = useReducer(boardUi, storage.get, initialUi)
+  const [ui, dispatchUi] = useReducer(boardUi, storage.get, initialUi)
+  const place = useContext(PanelContext)
   const { follow } = useLanguage()
   const tick = useTick(TICK_MS)
 
@@ -57,7 +61,7 @@ export function BoardProvider({ children }: { children: ReactNode }) {
   const [settled, setSettled] = useState(live.data)
   if (settled !== live.data) {
     setSettled(live.data)
-    if (live.data) dispatch({ type: 'settle', items: live.data.items, launches: live.data.launches, now: Date.now() })
+    if (live.data) dispatchUi({ type: 'settle', items: live.data.items, launches: live.data.launches, now: Date.now() })
     // A master's devices (#502): their titles, for the words of a node-offline answer.
     if (live.data?.devices) knowDevices(live.data.devices)
   }
@@ -72,7 +76,7 @@ export function BoardProvider({ children }: { children: ReactNode }) {
   usePersisted('board.viewed', JSON.stringify(ui.viewed))
 
   const toast = useCallback((text: string, error = false, options: ToastOptions = {}) => {
-    if (text) dispatch({ type: 'toast', text, error, ...options })
+    if (text) dispatchUi({ type: 'toast', text, error, ...options })
   }, [])
   // Read at every draw (a new board, the connection, the page state, the tick), as the old page's
   // render() read the clock.
@@ -80,7 +84,27 @@ export function BoardProvider({ children }: { children: ReactNode }) {
   const now = useMemo(() => Date.now(), [tick, live, ui])
   // The board as the page shows it: with its own edits (lanes reordered, reminders cancelled or switched).
   const data = useMemo(() => live.data && withEdits(live.data, ui.edits), [live.data, ui.edits])
-  const value = useMemo<Board>(() => ({ ...live, data, ui, dispatch, toast, now }), [live, data, ui, toast, now])
+  const latest = useLatest({ data, ui, place })
+  const dispatch = useCallback(
+    (action: BoardAction) => {
+      const { data, ui, place } = latest.current
+      if (action.type !== 'open' || !action.key || !place || place.isPhone()) {
+        dispatchUi(action)
+        return
+      }
+      const kindOf = (key: string) => sessionWindowKind(data?.items.find(item => item.key === key))
+      const modal = readCardWindow(kindOf(action.key)) === 'modal'
+      const panel = place.openPanel()
+      const keepSidebar =
+        modal && !ui.sidebarSheet && place.layout.dock !== 'float' && panel?.chat === true && !panel.modal
+      dispatchUi({ ...action, modal, keepSidebar })
+    },
+    [latest],
+  )
+  const value = useMemo<Board>(
+    () => ({ ...live, data, ui, dispatch, toast, now }),
+    [live, data, ui, dispatch, toast, now],
+  )
   return <BoardContext.Provider value={value}>{children}</BoardContext.Provider>
 }
 

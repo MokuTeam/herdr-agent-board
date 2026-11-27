@@ -14,6 +14,7 @@ import { cardMenu } from '../../web/src/models/menu-model.ts'
 import { batchSize, footStatus, lineHtml, pasteOf, statePanel, termButton } from '../../web/src/models/terminal.ts'
 import { item } from './support/board.tsx'
 import { oldCode, oldFunction, oldModule, oldSource } from './support/old-app.ts'
+import { foregroundSheetCss } from './support/stylesheets.ts'
 import {
   newTerminal,
   oldTerminal,
@@ -489,7 +490,7 @@ describe('the window’s parts', () => {
         .replace(/\r\n/g, '\n')
         .replace('(web/src/components/terminal/Terminal.tsx)', '(terminal.js)')
         .replace('(hooks/useTerminal.ts)', '(terminal.js)')
-    expect(normal(ours)).toBe(normal(theirs))
+    expect(normal(foregroundSheetCss(ours))).toBe(normal(theirs))
   })
 })
 

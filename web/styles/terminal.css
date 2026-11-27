@@ -191,8 +191,8 @@
 .term-close.armed { background: color-mix(in srgb, var(--red) 16%, transparent); color: var(--red); }
 
 /* The sheet's Terminal button: a dot while the board has a shell open for the session. */
-#sheet-term { position: relative; }
-#sheet-term.has-shell::after { content: ''; position: absolute; top: 5px; right: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 1.5px var(--surface); }
+:is(#sheet-term, #sidebar-sheet-term) { position: relative; }
+:is(#sheet-term, #sidebar-sheet-term).has-shell::after { content: ''; position: absolute; top: 5px; right: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 1.5px var(--surface); }
 
 @media (max-width: 760px) {
   .term .ql-win { width: calc(100vw - 16px); height: calc(var(--term-vh, 100vh) - 16px); }

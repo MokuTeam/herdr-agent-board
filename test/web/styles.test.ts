@@ -5,6 +5,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { oldSource } from './support/old-app.ts'
+import { foregroundSheetCss } from './support/stylesheets.ts'
 
 /** The newest upstream merge whose stylesheets are ported (#53-#58 changed app.css; the others are #45's still). */
 const STYLES_REF = 'b2c5afa'
@@ -20,7 +21,7 @@ const rules = (css: string): string[] =>
     .map(line => line.trimEnd())
     .filter(line => line.trim() !== '')
 
-const ours = (sheet: string) => rules(readFileSync(join(ROOT, 'web', 'styles', sheet), 'utf8'))
+const ours = (sheet: string) => rules(foregroundSheetCss(readFileSync(join(ROOT, 'web', 'styles', sheet), 'utf8')))
 
 const isSetupRule = (line: string) => /^\.(setup-|sr-only)/.test(line)
 

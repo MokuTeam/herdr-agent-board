@@ -42,6 +42,13 @@ export const ARCHIVING_MS = 20_000
 /** How long a card back from the archive is awaited, to come out of the archive's button. */
 export const FLY_BACK_MS = 90_000
 
+export type SheetSlot = 0 | 1
+
+interface SidebarSheet {
+  key: string
+  opened: number
+}
+
 export interface BoardUi {
   /**
    * The lanes on show, in the order they were picked; none: every lane (kept in localStorage as
@@ -70,6 +77,9 @@ export interface BoardUi {
   open: string | null
   /** Counts the openings: a session opened again (its card clicked) starts its sheet over. */
   opened: number
+  /** The foreground sheet's slot. The other slot can keep a docked chat mounted. */
+  sheetSlot?: SheetSlot
+  sidebarSheet?: SidebarSheet | undefined
   /** The latest opening asked for the message box ("Write"). */
   compose: boolean
   limitsOpen: boolean
@@ -101,7 +111,8 @@ export type BoardAction =
   | { type: 'query'; text: string }
   | { type: 'column'; id: ColumnId | null }
   | { type: 'toggleSleepers' }
-  | { type: 'open'; key: string | null; compose?: boolean }
+  | { type: 'open'; key: string | null; compose?: boolean; modal?: boolean; keepSidebar?: boolean }
+  | { type: 'closeSheet'; slot: SheetSlot }
   | { type: 'viewed'; item: AttentionItem }
   | { type: 'limits'; open: boolean }
   | ({ type: 'toast'; text: string; error: boolean } & ToastOptions)
@@ -160,6 +171,19 @@ function withBusy(busy: ReadonlyMap<string, string>, key: string, label: string 
   return next
 }
 
+function closeSheet(state: BoardUi): BoardUi {
+  const sidebar = state.sidebarSheet
+  if (!sidebar) return state.open === null ? state : { ...state, open: null }
+  return {
+    ...state,
+    open: sidebar.key,
+    opened: sidebar.opened,
+    compose: false,
+    sheetSlot: state.sheetSlot === 1 ? 0 : 1,
+    sidebarSheet: undefined,
+  }
+}
+
 export function boardUi(state: BoardUi, action: BoardAction): BoardUi {
   switch (action.type) {
     case 'filter':
@@ -180,9 +204,25 @@ export function boardUi(state: BoardUi, action: BoardAction): BoardUi {
       return action.id === state.column ? state : { ...state, column: action.id }
     case 'toggleSleepers':
       return { ...state, sleepers: !state.sleepers }
-    case 'open':
-      if (action.key === null) return { ...state, open: null }
-      return { ...state, open: action.key, opened: state.opened + 1, compose: !!action.compose }
+    case 'open': {
+      if (action.key === null) return closeSheet(state)
+      const opened = { ...state, open: action.key, opened: state.opened + 1, compose: !!action.compose }
+      if (state.sidebarSheet?.key === action.key) return { ...closeSheet(state), compose: !!action.compose }
+      if (action.keepSidebar && state.open && state.open !== action.key) {
+        return {
+          ...opened,
+          sheetSlot: state.sheetSlot === 1 ? 0 : 1,
+          sidebarSheet: { key: state.open, opened: state.opened },
+        }
+      }
+      return action.modal || !state.sidebarSheet ? opened : { ...opened, sidebarSheet: undefined }
+    }
+    case 'closeSheet':
+      return action.slot === (state.sheetSlot ?? 0)
+        ? closeSheet(state)
+        : state.sidebarSheet
+          ? { ...state, sidebarSheet: undefined }
+          : state
     case 'viewed':
       return { ...state, viewed: recordView(state.viewed, action.item) }
     case 'limits':

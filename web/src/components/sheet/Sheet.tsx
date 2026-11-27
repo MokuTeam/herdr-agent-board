@@ -55,6 +55,7 @@ import { AskedCompact } from './AskedCompact.tsx'
 import { Composer, type SessionButtons } from './Composer.tsx'
 import type { ScheduleActions } from './ScheduleRow.tsx'
 import { SheetHead } from './SheetHead.tsx'
+import { useSheetId } from './sheet-ids.ts'
 import { Thread, Waiting } from './Thread.tsx'
 import type { ThreadLinks } from './ThreadLinks.tsx'
 
@@ -116,7 +117,9 @@ function useShown(open: string | null, item: Item | undefined): { key: string | 
   return { key, item: item ?? (kept?.key === key ? kept : null) }
 }
 
-export function Sheet(slots: SheetSlots) {
+export function Sheet(slots: SheetSlots & { foreground?: boolean; onClose?: () => void }) {
+  const { foreground = true, onClose } = slots
+  const id = useSheetId()
   const {
     question,
     upgradeFiles,
@@ -171,7 +174,9 @@ export function Sheet(slots: SheetSlots) {
   }, [scroll, composer.outbox.foot])
   // The helpers window lists what the open session's detail says.
   const fed = open !== null && detail.value.key === open ? detail.value.data : null
-  useLayoutEffect(() => helpers?.engine.feed({ key: open, data: fed }), [helpers, open, fed])
+  useLayoutEffect(() => {
+    if (foreground) helpers?.engine.feed({ key: open, data: fed })
+  }, [foreground, helpers, open, fed])
   const goToSession = useGoToSession()
   const links: SheetLinks = {
     onHelper: (id, el) => helpers?.show({ id }, el),
@@ -188,7 +193,7 @@ export function Sheet(slots: SheetSlots) {
   useLayoutEffect(() => {
     if (body.current && drawn) upgradeFiles?.(body.current, cwd, shown.key)
   }, [detail.value.data, drawn, shown.key, cwd, t, upgradeFiles])
-  const form = shown.item ? question?.(shown.item, detail.value.data) : null
+  const form = foreground && shown.item ? question?.(shown.item, detail.value.data) : null
   const hasForm = form !== null && form !== undefined && form !== false
   // Once its paths are chips: a conversation drawn anew (what upstream's renderSheetBody draws it
   // from) stays at the bottom if it was there; any other render leaves its scroll alone.
@@ -222,11 +227,11 @@ export function Sheet(slots: SheetSlots) {
   }
   return (
     <Panel
-      id="sheet"
+      id={id('sheet')}
       kind="session"
       cardWindow={sessionWindowKind(shown.item)}
       open={open !== null}
-      onClose={() => dispatch({ type: 'open', key: null })}
+      onClose={onClose ?? (() => dispatch({ type: 'open', key: null }))}
       about={() => cardOf(open)}
       className={classNames(drop.dropping && 'dropping', density.compact && 'sheet-compact')}
       drop={drop.handlers}
@@ -312,6 +317,7 @@ export interface SheetViewProps {
 /** The sheet under its head, as drawn for one state. */
 export function SheetView(props: SheetViewProps) {
   const { open, item, detail, form, composer, buttons, compact = false } = props
+  const id = useSheetId()
   const t = useT()
   const { data, connected, canMutate, canEdit, now } = useBoardContext()
   // A redraw of the conversation keeps the focus on what opens the same thing (a helper's line).
@@ -344,7 +350,7 @@ export function SheetView(props: SheetViewProps) {
   const asking = !hasForm && item?.column === 'me'
   return (
     <>
-      <div className="sheet-question" id="sheet-question" hidden={!hasForm && !asking}>
+      <div className="sheet-question" id={id('sheet-question')} hidden={!hasForm && !asking}>
         {hasForm
           ? form
           : asking &&
@@ -366,14 +372,14 @@ export function SheetView(props: SheetViewProps) {
       />
       <div
         className={classNames('sheet-body', !!notice.text && 'has-detail-state')}
-        id="sheet-body"
+        id={id('sheet-body')}
         ref={props.bodyRef}
         onScroll={props.onBodyScroll}
         {...keepFocus}
       >
         {item && (
           <>
-            <div className="detail-status" id="sheet-detail-state" role="status" hidden={!notice.text}>
+            <div className="detail-status" id={id('sheet-detail-state')} role="status" hidden={!notice.text}>
               <span>
                 {notice.text}
                 {notice.stamp && <small>{notice.stamp}</small>}

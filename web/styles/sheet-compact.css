@@ -2,7 +2,7 @@
    fold with it), so the conversation gets the room on a phone and on a desk alike. Whole, the head is
    what it always was: the row of pills (where the card shows, its lane, the pencil, the star), the
    name under it, then the facts and the card's fields; the chevron sits at the end of the name's line.
-   Compact (`#sheet.sheet-compact`) it is one row: where the card shows, the name on one line, the
+   Compact (`:is(#sheet, #sidebar-sheet).sheet-compact`) it is one row: where the card shows, the name on one line, the
    helpers' count, the chevron; the lane, the pencil and the star are out of it, and the facts and the
    card's fields fold away under it. Compact also holds the helpers' strip behind their count, cuts the
    open question to two lines and folds the action row behind the footer line. Every part that folds
@@ -12,11 +12,11 @@
 
 /* ---------------------------------------------------------------- the head's rows */
 /* Whole: the pills' row, then the name's line with the chevron at its end. */
-#sheet .sheet-headline { display: flex; flex-wrap: wrap; align-items: flex-start; column-gap: 8px; min-width: 0; }
-#sheet .sheet-headline > .sheet-pills { flex: 1 0 100%; min-width: 0; }
+:is(#sheet, #sidebar-sheet) .sheet-headline { display: flex; flex-wrap: wrap; align-items: flex-start; column-gap: 8px; min-width: 0; }
+:is(#sheet, #sidebar-sheet) .sheet-headline > .sheet-pills { flex: 1 0 100%; min-width: 0; }
 /* The name leaves the chevron its place on its line (28px and the gap): a name as wide as the row would
    push it to a line of its own. */
-#sheet .sheet-headline > h2 { min-width: 0; max-width: calc(100% - 36px); }
+:is(#sheet, #sidebar-sheet) .sheet-headline > h2 { min-width: 0; max-width: calc(100% - 36px); }
 
 .sheet-compact-toggle,
 .sheet-helpers-chip {
@@ -61,22 +61,22 @@
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
-#sheet.sheet-compact .sheet-helpers-chip { display: inline-flex; margin-left: auto; }
-#sheet.sheet-compact .sheet-helpers-chip + .sheet-compact-toggle { margin-left: 0; }
+:is(#sheet, #sidebar-sheet).sheet-compact .sheet-helpers-chip { display: inline-flex; margin-left: auto; }
+:is(#sheet, #sidebar-sheet).sheet-compact .sheet-helpers-chip + .sheet-compact-toggle { margin-left: 0; }
 .sheet-helpers-chip .dot { width: 7px; height: 7px; }
 
 /* Compact: one row. The pills' row dissolves into it, and the lane, the pencil and the star leave it;
    the name has one line. Not in the wide, low layout (below), where the head is a column beside the
    conversation and keeps its rows. */
 @container sheet not ((min-width: 680px) and (min-aspect-ratio: 5 / 4) and (height < 600px)) {
-  #sheet.sheet-compact .sheet-headline { flex-wrap: nowrap; align-items: center; min-height: 30px; }
-  #sheet.sheet-compact .sheet-headline > .sheet-pills { display: contents; }
-  #sheet.sheet-compact .sheet-pills > :not(.status-pill) { display: none; }
+  :is(#sheet, #sidebar-sheet).sheet-compact .sheet-headline { flex-wrap: nowrap; align-items: center; min-height: 30px; }
+  :is(#sheet, #sidebar-sheet).sheet-compact .sheet-headline > .sheet-pills { display: contents; }
+  :is(#sheet, #sidebar-sheet).sheet-compact .sheet-pills > :not(.status-pill) { display: none; }
   /* A long name gives way, not the pill: it takes the shrinking. */
-  #sheet.sheet-compact .sheet-pills > .status-pill { flex: 0 0 auto; }
-  #sheet.sheet-compact .sheet-pills > .status-pill .pill-label { white-space: nowrap; }
-  #sheet.sheet-compact .sheet-helpers-chip, #sheet.sheet-compact .sheet-compact-toggle { margin-top: 0; margin-bottom: 0; }
-  #sheet.sheet-compact .sheet-headline > h2 {
+  :is(#sheet, #sidebar-sheet).sheet-compact .sheet-pills > .status-pill { flex: 0 0 auto; }
+  :is(#sheet, #sidebar-sheet).sheet-compact .sheet-pills > .status-pill .pill-label { white-space: nowrap; }
+  :is(#sheet, #sidebar-sheet).sheet-compact .sheet-helpers-chip, :is(#sheet, #sidebar-sheet).sheet-compact .sheet-compact-toggle { margin-top: 0; margin-bottom: 0; }
+  :is(#sheet, #sidebar-sheet).sheet-compact .sheet-headline > h2 {
     display: block;
     overflow: hidden;
     margin-top: 0;
@@ -87,16 +87,16 @@
     -webkit-line-clamp: unset;
     flex-shrink: 100;
   }
-  #sheet.sheet-compact .sheet-compact-toggle { margin-left: auto; }
-  #sheet.sheet-compact .sheet-helpers-chip + .sheet-compact-toggle { margin-left: 0; }
+  :is(#sheet, #sidebar-sheet).sheet-compact .sheet-compact-toggle { margin-left: auto; }
+  :is(#sheet, #sidebar-sheet).sheet-compact .sheet-helpers-chip + .sheet-compact-toggle { margin-left: 0; }
 }
 
 /* ---------------------------------------------------------------- the fold under the row */
-#sheet .sheet-details[data-folded]:not([data-moving]) { height: 0; overflow: hidden; visibility: hidden; opacity: 0; }
-#sheet .sheet-details[data-moving] { overflow: hidden; }
+:is(#sheet, #sidebar-sheet) .sheet-details[data-folded]:not([data-moving]) { height: 0; overflow: hidden; visibility: hidden; opacity: 0; }
+:is(#sheet, #sidebar-sheet) .sheet-details[data-moving] { overflow: hidden; }
 
 /* ---------------------------------------------------------------- the helpers' strip */
-#sheet .sheet-helpers[data-folded]:not([data-moving]) {
+:is(#sheet, #sidebar-sheet) .sheet-helpers[data-folded]:not([data-moving]) {
   height: 0;
   max-height: 0;
   padding-top: 0;
@@ -105,10 +105,10 @@
   visibility: hidden;
   opacity: 0;
 }
-#sheet .sheet-helpers[data-moving] { overflow: hidden; }
+:is(#sheet, #sidebar-sheet) .sheet-helpers[data-moving] { overflow: hidden; }
 
 /* ---------------------------------------------------------------- the open question */
-#sheet .asked-compact { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 8px 10px; }
+:is(#sheet, #sidebar-sheet) .asked-compact { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 8px 10px; }
 .asked-compact .asked-text {
   display: flex;
   align-items: flex-start;
@@ -132,13 +132,13 @@
 .asked-compact .asked-text .chevron { flex: none; width: 16px; height: 16px; margin-top: 1px; fill: none; stroke: var(--label-3); stroke-width: 1.8; transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1); }
 .asked-compact .asked-link-toggle { display: flex; padding: 0; border: 0; background: none; cursor: pointer; }
 .asked-compact [aria-expanded="true"] .chevron { transform: rotate(180deg); }
-#sheet .asked-compact .asked-dismiss { margin: 0; height: 28px; }
+:is(#sheet, #sidebar-sheet) .asked-compact .asked-dismiss { margin: 0; height: 28px; }
 
 /* ---------------------------------------------------------------- the footer */
 /* The action row folded behind the footer line: its height and the gap under it go, the buttons
    stay laid out (the row's fit reads their widths). */
-#sheet .composer-actions[data-folded]:not([data-moving]) { height: 0; margin-bottom: 0; overflow: hidden; visibility: hidden; opacity: 0; }
-#sheet .composer-actions[data-moving] { overflow: hidden; }
+:is(#sheet, #sidebar-sheet) .composer-actions[data-folded]:not([data-moving]) { height: 0; margin-bottom: 0; overflow: hidden; visibility: hidden; opacity: 0; }
+:is(#sheet, #sidebar-sheet) .composer-actions[data-moving] { overflow: hidden; }
 .session-meter { position: relative; }
 .session-meter .foot-toggle {
   display: grid;
@@ -166,16 +166,16 @@
    conversation's own parts (the helpers' strip, the question, the action row), which do take height
    from it, and the count with them. */
 @container sheet (min-width: 680px) and (min-aspect-ratio: 5 / 4) and (height < 600px) {
-  #sheet .sheet-details[data-folded]:not([data-moving]), #sheet .sheet-details[data-moving] { height: auto !important; overflow: visible !important; visibility: visible !important; opacity: 1 !important; }
-  #sheet .sheet-details-inner { transform: none !important; }
+  :is(#sheet, #sidebar-sheet) .sheet-details[data-folded]:not([data-moving]), :is(#sheet, #sidebar-sheet) .sheet-details[data-moving] { height: auto !important; overflow: visible !important; visibility: visible !important; opacity: 1 !important; }
+  :is(#sheet, #sidebar-sheet) .sheet-details-inner { transform: none !important; }
   /* The count joins the chevron at the end of the name's line, and the name leaves room for both. */
-  #sheet.sheet-compact .sheet-headline > h2 { max-width: calc(100% - 84px); }
+  :is(#sheet, #sidebar-sheet).sheet-compact .sheet-headline > h2 { max-width: calc(100% - 84px); }
 }
 
 /* ---------------------------------------------------------------- touch, pointers and motion */
 /* A phone's compact row gives the name what room it can: the pill goes without its arrows (it still opens its menu). */
 @media (max-width: 760px) {
-  #sheet.sheet-compact .sheet-pills .status-pill .updown { display: none; }
+  :is(#sheet, #sidebar-sheet).sheet-compact .sheet-pills .status-pill .updown { display: none; }
 }
 /* A touch screen keeps :hover on what was last tapped: the lift is for a pointer that hovers. On a
    touch screen the footer line is the whole target of its chevron, the facts included. */

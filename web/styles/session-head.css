@@ -3,9 +3,9 @@
    menu (the board's own, grown out of the pill), the pencil shows the card's empty fields to fill,
    and the card's fields sit in the head as quiet lines, only the ones that say something. Laid
    over upstream's sheets, which stay theirs rule for rule: every rule here outranks the one it
-   changes (#sheet) or is new. */
+   changes (:is(#sheet, #sidebar-sheet)) or is new. */
 
-#sheet .sheet-head { padding: 16px 16px 10px 22px; }
+:is(#sheet, #sidebar-sheet) .sheet-head { padding: 16px 16px 10px 22px; }
 
 /* The pills: the status pill is a button now, the lane a neutral pill with its color, the pencil a small round. */
 .sheet-pills { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
@@ -34,7 +34,7 @@
 .lane-pill::before { content: ""; flex: none; width: 8px; height: 8px; border-radius: 2.5px; background: var(--lane); }
 .lane-pill > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .lane-pill:not(:disabled):hover, .lane-pill[aria-expanded="true"] { background: var(--fill); color: var(--label); }
-#sheet .sheet-properties-toggle {
+:is(#sheet, #sidebar-sheet) .sheet-properties-toggle {
   display: grid;
   place-items: center;
   align-self: auto;
@@ -46,23 +46,23 @@
   background: none;
   color: var(--label-3);
 }
-#sheet .sheet-properties-toggle::after { content: none; }
-#sheet .sheet-properties-toggle svg { width: 14px; height: 14px; }
-#sheet .sheet-properties-toggle:hover { background: var(--fill-2); color: var(--label-2); }
-#sheet .sheet-properties-toggle[aria-expanded="true"] { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+:is(#sheet, #sidebar-sheet) .sheet-properties-toggle::after { content: none; }
+:is(#sheet, #sidebar-sheet) .sheet-properties-toggle svg { width: 14px; height: 14px; }
+:is(#sheet, #sidebar-sheet) .sheet-properties-toggle:hover { background: var(--fill-2); color: var(--label-2); }
+:is(#sheet, #sidebar-sheet) .sheet-properties-toggle[aria-expanded="true"] { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 
 /* The card's fields under the name: no grouped card, lines that read as the head's own. */
-#sheet .sheet-card { flex: none; min-height: 0; max-height: 30cqh; margin-top: 6px; padding: 0; overflow: auto; cursor: auto; }
-#sheet .sheet-card[hidden] { display: none; }
-#sheet .sheet-card .group { margin: 0; border-radius: 0; background: none; box-shadow: none; }
-#sheet .sheet-card .row { min-height: 28px; gap: 10px; padding: 2px 0; }
-#sheet .sheet-card .row + .row { box-shadow: none; }
-#sheet .sheet-card .row-label { width: 76px; font-size: 12px; }
+:is(#sheet, #sidebar-sheet) .sheet-card { flex: none; min-height: 0; max-height: 30cqh; margin-top: 6px; padding: 0; overflow: auto; cursor: auto; }
+:is(#sheet, #sidebar-sheet) .sheet-card[hidden] { display: none; }
+:is(#sheet, #sidebar-sheet) .sheet-card .group { margin: 0; border-radius: 0; background: none; box-shadow: none; }
+:is(#sheet, #sidebar-sheet) .sheet-card .row { min-height: 28px; gap: 10px; padding: 2px 0; }
+:is(#sheet, #sidebar-sheet) .sheet-card .row + .row { box-shadow: none; }
+:is(#sheet, #sidebar-sheet) .sheet-card .row-label { width: 76px; font-size: 12px; }
 /* What it does and what it waits for: a field that reads as the line's text and wraps when long,
    three lines at most (then it scrolls; the tooltip has it whole). */
-#sheet .sheet-card .row:has(> textarea) { align-items: flex-start; }
-#sheet .sheet-card .row:has(> textarea) > .row-label { padding-top: 3px; line-height: 18px; }
-#sheet .sheet-card textarea {
+:is(#sheet, #sidebar-sheet) .sheet-card .row:has(> textarea) { align-items: flex-start; }
+:is(#sheet, #sidebar-sheet) .sheet-card .row:has(> textarea) > .row-label { padding-top: 3px; line-height: 18px; }
+:is(#sheet, #sidebar-sheet) .sheet-card textarea {
   display: block;
   width: calc(100% + 6px);
   max-height: calc(3 * 18px + 6px);
@@ -82,12 +82,12 @@
   scrollbar-width: thin;
   transition: background-color 120ms ease;
 }
-#sheet .sheet-card textarea::placeholder { color: var(--label-3); }
+:is(#sheet, #sidebar-sheet) .sheet-card textarea::placeholder { color: var(--label-3); }
 /* The empty card fields, offered as one quiet line: only the one asked for opens. */
-#sheet .sheet-card .add-row { min-height: 24px; }
-#sheet .sheet-card .add-row .row-label { color: var(--label-3); }
-#sheet .sheet-card .add-fields { display: flex; flex-wrap: wrap; gap: 6px; }
-#sheet .sheet-card .add-field {
+:is(#sheet, #sidebar-sheet) .sheet-card .add-row { min-height: 24px; }
+:is(#sheet, #sidebar-sheet) .sheet-card .add-row .row-label { color: var(--label-3); }
+:is(#sheet, #sidebar-sheet) .sheet-card .add-fields { display: flex; flex-wrap: wrap; gap: 6px; }
+:is(#sheet, #sidebar-sheet) .sheet-card .add-field {
   padding: 2px 8px;
   border: 0;
   border-radius: 6px;
@@ -98,27 +98,27 @@
   font-weight: 500;
   cursor: pointer;
 }
-#sheet .sheet-card .add-field:not(:disabled):hover { background: var(--fill); color: var(--label); }
-#sheet .sheet-card .add-field:disabled { cursor: default; opacity: 0.5; }
-#sheet .sheet-card .add-field:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-#sheet .sheet-card textarea:not(:disabled):hover, #sheet .sheet-card textarea:focus { background: var(--fill-2); }
+:is(#sheet, #sidebar-sheet) .sheet-card .add-field:not(:disabled):hover { background: var(--fill); color: var(--label); }
+:is(#sheet, #sidebar-sheet) .sheet-card .add-field:disabled { cursor: default; opacity: 0.5; }
+:is(#sheet, #sidebar-sheet) .sheet-card .add-field:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+:is(#sheet, #sidebar-sheet) .sheet-card textarea:not(:disabled):hover, :is(#sheet, #sidebar-sheet) .sheet-card textarea:focus { background: var(--fill-2); }
 /* The line under the name breaks between its facts, after a separator, as it did. */
 .sheet-meta > .sep { white-space: normal; }
 /* A question form to answer: the fields give way first, as they did under the head. */
-#sheet .sheet-inner:has(.sheet-question .qa) .sheet-card { max-height: 64px; }
+:is(#sheet, #sidebar-sheet) .sheet-inner:has(.sheet-question .qa) .sheet-card { max-height: 64px; }
 
 /* The helpers strip with none at work: a helper that ended says how and when in its mark's place
    ("stopped 1 d ago", web/src/models/helper-model.ts endedLine), quiet as the rows' clocks (#113). */
-#sheet .helper-last.past { grid-template-columns: 22px minmax(0, 1fr) auto; }
+:is(#sheet, #sidebar-sheet) .helper-last.past { grid-template-columns: 22px minmax(0, 1fr) auto; }
 
 /* A wide panel (upstream's container query puts the panel's parts side by side there). Tall
    enough, it reads as a narrow one: one column, the head across the top. */
 @container sheet (min-width: 680px) and (min-aspect-ratio: 5 / 4) and (height >= 600px) {
-  #sheet .sheet-inner { display: flex; }
-  #sheet .sheet-question { padding: 0 18px 10px 22px; }
-  #sheet .sheet-helpers { padding: 0 18px 10px 22px; }
-  #sheet .sheet-body { min-height: max(96px, min(36cqh, 280px)); padding: 2px 18px 16px 22px; }
-  #sheet .composer { padding: 10px 14px 14px 18px; }
+  :is(#sheet, #sidebar-sheet) .sheet-inner { display: flex; }
+  :is(#sheet, #sidebar-sheet) .sheet-question { padding: 0 18px 10px 22px; }
+  :is(#sheet, #sidebar-sheet) .sheet-helpers { padding: 0 18px 10px 22px; }
+  :is(#sheet, #sidebar-sheet) .sheet-body { min-height: max(96px, min(36cqh, 280px)); padding: 2px 18px 16px 22px; }
+  :is(#sheet, #sidebar-sheet) .composer { padding: 10px 14px 14px 18px; }
 }
 /* Low (at the bottom), one column would leave the conversation no room: the head, its fields in
    it, is a column down the left, wide enough for the head's lines as the narrow panel has them
@@ -126,20 +126,20 @@
    under the name stack); what it asks, the helpers, the conversation and the message box take the
    whole height beside it. */
 @container sheet (min-width: 680px) and (min-aspect-ratio: 5 / 4) and (height < 600px) {
-  #sheet .sheet-inner { grid-template-columns: clamp(360px, 36%, 480px) minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; }
-  #sheet .sheet-head { position: relative; grid-column: 1; grid-row: 1 / -1; min-height: 0; overflow: auto; padding-bottom: 16px; box-shadow: inset -0.5px 0 0 var(--separator); }
-  #sheet .sheet-tools { position: absolute; top: 12px; right: 16px; }
-  #sheet .sheet-pills { padding-right: 72px; }
-  #sheet .sheet-meta { display: flex; flex-direction: column; gap: 1px; }
-  #sheet .sheet-meta > .sep { display: none; }
-  #sheet .sheet-card, #sheet .sheet-inner:has(.sheet-question .qa) .sheet-card { max-height: none; overflow: visible; margin-top: 10px; }
-  #sheet .sheet-card .sched-mini { align-items: flex-start; }
-  #sheet .sheet-card .sched-mini .when { padding-top: 5px; }
-  #sheet .sheet-card .sched-mini .text { display: -webkit-box; padding-top: 4px; white-space: normal; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-  #sheet .sheet-question { grid-column: 2; grid-row: 1; padding-top: 16px; }
-  #sheet .sheet-helpers { grid-column: 2; grid-row: 2; }
-  #sheet .sheet-body { grid-column: 2; grid-row: 3; min-height: 0; padding-top: 14px; }
-  #sheet .composer { grid-column: 2; grid-row: 4; }
+  :is(#sheet, #sidebar-sheet) .sheet-inner { grid-template-columns: clamp(360px, 36%, 480px) minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; }
+  :is(#sheet, #sidebar-sheet) .sheet-head { position: relative; grid-column: 1; grid-row: 1 / -1; min-height: 0; overflow: auto; padding-bottom: 16px; box-shadow: inset -0.5px 0 0 var(--separator); }
+  :is(#sheet, #sidebar-sheet) .sheet-tools { position: absolute; top: 12px; right: 16px; }
+  :is(#sheet, #sidebar-sheet) .sheet-pills { padding-right: 72px; }
+  :is(#sheet, #sidebar-sheet) .sheet-meta { display: flex; flex-direction: column; gap: 1px; }
+  :is(#sheet, #sidebar-sheet) .sheet-meta > .sep { display: none; }
+  :is(#sheet, #sidebar-sheet) .sheet-card, :is(#sheet, #sidebar-sheet) .sheet-inner:has(.sheet-question .qa) .sheet-card { max-height: none; overflow: visible; margin-top: 10px; }
+  :is(#sheet, #sidebar-sheet) .sheet-card .sched-mini { align-items: flex-start; }
+  :is(#sheet, #sidebar-sheet) .sheet-card .sched-mini .when { padding-top: 5px; }
+  :is(#sheet, #sidebar-sheet) .sheet-card .sched-mini .text { display: -webkit-box; padding-top: 4px; white-space: normal; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  :is(#sheet, #sidebar-sheet) .sheet-question { grid-column: 2; grid-row: 1; padding-top: 16px; }
+  :is(#sheet, #sidebar-sheet) .sheet-helpers { grid-column: 2; grid-row: 2; }
+  :is(#sheet, #sidebar-sheet) .sheet-body { grid-column: 2; grid-row: 3; min-height: 0; padding-top: 14px; }
+  :is(#sheet, #sidebar-sheet) .composer { grid-column: 2; grid-row: 4; }
 }
 
 /* The card's fields folded into one line, on a phone only (below). */
@@ -152,15 +152,15 @@
    their own. What gives way when the panel is short: the helpers first, then the conversation
    (down to 96px), then an open card's fields (the head scrolls); never the message box. */
 @media (max-width: 760px) {
-  #sheet .sheet-pills { flex-wrap: nowrap; }
-  #sheet .sheet-pills > * { flex: none; }
-  #sheet .sheet-pills > .lane-pill { flex: 0 3 auto; }
-  #sheet .sheet-pills > .status-pill { flex: 0 1 auto; min-width: 0; }
-  #sheet .status-pill > :not(.pill-label) { flex: none; }
-  #sheet .status-pill > .pill-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-  #sheet .sheet-pills button { min-height: 26px; }
-  #sheet .sheet-properties-toggle { display: none; }
-  #sheet .sheet-meta { -webkit-line-clamp: 1; overflow-wrap: anywhere; }
+  :is(#sheet, #sidebar-sheet) .sheet-pills { flex-wrap: nowrap; }
+  :is(#sheet, #sidebar-sheet) .sheet-pills > * { flex: none; }
+  :is(#sheet, #sidebar-sheet) .sheet-pills > .lane-pill { flex: 0 3 auto; }
+  :is(#sheet, #sidebar-sheet) .sheet-pills > .status-pill { flex: 0 1 auto; min-width: 0; }
+  :is(#sheet, #sidebar-sheet) .status-pill > :not(.pill-label) { flex: none; }
+  :is(#sheet, #sidebar-sheet) .status-pill > .pill-label { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  :is(#sheet, #sidebar-sheet) .sheet-pills button { min-height: 26px; }
+  :is(#sheet, #sidebar-sheet) .sheet-properties-toggle { display: none; }
+  :is(#sheet, #sidebar-sheet) .sheet-meta { -webkit-line-clamp: 1; overflow-wrap: anywhere; }
   .sheet-fold {
     display: flex;
     align-items: center;
@@ -184,41 +184,41 @@
   .sheet-fold-text { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
   .sheet-fold .chevron { flex: none; width: 16px; height: 16px; fill: none; stroke: var(--label-3); stroke-width: 1.8; transition: transform 240ms cubic-bezier(0.2, 0.8, 0.2, 1); }
   .sheet-fold[aria-expanded="true"] .chevron { transform: rotate(180deg); }
-  #sheet .sheet-card { max-height: none; }
-  #sheet .sheet-card[data-folded] { display: none; }
-  #sheet .composer { flex: none; }
-  #sheet .sheet-head { flex-shrink: 0; }
-  #sheet .sheet-head:has(.sheet-card:not([hidden], [data-folded])) { flex-shrink: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
-  #sheet .sheet-helpers { flex-shrink: 1; }
-  #sheet .sheet-body { min-height: 96px; }
+  :is(#sheet, #sidebar-sheet) .sheet-card { max-height: none; }
+  :is(#sheet, #sidebar-sheet) .sheet-card[data-folded] { display: none; }
+  :is(#sheet, #sidebar-sheet) .composer { flex: none; }
+  :is(#sheet, #sidebar-sheet) .sheet-head { flex-shrink: 0; }
+  :is(#sheet, #sidebar-sheet) .sheet-head:has(.sheet-card:not([hidden], [data-folded])) { flex-shrink: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+  :is(#sheet, #sidebar-sheet) .sheet-helpers { flex-shrink: 1; }
+  :is(#sheet, #sidebar-sheet) .sheet-body { min-height: 96px; }
 }
 /* In a short modal, let the conversation give up its minimum height before it pushes
    the expanded draft and Send below the clipped sheet. Cap the draft by the available height. */
 @container sheet (height < 420px) {
-  #sheet:is([data-dock="modal"], [data-dock="mobile"]) .sheet-body { min-height: 0; }
-  #sheet:is([data-dock="modal"], [data-dock="mobile"]) .composer textarea { max-height: clamp(24px, 50cqh, 180px); }
+  :is(#sheet, #sidebar-sheet):is([data-dock="modal"], [data-dock="mobile"]) .sheet-body { min-height: 0; }
+  :is(#sheet, #sidebar-sheet):is([data-dock="modal"], [data-dock="mobile"]) .composer textarea { max-height: clamp(24px, 50cqh, 180px); }
 }
 /* Auto-compact's last run (#378): the line's quiet text, in orange while it holds the session (no
    other /compact until its context is below the limit or the limit changes). */
-#sheet .sheet-card .compact-run { padding: 3px 0; color: var(--label-2); font-size: 12px; line-height: 18px; font-variant-numeric: tabular-nums; }
-#sheet .sheet-card .compact-run.held { color: color-mix(in srgb, var(--orange) 65%, var(--label)); }
+:is(#sheet, #sidebar-sheet) .sheet-card .compact-run { padding: 3px 0; color: var(--label-2); font-size: 12px; line-height: 18px; font-variant-numeric: tabular-nums; }
+:is(#sheet, #sidebar-sheet) .sheet-card .compact-run.held { color: color-mix(in srgb, var(--orange) 65%, var(--label)); }
 /* Active TodoWrite checklist (#637): quiet progress header + ordered items inside SheetCard. */
-#sheet .sheet-card .checklist-row { align-items: flex-start; }
-#sheet .sheet-card .checklist-row > .row-label { padding-top: 3px; line-height: 18px; }
-#sheet .sheet-card .checklist-detail { display: flex; flex-direction: column; gap: 6px; padding: 3px 0; }
-#sheet .sheet-card .checklist-head { display: flex; align-items: center; gap: 8px; }
-#sheet .sheet-card .checklist-ratio { font-size: 12px; font-weight: 600; color: var(--label-2); font-variant-numeric: tabular-nums; line-height: 18px; }
-#sheet .sheet-card .checklist-bar { width: 56px; height: 3px; border-radius: 999px; overflow: hidden; background: var(--fill); }
-#sheet .sheet-card .checklist-bar-fill { height: 100%; background: var(--accent); transition: width 220ms cubic-bezier(0.2, 0.8, 0.2, 1); }
-#sheet .sheet-card .checklist-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
-#sheet .sheet-card .checklist-item { display: flex; align-items: flex-start; gap: 6px; font-size: 12.5px; line-height: 1.38; color: var(--label-2); }
-#sheet .sheet-card .checklist-item.completed { color: var(--label-3); }
-#sheet .sheet-card .checklist-item.in_progress { color: var(--label); font-weight: 500; }
-#sheet .sheet-card .checklist-mark { flex: none; width: 12px; text-align: center; font-size: 11px; line-height: 1.5; color: var(--label-3); }
-#sheet .sheet-card .checklist-item.in_progress .checklist-mark { color: var(--accent); }
-#sheet .sheet-card .checklist-text { min-width: 0; overflow-wrap: anywhere; }
+:is(#sheet, #sidebar-sheet) .sheet-card .checklist-row { align-items: flex-start; }
+:is(#sheet, #sidebar-sheet) .sheet-card .checklist-row > .row-label { padding-top: 3px; line-height: 18px; }
+:is(#sheet, #sidebar-sheet) .sheet-card .checklist-detail { display: flex; flex-direction: column; gap: 6px; padding: 3px 0; }
+:is(#sheet, #sidebar-sheet) .sheet-card .checklist-head { display: flex; align-items: center; gap: 8px; }
+:is(#sheet, #sidebar-sheet) .sheet-card .checklist-ratio { font-size: 12px; font-weight: 600; color: var(--label-2); font-variant-numeric: tabular-nums; line-height: 18px; }
+:is(#sheet, #sidebar-sheet) .sheet-card .checklist-bar { width: 56px; height: 3px; border-radius: 999px; overflow: hidden; background: var(--fill); }
+:is(#sheet, #sidebar-sheet) .sheet-card .checklist-bar-fill { height: 100%; background: var(--accent); transition: width 220ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+:is(#sheet, #sidebar-sheet) .sheet-card .checklist-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+:is(#sheet, #sidebar-sheet) .sheet-card .checklist-item { display: flex; align-items: flex-start; gap: 6px; font-size: 12.5px; line-height: 1.38; color: var(--label-2); }
+:is(#sheet, #sidebar-sheet) .sheet-card .checklist-item.completed { color: var(--label-3); }
+:is(#sheet, #sidebar-sheet) .sheet-card .checklist-item.in_progress { color: var(--label); font-weight: 500; }
+:is(#sheet, #sidebar-sheet) .sheet-card .checklist-mark { flex: none; width: 12px; text-align: center; font-size: 11px; line-height: 1.5; color: var(--label-3); }
+:is(#sheet, #sidebar-sheet) .sheet-card .checklist-item.in_progress .checklist-mark { color: var(--accent); }
+:is(#sheet, #sidebar-sheet) .sheet-card .checklist-text { min-width: 0; overflow-wrap: anywhere; }
 
 @media (prefers-reduced-motion: reduce) {
-  .sheet-pills button, .sheet-fold .chevron, #sheet .sheet-card .checklist-bar-fill { transition: none; }
+  .sheet-pills button, .sheet-fold .chevron, :is(#sheet, #sidebar-sheet) .sheet-card .checklist-bar-fill { transition: none; }
 }
 

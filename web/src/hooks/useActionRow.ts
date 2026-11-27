@@ -50,6 +50,8 @@ export interface RowWidths {
   more: number
 }
 
+const actionId = (el: HTMLElement) => el.id.replace(/^sidebar-/, '')
+
 export const NOT_MEASURED: RowWidths = { key: '', buttons: [], more: 0 }
 
 /** The layout's width, whatever the panel's transform. */
@@ -58,10 +60,10 @@ const width = (el: Element): number => Number.parseFloat(getComputedStyle(el).wi
 /** The buttons of the row `actions` on show, in PRIORITY order (`narrow`: the phone's sheet). */
 export function rowButtons(actions: HTMLElement, narrow: boolean): RowButtons {
   const byId = new Map<string, HTMLElement>()
-  for (const el of Array.from(actions.children)) if (el instanceof HTMLElement) byId.set(el.id, el)
+  for (const el of Array.from(actions.children)) if (el instanceof HTMLElement) byId.set(actionId(el), el)
   const all = PRIORITY.map(id => byId.get(id)).filter((el): el is HTMLElement => !!el && !el.hidden)
   // A terminal wants a keyboard: on a phone it stays under More.
-  const row = all.filter(el => !(narrow && el.id === 'sheet-term'))
+  const row = all.filter(el => !(narrow && actionId(el) === 'sheet-term'))
   const key = [narrow, ...row.map(el => `${el.id} ${(el.textContent ?? '').trim()}`)].join('\n')
   return { all, row, key }
 }
@@ -73,7 +75,7 @@ function measure(actions: HTMLElement, buttons: RowButtons): RowWidths {
   actions.classList.remove('icons')
   const words = buttons.row.map(width)
   actions.classList.add('icons')
-  const more = actions.querySelector('#sheet-more')
+  const more = actions.querySelector('#sheet-more, #sidebar-sheet-more')
   const widths = {
     key: buttons.key,
     buttons: buttons.row.map((el, i) => ({ words: words[i] ?? 0, icon: width(el) })),
@@ -103,7 +105,7 @@ export function fitActions(
     gap,
     more: measured.more,
     moreAlways: buttons.all.length > buttons.row.length,
-    firstWords: buttons.row[0]?.id === 'sheet-focus',
+    firstWords: buttons.row[0] !== undefined && actionId(buttons.row[0]) === 'sheet-focus',
   })
   const over = new Set(
     buttons.all
@@ -111,7 +113,7 @@ export function fitActions(
         const i = buttons.row.indexOf(el)
         return i < 0 || i >= fit.shown
       })
-      .map(el => el.id),
+      .map(actionId),
   )
   if (!over.size) over.add('sheet-more')
   return { shown: { icons: !fit.words, over }, widths: measured }

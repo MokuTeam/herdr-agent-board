@@ -352,7 +352,7 @@
 :root[data-look="terminal"] .sheet-compact-toggle { border-radius: var(--radius); }
 :root[data-look="terminal"] .sheet-helpers-chip { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
 @container sheet not ((min-width: 680px) and (min-aspect-ratio: 5 / 4) and (height < 600px)) {
-  :root[data-look="terminal"] #sheet.sheet-compact .sheet-headline > h2 { font-size: 14px; }
+  :root[data-look="terminal"] :is(#sheet, #sidebar-sheet).sheet-compact .sheet-headline > h2 { font-size: 14px; }
 }
 :root[data-look="terminal"] .session-meter .foot-toggle { border-radius: var(--radius); }
 @media (hover: hover) {
@@ -360,7 +360,7 @@
   :root[data-look="terminal"] .sheet-helpers-chip:hover { background: none; box-shadow: inset 0 0 0 1px var(--t-dim); }
   :root[data-look="terminal"] .session-meter .foot-toggle:hover { background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
 }
-:root[data-look="terminal"] #sheet .sheet-properties-toggle[aria-expanded="true"] { background: none; box-shadow: inset 0 0 0 1px var(--accent); }
+:root[data-look="terminal"] :is(#sheet, #sidebar-sheet) .sheet-properties-toggle[aria-expanded="true"] { background: none; box-shadow: inset 0 0 0 1px var(--accent); }
 :root[data-look="terminal"] .sheet-properties-toggle { border-radius: var(--radius); background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
 
 :root[data-look="terminal"] .group { border-radius: var(--radius); }
@@ -600,7 +600,7 @@
   :root[data-look="terminal"] .col-label .dot { display: none; }
 }
 @media (max-width: 760px) {
-  :root[data-look="terminal"] #sheet .sheet-title h2 { font-size: 16px; }
+  :root[data-look="terminal"] :is(#sheet, #sidebar-sheet) .sheet-title h2 { font-size: 16px; }
   :root[data-look="terminal"] .ql-win { border-radius: 8px; }
 }
 
@@ -746,8 +746,8 @@
 /* TodoWrite checklist (#637): 1px hairline at card bottom, monochrome sheet bar. */
 :root[data-look="terminal"] .card-todo-track { height: 1px; border-radius: 0 0 var(--radius) var(--radius); background: transparent; }
 :root[data-look="terminal"] .card-todo-fill { background: var(--accent); opacity: 0.75; }
-:root[data-look="terminal"] #sheet .sheet-card .checklist-bar { border-radius: 0; background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
-:root[data-look="terminal"] #sheet .sheet-card .checklist-bar-fill { background: var(--accent); }
+:root[data-look="terminal"] :is(#sheet, #sidebar-sheet) .sheet-card .checklist-bar { border-radius: 0; background: none; box-shadow: inset 0 0 0 1px var(--t-edge); }
+:root[data-look="terminal"] :is(#sheet, #sidebar-sheet) .sheet-card .checklist-bar-fill { background: var(--accent); }
 
 /* Node local board banner (#744): outlined, monospace, no fills. */
 :root[data-look="terminal"] .node-master-banner { border-radius: var(--radius); background: none; border-color: var(--t-edge); font-family: var(--mono); }

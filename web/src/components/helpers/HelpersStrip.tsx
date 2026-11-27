@@ -3,6 +3,7 @@
 // newest one in a line, which says how and when it ended if it did. A row opens the helper's conversation, "All" the whole list (the helpers
 // window, hooks/useHelpers.ts). A redraw keeps the focus on what opens the same thing
 // (hooks/useKeepFocus.ts).
+
 import { type MouseEvent, type ReactNode, useRef } from 'react'
 import type { PublicHelper, WorkflowRun } from '../../../../src/core/helpers.ts'
 import { useCollapse } from '../../hooks/useCollapse.ts'
@@ -12,6 +13,7 @@ import { ago } from '../../models/card.ts'
 import { endedLine, helpersSum, helperTitle } from '../../models/helper-model.ts'
 import { useBoardContext } from '../../state/BoardProvider.tsx'
 import { ChevGlyph } from '../icons.tsx'
+import { useSheetId } from '../sheet/sheet-ids.ts'
 import { HelperRow, KindIcon, RunRow, StatusMark } from './HelperRows.tsx'
 
 export interface HelpersStripProps {
@@ -26,6 +28,7 @@ export interface HelpersStripProps {
 }
 
 export function HelpersStrip({ helpers: list, workflows: runs, onHelper, onList, folded = false }: HelpersStripProps) {
+  const id = useSheetId()
   const t = useT()
   const keepFocus = useKeepFocus()
   const strip = useRef<HTMLElement>(null)
@@ -34,8 +37,8 @@ export function HelpersStrip({ helpers: list, workflows: runs, onHelper, onList,
   return (
     <section
       className="sheet-helpers"
-      id="sheet-helpers"
-      aria-labelledby="sheet-helpers-title"
+      id={id('sheet-helpers')}
+      aria-labelledby={id('sheet-helpers-title')}
       hidden={!shown}
       ref={strip}
       data-folded={folded ? '' : undefined}
@@ -53,6 +56,7 @@ function Strip({
   onList,
   t,
 }: HelpersStripProps & { t: ReturnType<typeof useT> }) {
+  const id = useSheetId()
   const { now } = useBoardContext()
   const running = list.filter(h => h.status === 'running')
   const own = running.filter(h => !h.workflow)
@@ -102,7 +106,7 @@ function Strip({
   return (
     <>
       <header className="helpers-head">
-        <h3 id="sheet-helpers-title">{t('helpers.title')}</h3>
+        <h3 id={id('sheet-helpers-title')}>{t('helpers.title')}</h3>
         <span className="helpers-sum">{sum}</span>
         <button
           type="button"

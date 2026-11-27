@@ -6,7 +6,7 @@
 /* ---------------------------------------------------------------- entry points */
 .pill-toggle.new-session { color: var(--accent); background: color-mix(in srgb, var(--accent) 13%, transparent); }
 .pill-toggle.new-session:hover { background: color-mix(in srgb, var(--accent) 19%, transparent); }
-.pill-toggle.new-session:disabled, #sheet-new:disabled { opacity: 0.4; }
+.pill-toggle.new-session:disabled, :is(#sheet-new, #sidebar-sheet-new):disabled { opacity: 0.4; }
 .pill-toggle.new-session svg { stroke-width: 1.9; }
 
 .lane-bar { display: flex; align-items: center; gap: 2px; margin: 0 0 10px 2px; }
@@ -30,9 +30,9 @@
 @media (pointer: coarse) { .lane-new { opacity: 1; } }
 
 /* The session's name in the sheet renames it on a click. */
-#sheet-name { width: fit-content; max-width: 100%; margin-left: -5px; padding: 0 5px; border-radius: 7px; cursor: text; outline: none; transition: background 120ms ease; }
-#sheet-name:hover, #sheet-name:focus-visible { background: var(--fill-2); }
-#sheet-name:focus-visible { box-shadow: 0 0 0 2px var(--accent); }
+:is(#sheet-name, #sidebar-sheet-name) { width: fit-content; max-width: 100%; margin-left: -5px; padding: 0 5px; border-radius: 7px; cursor: text; outline: none; transition: background 120ms ease; }
+:is(#sheet-name, #sidebar-sheet-name):hover, :is(#sheet-name, #sidebar-sheet-name):focus-visible { background: var(--fill-2); }
+:is(#sheet-name, #sidebar-sheet-name):focus-visible { box-shadow: 0 0 0 2px var(--accent); }
 
 /* ---------------------------------------------------------------- the window */
 .launch { position: fixed; inset: 0; z-index: 75; display: grid; place-items: start center; padding-top: max(24px, 10vh); }

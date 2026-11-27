@@ -22,13 +22,13 @@ import { PanelProvider } from './state/PanelProvider.tsx'
 const root = document.getElementById('root')
 const confirming = confirmPage()
 const board = (
-  <BoardProvider>
-    <ThreadsProvider>
-      <PanelProvider>
+  <PanelProvider>
+    <BoardProvider>
+      <ThreadsProvider>
         <App />
-      </PanelProvider>
-    </ThreadsProvider>
-  </BoardProvider>
+      </ThreadsProvider>
+    </BoardProvider>
+  </PanelProvider>
 )
 if (root && confirming)
   createRoot(root).render(

@@ -52,6 +52,7 @@ import { Attachments } from './Attachments.tsx'
 import { SendButton } from './SendButton.tsx'
 import { type FootFold, SessionMeter } from './SessionMeter.tsx'
 import { SLASH_MENU_ID, SlashMenu, slashOptionId } from './SlashMenu.tsx'
+import { useSheetId } from './sheet-ids.ts'
 
 /** What the session's buttons do; each gets the button it was pressed on, for what opens from it. */
 export interface SessionButtons {
@@ -114,6 +115,7 @@ export function Composer({
   moreOpen = false,
   fold,
 }: ComposerProps) {
+  const id = useSheetId()
   const t = useT()
   const fileInput = useRef<HTMLInputElement>(null)
   const actions = useRef<HTMLDivElement>(null)
@@ -154,13 +156,13 @@ export function Composer({
 
   return (
     <footer className="composer">
-      <p id="sheet-connection-state" role="status" hidden={!av.blocked}>
+      <p id={id('sheet-connection-state')} role="status" hidden={!av.blocked}>
         {av.banner}
       </p>
       <div
         className={classNames('composer-actions', row.icons && 'icons')}
         ref={actions}
-        id={fold ? 'sheet-actions' : undefined}
+        id={fold ? id('sheet-actions') : undefined}
         data-folded={fold?.folded ? '' : undefined}
       >
         {/* Not in a phone's browser: herdr's window is on the computer (the row then fits without it); on a desk, herdr follows. */}
@@ -169,7 +171,7 @@ export function Composer({
           <button
             type="button"
             className={classNames('button', over('sheet-focus'))}
-            id="sheet-focus"
+            id={id('sheet-focus')}
             disabled={av.focus}
             onClick={() => on.focus?.()}
           >
@@ -180,7 +182,7 @@ export function Composer({
         <button
           type="button"
           className={classNames('button', over('sheet-mokupilot'))}
-          id="sheet-mokupilot"
+          id={id('sheet-mokupilot')}
           hidden={buttons.mokupilotHidden}
           title={t('mokupilot.hint')}
           disabled={av.edit}
@@ -194,7 +196,7 @@ export function Composer({
           <button
             type="button"
             className={classNames('button', over('sheet-fork'))}
-            id="sheet-fork"
+            id={id('sheet-fork')}
             title={t('fork.hint')}
             disabled={av.newHere}
             onClick={e => on.fork?.(e.currentTarget)}
@@ -206,7 +208,7 @@ export function Composer({
         <button
           type="button"
           className={classNames('button', term.hasShell && 'has-shell', over('sheet-term'))}
-          id="sheet-term"
+          id={id('sheet-term')}
           hidden={term.hidden}
           title={term.title || t('term.hint')}
           onClick={e => on.terminal?.(e.currentTarget)}
@@ -217,7 +219,7 @@ export function Composer({
         <button
           type="button"
           className={classNames('button', over('sheet-changes'))}
-          id="sheet-changes"
+          id={id('sheet-changes')}
           hidden={changesHidden}
           disabled={av.files}
           title={t('changes.hint')}
@@ -229,7 +231,7 @@ export function Composer({
         <button
           type="button"
           className={classNames('button', over('sheet-history'))}
-          id="sheet-history"
+          id={id('sheet-history')}
           hidden={buttons.historyHidden}
           disabled={av.files}
           title={t('history.hint')}
@@ -241,7 +243,7 @@ export function Composer({
         <button
           type="button"
           className={classNames('button', over('sheet-wake'))}
-          id="sheet-wake"
+          id={id('sheet-wake')}
           title={t('sheet.wake')}
           hidden={buttons.wakeHidden}
           disabled={av.wake}
@@ -253,7 +255,7 @@ export function Composer({
         <button
           type="button"
           className={classNames('button', over('sheet-sleep'))}
-          id="sheet-sleep"
+          id={id('sheet-sleep')}
           hidden={buttons.sleepHidden}
           disabled={av.sleep}
           title={buttons.sleepTitle}
@@ -265,7 +267,7 @@ export function Composer({
         <button
           type="button"
           className={classNames('button', over('sheet-restart'))}
-          id="sheet-restart"
+          id={id('sheet-restart')}
           hidden={buttons.restartHidden}
           disabled={av.restart}
           title={buttons.restartTitle}
@@ -277,7 +279,7 @@ export function Composer({
         <button
           type="button"
           className={classNames('button', over('sheet-archive'))}
-          id="sheet-archive"
+          id={id('sheet-archive')}
           hidden={buttons.archiveHidden}
           disabled={av.archive}
           title={buttons.archiveTitle}
@@ -289,7 +291,7 @@ export function Composer({
         <button
           type="button"
           className={classNames('button', over('sheet-new'))}
-          id="sheet-new"
+          id={id('sheet-new')}
           disabled={av.newHere}
           title={av.newHereTitle}
           onClick={e => on.newHere?.(e.currentTarget)}
@@ -300,7 +302,7 @@ export function Composer({
         <button
           type="button"
           className={classNames('button', over('sheet-more'))}
-          id="sheet-more"
+          id={id('sheet-more')}
           aria-haspopup="menu"
           aria-expanded={moreOpen}
           title={t('sheet.more')}
@@ -311,10 +313,10 @@ export function Composer({
         </button>
       </div>
       {aside.deck}
-      <Attachments list={attachments} onRemove={composer.removeFile} />
+      <Attachments list={attachments} onRemove={composer.removeFile} id={id('attachments')} />
       <form
         className={classNames('composer-box', aside.on && 'aside')}
-        id="composer"
+        id={id('composer')}
         onSubmit={e => {
           e.preventDefault()
           slash.sent(text)
@@ -326,7 +328,7 @@ export function Composer({
         <button
           type="button"
           className="attach"
-          id="attach"
+          id={id('attach')}
           title={t('compose.attach')}
           aria-label={t('compose.attachLabel')}
           disabled={av.edit}
@@ -347,7 +349,7 @@ export function Composer({
         )}
         <input
           type="file"
-          id="file-input"
+          id={id('file-input')}
           multiple
           hidden
           ref={fileInput}
@@ -367,15 +369,15 @@ export function Composer({
           />
         )}
         <textarea
-          id="message"
+          id={id('message')}
           rows={1}
           placeholder={t(
             aside.on ? 'aside.placeholder' : remotePage() ? 'compose.placeholderPhone' : 'compose.placeholder',
           )}
           aria-label={t('compose.label')}
           aria-autocomplete={slash.open ? 'list' : undefined}
-          aria-controls={slash.open ? SLASH_MENU_ID : undefined}
-          aria-activedescendant={slash.open ? slashOptionId(slash.active) : undefined}
+          aria-controls={slash.open ? id(SLASH_MENU_ID) : undefined}
+          aria-activedescendant={slash.open ? id(slashOptionId(slash.active)) : undefined}
           ref={messageRef}
           value={text}
           onChange={e => composer.input(e.currentTarget.value)}
@@ -387,7 +389,7 @@ export function Composer({
         <button
           type="button"
           className="draft-clear"
-          id="draft-cancel"
+          id={id('draft-cancel')}
           hidden={view.discardHidden}
           disabled={view.discardDisabled}
           title={t('draft.cancel')}

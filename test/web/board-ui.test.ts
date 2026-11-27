@@ -132,6 +132,34 @@ test('opening: each one counts (the same session again starts its sheet over), "
   expect([ui.open, ui.opened, ui.compose]).toEqual(['b', 3, false])
 })
 
+test('a modal session keeps the docked session in its own slot until the modal closes', () => {
+  const docked = boardUi(initialUi(stored({})), { type: 'open', key: 'pane-master', compose: true })
+  const modal = boardUi(docked, { type: 'open', key: 'claude-session', modal: true, keepSidebar: true })
+  expect(modal.open).toBe('claude-session')
+  expect(modal.sidebarSheet).toEqual({ key: 'pane-master', opened: docked.opened })
+  expect(modal.sheetSlot).toBe(1)
+
+  const next = boardUi(modal, { type: 'open', key: 'pane-pi', modal: true })
+  expect(next.sidebarSheet).toBe(modal.sidebarSheet)
+  const closed = boardUi(next, { type: 'closeSheet', slot: 1 })
+  expect([closed.open, closed.opened, closed.sheetSlot, closed.compose]).toEqual(['pane-master', 1, 0, false])
+  expect(closed.sidebarSheet).toBeUndefined()
+})
+
+test('closing the dock or opening another side session clears only the dock reservation', () => {
+  const docked = boardUi(initialUi(stored({})), { type: 'open', key: 'pane-master' })
+  const modal = boardUi(docked, { type: 'open', key: 'pane-session', modal: true, keepSidebar: true })
+  expect(modal.sidebarSheet?.key).toBe('pane-master')
+  const dockClosed = boardUi(modal, { type: 'closeSheet', slot: 0 })
+  expect(dockClosed.open).toBe('pane-session')
+  expect(dockClosed.sidebarSheet).toBeUndefined()
+  expect(boardUi(dockClosed, { type: 'closeSheet', slot: 1 }).open).toBeNull()
+
+  const switched = boardUi(modal, { type: 'open', key: 'other-master' })
+  expect(switched.open).toBe('other-master')
+  expect(switched.sidebarSheet).toBeUndefined()
+})
+
 test('a result read in the sheet is recorded as viewed', () => {
   const done = item({ key: 'a', column: 'done', result: 'Fixed', activity: 5 })
   const ui = boardUi(initialUi(stored({})), { type: 'viewed', item: done })

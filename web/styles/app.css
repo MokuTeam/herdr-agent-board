@@ -846,11 +846,11 @@ div.notice, .notice > summary { display: flex; align-items: flex-start; gap: 7px
 .composer-actions > .button { flex: none; }
 .composer-actions > .over { display: none; }
 .composer-actions.measuring > .button { display: inline-flex; }
-.composer-actions:not(.measuring) > #sheet-focus { flex: 0 1 auto; min-width: 0; }
-#sheet-focus > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-#sheet-more { justify-content: center; width: 30px; margin-left: auto; padding: 0; }
-.composer-actions.icons > .button:not(#sheet-focus) { justify-content: center; width: 30px; padding: 0; }
-.composer-actions.icons > .button:not(#sheet-focus) > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.composer-actions:not(.measuring) > :is(#sheet-focus, #sidebar-sheet-focus) { flex: 0 1 auto; min-width: 0; }
+:is(#sheet-focus, #sidebar-sheet-focus) > span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+:is(#sheet-more, #sidebar-sheet-more) { justify-content: center; width: 30px; margin-left: auto; padding: 0; }
+.composer-actions.icons > .button:not(:is(#sheet-focus, #sidebar-sheet-focus)) { justify-content: center; width: 30px; padding: 0; }
+.composer-actions.icons > .button:not(:is(#sheet-focus, #sidebar-sheet-focus)) > span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .button {
   display: inline-flex;
   align-items: center;
@@ -1533,21 +1533,21 @@ button.swatch:active { transform: scale(0.88); }
 
 /* ---------------------------------------------------------------- narrow windows */
 @media (max-width: 760px) {
-  #sheet .sheet-head { padding: 14px 16px 8px; }
-  #sheet .sheet-title h2 { font-size: 19px; line-height: 1.2; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-  #sheet .sheet-meta { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  :is(#sheet, #sidebar-sheet) .sheet-head { padding: 14px 16px 8px; }
+  :is(#sheet, #sidebar-sheet) .sheet-title h2 { font-size: 19px; line-height: 1.2; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  :is(#sheet, #sidebar-sheet) .sheet-meta { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
   .sheet-properties-toggle { display: block; align-self: flex-start; margin: 0 16px 8px; padding: 5px 10px; border: 0; border-radius: 8px; background: var(--fill); color: var(--label-2); font-size: 12.5px; }
   .sheet-properties-toggle::after { content: '⌄'; margin-left: 8px; }
   .sheet-properties-toggle[aria-expanded="true"]::after { content: '⌃'; }
-  #sheet .sheet-card { max-height: 28vh; }
-  #sheet .chips button { height: auto; min-height: 30px; max-width: 100%; padding-top: 4px; padding-bottom: 4px; text-align: left; }
-  #sheet .sheet-question { padding: 0 16px 8px; max-height: 24vh; }
-  #sheet .asked { padding: 8px 10px; font-size: 12.5px; }
-  #sheet .asked b { display: inline; margin-right: 5px; font-size: 11px; }
-  #sheet .asked-dismiss { display: inline-flex; height: 26px; margin: 5px 0 0 6px; font-size: 12px; }
-  #sheet .composer-actions { margin-bottom: 8px; flex-wrap: nowrap; }
-  #sheet .composer-actions .button { min-width: 36px; min-height: 36px; }
-  #sheet .composer { padding: 8px 16px 12px; }
+  :is(#sheet, #sidebar-sheet) .sheet-card { max-height: 28vh; }
+  :is(#sheet, #sidebar-sheet) .chips button { height: auto; min-height: 30px; max-width: 100%; padding-top: 4px; padding-bottom: 4px; text-align: left; }
+  :is(#sheet, #sidebar-sheet) .sheet-question { padding: 0 16px 8px; max-height: 24vh; }
+  :is(#sheet, #sidebar-sheet) .asked { padding: 8px 10px; font-size: 12.5px; }
+  :is(#sheet, #sidebar-sheet) .asked b { display: inline; margin-right: 5px; font-size: 11px; }
+  :is(#sheet, #sidebar-sheet) .asked-dismiss { display: inline-flex; height: 26px; margin: 5px 0 0 6px; font-size: 12px; }
+  :is(#sheet, #sidebar-sheet) .composer-actions { margin-bottom: 8px; flex-wrap: nowrap; }
+  :is(#sheet, #sidebar-sheet) .composer-actions .button { min-width: 36px; min-height: 36px; }
+  :is(#sheet, #sidebar-sheet) .composer { padding: 8px 16px 12px; }
   .ql-head { display: grid; grid-template-columns: 30px 28px minmax(0, 1fr) 30px; gap: 8px; padding: 12px; }
   .ql-back { grid-column: 1; grid-row: 1; }
   .ql-icon { grid-column: 2; grid-row: 1; }
@@ -1594,7 +1594,7 @@ button.swatch:active { transform: scale(0.88); }
   .msg.user.waiting:not(.failed) { box-shadow: inset 0 0 0 1px var(--accent); }
 }
 
-#connection-state, #sheet-connection-state { margin: 4px 16px; color: var(--orange); font-size: 12px; }
+#connection-state, :is(#sheet-connection-state, #sidebar-sheet-connection-state) { margin: 4px 16px; color: var(--orange); font-size: 12px; }
 @media (pointer: coarse) {
   .card { touch-action: pan-y; user-select: text; -webkit-user-select: text; }
   .sheet-body, .sheet-title, .ql-body { user-select: text; -webkit-user-select: text; }

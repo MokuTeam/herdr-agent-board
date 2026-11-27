@@ -1,8 +1,8 @@
 /* Keep centered card windows and their scrims in the space beside a docked chat.
    At narrow desktop widths the chat still takes up space even when it overlays the board. */
-:root:has(#sheet.open:is([data-dock="left"], [data-dock="right"], [data-dock="bottom"])) {
-  --card-left: max(var(--room-left, 0px), var(--over-left, 0px) - 12px);
-  --card-right: max(var(--room-right, 0px), var(--over-right, 0px) - 12px);
+:root:has(:is(#sheet, #sidebar-sheet).open:is([data-dock="left"], [data-dock="right"], [data-dock="bottom"])) {
+  --card-left: max(var(--room-left, 0px), calc(var(--over-left, 0px) - 12px));
+  --card-right: max(var(--room-right, 0px), calc(var(--over-right, 0px) - 12px));
   --card-bottom: var(--room-bottom, 0px);
   --card-width: calc(100vw - var(--card-left) - var(--card-right) - 24px);
 }

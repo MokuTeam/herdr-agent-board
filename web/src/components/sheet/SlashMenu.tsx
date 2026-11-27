@@ -5,6 +5,7 @@ import { type RefObject, useLayoutEffect, useRef } from 'react'
 import type { SlashBox } from '../../hooks/useSlash.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { classNames } from '../class-names.ts'
+import { useSheetId } from './sheet-ids.ts'
 
 export const SLASH_MENU_ID = 'slash-menu'
 export const slashOptionId = (i: number): string => `slash-option-${i}`
@@ -19,6 +20,7 @@ export function SlashMenu({
   text: string
   box: RefObject<HTMLTextAreaElement | null>
 }) {
+  const id = useSheetId()
   const t = useT()
   const menu = useRef<HTMLDivElement>(null)
   const { open, list, active, argument } = slash
@@ -35,13 +37,13 @@ export function SlashMenu({
     // A press anywhere on it (a row, its padding, the keys line, its scrollbar) leaves the focus in the box.
     // biome-ignore lint/a11y/noStaticElementInteractions: it only keeps the focus where it is, it acts on nothing
     <div className="slash-menu" onPointerDown={e => e.preventDefault()} onMouseDown={e => e.preventDefault()}>
-      <div className="slash-list" id={SLASH_MENU_ID} role="listbox" aria-label={t('slash.label')} ref={menu}>
+      <div className="slash-list" id={id(SLASH_MENU_ID)} role="listbox" aria-label={t('slash.label')} ref={menu}>
         {list.map((c, i) => (
           // biome-ignore lint/a11y/useKeyWithClickEvents: the box's arrows, Tab and Enter pick (aria-activedescendant)
           // biome-ignore lint/a11y/useFocusableInteractive: as above: the focus stays in the box
           <div
             key={c.name}
-            id={slashOptionId(i)}
+            id={id(slashOptionId(i))}
             role="option"
             aria-selected={i === active}
             className={classNames('slash-option', i === active && 'active')}

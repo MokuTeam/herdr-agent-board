@@ -211,7 +211,7 @@ export function PanelView(props: PanelViewProps) {
           glyph={chrome.glyph}
           menuOpen={menuOpen}
           hidePlace={modal}
-          closeId={closeId}
+          closeId={kind === 'session' && id !== 'sheet' ? 'sidebar-sheet-close' : closeId}
           onPlace={onPlace}
           onClose={onClose}
         />
