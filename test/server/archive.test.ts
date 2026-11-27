@@ -338,9 +338,7 @@ test('Return before the tab closed puts everything back as it was: the card, the
   assert.match(String(again.body.error), /not in the archive/)
 }, 30_000)
 
-test('Codex enters the archive and Return starts the original UUID in its rollout home', async () => {
-  const box = await sandbox()
-  const dir = project(box, {}, '')
+function codexTranscript(box: Sandbox, dir: string): string {
   const codexHome = join(box.dir, 'Codex home 50%')
   const rolls = join(codexHome, 'sessions', '2026', '11', '26')
   mkdirSync(rolls, { recursive: true })
@@ -348,6 +346,13 @@ test('Codex enters the archive and Return starts the original UUID in its rollou
     join(rolls, `rollout-2026-11-26T12-00-00-${S}.jsonl`),
     `${JSON.stringify({ type: 'session_meta', payload: { id: S, cwd: dir } })}\n`,
   )
+  return codexHome
+}
+
+test('Codex enters the archive and Return starts the original UUID in its rollout home', async () => {
+  const box = await sandbox()
+  const dir = project(box, {}, '')
+  const codexHome = codexTranscript(box, dir)
   const bin = join(box.dir, 'bin')
   mkdirSync(bin)
   const file = join(bin, process.platform === 'win32' ? 'codex.cmd' : 'codex')
@@ -394,6 +399,60 @@ test('Codex enters the archive and Return starts the original UUID in its rollou
   await b.refresh()
   await until(() => record(box) === null, 10_000)
   assert.ok((await b.items()).includes(S))
+})
+
+test('archived Codex sleeper with a closed pane keeps its schedule until the native SID returns', async () => {
+  const box = await sandbox()
+  const dir = project(box, {}, '')
+  const codexHome = codexTranscript(box, dir)
+  const sleepers = join(stateDir(box), 'wake-codex.json')
+  mkdirSync(stateDir(box), { recursive: true })
+  writeFileSync(
+    sleepers,
+    JSON.stringify({
+      [S]: { session: S, pane: 'wP:p1', name: 'Probe card', cwd: dir, argv: ['codex'], slept_at: Date.now() },
+    }),
+  )
+  schedule(box)
+  herdrWith(box, dir, { agent: 'codex', asleep: true, label: '💤 Probe card' })
+  const b = await board(box, { archiveUndoSec: 0.2 }, { CODEX_HOME: codexHome })
+  const find = async () => ((await b.payload()).items as Item[]).find(i => i.key === S)
+  const asleep = await find()
+  assert.deepEqual([asleep?.agent, asleep?.sleeping, asleep?.pane], ['codex', true, 'wP:p1'])
+
+  assert.equal((await b.archive()).body.ok, true)
+  await until(() => archiveLog(box).some(e => e.result === 'closed'), 10_000)
+  assert.ok(calls(box).includes('tab close wP:t1'))
+  herdrWith(box, dir, { gone: true })
+  await b.refresh()
+  assert.equal(await find(), undefined)
+  assert.equal(record(box)?.state, 'archived')
+  assert.equal(record(box)?.pane, 'wP:p1')
+  assert.ok(record(box)?.held.some(e => e.id === 'abc123'))
+  assert.equal(existsSync(entryFile(box, 'abc123')), false)
+  assert.deepEqual(
+    archiveLog(box).map(l => l.result),
+    ['closed'],
+  )
+
+  // The stale registry row can coexist with a real resume. The native item wins by SID.
+  box.state({
+    'api snapshot': {
+      result: {
+        snapshot: { panes: [{ ...FRESH(dir), agent: 'codex' }], tabs: [], workspaces: [] },
+      },
+    },
+  })
+  await b.refresh()
+  const resumed = await find()
+  assert.deepEqual([resumed?.agent, resumed?.session, resumed?.sleeping, resumed?.pane], ['codex', S, false, 'wP:p9'])
+  assert.equal(record(box), null)
+  assert.deepEqual(
+    archiveLog(box).map(l => l.result),
+    ['closed', 'returned'],
+  )
+  const reminder = JSON.parse(readFileSync(entryFile(box, 'abc123'), 'utf8'))
+  assert.deepEqual([reminder.id, reminder.key, reminder.pane], ['abc123', S, 'wP:p9'])
 })
 
 test('Return after the tab closed resumes it by its id in a new tab, in its folder and workspace, with its name; then it is settled', async () => {
