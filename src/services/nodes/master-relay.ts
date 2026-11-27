@@ -22,7 +22,6 @@ import {
   plainPath,
   RELAY_ANSWER_HEADERS,
   RELAY_ANSWER_MAX,
-  RELAY_BODY_MAX,
   RELAY_CHUNK_MAX,
   RELAY_ERRORS,
   RELAY_REQUEST_HEADERS,
@@ -30,10 +29,12 @@ import {
   type RelayRequest,
   type RelayWho,
   rawPathOf,
+  relayBodyMax,
   relayError,
   relayMatch,
   relayRequestOf,
 } from '../../core/master-relay.ts'
+import { TEAM_FILE_PATH } from '../../core/upload-name.ts'
 import type { Link } from './link.ts'
 import type { NodeLinks } from './links.ts'
 
@@ -293,7 +294,7 @@ export function createMasterRelayRunner(o: MasterRelayRunnerOptions): MasterRela
       await res.body?.cancel().catch(() => {})
       throw new Error(`body fetch: HTTP ${res.status}`)
     }
-    const bytes = await bytesUpTo(res, RELAY_BODY_MAX)
+    const bytes = await bytesUpTo(res, relayBodyMax(req.method, rawPathOf(req.path)))
     if (!bytes) throw new Error('body too large')
     if (createHash('sha256').update(bytes).digest('hex') !== req.bodySha)
       throw new Error('body does not match its hash')
@@ -324,7 +325,8 @@ export function createMasterRelayRunner(o: MasterRelayRunnerOptions): MasterRela
     const res = await o.replay(request, { device, who: req.who })
     const head = answerHeadersOf(res)
     const type = (res.headers.get('content-type') ?? '').toLowerCase()
-    if (!type.startsWith('text/event-stream') || !res.body) {
+    const teamFile = req.method === 'GET' && TEAM_FILE_PATH.test(rawPathOf(path)) && res.ok
+    if ((!teamFile && !type.startsWith('text/event-stream')) || !res.body) {
       const bytes = await bytesUpTo(res, RELAY_ANSWER_MAX)
       if (!bytes) return failure(502, RELAY_ERRORS.tooBig)
       return {

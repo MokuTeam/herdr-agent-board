@@ -27,6 +27,7 @@ import {
   type RelayEntry,
   type RelayRequest,
   type RelayWho,
+  relayBodyMax,
   relayBodyWants,
   relayChunkOf,
   relayError,
@@ -340,7 +341,7 @@ export function createMasterRelay(deps: MasterRelayDeps): MasterRelay {
       let bytes: Uint8Array<ArrayBuffer> | null = new Uint8Array(0)
       if (gated) bytes = gated
       else if (write) {
-        bytes = await bodyUpTo(req, RELAY_BODY_MAX)
+        bytes = await bodyUpTo(req, relayBodyMax(req.method, caller.rawPath))
         if (!bytes) return refused(413, RELAY_ERRORS.tooBig)
       }
       const headers: Record<string, string> = {}

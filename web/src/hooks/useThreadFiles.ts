@@ -1,6 +1,5 @@
 // The files that go with the next message in each Team thread (#371), by the thread's key, while
-// the page lives: each uploads to the board as soon as it comes in (POST /api/upload, as the
-// session's box does), a picture previews from the browser's own copy, and a failed one says why in
+// the page lives: each uploads to the board as soon as it comes in (POST /api/team/upload), a picture previews from the browser's own copy, and a failed one says why in
 // a toast. Another thread on show keeps its own; a send clears the ones it took. The board seals
 // each file for the thread's members when the message goes (POST /api/team/send's `file`).
 import { useRef, useState } from 'react'
@@ -17,7 +16,7 @@ export const MAX_THREAD_FILES = 10
 const uploadError = (err: unknown, t: Translator): string =>
   err instanceof ApiError ? errorText(err, t) : err instanceof Error ? err.message : String(err)
 
-/** Where in the board's uploads a saved file is (`<day>/<name>`), from the path /api/upload answered. */
+/** Where in the board's uploads a saved file is (`<day>/<name>`), from the path the Team upload answered. */
 export const uploadPlace = (path: string): string => path.split(/[\\/]/).slice(-2).join('/')
 
 export interface ThreadFiles {
@@ -48,7 +47,7 @@ export function useThreadFiles(): ThreadFiles {
 
     async function upload(key: string, a: Attachment, file: File): Promise<void> {
       try {
-        update(key, a.id, { status: 'done', path: await api.upload(a.name, file) })
+        update(key, a.id, { status: 'done', path: await api.uploadTeam(a.name, file) })
       } catch (err) {
         update(key, a.id, { status: 'error' })
         const { t, toast } = latest.current

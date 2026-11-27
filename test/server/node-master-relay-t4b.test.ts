@@ -13,6 +13,11 @@
 import { expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { memoryBlobs } from '../../hub/src/blobs.ts'
+import { boxBytes, generateKey, sign } from '../../src/core/team.ts'
+import { generateBoxKey } from '../../src/core/team-box.ts'
+import { isThreadLines } from '../../web/src/models/team.ts'
+import { startHarness } from '../hub/harness.ts'
 import { serveBoard } from '../support/board-server.ts'
 import { nodePair, type PairNode } from '../support/node-pair.ts'
 import { sandbox } from '../support/sandbox.ts'
@@ -272,4 +277,77 @@ test('a board without node answers Devices, Add a server and Team as before', as
   expect((await getJson(`${url}/api/team`)).status).toBe(404)
   // Add a server's form is this board's own (it adds its first server here).
   expect((await getJson(`${url}/api/nodes/setup`)).status).toBe(200)
+}, 30_000)
+
+test('a node uploads Team photos to its master and loads the posted preview', async () => {
+  const hub = await startHarness({ blobs: memoryBlobs() })
+  try {
+    const peer = await generateKey()
+    const box = await generateBoxKey()
+    const claim = { key: box.pub, sig: await sign(peer.pkcs8, boxBytes({ box: box.pub, peer: peer.pub })) }
+    const client = await hub.join(peer, 'photo fixture', undefined, ['threads', 'channels', 'files'], { box: claim })
+    const master = await generateKey()
+    ;(await hub.join(master, 'photo master')).close()
+    const pair = await nodePair({
+      count: 1,
+      masterCfg: { team: { hub: hub.url.replace(/\/v1$/, ''), name: 'photo master' } },
+      masterSetup(box) {
+        const dir = join(box.env.LOCALAPPDATA as string, 'herdr', 'plugins', 'agent-board')
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(join(dir, 'team-key.json'), JSON.stringify({ v: 1, ...master }), { mode: 0o600 })
+      },
+    })
+    const [node] = pair.nodes as [PairNode]
+    await pair.waitDevice(node.id, d => d.link?.state === 'online', 10_000)
+    await until('the Team member supports files', async () => {
+      const res = await fetch(`${node.url}/api/team`)
+      if (!res.ok) return null
+      const view = (await res.json()) as { roster: { peer: string; files?: boolean }[] }
+      return view.roster.some(p => p.peer === peer.pub && p.files) ? true : null
+    })
+
+    const shot = new Uint8Array(5 * 1024 * 1024)
+    shot.set([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4])
+    const name = 'Фото 100%.png'
+    const headers = { 'x-board': '1', 'x-filename': encodeURIComponent(name) }
+    const localUpload = await fetch(`${node.url}/api/upload`, {
+      method: 'POST',
+      headers,
+      body: new Uint8Array([1]),
+    })
+    const local = (await localUpload.json()) as { url: string }
+    expect((await fetch(node.url + local.url)).status).toBe(200)
+    expect((await fetch(pair.master.url + local.url)).status).toBe(404)
+    const localPlace = decodeURIComponent(local.url.slice('/uploads/'.length))
+    const wrongBoard = await post(`${node.url}/api/team/send`, {
+      to: peer.pub,
+      text: '',
+      file: { upload: localPlace, name },
+    })
+    expect(wrongBoard.status).toBe(400)
+    expect(await wrongBoard.json()).toEqual({ ok: false, error: 'file' })
+
+    const uploadRes = await fetch(`${node.url}/api/team/upload`, { method: 'POST', headers, body: shot })
+    expect(uploadRes.status).toBe(200)
+    const up = (await uploadRes.json()) as { path: string }
+    const upload = up.path.split(/[\\/]/).slice(-2).join('/')
+    const sent = await post(`${node.url}/api/team/send`, { to: peer.pub, text: '', file: { upload, name } })
+    expect(sent.status).toBe(200)
+    await client.take('deliver', 8000)
+    const thread = (await (await fetch(`${node.url}/api/team/threads/${peer.pub}/general`)).json()) as {
+      lines: { file?: { url: string } }[]
+    }
+    expect(isThreadLines(thread)).toBe(true)
+    const preview = thread.lines[0]?.file?.url
+    expect(preview).toBeTruthy()
+    const downloaded = await fetch(node.url + preview)
+    expect(downloaded.status).toBe(200)
+    expect(downloaded.headers.get('content-type')).toBe('image/png')
+    expect(downloaded.headers.get('content-security-policy')).toBe("default-src 'none'")
+    expect(Buffer.from(await downloaded.arrayBuffer()).equals(Buffer.from(shot))).toBe(true)
+    expect((await fetch(`${node.url}${preview}-missing`)).status).toBe(404)
+    expect((await fetch(node.url + preview, { headers: { 'x-board-session': S1 } })).status).toBe(403)
+  } finally {
+    hub.stop()
+  }
 }, 30_000)
