@@ -223,7 +223,7 @@ export function Sheet(slots: SheetSlots) {
     <Panel
       id="sheet"
       kind="session"
-      cardWindow="session"
+      centered
       open={open !== null}
       onClose={() => dispatch({ type: 'open', key: null })}
       about={() => cardOf(open)}

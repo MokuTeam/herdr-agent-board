@@ -21,6 +21,7 @@ import {
   canonical,
   type Element,
   find,
+  findAll,
   hasClass,
   type Node,
   OLD_PAGE_ONLY,
@@ -97,7 +98,8 @@ describe.each(['en', 'ru'])('the shell in %s', lang => {
     const react = inPanels(<SidePanels {...panelsOf(false)} />, lang)
     const asides = react.filter((n): n is Element => n.kind === 'element')
     expect(asides.map(a => a.attrs.get('id'))).toEqual(IDS)
-    for (const id of IDS) expect(shell(asideOf(react, id))).toBe(shell(asideOf(old.get(id) ?? [], id)))
+    for (const id of IDS.filter(id => id !== 'sheet'))
+      expect(shell(asideOf(react, id))).toBe(shell(asideOf(old.get(id) ?? [], id)))
     const inner = (id: string) => find([asideOf(react, id)], el => hasClass(el, 'sheet-inner')).children
     // The session sheet's own parts (their markup: sheet.test.tsx).
     expect(inner('sheet').map(n => (n.kind === 'element' ? (n.attrs.get('id') ?? n.attrs.get('class')) : ''))).toEqual([
@@ -177,17 +179,23 @@ test('a panel’s own tools come before the place button', () => {
   ).toEqual(['own', 'data-layout', 'sheet-close'])
 })
 
-test('a single remembered card view applies to master, ordinary Claude and pi sessions', () => {
+test('every card uses a centered dialog without reading either old card preference', () => {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'localStorage')
   const saved = new Map([
     ['board.panel', '{"dock":"left"}'],
-    ['board.cardWindow.session', 'modal'],
+    ['board.cardWindow.session', 'panel'],
     ['board.cardWindow.master', 'panel'],
     ['board.cardWindow.thread', 'invalid'],
   ])
+  const reads: string[] = []
   Object.defineProperty(globalThis, 'localStorage', {
     configurable: true,
-    value: { getItem: (key: string) => saved.get(key) ?? null },
+    value: {
+      getItem: (key: string) => {
+        reads.push(key)
+        return saved.get(key) ?? null
+      },
+    },
   })
   const cards = [
     item({ key: 'pane-w2:p1', name: 'Build %', agent: 'codex', teamMaster: true }),
@@ -211,6 +219,9 @@ test('a single remembered card view applies to master, ordinary Claude and pi se
   }
   try {
     const master = view(cards[0].key)
+    expect(
+      findAll([asideOf(master, 'sheet')], el => el.attrs.has('data-card-window') || el.attrs.has('data-layout')),
+    ).toHaveLength(0)
     expect(asideOf(master, 'sheet').attrs.get('data-dock')).toBe('modal')
     const ordinary = view(cards[1].key)
     expect(asideOf(ordinary, 'sheet').attrs.get('data-dock')).toBe('modal')
@@ -222,12 +233,14 @@ test('a single remembered card view applies to master, ordinary Claude and pi se
     saved.set('board.cardWindow.master', 'modal')
     saved.set('board.cardWindow.session', 'panel')
     saved.set('board.cardWindow.thread', 'modal')
-    expect(asideOf(view(cards[0].key), 'sheet').attrs.get('data-dock')).toBe('left')
-    expect(asideOf(view(cards[1].key), 'sheet').attrs.get('data-dock')).toBe('left')
+    expect(asideOf(view(cards[0].key), 'sheet').attrs.get('data-dock')).toBe('modal')
+    expect(asideOf(view(cards[1].key), 'sheet').attrs.get('data-dock')).toBe('modal')
     expect(asideOf(view(cards[1].key), 'threads-sheet').attrs.get('data-dock')).toBe('modal')
     saved.delete('board.cardWindow.session')
     expect(asideOf(view(cards[0].key), 'sheet').attrs.get('data-dock')).toBe('modal')
     expect(asideOf(view(cards[1].key), 'sheet').attrs.get('data-dock')).toBe('modal')
+    expect(reads).not.toContain('board.cardWindow.session')
+    expect(reads).not.toContain('board.cardWindow.master')
   } finally {
     if (previous) Object.defineProperty(globalThis, 'localStorage', previous)
     else Reflect.deleteProperty(globalThis, 'localStorage')

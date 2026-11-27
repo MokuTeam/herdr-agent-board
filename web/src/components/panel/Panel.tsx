@@ -95,15 +95,16 @@ interface ShellProps {
 export interface PanelProps extends ShellProps {
   open: boolean
   cardWindow?: CardWindowKind
+  centered?: boolean
   onClose(): void
   /** The element the panel is about (the session's card): kept in its place on screen while the board makes room. */
   about?: () => Element | null
 }
 
-export function Panel({ open, onClose, about, cardWindow, ...shell }: PanelProps) {
+export function Panel({ open, onClose, about, cardWindow, centered = false, ...shell }: PanelProps) {
   const choice = useCardWindow(cardWindow)
-  const modal = choice?.view === 'modal'
-  const tool = shell.kind === 'team' || shell.kind === 'threads' || shell.kind === 'schedule' ? shell.kind : undefined
+  const modal = centered || choice?.view === 'modal'
+  const tool = shell.kind === 'session' ? undefined : shell.kind
   const panel = usePanel({ open, modal, chat: shell.kind === 'session', tool, onClose, about })
   const { ref, shown } = panel
   useLayoutEffect(() => {
