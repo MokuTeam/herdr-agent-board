@@ -26,7 +26,6 @@ import { type DetailSnapshot, useSessionDetail } from '../../hooks/useSessionDet
 import { useSheetDensity } from '../../hooks/useSheetDensity.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import { inTurn } from '../../models/card.ts'
-import { sessionWindowKind } from '../../models/card-window.ts'
 import { ConversationScroll } from '../../models/conversation-scroll.ts'
 import { nodeLook } from '../../models/devices.ts'
 import { helpersChip } from '../../models/helper-model.ts'
@@ -224,7 +223,7 @@ export function Sheet(slots: SheetSlots) {
     <Panel
       id="sheet"
       kind="session"
-      cardWindow={sessionWindowKind(shown.item)}
+      cardWindow="session"
       open={open !== null}
       onClose={() => dispatch({ type: 'open', key: null })}
       about={() => cardOf(open)}

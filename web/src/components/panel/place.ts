@@ -1,6 +1,6 @@
 // The one place the side panels share: the viewer's layout (this browser's: docked right, left or
 // at the bottom, or floating), the room the board makes for a docked panel, the dock preview and
-// the place menu, and the window around them. One panel is open at a time, in this place.
+// the place menu, and the window around them. A docked chat and a centered card can share it.
 //
 // The board's margins (--room-left/right/bottom on <html>) are springs. While they move, the card
 // the panel is about keeps its place on screen, and stays clear of a panel at the bottom. A side
@@ -36,11 +36,17 @@ import { LayoutMenuMotion, type MenuView } from './layout-menu.ts'
 
 /** The viewer's layout in localStorage (format: panel-layout.ts serializeLayout). */
 export const LAYOUT_KEY = 'board.panel'
+export type PanelTool = 'team' | 'threads' | 'schedule'
+const toolKey = (tool: PanelTool) => `${LAYOUT_KEY}.${tool}`
 
 /** What the place needs of a panel. */
 export interface PlacedPanel {
   readonly isOpen: boolean
   readonly modal?: boolean
+  readonly chat?: boolean
+  readonly tool?: PanelTool | undefined
+  readonly layout?: PanelLayout
+  contains?(target: Element | null): boolean
   /** A gesture is in progress. */
   readonly gesturing: boolean
   close(velocity?: { x?: number; y?: number }): void
@@ -85,6 +91,7 @@ function windowSize(): Viewport {
 export class PanelPlace {
   layout: PanelLayout
   readonly panels: PlacedPanel[] = []
+  private readonly toolLayouts = new Map<PanelTool, PanelLayout>()
   readonly room: Record<Side, Spring>
   readonly over: Record<keyof Over, Spring>
   readonly preview: DockPreviewMotion
@@ -134,8 +141,24 @@ export class PanelPlace {
     return this.phoneQuery()?.matches ?? false
   }
 
-  modeNow(): Mode {
-    return this.isPhone() ? 'mobile' : this.layout.dock
+  modeNow(layout = this.layout): Mode {
+    return this.isPhone() ? 'mobile' : layout.dock
+  }
+
+  layoutFor(tool: PanelTool | undefined): PanelLayout {
+    if (!tool) return this.layout
+    const local = this.toolLayouts.get(tool)
+    if (local) return local
+    const saved = storage.read(toolKey(tool))
+    if (saved === null) return this.layout
+    const layout = restoreLayout(saved)
+    this.toolLayouts.set(tool, layout)
+    return layout
+  }
+
+  setToolLayout(tool: PanelTool, layout: PanelLayout, save: boolean): void {
+    this.toolLayouts.set(tool, layout)
+    if (save) storage.set(toolKey(tool), serializeLayout(layout))
   }
 
   /** The viewer's place changed; `save` keeps it for the next visit. */
@@ -151,18 +174,44 @@ export class PanelPlace {
     if (open !== this.state.get().open) this.state.set({ ...this.state.get(), open })
   }
 
+  centeredPanel(): PlacedPanel | undefined {
+    return (
+      this.panels.find(panel => panel.isOpen && panel.modal && panel.chat) ??
+      this.panels.find(panel => panel.isOpen && panel.modal)
+    )
+  }
+
+  sidebarPanel(): PlacedPanel | undefined {
+    return this.panels.find(panel => panel.isOpen && !panel.modal)
+  }
+
   openPanel(): PlacedPanel | undefined {
-    return this.panels.find(p => p.isOpen)
+    return this.centeredPanel() ?? this.sidebarPanel()
+  }
+
+  /** Tools at different docks and the centered card keep their own place. */
+  activate(panel: PlacedPanel): void {
+    for (const other of this.panels) {
+      if (other === panel || !other.isOpen) continue
+      const sameCenter = panel.modal && other.modal && !!panel.chat === !!other.chat
+      const sameDock =
+        !panel.modal && !other.modal && (panel.layout ?? this.layout).dock === (other.layout ?? this.layout).dock
+      if (this.isPhone() || sameCenter || sameDock) other.close()
+    }
+  }
+
+  focusedPanel(target: Element | null): PlacedPanel | undefined {
+    return this.panels.find(panel => panel.isOpen && panel.contains?.(target))
   }
 
   /** Settings picked a place: the open panel moves there, and the others open there next. */
   placePanels(dock: Dock): void {
-    ;(this.openPanel() ?? this.panels[0])?.setDock(dock)
+    ;(this.sidebarPanel() ?? this.panels[0])?.setDock(dock)
   }
 
   /** Settings asked for the default size of the panels' place. */
   resetPanelSize(): void {
-    ;(this.openPanel() ?? this.panels[0])?.resetSize()
+    ;(this.sidebarPanel() ?? this.panels[0])?.resetSize()
   }
 
   /** The room a panel at the bottom takes now: where the board's visible part ends. */
@@ -208,14 +257,19 @@ export class PanelPlace {
 
   /** The board's room for the open panel (none on a phone, or for a floating one). */
   syncRoom({ jump = false, velocity = {}, response = 0.4, about = nothing }: RoomOptions = {}): void {
-    const open = this.openPanel()
     const vp = this.viewport()
     const phone = this.isPhone()
-    const docked = !!open && !open.modal
-    const want = roomWanted(docked, phone, this.layout, vp)
-    const wantOver = overWanted(docked, phone, this.layout, vp)
-    // Over the board it casts a deeper shadow, a drawer over the cards rather than beside them.
-    open?.setOver(docked && !phone && overlays(this.layout, vp))
+    const want = roomWanted(false, phone, this.layout, vp)
+    const wantOver = overWanted(false, phone, this.layout, vp)
+    for (const panel of this.panels) {
+      if (!panel.isOpen || panel.modal) continue
+      const layout = panel.layout ?? this.layout
+      const room = roomWanted(true, phone, layout, vp)
+      const over = overWanted(true, phone, layout, vp)
+      panel.setOver(!phone && overlays(layout, vp))
+      for (const side of SIDES) want[side] = Math.max(want[side], room[side])
+      for (const side of OVER_SIDES) wantOver[side] = Math.max(wantOver[side], over[side])
+    }
     if (jump) {
       for (const side of OVER_SIDES) this.over[side].set(wantOver[side])
       for (const side of SIDES) this.room[side].set(want[side])

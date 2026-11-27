@@ -5,6 +5,7 @@
 // makes room. Both are read when the panel moves, from the latest render.
 import { type RefObject, useLayoutEffect, useRef, useState } from 'react'
 import { PanelMotion } from '../components/panel/motion.ts'
+import type { PanelTool } from '../components/panel/place.ts'
 import type { PanelChrome } from '../models/panel-motion.ts'
 import { useStore } from '../state/store.ts'
 import { useLatest } from './useLatest.ts'
@@ -13,6 +14,8 @@ import { usePanelPlace } from './usePanelLayout.ts'
 export interface PanelOptions {
   open: boolean
   modal?: boolean
+  chat?: boolean
+  tool?: PanelTool | undefined
   onClose(): void
   about?: (() => Element | null) | undefined
 }
@@ -29,12 +32,12 @@ export interface PanelControls {
   close(): void
 }
 
-export function usePanel({ open, modal = false, onClose, about }: PanelOptions): PanelControls {
+export function usePanel({ open, modal = false, chat = false, tool, onClose, about }: PanelOptions): PanelControls {
   const place = usePanelPlace()
   // Updated in this component's layout effects, before the one below that opens or closes it.
   const latest = useLatest({ onClose, about })
   const [motion] = useState(() => {
-    const m = new PanelMotion(place)
+    const m = new PanelMotion(place, chat, tool)
     m.onClose = () => latest.current.onClose()
     m.about = () => latest.current.about?.() ?? null
     return m
@@ -44,12 +47,12 @@ export function usePanel({ open, modal = false, onClose, about }: PanelOptions):
   const ref = useRef<HTMLElement>(null)
 
   useLayoutEffect(() => (ref.current ? motion.attach(ref.current) : undefined), [motion])
-  useLayoutEffect(() => motion.setModal(modal), [motion, modal])
   // After the element is taken: a panel asked open comes in, one asked closed goes.
   useLayoutEffect(() => {
+    if (!open) motion.close()
+    motion.setModal(modal)
     if (open) motion.open()
-    else motion.close()
-  }, [open, motion])
+  }, [open, motion, modal])
 
   const [controls] = useState(() => ({
     togglePlaceMenu: (button: HTMLElement) => place.menu.toggle(motion, button),

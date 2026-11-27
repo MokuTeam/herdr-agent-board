@@ -290,6 +290,7 @@ export async function oldSide(options: SideOptions): Promise<PanelSide> {
 /** The React side, with the shared place its panels are in. */
 export interface ReactSide extends PanelSide {
   shared: PanelPlace
+  panel(id: string): PanelMotion
 }
 
 export async function newSide(options: SideOptions): Promise<ReactSide> {
@@ -303,7 +304,11 @@ export async function newSide(options: SideOptions): Promise<ReactSide> {
   const inI18n = (node: ReactNode) => first(reactMarkup(<I18nProvider lang={lang}>{node}</I18nProvider>))
   const views = options.ids.map(id => {
     const kind = KINDS[id] ?? 'categories'
-    const motion = new PanelMotion(place)
+    const motion = new PanelMotion(
+      place,
+      kind === 'session',
+      id === 'team-sheet' ? 'team' : id === 'threads-sheet' ? 'threads' : id === 'sched-sheet' ? 'schedule' : undefined,
+    )
     motion.onClose = () => closes.push(id)
     const draw = () => {
       const { shown, chrome, over } = motion.state.get()

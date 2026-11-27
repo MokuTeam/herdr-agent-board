@@ -1,12 +1,10 @@
 // The side-panel shell the session sheet, the categories, the schedule, the archive and the profiles share: an
 // aside with a grip, the head and the panel's content, and the edges that resize it. Where it sits,
-// how it moves and the one-open-at-a-time rule are the shared place's (components/panel/place.ts
+// how it moves and which panels can share the screen are the shared place's (components/panel/place.ts
 // and motion.ts); `open` asks for it, `onClose` hears when it closed itself or gave way to another.
 import { type ReactNode, type Ref, useLayoutEffect } from 'react'
 import { useCardWindow } from '../../hooks/useCardWindow.ts'
 import type { DropHandlers } from '../../hooks/useFileDrop.ts'
-import { useLatest } from '../../hooks/useLatest.ts'
-import { useModalFocus } from '../../hooks/useModalFocus.ts'
 import { usePanel } from '../../hooks/usePanel.ts'
 import { useT } from '../../i18n/I18nProvider.tsx'
 import type { CardWindowKind } from '../../models/card-window.ts'
@@ -103,51 +101,33 @@ export interface PanelProps extends ShellProps {
 }
 
 export function Panel({ open, onClose, about, cardWindow, ...shell }: PanelProps) {
-  const t = useT()
   const choice = useCardWindow(cardWindow)
   const modal = choice?.view === 'modal'
-  const panel = usePanel({ open, modal, onClose, about })
+  const tool = shell.kind === 'team' || shell.kind === 'threads' || shell.kind === 'schedule' ? shell.kind : undefined
+  const panel = usePanel({ open, modal, chat: shell.kind === 'session', tool, onClose, about })
   const { ref, shown } = panel
-  const focus = useModalFocus(ref)
-  const origin = useLatest(about)
   useLayoutEffect(() => {
-    if (!open || !modal || !shown) return
-    const active = document.activeElement
-    focus.open(ref.current?.contains(active) ? active : (origin.current?.() ?? active))
-    return () => focus.close()
-  }, [focus, open, modal, shown, origin, ref])
-
+    if (open && modal && shown && !ref.current?.contains(document.activeElement))
+      ref.current?.focus({ preventScroll: true })
+  }, [open, modal, shown, ref])
   return (
-    <>
-      {modal && open && (
-        <button
-          type="button"
-          className="card-window-scrim"
-          tabIndex={-1}
-          aria-label={t('sheet.closeLabel')}
-          onClick={panel.close}
-        />
-      )}
-      <PanelView
-        {...shell}
-        tools={
-          <>
-            {shell.tools}
-            {(open || panel.shown) && choice?.toggle && (
-              <CardWindowSwitch view={choice.view} onToggle={choice.toggle} />
-            )}
-          </>
-        }
-        modal={modal}
-        shown={panel.shown && (!modal || open)}
-        chrome={panel.chrome}
-        over={panel.over}
-        menuOpen={panel.menuOpen}
-        asideRef={panel.ref}
-        onPlace={modal ? undefined : panel.togglePlaceMenu}
-        onClose={panel.close}
-      />
-    </>
+    <PanelView
+      {...shell}
+      tools={
+        <>
+          {shell.tools}
+          {(open || panel.shown) && choice?.toggle && <CardWindowSwitch view={choice.view} onToggle={choice.toggle} />}
+        </>
+      }
+      modal={modal}
+      shown={panel.shown && (!modal || open)}
+      chrome={panel.chrome}
+      over={panel.over}
+      menuOpen={panel.menuOpen}
+      asideRef={panel.ref}
+      onPlace={modal ? undefined : panel.togglePlaceMenu}
+      onClose={panel.close}
+    />
   )
 }
 
@@ -188,14 +168,12 @@ export function PanelView(props: PanelViewProps) {
   const t = useT()
   const { label, closeId } = KINDS[kind]
   return (
-    // biome-ignore lint/a11y/useAriaPropsSupportedByRole: the modal branch has role=dialog and the side panel has no aria-modal.
     <aside
       className={classNames('sheet', shown && 'open', over && 'over', className)}
       id={id}
       aria-hidden={!shown}
       aria-label={t(label)}
       role={modal ? 'dialog' : undefined}
-      aria-modal={modal || undefined}
       tabIndex={modal ? -1 : undefined}
       data-dock={modal ? 'modal' : chrome.mode}
       data-measure={measure === 'full' ? 'full' : undefined}

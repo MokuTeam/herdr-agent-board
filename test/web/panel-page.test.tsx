@@ -166,3 +166,96 @@ describe('the viewer’s layout', () => {
     }
   })
 })
+
+describe('a centered card window beside a docked chat', () => {
+  for (const width of [1680, 820]) {
+    test(`keeps the chat in place at ${width}px and closes the dialog first`, async () => {
+      const side = await newSide({ viewport: { w: width, h: 900 }, ids: ['sheet', 'cats-sheet', 'sched-sheet'] })
+      try {
+        // These use the same motion engine as the session and thread shells.
+        const chat = side.panel('sheet')
+        const dialog = side.panel('cats-sheet')
+        dialog.setModal(true)
+
+        await side.open('sheet')
+        await side.world.settle()
+        const room = side.shared.room.right.target
+        const over = side.shared.over.right.target
+        expect(room + over).toBeGreaterThan(0)
+
+        await side.open('cats-sheet')
+        await side.world.settle()
+        expect(chat.isOpen).toBe(true)
+        expect(side.closes).toEqual([])
+        expect(side.shared.room.right.target).toBe(room)
+        expect(side.shared.over.right.target).toBe(over)
+        expect(side.shared.openPanel()).toBe(dialog)
+
+        side.shared.openPanel()?.close()
+        expect(side.shared.openPanel()).toBe(chat)
+        expect(side.closes).toEqual(['cats-sheet'])
+
+        await side.open('cats-sheet')
+        dialog.setModal(false)
+        expect(chat.isOpen).toBe(false)
+        expect(dialog.isOpen).toBe(true)
+        await side.open('sched-sheet')
+        expect(dialog.isOpen).toBe(false)
+      } finally {
+        await side.world.settle()
+        side.dispose()
+      }
+    })
+  }
+})
+
+test('Team and other side panels replace each other while the separate session dialog stays open', async () => {
+  const side = await newSide({ viewport: VP, ids: ['sheet', 'team-sheet', 'cats-sheet'] })
+  const dialog = side.panel('sheet')
+  const stop = listenClickAway(side.shared)
+  try {
+    dialog.setModal(true)
+    await side.open('sheet')
+    await side.open('team-sheet')
+    expect(dialog.isOpen).toBe(true)
+    expect(side.panel('team-sheet').isOpen).toBe(true)
+
+    await side.open('cats-sheet')
+    expect(side.panel('team-sheet').isOpen).toBe(false)
+    expect(dialog.isOpen).toBe(true)
+    const { board } = mountBoard(side)
+    await clickOn(side, board)
+    expect(dialog.isOpen).toBe(true)
+    expect(side.panel('cats-sheet').isOpen).toBe(false)
+    dialog.close()
+    expect(side.shared.openPanel()).toBeUndefined()
+  } finally {
+    stop()
+    await side.world.settle()
+    side.dispose()
+  }
+})
+
+test('a centered card leaves Team, Threads and the bottom schedule in their own saved places', async () => {
+  const ids = ['team-sheet', 'threads-sheet', 'sched-sheet', 'sheet']
+  const side = await newSide({ viewport: { w: 1900, h: 1000 }, ids })
+  try {
+    side.panel('sched-sheet').setDock('bottom')
+    side.panel('threads-sheet').setDock('left')
+    for (const id of ids.slice(0, 3)) await side.open(id)
+    const card = side.panel('sheet')
+    card.setModal(true)
+    await side.open('sheet')
+    expect(ids.map(id => side.panel(id).isOpen)).toEqual([true, true, true, true])
+    expect(ids.slice(0, 3).map(id => side.panel(id).mode)).toEqual(['right', 'left', 'bottom'])
+    expect(side.shared.room.bottom.target).toBeGreaterThan(0)
+    expect(side.world.storage.get('board.panel.schedule')).toContain('bottom')
+    expect(side.world.storage.get('board.panel.threads')).toContain('left')
+    expect(side.world.storage.get('board.panel')).toBeUndefined()
+    card.close()
+    expect(ids.slice(0, 3).every(id => side.panel(id).isOpen)).toBe(true)
+  } finally {
+    await side.world.settle()
+    side.dispose()
+  }
+})

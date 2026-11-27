@@ -7,7 +7,7 @@ export function useCardWindow(kind: CardWindowKind | undefined) {
   const phone = useMediaQuery(kind ? PHONE_QUERY : null)
   const [choices, setChoices] = useState<Partial<Record<CardWindowKind, CardWindowView>>>({})
   if (!kind) return undefined
-  const view = choices[kind] ?? readCardWindow(kind)
+  const view = readCardWindow(kind, choices[kind])
   return {
     view: phone ? (kind === 'terminal' ? 'modal' : 'panel') : view,
     toggle: phone

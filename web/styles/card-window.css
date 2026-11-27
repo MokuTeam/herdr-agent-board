@@ -1,24 +1,39 @@
-/* Card windows use the existing sheet contents in either presentation. */
-.card-window-scrim {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  border: 0;
-  background: rgba(0, 0, 0, 0.36);
+/* Leave the navigation rail and the dock accessible beside the separate dialog. */
+:root {
+  --card-left: max(var(--room-left, 0px), calc(var(--over-left, 0px) - 12px));
+  --dialog-left: calc(var(--rail-w, 0px) + var(--card-left));
+  --card-right: max(var(--room-right, 0px), calc(var(--over-right, 0px) - 12px));
+  --card-bottom: var(--room-bottom, 0px);
+  --card-width: calc(100vw - var(--card-left) - var(--card-right) - 24px);
+  --dialog-width: calc(100vw - var(--dialog-left) - var(--card-right) - 24px);
+  --card-board-space: clamp(0px, var(--dialog-width) - 348px, 130px);
+}
+
+.term:not(.term-side) {
+  inset: 0 var(--card-right, 0px) var(--card-bottom, 0px) var(--card-left, 0px);
 }
 .sheet[data-dock="modal"] .sheet-grip { display: none; }
 .sheet[data-dock="modal"] {
   z-index: 61;
-  top: 50%;
-  left: 50%;
-  width: min(1080px, calc(100vw - 48px)) !important;
-  height: min(860px, calc(100dvh - 48px)) !important;
+  top: calc((100% - var(--card-bottom, 0px)) / 2);
+  left: calc((100% + var(--dialog-left) + var(--card-board-space) - var(--card-right)) / 2);
+  width: min(1080px, calc(var(--dialog-width) - var(--card-board-space))) !important;
+  height: min(860px, calc(100dvh - var(--card-bottom, 0px) - 48px)) !important;
   transform: translate(-50%, -50%) !important;
   opacity: 1 !important;
   outline: none;
+  box-shadow: 0 0 0 1px var(--separator), 0 16px 54px rgba(0, 0, 0, .34);
 }
+#sheet[data-dock="modal"] { z-index: 62; }
 .sheet-tools [data-card-window] svg,
 .term-head [data-card-window] svg { width: 20px; height: 20px; }
+
+@media (min-width: 761px) {
+  .term:not(.term-side) .term-win {
+    width: min(1080px, var(--card-width, calc(100vw - 48px)));
+    height: min(860px, calc(var(--term-vh, 100vh) - var(--card-bottom, 0px) - 48px));
+  }
+}
 
 .term-side {
   justify-items: end;
@@ -29,4 +44,13 @@
   height: var(--term-vh, 100dvh);
   border-radius: 0;
   pointer-events: auto;
+}
+
+/* Keep the rail accessible beside a left-docked tool, and the bottom schedule between the docks. */
+:is(#threads-sheet, #team-sheet, #sched-sheet)[data-dock="left"] {
+  translate: var(--rail-w, 0px) 0;
+}
+#sched-sheet[data-dock="bottom"] {
+  translate: var(--dialog-left) 0;
+  width: calc(100vw - var(--dialog-left) - var(--card-right)) !important;
 }
