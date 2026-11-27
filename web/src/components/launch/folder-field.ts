@@ -107,14 +107,16 @@ export function folderField(host: FolderHost) {
   let check: FolderCheck | null = null
   let git: GitInfo | null = null
   let checkTimer: ReturnType<typeof setTimeout> | undefined
+  let checkSeq = 0
 
   async function dirs(path: string, withGit = false): Promise<DirListing | null> {
+    const currentCache = cache
     const key = `${path}\n${withGit}`
-    const known = cache.get(key)
+    const known = currentCache.get(key)
     if (known) return known
     const res = await host.dirs(path, withGit)
-    // Into the cache of the opening on now, as before (an answer to the last one included).
-    if (res && host.live()) cache.set(key, res)
+    // Into the cache of the opening/device on now, never poisoning a reset cache.
+    if (res && host.live() && cache === currentCache) currentCache.set(key, res)
     return res
   }
 
@@ -140,8 +142,9 @@ export function folderField(host: FolderHost) {
 
   async function runCheck(path: string): Promise<void> {
     clearTimeout(checkTimer)
+    const seq = ++checkSeq
     const r = await dirs(path, true)
-    if (!host.live() || text().trim() !== path) return
+    if (seq !== checkSeq || !host.live() || text().trim() !== path) return
     const t = host.t()
     check = { ...r, input: path }
     if (r?.slow) setState('bad', t('launch.err.cwdSlow', { path }))
@@ -260,8 +263,12 @@ export function folderField(host: FolderHost) {
     /** What the server said about the folder as typed, and its checkout. */
     check: () => check,
     git: () => git,
-    /** A new opening: nothing asked or known yet. */
+    /** A new opening or device switch: nothing asked or known yet. */
     reset(): void {
+      clearTimeout(checkTimer)
+      checkSeq++
+      popSeq++
+      chain = []
       cache = new Map()
       check = null
       git = null

@@ -317,7 +317,8 @@ export function createLaunches({
     // A new Codex session starts through herdr's launcher whatever the config's (run.ts).
     const starts =
       r.launch.agent === CODEX_AGENT && !codexFork ? launcherFor(deps.cfg.launch, { codex: true }) : launcher
-    if (r.launch.model && !starts.takesModel) return { ok: false, field: 'model', error: t('launch.err.modelLauncher') }
+    if (!r.launch.remote && r.launch.model && !starts.takesModel)
+      return { ok: false, field: 'model', error: t('launch.err.modelLauncher') }
     // A resumed session keeps its conversation: no first message goes into it. A fork starts with
     // a copy of its source's in the source's folder: no worktree.
     const request = resume ? { ...r.launch, message: '' } : fork ? { ...r.launch, worktree: null } : r.launch

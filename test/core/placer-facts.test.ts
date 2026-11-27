@@ -126,9 +126,36 @@ test('"Where" is read only while the board places; a folder this computer lacks 
     const here = await checkRequest({ ...body, cwd: join(dir, 'missing'), pin }, on)
     expect(!here.ok && here.field).toBe('cwd')
   }
-  // A folder this computer has is its own, pinned or not.
-  const own = await checkRequest({ ...body, pin: { device: 'server-1' } }, on)
-  expect(own.ok && own.launch.remote).toBeUndefined()
+  // An agent's start (`byHand: false`) with a folder this computer has keeps it local so git can clone it.
+  const agentOwn = await checkRequest({ ...body, byHand: false, pin: { device: 'server-1' } }, on)
+  expect(agentOwn.ok && agentOwn.launch.remote).toBeUndefined()
+  // A person's start (`byHand` omitted/true) pinned to a remote node treats even an existing POSIX path
+  // as a folder on that node without stat'ing on the master (#948).
+  const humanRemote = await checkRequest({ ...body, pin: { device: 'server-1' } }, on)
+  expect(humanRemote.ok && [humanRemote.launch.cwd, humanRemote.launch.remote]).toEqual([dir, 'server-1'])
+  // A remote agent offered by the target node passes even if the master doesn't offer it locally.
+  const remoteAgent = await checkRequest(
+    {
+      ...body,
+      cwd: 'C:\\Work\\BB',
+      pin: { device: 'win-laptop' },
+      agent: 'codex',
+      model: 'gpt-5',
+      effort: 'high',
+      agents: () => [{ id: 'claude', title: 'Claude Code' }],
+    } as Record<string, unknown>,
+    { ...on, agents: () => [{ id: 'claude', title: 'Claude Code' }] },
+  )
+  expect(remoteAgent.ok && [remoteAgent.launch.agent, remoteAgent.launch.remote, remoteAgent.launch.effort]).toEqual([
+    'codex',
+    'win-laptop',
+    'high',
+  ])
+  const remoteAgy = await checkRequest(
+    { ...body, cwd: 'C:\\Work\\BB', pin: { device: 'win-laptop' }, agent: 'agy' },
+    { ...on, agents: () => [{ id: 'claude', title: 'Claude Code' }] },
+  )
+  expect(remoteAgy.ok && [remoteAgy.launch.agent, remoteAgy.launch.remote]).toEqual(['agy', 'win-laptop'])
 })
 
 test('a Windows node’s folder pinned to that node is the node’s on any master; pinned elsewhere it is refused (#891)', async () => {

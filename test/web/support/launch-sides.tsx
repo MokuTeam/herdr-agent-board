@@ -6,7 +6,7 @@
 // (support/react-commit.ts), its handlers React's own (support/react-events.ts). Both sides take
 // the same steps against the same fake server; snapshot() prints what a viewer could tell apart.
 import { createRef } from 'react'
-import type { BoardCategory, BoardProfile } from '../../../src/core/payload.ts'
+import type { BoardCategory, BoardDevice, BoardProfile } from '../../../src/core/payload.ts'
 import type { Item, LaunchView, Translator } from '../../../src/core/types.ts'
 import { launchApi } from '../../../web/src/api/launch.ts'
 import { LaunchDialogView, type LaunchRefs, launchHandlers } from '../../../web/src/components/launch/LaunchDialog.tsx'
@@ -42,6 +42,14 @@ export interface LaunchScene {
   canMutate: boolean
   /** The Claude profiles (the old page had none; a board before them sends none). */
   profiles?: BoardProfile[]
+  /** Multi-node devices (absent on single-machine boards). */
+  devices?: BoardDevice[] | undefined
+  /** Active device filter (`all` or device id). */
+  device?: string | undefined
+  /** Present on a node's own page. */
+  relayedDevices?: { master: string } | undefined
+  /** Browser OS platform override (for tests). */
+  browserOs?: (() => string | null) | undefined
 }
 
 // ---------------------------------------------------------------- the server
@@ -138,6 +146,8 @@ export interface Reply {
 /** The board's routes as the window uses them; a route can be held until the test lets it answer. */
 export class FakeServer {
   options: unknown = OPTIONS
+  optionsByDevice: Record<string, unknown> = {}
+  dirsByDevice: Record<string, (raw: string, git: boolean) => Record<string, unknown>> = {}
   start: Reply = { status: 200, body: { ok: true, id: 'L7' } }
   acts: Record<string, Reply> = {}
   private holding = new Set<string>()
@@ -155,13 +165,20 @@ export class FakeServer {
   }
 
   private answer(method: string, url: string, body: string): { route: string; reply: Reply } {
-    if (method === 'GET' && url === '/api/launch/options')
-      return { route: 'options', reply: { status: 200, body: this.options } }
+    const parsed = new URL(url, 'http://localhost')
+    if (method === 'GET' && parsed.pathname === '/api/launch/options') {
+      const dev = parsed.searchParams.get('device')
+      const replyBody = dev && dev in this.optionsByDevice ? this.optionsByDevice[dev] : this.options
+      return { route: dev ? `options:${dev}` : 'options', reply: { status: 200, body: replyBody } }
+    }
     const asked: unknown = body ? JSON.parse(body) : {}
     const field = (name: string) =>
       typeof asked === 'object' && asked !== null && name in asked ? Reflect.get(asked, name) : undefined
-    if (url === '/api/fs/dirs')
-      return { route: 'dirs', reply: { status: 200, body: listing(String(field('path') ?? ''), !!field('git')) } }
+    if (parsed.pathname === '/api/fs/dirs') {
+      const dev = typeof field('device') === 'string' ? (field('device') as string) : ''
+      const fn = (dev && this.dirsByDevice[dev]) || listing
+      return { route: 'dirs', reply: { status: 200, body: fn(String(field('path') ?? ''), !!field('git')) } }
+    }
     if (url === '/api/launch') return { route: 'launch', reply: this.start }
     const act = /^\/api\/launch\/([^/]+)\/(\w+)$/.exec(url)
     if (act) return { route: act[2] ?? '', reply: this.acts[act[2] ?? ''] ?? { status: 200, body: { ok: true } } }
@@ -463,6 +480,9 @@ export function reactLaunchSide(scene: LaunchScene): LaunchSide {
       items: scene.items,
       filter: scene.lanes ?? onlyLane(scene.filter),
       profiles: scene.profiles ?? [],
+      devices: scene.devices,
+      device: scene.device,
+      relayedDevices: scene.relayedDevices,
     }),
     toast: page.toast,
     api: launchApi,
@@ -473,6 +493,7 @@ export function reactLaunchSide(scene: LaunchScene): LaunchSide {
     onStarted: page.onStarted,
     now: () => world.now,
     viewportHeight: () => VIEWPORT.h,
+    ...(scene.browserOs && { browserOs: scene.browserOs }),
   })
   const stopKeys = windowKeys(dialog)
   const on = launchHandlers(dialog)

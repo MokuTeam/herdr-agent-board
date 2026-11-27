@@ -306,6 +306,8 @@ export interface StartBody {
   agent?: string
   /** The model it starts on (#380); left out for the profile's default. */
   model?: string
+  /** Target device pin in multi-node setups (#948); omitted on single-device boards. */
+  pin?: { device: string }
 }
 
 /**
@@ -325,6 +327,7 @@ export function startBody(
     agent?: string
     /** The launcher takes a model (the window offers the field): a model typed goes. */
     takesModel?: boolean
+    pin?: { device: string }
   },
 ): StartBody {
   const model = s.takesModel ? f.model.trim() : ''
@@ -343,12 +346,14 @@ export function startBody(
     ...(s.parent === undefined ? {} : { parent: s.parent }),
     ...(s.agent === undefined ? {} : { agent: s.agent }),
     ...(model ? { model } : {}),
+    ...(s.pin ? { pin: s.pin } : {}),
   }
 }
 
 /** The page's own card for a start, until the server's board has the launch. */
 export function startedLaunch(id: string, body: StartBody, now: number): LaunchView {
   const ws = body.workspace
+  const remoteDevice = body.pin?.device && body.pin.device !== 'local' ? body.pin.device : undefined
   return {
     id,
     name: body.name,
@@ -371,5 +376,6 @@ export function startedLaunch(id: string, body: StartBody, now: number): LaunchV
     ...(body.parent === undefined ? {} : { parent: body.parent }),
     ...(body.agent === undefined ? {} : { agent: body.agent }),
     ...(body.model === undefined ? {} : { model: body.model }),
+    ...(remoteDevice && { device: remoteDevice, place: { device: remoteDevice } }),
   }
 }

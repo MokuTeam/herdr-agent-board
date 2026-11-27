@@ -44,7 +44,7 @@ import {
   rekeyOutcome,
   splitTargets,
 } from '../../core/node-proxy.ts'
-import { type NodesConfig, nodesConfig, parseNodeKey } from '../../core/nodes.ts'
+import { LOCAL, type NodesConfig, nodesConfig, parseNodeKey } from '../../core/nodes.ts'
 import type { Config, Item } from '../../core/types.ts'
 import type { Link } from '../../services/nodes/link.ts'
 import type { NodeLinks } from '../../services/nodes/links.ts'
@@ -385,12 +385,21 @@ export function createNodeProxy(app: NodeProxyApp): NodeProxy {
     })
   }
 
-  /** A request whose body names a node's key: `field` carries it, the node is sent `send` in its place. */
+  /** A request whose body names a node's key or an explicit target device for `/api/fs/dirs`. */
   async function byBody(ctx: RouteContext, path: string): Promise<Response | undefined> {
     const body = await ctx.rawBody().catch(() => undefined)
     if (!isRecord(body)) return undefined
     if (DESKTOP.has(path)) return deviceKey(body.key) ? desktop() : undefined
     if (path === '/api/todos' && body.op === 'settings') return undefined
+    if (path === '/api/fs/dirs' && typeof body.device === 'string' && body.device) {
+      if (body.device === LOCAL) return undefined
+      const refused = ctx.refuse('board-header')
+      if (refused) return refused
+      const r = reach(body.device)
+      if ('refused' in r) return r.refused
+      const { device: _device, key: _key, ...rest } = body
+      return forward(body.device, r.link, path, jsonInit(rest))
+    }
     const field = path === '/api/schedule' ? 'id' : 'key'
     const at = deviceKey(body[field])
     if (!at) return undefined
@@ -474,6 +483,22 @@ export function createNodeProxy(app: NodeProxyApp): NodeProxy {
     return json(res.status, answer)
   }
 
+  /** New session options for a specific device (`GET /api/launch/options?device=<id>`). */
+  async function launchOptions(req: Request, ctx: RouteContext): Promise<Response | undefined> {
+    const device = ctx.url.searchParams.get('device')
+    if (!device || device === LOCAL) return undefined
+    const r = reach(device)
+    if ('refused' in r) return r.refused
+    const query = nodeQuery(ctx.url.searchParams, ['device'])
+    return forward(
+      device,
+      r.link,
+      `/api/launch/options${query}`,
+      { method: 'GET', headers: pickHeaders(req.headers, FORWARDED_REQUEST_HEADERS) },
+      req,
+    )
+  }
+
   /** Bytes of a node's file: `/api/fs/(raw|download)` with this board's token in, the node's out; `/uploads/...`. */
   async function bytes(req: Request, ctx: RouteContext, tokened: boolean): Promise<Response | undefined> {
     const at = deviceKey(ctx.url.searchParams.get('key'))
@@ -511,6 +536,7 @@ export function createNodeProxy(app: NodeProxyApp): NodeProxy {
         return undefined
       }
       if (req.method === 'GET') {
+        if (path === '/api/launch/options') return launchOptions(req, ctx)
         if (path === '/api/fs/raw' || path === '/api/fs/download') return bytes(req, ctx, true)
         if (UPLOADS.test(ctx.rawPath)) return bytes(req, ctx, false)
       }

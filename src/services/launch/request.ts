@@ -19,7 +19,7 @@ import {
   piCommand,
 } from '../../core/launch/agents.ts'
 import { MODEL_MAX, readModel } from '../../core/launch/model.ts'
-import { checkBranch, checkName, NAME_MAX, UNSAFE_CHARS } from '../../core/launch/names.ts'
+import { checkBranch, checkName, isAbsolutePath, NAME_MAX, UNSAFE_CHARS } from '../../core/launch/names.ts'
 import { profileCommand } from '../../core/launch/spawn-args.ts'
 import { DEVICE_ID, LOCAL } from '../../core/nodes.ts'
 import { PI_AGENT } from '../../core/pi.ts'
@@ -28,6 +28,8 @@ import type { Item, Vars } from '../../core/types.ts'
 
 const MESSAGE_MAX = 20_000
 const WORKSPACE_ID = /^[A-Za-z0-9][\w:-]{0,39}$/
+const REMOTE_AGENTS: ReadonlySet<string> = new Set([CLAUDE_AGENT, PI_AGENT, AGY_AGENT, CODEX_AGENT])
+const EFFORT_WORD = /^[a-z0-9_-]{1,32}$/i
 
 /** A workspace name herdr takes as a value: no control characters, no leading dash. */
 const workspaceName = (s: string, max: number): boolean =>
@@ -174,6 +176,17 @@ export async function checkRequest(
     cwd = String(b.cwd ?? '').trim()
     if (!cwd) return fail('cwd', 'launch.err.cwdEmpty')
     remote = forcedRemote
+  } else if (pins && pin && 'device' in pin && pin.device !== LOCAL && b.byHand !== false) {
+    // Explicit human start pinned to a remote node (#948): cwd is a folder on that node,
+    // never stat'd on the master (works for Windows paths on Linux master and POSIX paths
+    // that don't exist on master or coincidentally exist on both).
+    const raw = String(b.cwd ?? '')
+      .trim()
+      .replace(/^["']|["']$/g, '')
+    if (!raw) return fail('cwd', 'launch.err.cwdEmpty')
+    if (!isAbsolutePath(raw)) return fail('cwd', 'launch.err.cwdMissing', { path: raw })
+    cwd = raw
+    remote = pin.device
   } else {
     cwd = resolvePath(b.cwd).path
     // A Windows node's folder on a POSIX master (#891): never stat'd here.
@@ -247,14 +260,22 @@ export async function checkRequest(
   // Picked here, but refused only after the profile, as before Codex: Codex has no Claude profile.
   const asked = given(b.agent)
   const offered = asked === undefined ? null : agents()
-  const agent: LaunchAgentId | undefined = offered === null ? standard(agents) : offered.find(a => a.id === asked)?.id
+  const agent: LaunchAgentId | undefined =
+    offered === null
+      ? standard(agents)
+      : (offered.find(a => a.id === asked)?.id ??
+        (pins && remote && asked !== undefined && REMOTE_AGENTS.has(asked) ? (asked as LaunchAgentId) : undefined))
   if (agent === CODEX_AGENT) {
-    // An effort only with a model whose effort levels Codex's cache lists.
+    // An effort only with a model whose effort levels Codex's cache lists (remote nodes verify against their own cache).
     const effort = given(b.effort)
     if (effort) {
-      const models = await cachedCodexModels()
-      if (!model || !Object.hasOwn(models, model) || !models[model]?.includes(effort))
-        return fail('model', 'launch.err.codexEffort')
+      if (remote) {
+        if (!EFFORT_WORD.test(effort)) return fail('model', 'launch.err.codexEffort')
+      } else {
+        const models = await cachedCodexModels()
+        if (!model || !Object.hasOwn(models, model) || !models[model]?.includes(effort))
+          return fail('model', 'launch.err.codexEffort')
+      }
     }
     return {
       ok: true,
@@ -319,8 +340,8 @@ export async function checkRequest(
     profile = target.profile
     configDir = target.configDir
   }
-  // A folder to set must be there: Claude would make a new, empty profile of it.
-  if (configDir !== null) {
+  // A folder to set must be there on this computer: Claude would make a new, empty profile of it.
+  if (configDir !== null && !remote) {
     const st = await statOf(configDir, 3000)
     if (!st || st === SLOW || !st.isDirectory())
       return fail('profile', 'launch.err.profileFolder', { title: profile.title, path: configDir })
@@ -335,16 +356,16 @@ export async function checkRequest(
       return { ok: false, field: 'profile', error: err instanceof Error ? err.message : String(err) }
     }
   }
-  // An agent the board does not offer; pi's command must be one the tab's shell can type.
+  // An agent the board does not offer; pi's/agy's command is checked locally when running on this computer.
   if (!agent)
     return fail('agent', offered?.length ? 'launch.err.agent' : 'launch.err.agentLauncher', { id: asked ?? '' })
-  if (agent === PI_AGENT)
+  if (agent === PI_AGENT && !remote)
     try {
       piCommand(pi)
     } catch (err) {
       return { ok: false, field: 'agent', error: err instanceof Error ? err.message : String(err) }
     }
-  if (agent === AGY_AGENT)
+  if (agent === AGY_AGENT && !remote)
     try {
       agyCommand(agy)
     } catch (err) {

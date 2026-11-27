@@ -220,6 +220,9 @@ export function useLaunch({ onResume, onFork }: LaunchOptions = {}): Launch {
           items: data?.items ?? [],
           filter: ui.filter,
           profiles: data?.profiles ?? [],
+          devices: data?.devices,
+          device: ui.device,
+          relayedDevices: data?.relayedDevices,
         }
       },
       toast: (text, error) => latest.current.board.toast(text, error),

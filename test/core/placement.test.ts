@@ -698,4 +698,25 @@ describe('edges', () => {
     })
     assert.deepEqual(place(task(), v, NOW), { on: 'local', why: 'room' })
   })
+
+  test('codex and agy skip Claude profile and login checks when offered by the node (#948)', () => {
+    const v = view({
+      devices: {
+        'server-1': {
+          status: status({
+            agents: ['claude', 'codex', 'agy'],
+            profiles: [{ id: 'other', loggedIn: false }],
+          }),
+        },
+      },
+    })
+    assert.deepEqual(place(task({ agent: 'codex', profile: '', pin: { device: 'server-1' } }), v, NOW), {
+      on: 'server-1',
+      why: 'room',
+    })
+    assert.deepEqual(place(task({ agent: 'agy', profile: 'default', pin: { device: 'server-1' } }), v, NOW), {
+      on: 'server-1',
+      why: 'room',
+    })
+  })
 })

@@ -111,15 +111,15 @@ const launchPath = (id: string, what: string) => `/api/launch/${encodeURICompone
 
 export const launchApi = {
   /** null when the server could not say (the window works without it). */
-  options: (): Promise<LaunchOptions | null> =>
-    fetch('/api/launch/options')
-      .then(r => r.json())
+  options: (device?: string): Promise<LaunchOptions | null> =>
+    fetch(device ? `/api/launch/options?device=${encodeURIComponent(device)}` : '/api/launch/options')
+      .then(r => (r.ok ? r.json() : null))
       .then(asOptions)
       .catch(() => null),
   /** The folders in `path` ('' the roots); `git`: also the checkout it is in. null when there is no answer. */
-  dirs: (path: string, git: boolean): Promise<DirListing | null> =>
-    postJson('/api/fs/dirs', { path, git })
-      .then(r => r.json())
+  dirs: (path: string, git: boolean, device?: string): Promise<DirListing | null> =>
+    postJson('/api/fs/dirs', device ? { path, git, device } : { path, git })
+      .then(r => (r.ok ? r.json() : null))
       .then(asListing)
       .catch(() => null),
   start: (body: StartBody, t: Translator): Promise<LaunchReply> => post('/api/launch', body, t),

@@ -527,3 +527,60 @@ test('an owner service start carries its attribution into the node launch pipeli
   assert.equal((await launch.answer(body)).status, 202)
   assert.deepEqual(calls[0]?.[2], { by })
 })
+
+test('modal workspaceId, newWorkspace, effort, and codex/agy without Claude profile reach the node pipeline (#948)', async () => {
+  const root = tmp()
+  const { deps, starts, profileDir } = nodeWith(root, {
+    workspaces: async () => [
+      { id: 'w7', label: 'atlas' },
+      { id: 'w9', label: 'NodeWork' },
+    ],
+  })
+  // Even without Claude credentials on the node, codex and agy start cleanly.
+  rmSync(join(profileDir, '.credentials.json'))
+  const launch = createNodeLaunch(deps)
+
+  // workspaceId selects the exact target workspace even when its label doesn't match the folder name.
+  const byId = await launch.answer({
+    id: ID,
+    name: 'codex-job',
+    category: 'atlas',
+    profile: '',
+    agent: 'codex',
+    model: 'gpt-5',
+    effort: 'high',
+    message: 'Run tests',
+    workspace: 'CustomLabel',
+    workspaceId: 'w9',
+    source: { kind: 'path', cwd: root, worktree: null },
+  })
+  assert.equal(byId.status, 202)
+  assert.deepEqual(starts[0]?.body, {
+    name: 'codex-job',
+    cwd: root,
+    category: 'atlas',
+    workspace: { id: 'w9', label: 'NodeWork' },
+    message: 'Run tests',
+    worktree: null,
+    agent: 'codex',
+    model: 'gpt-5',
+    effort: 'high',
+  })
+
+  // newWorkspace: true creates a new workspace instead of matching an existing one with the same label.
+  const created = await launch.answer({
+    id: OTHER,
+    name: 'agy-job',
+    category: 'atlas',
+    profile: '',
+    agent: 'agy',
+    model: '',
+    message: '',
+    workspace: 'atlas',
+    newWorkspace: true,
+    source: { kind: 'path', cwd: root, worktree: null },
+  })
+  assert.equal(created.status, 202)
+  assert.deepEqual(starts[1]?.body.workspace, { create: 'atlas' })
+  assert.equal(starts[1]?.body.agent, 'agy')
+})
