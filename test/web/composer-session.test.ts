@@ -11,11 +11,13 @@ import {
   COMPOSE_FOCUS_MS,
   type ComposerPage,
   composerSession,
+  NODE_REDRAW_AFTER_SEND_MS,
   REDRAW_AFTER_SEND_MS,
   RELOAD_AFTER_SEND_MS,
   type SendResult,
 } from '../../web/src/models/composer-session.ts'
 import { draftBook } from '../../web/src/models/drafts.ts'
+import { NODE_KEEP_SENT_MS } from '../../web/src/models/outbox.ts'
 import { item } from './support/board.tsx'
 
 const t = translator('en')
@@ -442,4 +444,52 @@ test('discarding clears the box, the files and the stored draft — not while th
   p.box.discard()
   expect([p.state.text, p.state.files.length, p.storage.has('board.draft.sa')]).toEqual(['', 0, false])
   expect(p.log.at(-1)).toBe('focus')
+})
+
+test('a node session (#938): its message stays at the foot while its echo is late, past 30 s, and goes once its transcript has it, or after 3 min', async () => {
+  const z = item({ key: '@win-laptop:01a2195e', session: '01a2195e', name: 'Zenbook', device: 'win-laptop' })
+  const p = page([z, a])
+  p.open(z.key)
+  p.state.detail = { conversation: [{ role: 'assistant', text: 'earlier', at: 1000 }] }
+  p.box.input('привет, Zenbook')
+  const one = p.box.send()
+  p.answer({ ok: true })
+  await one
+  expect(p.timers.map(x => x.ms)).toEqual([RELOAD_AFTER_SEND_MS, NODE_REDRAW_AFTER_SEND_MS])
+  // 31 s on, the node's transcript still without it: it stays.
+  p.clock.now += 31_000
+  p.box.settle()
+  expect(p.waiting(z.key).map(e => e.text)).toEqual(['привет, Zenbook'])
+  // Its echo comes: it goes for good, once (the thread shows it, no bubble beside it).
+  p.state.detail = {
+    conversation: [
+      { role: 'assistant', text: 'earlier', at: 1000 },
+      { role: 'user', text: 'привет, Zenbook', at: 2000 },
+    ],
+  }
+  p.box.settle()
+  expect(p.waiting(z.key)).toEqual([])
+  // Never seen at all: it goes after 3 min.
+  p.state.detail = { conversation: [{ role: 'assistant', text: 'earlier', at: 1000 }] }
+  p.box.input('второе')
+  const two = p.box.send()
+  p.answer({ ok: true })
+  await two
+  p.clock.now += NODE_KEEP_SENT_MS - 1000
+  expect(p.waiting(z.key).map(e => e.text)).toEqual(['второе'])
+  p.clock.now += 2000
+  expect(p.waiting(z.key)).toEqual([])
+})
+
+test('a session of this computer keeps the 30 s it had (#938)', async () => {
+  const p = page([a])
+  p.open('a')
+  p.state.detail = { conversation: [{ role: 'assistant', text: 'earlier', at: 1000 }] }
+  p.box.input('hello')
+  const one = p.box.send()
+  p.answer({ ok: true })
+  await one
+  expect(p.timers.map(x => x.ms)).toEqual([RELOAD_AFTER_SEND_MS, REDRAW_AFTER_SEND_MS])
+  p.clock.now += 31_000
+  expect(p.waiting('a')).toEqual([])
 })

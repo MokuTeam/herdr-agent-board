@@ -142,10 +142,12 @@ export function useSessionDetail(shown: string | null): SessionDetailApi {
     const timer = setInterval(() => {
       const { board } = latest.current
       if (board.ui.open !== open || document.hidden) return
+      const read = current.current.key === open ? current.current.data : null
       const live = nodeLivePoll({
         item: itemIn(board.data, open),
         nudgedAt: nudged.current,
-        newest: newestAt(current.current.key === open ? current.current.data : null),
+        newest: newestAt(read),
+        lastRole: read?.conversation.at(-1)?.role ?? '',
         now: Date.now(),
       })
       if (live) load(open)
