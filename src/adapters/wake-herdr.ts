@@ -10,6 +10,7 @@ import {
   herdr,
   herdrText,
   snapshot,
+  withResumedSession,
 } from './herdr.ts'
 import { isRecord } from './json-store.ts'
 
@@ -59,7 +60,7 @@ export interface WakeHerdr {
   /** `api snapshot` (unknown fields such as `agents` kept). */
   snapshot(): Promise<HerdrSnapshot>
   /** `pane get <pane>`; null when herdr no longer has the pane. */
-  pane(pane: string): Promise<HerdrPane | null>
+  pane(pane: string, options?: { verifyCodexResume: true }): Promise<HerdrPane | null>
   /** `agent get <pane>`; null when the pane has no agent, or herdr no longer has the pane. */
   agent(pane: string): Promise<HerdrAgent | null>
   /** `pane process-info --pane <pane>`. */
@@ -99,10 +100,12 @@ async function unlessGone<T>(get: () => Promise<T>): Promise<T | null> {
 /** WakeHerdr over the herdr CLI (adapters/herdr.ts). */
 export const cliWakeHerdr: WakeHerdr = {
   snapshot: () => snapshot(),
-  pane: pane =>
+  pane: (pane, options) =>
     unlessGone(async () => {
       const answer = await herdr(['pane', 'get', pane])
-      return isRecord(answer) ? asPane(answer.pane) : null
+      const current = isRecord(answer) ? asPane(answer.pane) : null
+      // A wake can restart Codex in the same terminal, whose cached argv may still be old.
+      return current && options?.verifyCodexResume ? withResumedSession(current, true) : current
     }),
   agent: pane => unlessGone(() => agentGet(pane)),
   processInfo: async pane => asProcessInfo(await herdr(['pane', 'process-info', '--pane', pane])),

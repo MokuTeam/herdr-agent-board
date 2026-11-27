@@ -17,6 +17,7 @@ import { cliWakeHerdr, type WakeHerdr } from '../../adapters/wake-herdr.ts'
 import { AGY_AGENT } from '../../core/agy.ts'
 import { codexPromptAt } from '../../core/codex.ts'
 import { agyDraft } from '../../core/dialogs/agy-dialogs.ts'
+import { stripAnsi } from '../../core/dialogs/input-box.ts'
 import { stillTyped } from '../../core/launch/spawn-args.ts'
 import {
   type AgySleeper,
@@ -47,7 +48,7 @@ export interface AgyOps extends ShellAgentOps {
   reportSession(pane: string, session: string): Promise<void>
 }
 
-/** Codex reports its own session ID on resume. */
+/** Codex readiness requires a session ID, reported by herdr or verified from foreground argv. */
 export interface CodexOps extends ShellAgentOps {
   codex: { line(session: string): string | null; draft(screen: string): string | null }
 }
@@ -257,7 +258,7 @@ export async function waitAgyReady(
   const { sleep, now } = clock(t)
   const want = session.toLowerCase()
   for (const deadline = now() + timeoutMs; now() < deadline; await sleep(READY_POLL_MS)) {
-    const p = await ops.herdr.pane(pane)
+    const p = ops.codex ? await ops.herdr.pane(pane, { verifyCodexResume: true }) : await ops.herdr.pane(pane)
     if (!p) return 'timeout'
     if (p.agent !== (ops.codex ? 'codex' : AGY_AGENT)) continue
     const got = p.agent_session?.value
@@ -272,6 +273,31 @@ export async function waitAgyReady(
     if (p.agent_status === 'blocked') return 'blocked'
   }
   return 'timeout'
+}
+
+/** A queued pane run can leave the resume line in the shell. Submit that exact line once. */
+async function runCodexWakeLine(
+  io: WakeHerdr,
+  pane: string,
+  line: string,
+  shell: Awaited<ReturnType<typeof atPrompt>>,
+  terminal: string | undefined,
+  c: Required<Timing>,
+): Promise<void> {
+  await io.run(pane, line)
+  if (!shell || !terminal) return
+  await c.sleep(READY_POLL_MS)
+  if ((await atPrompt(io, pane))?.pid !== shell.pid) return
+  const visible =
+    stripAnsi(await io.screen(pane))
+      .trimEnd()
+      .split('\n')
+      .at(-1) ?? ''
+  if (!visible.endsWith(line) || !/[%$#>] $/.test(visible.slice(0, -line.length))) return
+  const current = await io.pane(pane)
+  if (!current || current.agent || current.terminal_id !== terminal) return
+  if ((await atPrompt(io, pane))?.pid !== shell.pid) return
+  await io.sendKeys(pane, 'enter')
 }
 
 export type AgyWakeOutcome = { ok: true; pane: string } | Exclude<WakeOutcome, { ok: true }>
@@ -298,15 +324,14 @@ export async function wakeAgy(
   let pane: string | null = null
   if (own) {
     pane = await withPane(own.pane_id, async () => {
-      if (ops.codex) {
-        const current = await ops.herdr.pane(own.pane_id)
-        if (!current || current.agent || current.label !== agySleepLabel(sleeper)) return null
-      }
+      const current = ops.codex ? await ops.herdr.pane(own.pane_id) : null
+      if (ops.codex && (!current || current.agent || current.label !== agySleepLabel(sleeper))) return null
       const prompt = await atPrompt(ops.herdr, own.pane_id)
       if (!prompt) return null
       c.log(`waking ${label} (${kind}) in ${own.pane_id}`)
       await ops.herdr.sendKeys(own.pane_id, clearKeyFor(prompt.shell, ops.platform))
-      await ops.herdr.run(own.pane_id, line)
+      if (ops.codex) await runCodexWakeLine(ops.herdr, own.pane_id, line, prompt, current?.terminal_id, c)
+      else await ops.herdr.run(own.pane_id, line)
       return own.pane_id
     })
   }
@@ -327,7 +352,11 @@ export async function wakeAgy(
       snap,
     )
     c.log(`waking ${label} (${kind}) in a new tab, ${fresh}: its pane ${sleeper.pane} is not as it was left`)
-    await withPane(fresh, () => ops.herdr.run(fresh, line))
+    await withPane(fresh, async () => {
+      if (!ops.codex) return ops.herdr.run(fresh, line)
+      const current = await ops.herdr.pane(fresh)
+      return runCodexWakeLine(ops.herdr, fresh, line, await atPrompt(ops.herdr, fresh), current?.terminal_id, c)
+    })
     pane = fresh
   }
   const state = await waitAgyReady(ops, pane, sleeper.session, o.timeoutMs, o)

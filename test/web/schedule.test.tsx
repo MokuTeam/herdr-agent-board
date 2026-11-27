@@ -289,6 +289,9 @@ describe('schedule rules', () => {
     expect(pendingText(e({ pendingSince: 1 }), t)).toBe('Waits until the session is free')
     expect(pendingText(e({ pendingSince: 1, why: 'busy' }), t)).toBe('Waits until the session is free')
     expect(pendingText(e({ pendingSince: 1, why: 'gone' }), t)).toBe('The session is not on the board')
+    expect(pendingText(e({ pendingSince: 1, why: 'delivery-unknown', kind: 'restart' }), t)).toBe(
+      'Delivery unconfirmed. Check the Codex conversation before resending.',
+    )
     expect(pendingText(e({ pendingSince: 1, why: 'node-offline' }), t)).toBe('Waits: the device is not reachable')
     expect(pendingText(e({ pendingSince: 1, why: 'node-offline' }), translator('ru'))).toBe(
       'Ждёт: устройство не на связи',

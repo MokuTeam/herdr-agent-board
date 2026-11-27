@@ -186,3 +186,31 @@ test('closes Codex tab on sleep on win32 when beside only Sidebar and leaves pan
   expect(await reopened.wake(ID)).toEqual({ ok: true, pane: 'w5:p10', name: label })
   expect(JSON.parse(readFileSync(w.file, 'utf8'))).toEqual({})
 })
+
+test('submits the unchanged resume line once when pane run did not press Enter', async () => {
+  const w = world()
+  w.pane.terminal_id = 'terminal-original'
+  const engine = createWakeEngine(w.deps)
+  expect(await engine.sleep(ID)).toMatchObject({ ok: true })
+  w.io.on(
+    a => a[1] === 'run' && a[3] === LINE,
+    () => {
+      w.pane.agent = null
+      w.pane.agent_session = null
+      delete w.pane.agent_status
+      w.io.screens[PANE] = `user@Mac % ${LINE}`
+    },
+  )
+  w.io.on(
+    a => a[1] === 'send-keys' && a[3] === 'enter',
+    () => {
+      w.pane.agent = 'codex'
+      w.pane.agent_session = { value: ID }
+      w.pane.agent_status = 'idle'
+    },
+  )
+  expect(await engine.wake(ID)).toMatchObject({ ok: true, pane: PANE })
+  expect(w.io.calls.filter(a => a[1] === 'send-keys' && a[3] === 'enter')).toEqual([
+    ['pane', 'send-keys', PANE, 'enter'],
+  ])
+})

@@ -1275,6 +1275,7 @@ export function createWakeEngine(deps: WakeEngineDeps): WakeEngine {
       if (s.freed || outcome.pane !== s.pane) followed(() => follow.paneOpened(s.session, outcome.pane))
       if (!s.freed && snap.panes.find(p => p.pane_id === s.pane)?.label === agySleepLabel(s))
         await deps.herdr.rename(s.pane, null).catch(() => {})
+      deps.log(`woke ${s.name} (codex) in ${outcome.pane} on request`)
       return { ok: true, pane: outcome.pane, name: s.name }
     } finally {
       codexGoing.delete(s.session)

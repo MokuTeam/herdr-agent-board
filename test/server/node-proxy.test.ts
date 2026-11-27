@@ -106,6 +106,29 @@ function holding(dir: string, text: string): string[] {
 }
 
 describe('a node card through the master', () => {
+  test('a legacy Codex node success without a submission receipt stays visible on the master', async () => {
+    const pair = await nodePair({
+      panes: (_id, box) => [codexPane(box, 'p')],
+      masterCfg: { scheduleTickSec: 0.2 },
+    })
+    const [node] = pair.nodes
+    if (!node) throw new Error('no node')
+    herdrOf(pair.master.box, [])
+    await boardWhen(pair.master.url, board => keys(board).includes(K))
+    let attempts = 0
+    node.proxy.intercept = async (method, path) => {
+      if (method !== 'POST' || !path.endsWith('/message')) return null
+      attempts++
+      return Response.json({ ok: true })
+    }
+    const held = entry(pair.master.box, { id: 'd1d2d4', key: K, text: 'unconfirmed', next: Date.now() - 1000 })
+    await until(() => attempts >= 1)
+    await Bun.sleep(850)
+    expect(JSON.parse(readFileSync(held, 'utf8')).why).toBe('delivery-unknown')
+    expect(attempts).toBe(1)
+    expect(prompts(node.box)).toEqual([])
+  }, 30_000)
+
   test('actions, the sheet, files, uploads, schedule edits and reminders reach the node; desktop routes do not', async () => {
     const tunnelPort = await unusedPort()
     const masterWake = await fakeWake()
@@ -261,11 +284,15 @@ describe('a node card through the master', () => {
     expect(cancelled.status, JSON.stringify(cancelled.body)).toBe(200)
     expect(existsSync(nodeEntry)).toBe(false)
 
-    // A reminder the master holds for the node's card goes through the node into its pane.
+    // A scheduled Codex reminder reaches the node, where missing native identity prevents submission.
     const held = entry(master.box, { id: 'd1d2d3', key: K, text: 'from the master', next: Date.now() - 1000 })
-    await until(() => prompts(node.box).some(c => c[3]?.includes('from the master')), 10_000)
-    await until(() => !existsSync(held), 5000)
+    await until(() => String(JSON.parse(readFileSync(held, 'utf8')).why ?? '').includes('journal'), 10_000)
+    expect(
+      node.proxy.received.some(r => r.request.endsWith('/message') && JSON.parse(r.body).verifyDelivery === true),
+    ).toBe(true)
+    expect(prompts(node.box).some(c => c[3]?.includes('from the master'))).toBe(false)
     expect(prompts(master.box)).toEqual([])
+    await post(at('/api/schedule'), { id: 'd1d2d3', op: 'cancel' })
 
     // The tunnel: its refusals first, the node never asked; what it lets through reaches the node.
     const caddy = viaCaddy(`http://127.0.0.1:${tunnelPort}`, `${LOGIN_COOKIE}=${LOGIN}`)

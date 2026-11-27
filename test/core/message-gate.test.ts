@@ -43,3 +43,15 @@ test('a request id must be a short token', async () => {
     assert.equal((await gate('a', id, [], async () => ({ ok: true }))).ok, false)
   }
 })
+
+test('same request cannot submit again when its delivery is uncertain', async () => {
+  const gate = messageGate()
+  const unknown = { ok: false, deliveryUnknown: true } as const
+  assert.deepEqual(await gate('a', 'id', [], () => unknown), unknown)
+  assert.deepEqual(
+    await gate('a', 'id', [], () => {
+      throw new Error('duplicate dispatch')
+    }),
+    unknown,
+  )
+})

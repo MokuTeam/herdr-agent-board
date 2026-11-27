@@ -4,7 +4,7 @@
 // lifecycle through the scheduler, SessionStart reporting, and web sheet/menu visibility.
 import { expect, setDefaultTimeout, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { t, useLanguage } from '../../src/core/lang.ts'
 import type { Item } from '../../src/core/types.ts'
@@ -85,6 +85,7 @@ function herdrAgy(
     agent_status: 'idle',
     agent_session: { value: ID },
     terminal_title_stripped: 'Gemini Dev',
+    ...(o.codex && { terminal_id: 'codex-test-terminal' }),
   })
   const snapshot = (panes: unknown[]) => ({
     result: {
@@ -102,7 +103,9 @@ function herdrAgy(
     // biome-ignore lint/suspicious/noThenProperty: fake herdr transition
     'api snapshot': { ...snapshot(before), until: ['pane run'], then: snapshot(after) },
     [`pane get ${woken}`]: {
-      result: { pane: o.own ? shell : { pane_id: 'w5:p20', workspace_id: 'w5', cwd } },
+      result: {
+        pane: o.codex && o.running ? agy(woken) : o.own ? shell : { pane_id: 'w5:p20', workspace_id: 'w5', cwd },
+      },
       until: ['pane run'],
       // biome-ignore lint/suspicious/noThenProperty: fake herdr transition
       then: { result: { pane: agy(woken) } },
@@ -251,12 +254,15 @@ test.each(['agy', 'codex'] as const)(
     const codex = kind === 'codex'
     const codexHome = join(box.dir, 'Codex home')
     const logs = join(codexHome, 'sessions', '2026', '11', '23')
+    const rollout = join(logs, `rollout-2026-11-23T10-00-00-${ID}.jsonl`)
+    const echo = (text: string): void => {
+      if (!codex) return
+      const message = { type: 'message', role: 'user', content: [{ type: 'input_text', text }] }
+      appendFileSync(rollout, `${JSON.stringify({ type: 'response_item', payload: message })}\n`)
+    }
     if (codex) {
       mkdirSync(logs, { recursive: true })
-      writeFileSync(
-        join(logs, `rollout-2026-11-23T10-00-00-${ID}.jsonl`),
-        `${JSON.stringify({ type: 'session_meta', payload: { id: ID, cwd } })}\n`,
-      )
+      writeFileSync(rollout, `${JSON.stringify({ type: 'session_meta', payload: { id: ID, cwd } })}\n`)
     }
     const env = codex ? { CODEX_HOME: codexHome } : { ANTIGRAVITY_APP_DATA_DIR: agyRoot }
     herdrAgy(box, cwd, { own: true, running: true, codex })
@@ -312,6 +318,7 @@ test.each(['agy', 'codex'] as const)(
         () => box.calls().some(c => c[0] === 'agent' && c[1] === 'prompt' && c[3]?.includes('Wake for reminder')),
         15_000,
       )
+      echo(box.calls().find(c => c[1] === 'prompt' && c[3]?.includes('Wake for reminder'))?.[3] ?? '')
       expect(wokeCount).toBe(1)
     }
     await card(i => !i.sleeping && i.agent === kind)
@@ -343,6 +350,7 @@ test.each(['agy', 'codex'] as const)(
     await until(() =>
       box.calls().some(c => c[0] === 'agent' && c[1] === 'prompt' && c[2] === 'w5:p9' && /restarted/i.test(c[3] ?? '')),
     )
+    echo(box.calls().find(c => c[1] === 'prompt' && /restarted/i.test(c[3] ?? ''))?.[3] ?? '')
     expect(sleptCount).toBe(2)
     expect(wokeCount).toBe(2)
 
