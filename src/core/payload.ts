@@ -271,6 +271,8 @@ export interface MasterFlagsPayload {
  * fields (`at`, free disk, launches) may be older than `GET /api/nodes`'s.
  */
 export interface BoardDevice extends DeviceView {
+  /** OS platform of this device (`process.platform`, e.g. 'win32', 'darwin', 'linux'), when known. */
+  platform?: string
   /** The link's state, without its detail; `heardAt` to the minute. */
   link: Omit<LinkStatus, 'detail'> | null
   paused: boolean

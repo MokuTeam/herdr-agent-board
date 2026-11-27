@@ -39,6 +39,8 @@ import { branchPushed, checkoutFacts, checkoutIdentity, gitInfo, headCommit } fr
 import { createNodeQueue, type NodeQueue, type NodeSource, type QueueEntry } from '../../adapters/node-queue.ts'
 import { knobMs, pace } from '../../adapters/pacing.ts'
 import { ROOT } from '../../adapters/paths.ts'
+import { AGY_AGENT } from '../../core/agy.ts'
+import { CODEX_AGENT } from '../../core/codex.ts'
 import { t } from '../../core/lang.ts'
 import { checkBranch } from '../../core/launch/names.ts'
 import type { NodeFolderFacts } from '../../core/launch/spawn-node.ts'
@@ -539,8 +541,11 @@ export function createPlacer(o: PlacerOptions): Placer {
       profile,
       agent: l.agent,
       model: l.model ?? '',
+      ...(l.effort && { effort: l.effort }),
       message: l.message,
       workspace: l.workspaceLabel,
+      ...(l.remote === device && l.workspaceId && { workspaceId: l.workspaceId }),
+      ...(l.remote === device && l.newWorkspace && { newWorkspace: true }),
       // A node's own folder (#760) goes back to it as that folder, not as a clone of its repository.
       source:
         h.source?.kind === 'repo' && h.task.origin !== LOCAL && device === h.task.origin
@@ -596,7 +601,8 @@ export function createPlacer(o: PlacerOptions): Placer {
     p.device = device
     delete p.wait
     h.l.state = 'starting'
-    if (o.bundle && !skipSync && !ownProfiles(device)) {
+    const needsProfileSync = !!h.l.profile && h.l.agent !== CODEX_AGENT && h.l.agent !== AGY_AGENT
+    if (o.bundle && !skipSync && needsProfileSync && !ownProfiles(device)) {
       if (h.gone || closed) {
         if (closed) release(session)
         return 'done'

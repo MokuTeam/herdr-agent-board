@@ -63,6 +63,8 @@
 .launch-body .group > :is(.row, .folder-cols):not(:first-child) { box-shadow: inset 0 0.5px 0 var(--separator); }
 .launch-body .row-label { width: 92px; }
 .launch-body .row input, .launch-body .row select { font-size: 13.5px; }
+.launch-devices button:disabled { opacity: 0.45; cursor: not-allowed; }
+.launch-devices .device-off { margin-left: 5px; font-size: 11px; color: var(--label-3); }
 
 .field-note { margin: 0; padding: 0 12px 9px 116px; font-size: 12px; line-height: 1.35; color: var(--label-2); overflow-wrap: anywhere; }
 .field-note.error { color: var(--red); }

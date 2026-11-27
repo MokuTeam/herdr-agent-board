@@ -48,6 +48,7 @@ function sources(over: Partial<StatusSources> = {}): StatusSources {
     launch: () => undefined,
     piFound: () => false,
     agyFound: () => false,
+    codexFound: () => false,
     platform: 'linux',
     arch: 'x64',
     home: '/home/owner',
@@ -185,11 +186,21 @@ describe('its helpers', () => {
         () => true,
       ),
     ).toEqual(['claude'])
+    expect(
+      agentsOf(
+        undefined,
+        () => false,
+        () => true,
+        () => true,
+      ),
+    ).toEqual(['claude', 'agy', 'codex'])
   })
 
-  test('createNodeStatus reports agy on PATH (including Windows .exe/.cmd/.ps1) and launch.agy (#898)', async () => {
+  test('createNodeStatus reports agy and codex on PATH (including Windows .exe/.cmd/.ps1) and launch.agy (#898, #948)', async () => {
     const withAgy = await createNodeStatus(sources({ agyFound: () => true })).answer()
     expect(withAgy?.agents).toEqual(['claude', 'agy'])
+    const withCodex = await createNodeStatus(sources({ codexFound: () => true })).answer()
+    expect(withCodex?.agents).toEqual(['claude', 'codex'])
     const withConfig = await createNodeStatus(
       sources({ launch: () => ({ agy: ['agy', '--dangerously-skip-permissions'] }) }),
     ).answer()

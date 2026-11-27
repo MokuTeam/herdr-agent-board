@@ -23,6 +23,8 @@ export const LAUNCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'launch.folderPlaceholder': 'C:\\path\\to\\folder or ~/project',
     'launch.browse': 'Browse',
     'launch.where': 'Open in',
+    'launch.device': 'Machine',
+    'launch.deviceOffline': 'offline',
     // the agent choice, when the board offers Claude Code and pi (web/src/models/launch-agent.ts)
     'launch.agent': 'Agent',
     // the model it starts on (#380), passed on the agent's command line; empty is the profile's default
@@ -218,6 +220,8 @@ export const LAUNCH_STRINGS: Record<Lang, Record<string, string | string[]>> = {
     'launch.folderPlaceholder': 'C:\\путь\\к\\папке или ~/project',
     'launch.browse': 'Обзор',
     'launch.where': 'Где открыть',
+    'launch.device': 'Машина',
+    'launch.deviceOffline': 'не в сети',
     'launch.agent': 'Агент',
     'launch.model': 'Модель',
     'launch.modelPlaceholder': 'Как в профиле',

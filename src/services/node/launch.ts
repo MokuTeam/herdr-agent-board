@@ -28,6 +28,8 @@ import { basename, join } from 'node:path'
 import { replaceFile } from '../../adapters/json-store.ts'
 import { nodeDir } from '../../adapters/node-store.ts'
 import { memAvailableMb } from '../../adapters/sysload.ts'
+import { AGY_AGENT } from '../../core/agy.ts'
+import { CODEX_AGENT } from '../../core/codex.ts'
 import { type GitIdentity, identityOf } from '../../core/git-access.ts'
 import { checkBranch } from '../../core/launch/names.ts'
 import type { NodeConfig } from '../../core/nodes.ts'
@@ -56,9 +58,14 @@ export interface NodeLaunchRequest {
   profile: string
   agent: string
   model: string
+  effort?: string
   message: string
   /** The master's workspace label, so its sessions of one workspace stay together here too; '' for none. */
   workspace: string
+  /** Target node's workspace id when picked in the modal (#948). */
+  workspaceId?: string
+  /** True when the modal explicitly asked to create a new workspace (#948). */
+  newWorkspace?: boolean
   /** True when `id` must be used as the exact Claude session id (a verifier, #675). */
   exactSession?: boolean
   /** spawn-agent --trust (#798): this board answers Claude's folder-trust dialog for the folder. */
@@ -108,6 +115,7 @@ export interface NodeLaunchDeps {
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+const WORKSPACE_ID = /^[A-Za-z0-9][\w:-]{0,39}$/
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
 const text = (v: unknown, max: number): v is string => typeof v === 'string' && v.length <= max
 function worktreeOf(v: unknown): { branch: string } | null | undefined {
@@ -138,6 +146,12 @@ export function launchRequestOf(raw: unknown): NodeLaunchRequest | { field: stri
   if (!isObject(s)) return { field: 'source' }
   if (b.exactSession !== undefined && typeof b.exactSession !== 'boolean') return { field: 'exactSession' }
   if (b.trust !== undefined && typeof b.trust !== 'boolean') return { field: 'trust' }
+  if (b.newWorkspace !== undefined && typeof b.newWorkspace !== 'boolean') return { field: 'newWorkspace' }
+  if (b.workspaceId !== undefined && b.workspaceId !== null) {
+    if (typeof b.workspaceId !== 'string' || (b.workspaceId !== '' && !WORKSPACE_ID.test(b.workspaceId)))
+      return { field: 'workspaceId' }
+  }
+  if (b.effort !== undefined && b.effort !== null && !text(b.effort, 32)) return { field: 'effort' }
   const worktree = worktreeOf(s.worktree)
   if (worktree === undefined) return { field: 'source.worktree' }
   let source: NodeLaunchRequest['source']
@@ -159,6 +173,8 @@ export function launchRequestOf(raw: unknown): NodeLaunchRequest | { field: stri
     source = { kind: 'path', cwd: s.cwd, worktree }
   } else return { field: 'source.kind' }
   const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+  const workspaceId = str(b.workspaceId).trim()
+  const effort = str(b.effort).trim()
   return {
     id: b.id,
     name: str(b.name),
@@ -166,8 +182,11 @@ export function launchRequestOf(raw: unknown): NodeLaunchRequest | { field: stri
     profile: str(b.profile),
     agent: str(b.agent),
     model: str(b.model),
+    ...(effort && { effort }),
     message: str(b.message),
     workspace: str(b.workspace).trim(),
+    ...(workspaceId && { workspaceId }),
+    ...(b.newWorkspace === true && { newWorkspace: true }),
     ...(by && { by }),
     ...(b.exactSession === true && { exactSession: true }),
     ...(b.trust === true && { trust: true }),
@@ -221,9 +240,19 @@ export function createNodeLaunch(d: NodeLaunchDeps): NodeLaunch {
     body: detail ? { error, detail } : { error },
   })
 
-  async function workspaceFor(label: string): Promise<{ id: string; label: string } | { create: string }> {
+  async function workspaceFor(
+    label: string,
+    workspaceId?: string,
+    newWorkspace?: boolean,
+  ): Promise<{ id: string; label: string } | { create: string }> {
+    if (newWorkspace) return { create: label }
     try {
-      const found = (await d.workspaces()).find(w => w.label === label)
+      const list = await d.workspaces()
+      if (workspaceId) {
+        const byId = list.find(w => w.id === workspaceId)
+        if (byId) return { id: byId.id, label: byId.label ?? label }
+      }
+      const found = list.find(w => w.label === label)
       if (found) return { id: found.id, label }
     } catch {}
     return { create: label }
@@ -234,9 +263,12 @@ export function createNodeLaunch(d: NodeLaunchDeps): NodeLaunch {
     // null: the system could not say. The master took a status that could not say as no room;
     // the node refuses only what it knows is below its floor.
     if (free !== null && free < FLOOR_MB) return turn('full')
-    const profile = d.profiles().list.find(p => p.id === r.profile)
-    if (!profile) return turn('profile', 'missing')
-    if (loggedIn(profile.dir, platform, d.exists ?? existsSync) === false) return turn('profile', 'login')
+    const needsClaudeProfile = r.agent !== CODEX_AGENT && r.agent !== AGY_AGENT
+    const profile = r.profile ? d.profiles().list.find(p => p.id === r.profile) : undefined
+    if (needsClaudeProfile) {
+      if (!profile) return turn('profile', 'missing')
+      if (loggedIn(profile.dir, platform, d.exists ?? existsSync) === false) return turn('profile', 'login')
+    }
     let cwd: string
     let label: string
     let worktree = r.source.worktree
@@ -255,7 +287,7 @@ export function createNodeLaunch(d: NodeLaunchDeps): NodeLaunch {
       cwd = r.source.cwd
       label = basename(cwd)
     }
-    const workspace = await workspaceFor((r.workspace || label || r.name).slice(0, 40))
+    const workspace = await workspaceFor((r.workspace || label || r.name).slice(0, 40), r.workspaceId, r.newWorkspace)
     mkdirSync(dir, { recursive: true })
     replaceFile(recordOf(r.id), JSON.stringify({ id: r.id }))
     let started: StartResult
@@ -268,9 +300,10 @@ export function createNodeLaunch(d: NodeLaunchDeps): NodeLaunch {
           workspace,
           message: r.message,
           worktree,
-          profile: r.profile,
+          ...(needsClaudeProfile ? { profile: r.profile } : profile ? { profile: profile.id } : {}),
           ...(r.agent && !r.exactSession && { agent: r.agent }),
           model: r.model,
+          ...(r.effort && { effort: r.effort }),
         },
         r.id,
         ...(r.exactSession || r.trust || r.by

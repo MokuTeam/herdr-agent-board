@@ -37,6 +37,7 @@ export type LaunchHandlers = Pick<
   | 'model'
   | 'effort'
   | 'pickCategory'
+  | 'pickDevice'
   | 'pickAgent'
   | 'pickProfile'
 > & { folder: FolderHandlers }
@@ -54,6 +55,7 @@ export const launchHandlers = (w: LaunchWindow): LaunchHandlers => ({
   model: w.model,
   effort: w.effort,
   pickCategory: w.pickCategory,
+  pickDevice: w.pickDevice,
   pickAgent: w.pickAgent,
   pickProfile: w.pickProfile,
   folder: w.folder,
@@ -126,6 +128,29 @@ export function LaunchDialogView({ view, folder, launcher, t, on, refs }: Launch
           }}
         >
           <div className="group">
+            {view.device.offered && (
+              <div className="row device-row">
+                <span className="row-label">{t('launch.device')}</span>
+                <div className="row-value chips launch-devices">
+                  {view.device.options.map(dev => (
+                    <button
+                      type="button"
+                      key={dev.id}
+                      name="device"
+                      data-device={dev.id}
+                      style={{ '--lane': dev.color }}
+                      aria-pressed={dev.pressed}
+                      disabled={!dev.online}
+                      title={dev.titleAttr || undefined}
+                      onClick={() => on.pickDevice(dev.id)}
+                    >
+                      {dev.title}
+                      {!dev.online && <span className="device-off">{t('launch.deviceOffline')}</span>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <label className="row">
               <span className="row-label">{t('launch.name')}</span>
               <input

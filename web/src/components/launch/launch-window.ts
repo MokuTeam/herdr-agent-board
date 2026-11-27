@@ -14,10 +14,12 @@ import {
   slugName,
   suggestName,
 } from '../../../../src/core/launch/names.ts'
-import type { BoardCategory, BoardProfile } from '../../../../src/core/payload.ts'
+import { LOCAL } from '../../../../src/core/node-key.ts'
+import type { BoardCategory, BoardDevice, BoardProfile } from '../../../../src/core/payload.ts'
 import type { Item, LaunchView, Translator } from '../../../../src/core/types.ts'
 import { type LaunchApi, type LaunchOptions, NO_OPTIONS } from '../../api/launch.ts'
 import type { MenuOrigin } from '../../models/board-menus.ts'
+import { deviceShown, reachable } from '../../models/devices.ts'
 import { FROM_BELOW, type GrowFrom, paintWindow } from '../../models/grow.ts'
 import type { LanePicks } from '../../models/lane-picks.ts'
 import { type Box, growFrom, LAUNCH_MOTION, type LauncherInfo, suggestionItems } from '../../models/launch.ts'
@@ -30,6 +32,18 @@ import {
   NO_AGENT_ROW,
   offersAgents,
 } from '../../models/launch-agent.ts'
+import {
+  browserPlatform,
+  type DeviceRow,
+  deviceBody,
+  devicePlatform,
+  deviceRow,
+  deviceStart,
+  LAUNCH_DEVICE,
+  NO_DEVICE_ROW,
+  offersDevices,
+  pathMatchesPlatform,
+} from '../../models/launch-device.ts'
 import { launchContext, launchDraftBook } from '../../models/launch-drafts.ts'
 import {
   draftOf,
@@ -76,6 +90,8 @@ export interface LaunchWindowView {
   workspaces: WorkspaceOption[]
   newWorkspaceHidden: boolean
   cats: CategoryChip[]
+  /** The device choice, only when the board has multiple devices. */
+  device: DeviceRow
   /** The profile choice (only when offered) and the profile beside Start. */
   profile: ProfileRow
   /** The agent choice, only when the board offers more than one. */
@@ -106,6 +122,7 @@ export const CLOSED_VIEW: LaunchWindowView = {
   workspaces: [],
   newWorkspaceHidden: true,
   cats: [],
+  device: NO_DEVICE_ROW,
   profile: { offered: false, options: [], chosen: null },
   agent: NO_AGENT_ROW,
   model: { offered: false, aliases: [] },
@@ -126,6 +143,12 @@ export interface LaunchBoard {
   filter: LanePicks
   /** The Claude profiles (none from a board before them). */
   profiles: BoardProfile[]
+  /** Multi-node devices (absent on single-machine setups). */
+  devices?: BoardDevice[] | undefined
+  /** Active device filter on the board (`all` or device id). */
+  device?: string | undefined
+  /** Present on a node's own page (#786). */
+  relayedDevices?: { master: string } | undefined
 }
 
 export interface LaunchWindowDeps {
@@ -145,6 +168,8 @@ export interface LaunchWindowDeps {
   onStarted(launch: LaunchView): void
   now(): number
   viewportHeight(): number
+  /** Browser OS platform override (for tests). */
+  browserOs?: () => string | null
 }
 
 /** What was asked of one opening of the window (the old page's `s`). */
@@ -156,6 +181,10 @@ interface Opening {
   category: string
   workspace: WorkspaceWant | null
   sending: boolean
+  /** Selected device in multi-node setups; null on single-machine boards. */
+  device: string | null
+  /** Monotonic counter guarding async /api/launch/options responses against races. */
+  optionsSeq: number
   /** The profile it starts in; `profileSet`: the user picked one, or the server asked for one. */
   profile: ProfilePick
   profileSet: boolean
@@ -207,10 +236,24 @@ export function launchWindow(deps: LaunchWindowDeps) {
     patch({ seq: view.get().seq + 1 })
   }
 
+  const dirDevice = (): string | undefined => (s?.device && s.device !== LOCAL ? s.device : undefined)
+  const optionsDevice = (): string | undefined =>
+    !s?.device ? undefined : s.device !== LOCAL ? s.device : d().relayedDevices ? LOCAL : undefined
+  const selectedPlatform = (): string | null =>
+    s?.device ? devicePlatform(d().devices?.find(x => x.id === s?.device)) : null
+  const deviceItems = (): Item[] => {
+    const data = d()
+    if (!s?.device) return data.items
+    const dev = s.device
+    return data.items.filter(it => deviceShown(dev, it, data.devices))
+  }
+  const workspaceStoreKey = (): string =>
+    !s?.device || s.device === LOCAL ? LAST_WORKSPACE : `${LAST_WORKSPACE}.${s.device}`
+
   const folder = folderField({
     id: 'launch',
     t,
-    dirs: (path, git) => deps.api.dirs(path, git),
+    dirs: (path, git) => deps.api.dirs(path, git, dirDevice()),
     live: () => !!s,
     suggestions: () => suggestionItems(suggestions(), t()),
     apply: path => applyFolder(path),
@@ -264,6 +307,32 @@ export function launchWindow(deps: LaunchWindowDeps) {
   const rectOf = (o: MenuOrigin | null): Box | null =>
     o instanceof Element ? (o.isConnected ? o.getBoundingClientRect() : null) : isBox(o) ? o : null
 
+  async function loadOptions(st: Opening): Promise<void> {
+    const seq = ++st.optionsSeq
+    const opts = await deps.api.options(optionsDevice())
+    if (!s || s !== st || st.optionsSeq !== seq) return
+    if (!opts) {
+      if (st.device !== null) {
+        options = NO_OPTIONS
+        launcher.set(NO_OPTIONS.launcher)
+        followAgent()
+        renderWorkspaces()
+        syncGo()
+      }
+      return
+    }
+    const prevAgent = st.agent
+    options = opts
+    launcher.set(opts.launcher)
+    followAgent()
+    if (st.agent !== prevAgent && view.get().fields.model) {
+      setFields({ model: '' })
+      noteFor('model', '')
+    }
+    renderWorkspaces()
+    if (!st.set.cwd && !cwd()) applyFolder(suggestions()[0]?.path ?? '', false)
+  }
+
   /**
    * Opens the window for `ctx`, grown out of `fromEl` (an element, or a point's box). The
    * workspaces and recent folders come from the server; the window is usable before they do.
@@ -272,6 +341,17 @@ export function launchWindow(deps: LaunchWindowDeps) {
     if (!deps.canMutate()) return deps.toast(t()('mobile.readOnly'), true)
     origin = fromEl
     const data = d()
+    const device = deviceStart(ctx, {
+      devices: data.devices,
+      filterDevice: data.device,
+      remembered: deps.store.get(LAUNCH_DEVICE),
+      relayedDevices: data.relayedDevices,
+      browserOs: (deps.browserOs ?? browserPlatform)(),
+    })
+    if (device !== null) {
+      options = NO_OPTIONS
+      launcher.set(NO_OPTIONS.launcher)
+    }
     s = {
       ctx,
       draftKey: launchContext(ctx, data.filter),
@@ -280,6 +360,8 @@ export function launchWindow(deps: LaunchWindowDeps) {
       category: 'other',
       workspace: null,
       sending: false,
+      device,
+      optionsSeq: 0,
       profile: { picked: null, locked: false, offered: false },
       profileSet: false,
       agent: null,
@@ -289,7 +371,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
     }
     folder.reset()
     growing = { focus: fromEl instanceof Element ? fromEl : document.activeElement }
-    patch({ shown: true, retry: !!s.retry })
+    patch({ shown: true, retry: !!s.retry, device: deviceRow(device, data.devices, t()) })
     fill(ctx)
     motion.to(1, LAUNCH_MOTION.open)
     openNow.set(isOpen())
@@ -298,13 +380,7 @@ export function launchWindow(deps: LaunchWindowDeps) {
       first?.focus({ preventScroll: true })
       selectText(first)
     }, FIRST_FOCUS_MS)
-    const opts = await deps.api.options()
-    if (!opts || !s || s.ctx !== ctx) return
-    options = opts
-    launcher.set(opts.launcher)
-    followAgent()
-    renderWorkspaces()
-    if (!s.set.cwd && !cwd()) applyFolder(suggestions()[0]?.path ?? '', false)
+    await loadOptions(s)
   }
 
   /** Keeps the whole form for this opening context, never just a prompt for another project. */
@@ -391,8 +467,8 @@ export function launchWindow(deps: LaunchWindowDeps) {
       wanted: s.set.workspace,
       category: s.category,
       title: catTitle(s.category),
-      items: d().items,
-      fallback: deps.store.get(LAST_WORKSPACE) ?? options.focused,
+      items: deviceItems(),
+      fallback: deps.store.get(workspaceStoreKey()) ?? options.focused,
     })
     patch({ workspaces: choice.list, newWorkspaceHidden: !choice.create })
     setFields({ workspace: choice.value })
@@ -515,11 +591,31 @@ export function launchWindow(deps: LaunchWindowDeps) {
   }
 
   function suggestions() {
-    const here = s?.ctx.item?.cwd ?? s?.ctx.cwd
+    if (!s?.device) {
+      const here = s?.ctx.item?.cwd ?? s?.ctx.cwd
+      return folderSuggestions({
+        context: { ...(here !== undefined && { cwd: here }), category: s?.category ?? 'other' },
+        categories: d().categories,
+        items: d().items,
+        recent: options.recent,
+      })
+    }
+    const platform = selectedPlatform()
+    const item = s.ctx.item
+    const here = item
+      ? (item.device ?? LOCAL) === s.device
+        ? item.cwd
+        : undefined
+      : s.ctx.cwd !== undefined && pathMatchesPlatform(s.ctx.cwd, platform)
+        ? s.ctx.cwd
+        : undefined
+    const categories = platform
+      ? d().categories.map(c => ({ ...c, paths: c.paths.filter(p => pathMatchesPlatform(p, platform)) }))
+      : d().categories
     return folderSuggestions({
-      context: { ...(here !== undefined && { cwd: here }), category: s?.category ?? 'other' },
-      categories: d().categories,
-      items: d().items,
+      context: { ...(here !== undefined && { cwd: here }), category: s.category },
+      categories,
+      items: deviceItems(),
       recent: options.recent,
     })
   }
@@ -582,13 +678,16 @@ export function launchWindow(deps: LaunchWindowDeps) {
     if (s.agent !== 'codex' && s.profile !== seen && (seen.offered || s.profile.offered)) return renderProfile()
     if (!deps.canMutate()) return deps.toast(t()('mobile.readOnly'), true)
     const st = s
+    const parent =
+      st.device !== null && st.ctx.item && (st.ctx.item.device ?? LOCAL) !== st.device ? null : parentOf(st.ctx)
     const body = startBody(fields(), {
       check: folder.check(),
       git: folder.git(),
       category: st.category,
       label: labelOf(view.get().fields.workspace),
-      ...(st.agent === 'codex' ? {} : profileBody(st.profile, d().profiles, parentOf(st.ctx))),
+      ...(st.agent === 'codex' ? {} : profileBody(st.profile, d().profiles, parent)),
       ...agentBody(st.agent, options.agents),
+      ...deviceBody(st.device, d().devices),
       takesModel: options.takesModel,
     })
     const effort = view.get().model.effort
@@ -615,13 +714,20 @@ export function launchWindow(deps: LaunchWindowDeps) {
         st.agentRefused = true
         patch({ error: { text: r.error, hidden: false } })
         $('[name="agent"][aria-pressed="true"]')?.focus()
-      } else if (field) {
+      } else if (
+        field === 'name' ||
+        field === 'cwd' ||
+        field === 'model' ||
+        field === 'workspace' ||
+        field === 'worktree'
+      ) {
         noteFor(field, r.error)
         $(`[name="${fieldOf(field)}"]`)?.focus()
       } else patch({ error: { text: r.error, hidden: false } })
       return
     }
-    if ('id' in body.workspace) deps.store.set(LAST_WORKSPACE, body.workspace.id)
+    if ('id' in body.workspace) deps.store.set(workspaceStoreKey(), body.workspace.id)
+    if (st.device !== null && offersDevices(d().devices)) deps.store.set(LAUNCH_DEVICE, st.device)
     if (body.profile) {
       const book = rememberProfile(rememberedProfiles(deps.store.get(LAUNCH_PROFILES)), body.cwd, body.profile)
       deps.store.set(LAUNCH_PROFILES, JSON.stringify(book))
@@ -661,6 +767,31 @@ export function launchWindow(deps: LaunchWindowDeps) {
     stop: () => void motion.stop(),
 
     // The form's own events.
+    pickDevice(id: string): void {
+      if (!s || s.device === null || s.device === id) return
+      const target = d().devices?.find(x => x.id === id)
+      if (!target || !reachable(target)) return
+      s.device = id
+      patch({
+        device: deviceRow(id, d().devices, t()),
+        error: { ...view.get().error, hidden: true },
+      })
+      folder.reset()
+      folder.closePop()
+      folder.closeBrowse()
+      s.workspace = null
+      s.set.workspace = false
+      if (s.set.cwd && cwd().trim()) {
+        folder.checkFolder()
+      } else {
+        folder.setText('')
+        folder.clearState()
+        if (!s.set.name) setFields({ name: '' })
+        renderWorktree()
+      }
+      void loadOptions(s)
+      syncGo()
+    },
     pickCategory(id: string): void {
       if (!s) return
       s.category = id

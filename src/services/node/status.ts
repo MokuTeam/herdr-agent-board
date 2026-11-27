@@ -15,7 +15,7 @@ import { NODE_API } from '../../core/node-door.ts'
 import type { NodeConfig, NodeStatus } from '../../core/nodes.ts'
 import type { Profile } from '../../core/profiles.ts'
 import type { Item, LaunchSpec, LaunchView } from '../../core/types.ts'
-import { agyOnPath, piOnPath } from '../launch/launches.ts'
+import { agyOnPath, codexOnPath, piOnPath } from '../launch/launches.ts'
 
 export type { NodeStatus }
 
@@ -39,6 +39,8 @@ export interface StatusSources {
   piFound?: () => boolean
   /** Whether `agy` is on this board's PATH (services/launch/launches.ts). */
   agyFound?: () => boolean
+  /** Whether `codex` is on this board's PATH (services/launch/launches.ts). */
+  codexFound?: () => boolean
   /**
    * The programs of core/bundle.ts NODE_PROGRAMS on this node's PATH (#603), asked once: the
    * master's bundle runs a hook's program only where it is. No `programs` in the status without it.
@@ -107,8 +109,9 @@ export function agentsOf(
   launch: LaunchSpec | undefined,
   piFound: () => boolean,
   agyFound: () => boolean = () => false,
+  codexFound: () => boolean = () => false,
 ): string[] {
-  const offered = launchAgents(launch, piFound, agyFound).map(a => a.id)
+  const offered = launchAgents(launch, piFound, agyFound, codexFound).map(a => a.id)
   return offered.length ? offered : [CLAUDE_AGENT]
 }
 
@@ -156,7 +159,12 @@ export function createNodeStatus(src: StatusSources): { answer(): Promise<NodeSt
         profiles: src
           .profiles()
           .map(p => ({ id: p.id, loggedIn: loggedIn(p.dir, platform, exists), bundle: src.bundle?.(p.id) ?? null })),
-        agents: agentsOf(src.launch(), src.piFound ?? piOnPath, src.agyFound ?? agyOnPath),
+        agents: agentsOf(
+          src.launch(),
+          src.piFound ?? piOnPath,
+          src.agyFound ?? agyOnPath,
+          src.codexFound ?? codexOnPath,
+        ),
         ...(src.programs && { programs: programsOnce(src.programs) }),
         ...(git && { git }),
         ...(agyLimits !== undefined && { agyLimits }),

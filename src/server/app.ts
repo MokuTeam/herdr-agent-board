@@ -110,6 +110,8 @@ import {
   MASTER_CONFIRM_PATH,
   MASTER_SCOPE_PREFIX,
   masterBulkBody,
+  masterDeviceId,
+  masterLaunchBody,
   masterNodesBody,
   masterScopeBody,
   masterScopePath,
@@ -1925,6 +1927,22 @@ export async function startServer({
       const body = masterBulkBody(raw, await req.json().catch(() => null), selfId)
       req = new Request(url, { method: req.method, headers: req.headers, body: JSON.stringify(body) })
     }
+    // A node's New session options / dirs / launch (#948): `local` becomes `from.device`, this master's `selfId` becomes `local`.
+    if (from && req.method === 'GET' && raw === '/api/launch/options') {
+      const dev = url.searchParams.get('device')
+      if (dev) {
+        const selfId = nodesConfig(cfg.nodes, hostname())?.id ?? ''
+        const mapped = masterDeviceId(dev, from.device, selfId)
+        if (mapped === LOCAL) url.searchParams.delete('device')
+        else url.searchParams.set('device', mapped)
+        req = new Request(url, { method: req.method, headers: req.headers })
+      }
+    }
+    if (from && req.method === 'POST' && (raw === '/api/fs/dirs' || raw === '/api/launch')) {
+      const selfId = nodesConfig(cfg.nodes, hostname())?.id ?? ''
+      const body = masterLaunchBody(await req.json().catch(() => null), from.device, selfId)
+      req = new Request(url, { method: req.method, headers: req.headers, body: JSON.stringify(body) })
+    }
     const owner = from?.who.kind === 'owner'
     // Devices and its setup forms (#786): a master's own, the owner's on each paired device (never a
     // node session's), each change in the admin log. Answered by the same routes as on this
@@ -2197,13 +2215,16 @@ export async function startServer({
       cfg,
       items: board.items,
       log,
-      // What this node answers itself (#786): a Team of its own config.json, and a start the master placed here.
-      stays: (entry, raw) =>
+      // What this node answers itself (#786): a Team of its own config.json, `GET /api/launch/options?device=local`
+      // for its own new-session window (#948), and a start the master placed here.
+      stays: (entry, raw, search) =>
         entry.group === 'team'
           ? teamConfig(cfg.team) !== null
-          : entry.group === 'launch' && /^\/api\/launch\/[\w-]+\//.test(raw)
-            ? launches.list().some(l => l.id === raw.split('/')[3])
-            : false,
+          : entry.group === 'launch' && raw === '/api/launch/options'
+            ? new URLSearchParams(search).get('device') === LOCAL
+            : entry.group === 'launch' && /^\/api\/launch\/[\w-]+\//.test(raw)
+              ? launches.list().some(l => l.id === raw.split('/')[3])
+              : false,
     })
     const upFlags = createNodeMasterFlags({ cfg, log, changed: () => void runRefresh() })
     nodeFlags = upFlags

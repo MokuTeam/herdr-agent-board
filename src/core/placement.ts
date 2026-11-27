@@ -332,12 +332,14 @@ function unfitWhy(device: DeviceId, task: Task, view: PlacementView): Unfit | nu
         ...(state?.updating && { updating: true as const }),
       }
   }
-  // The profile map is the master's to a node's: this computer's profiles and `nodeProfile` are already target ids.
-  const profile = (device !== LOCAL && !task.nodeProfile && settings?.profiles?.[task.profile]) || task.profile
-  const there = status.profiles.find(p => p.id === profile)
-  if (!there) return { device, kind: 'no-profile', profile }
-  // null is a device that cannot tell (an agent with no login of its own to read): not a refusal.
-  if (there.loggedIn === false) return { device, kind: 'not-logged-in', profile }
+  if (task.agent !== 'codex' && task.agent !== 'agy') {
+    // The profile map is the master's to a node's: this computer's profiles and `nodeProfile` are already target ids.
+    const profile = (device !== LOCAL && !task.nodeProfile && settings?.profiles?.[task.profile]) || task.profile
+    const there = status.profiles.find(p => p.id === profile)
+    if (!there) return { device, kind: 'no-profile', profile }
+    // null is a device that cannot tell (an agent with no login of its own to read): not a refusal.
+    if (there.loggedIn === false) return { device, kind: 'not-logged-in', profile }
+  }
   if (!status.agents.includes(task.agent)) return { device, kind: 'no-agent', agent: task.agent }
   return null
 }

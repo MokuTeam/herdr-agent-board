@@ -100,6 +100,7 @@ export const RELAY_TABLE: readonly RelayEntry[] = [
   { group: 'devices', method: 'GET', path: /^\/api\/nodes(?:\/(?:setup|relay\/setup|computer\/setup))?$/ },
   { group: 'devices', method: 'POST', path: /^\/api\/nodes(?:\/(?:setup|relay\/setup|computer\/setup))?$/ },
   { group: 'launch', method: 'GET', path: /^\/api\/launch\/options$/ },
+  { group: 'launch', method: 'POST', path: /^\/api\/fs\/dirs$/, when: 'device' },
   { group: 'launch', method: 'POST', path: /^\/api\/launch$/ },
   { group: 'launch', method: 'POST', path: /^\/api\/launch\/[\w-]+\/(?:dismiss|trust|close)$/ },
   { group: 'moves', method: 'POST', path: /^\/api\/move$/, when: 'device' },
@@ -693,6 +694,26 @@ export const relayOwnerTeam = (method: string, rawPath: string): boolean =>
 export const relayDevicesPath = (rawPath: string): boolean =>
   /^\/api\/nodes(?:\/(?:setup|relay\/setup|computer\/setup))?$/.test(rawPath)
 
+/** Maps a device id from a node's page (`local` -> `device`, master's `selfId` -> `local`). */
+export const masterDeviceId = (id: string, device: string, selfId: string): string =>
+  id === 'local' ? device : id === selfId ? 'local' : id
+
+/**
+ * `/api/launch` and `/api/fs/dirs` bodies from node `device`'s page in the master's terms (#948):
+ * `local` becomes `device`, the master's own id `selfId` becomes `local`.
+ */
+export function masterLaunchBody(body: unknown, device: string, selfId: string): unknown {
+  if (!isObject(body) || !device || !selfId) return body
+  let next: Record<string, unknown> | null = null
+  if (typeof body.device === 'string' && body.device) {
+    next = { ...body, device: masterDeviceId(body.device, device, selfId) }
+  }
+  if (isObject(body.pin) && typeof body.pin.device === 'string' && body.pin.device) {
+    next = { ...(next ?? body), pin: { device: masterDeviceId(body.pin.device, device, selfId) } }
+  }
+  return next ?? body
+}
+
 /**
  * Devices' `POST /api/nodes` from node `device`'s page as the master runs it (#786): that page
  * names itself `local` and the master by its id (core/board-slices.ts devicesForNode), so a device
@@ -701,7 +722,7 @@ export const relayDevicesPath = (rawPath: string): boolean =>
  */
 export function masterNodesBody(body: unknown, device: string, selfId: string): unknown {
   if (!isObject(body) || !device || !selfId) return body
-  const id = (v: unknown): unknown => (v === 'local' ? device : v === selfId ? 'local' : v)
+  const id = (v: unknown): unknown => (typeof v === 'string' ? masterDeviceId(v, device, selfId) : v)
   return {
     ...body,
     ...(typeof body.id === 'string' && { id: id(body.id) }),

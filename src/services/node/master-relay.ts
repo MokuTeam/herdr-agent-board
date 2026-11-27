@@ -80,7 +80,7 @@ export interface MasterRelayDeps {
    * A path of the table this board answers itself after all (#786): a group its own config.json
    * runs (its own Team), or a start of its own (a launch the master placed here). Absent: none.
    */
-  stays?(entry: RelayEntry, rawPath: string): boolean
+  stays?(entry: RelayEntry, rawPath: string, search: string): boolean
 }
 
 interface Waiting {
@@ -298,7 +298,7 @@ export function createMasterRelay(deps: MasterRelayDeps): MasterRelay {
       if (!enabled()) return undefined
       const match = relayMatch(req.method, caller.rawPath, skip)
       if (!match) return undefined
-      if (match.kind === 'table' && deps.stays?.(match.entry, caller.rawPath)) return undefined
+      if (match.kind === 'table' && deps.stays?.(match.entry, caller.rawPath, caller.search)) return undefined
       // A body-gated entry (#786): its body decides, read from a copy so a body that stays here
       // reaches this board's own route whole.
       let gated: Uint8Array<ArrayBuffer> | null = null

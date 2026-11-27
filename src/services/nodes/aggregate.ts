@@ -92,8 +92,10 @@ function boardDevice(
     const { detail, heardAt, ...rest } = view.link
     link = { ...rest, heardAt: heardAt === null ? null : heardAt - (heardAt % 60_000) }
   }
+  const platform = status?.platform ?? (view.id === LOCAL ? process.platform : undefined)
   return {
     ...view,
+    ...(platform && { platform }),
     ...(device?.color && { color: device.color }),
     link,
     status,
