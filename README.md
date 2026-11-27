@@ -2985,7 +2985,9 @@ after a lost answer reuses its digest, and a round that changes, closes or leave
 dropped. That a round was started (task, assignment, revision, never the bearer or digest) is
 committed in `board.db` before the grant is sent: a restart that finds a started round without
 its bearer makes no second digest for it (`Workdesk grant <id>: lost` in the log); the next round
-starts afresh. Workdesk ends the grant on its side: a handover deletes it, a new revision makes
+starts afresh. This holds even when the board stopped between that commit and the grant
+call, so Workdesk never saw a digest: the round is still `lost` on purpose (fail closed), not a
+bug. Workdesk ends the grant on its side: a handover deletes it, a new revision makes
 it invalid, a cancelled card is closed, and a done card only replays a verified close with its
 receipt.
 
