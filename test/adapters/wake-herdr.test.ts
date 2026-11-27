@@ -196,6 +196,38 @@ describe('cliWakeHerdr', () => {
     ])
   })
 
+  test.each([
+    ['codex', [], ['C:\\Program Files\\Codex\\codex.exe', '--no-daemon', 'resume', SID], SID],
+    ['codex', [], ['codex', 'resume', '--last'], null],
+    ['codex', [SID], ['codex', 'resume', '--last'], SID],
+    ['claude', [], ['codex', 'resume', SID], null],
+    ['agy', [], ['codex', 'resume', SID], null],
+    ['pi', [], ['codex', 'resume', SID], null],
+  ] as const)(
+    'recognizes a resumed %s pane with native session %j and foreground argv %j',
+    async (agent, native, argv, expected) => {
+      const box = await sandbox()
+      const pane = { ...PANE, agent, ...(native[0] && { agent_session: { value: native[0] } }) }
+      box.state({
+        'pane get': { result: { pane } },
+        'pane process-info': {
+          result: { process_info: { shell_pid: 10, foreground_processes: [{ pid: 11, argv }] } },
+        },
+      })
+      expect(await call(box, 'pane', PANE.pane_id, { verifyCodexResume: true })).toEqual({
+        code: 0,
+        out: {
+          ...pane,
+          ...(expected && !native.length && { agent_session: { value: expected, source: 'board:codex-resume' } }),
+        },
+      })
+      expect(box.calls()).toEqual([
+        ['pane', 'get', PANE.pane_id],
+        ...(agent === 'codex' && !native.length ? [['pane', 'process-info', '--pane', PANE.pane_id]] : []),
+      ])
+    },
+  )
+
   test('a pane herdr no longer has is none; another herdr error is passed on', async () => {
     const box = await sandbox()
     box.state({

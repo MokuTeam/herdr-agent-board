@@ -189,9 +189,9 @@ const resumed = new Map<string, { terminal: string; at: number; session: Promise
  * process's argv: after a resume herdr reports no session for the pane, though the rollout is the
  * same one. Asked only for a Codex pane herdr gives no session, at most once per RESUMED_MS.
  */
-function resumedSession(pane: string, terminal: string): Promise<string | null> {
+function resumedSession(pane: string, terminal: string, fresh = false): Promise<string | null> {
   const hit = resumed.get(pane)
-  if (hit && hit.terminal === terminal && Date.now() - hit.at < RESUMED_MS) return hit.session
+  if (!fresh && hit && hit.terminal === terminal && Date.now() - hit.at < RESUMED_MS) return hit.session
   const session = paneProcesses(pane, 5000)
     .then(procs => procs?.foreground.map(p => resumedCodexSession(p.args)).find(id => id) ?? null)
     .catch(() => null)
@@ -200,9 +200,9 @@ function resumedSession(pane: string, terminal: string): Promise<string | null> 
 }
 
 /** A Codex pane herdr knows no session of, given the one it was resumed with; every other pane as it is. */
-async function withResumedSession(pane: HerdrPane): Promise<HerdrPane> {
+export async function withResumedSession(pane: HerdrPane, fresh = false): Promise<HerdrPane> {
   if (pane.agent !== CODEX_AGENT || pane.agent_session?.value) return pane
-  const value = await resumedSession(pane.pane_id, pane.terminal_id ?? '')
+  const value = await resumedSession(pane.pane_id, pane.terminal_id ?? '', fresh)
   return value ? { ...pane, agent_session: { value, source: 'board:codex-resume' } } : pane
 }
 
@@ -210,7 +210,7 @@ async function withResumedSession(pane: HerdrPane): Promise<HerdrPane> {
 export async function snapshot(): Promise<HerdrSnapshot> {
   const snap = asSnapshot(await herdr(['api', 'snapshot']))
   if (snap.panes.some(p => p.agent === CODEX_AGENT && !p.agent_session?.value))
-    snap.panes = await Promise.all(snap.panes.map(withResumedSession))
+    snap.panes = await Promise.all(snap.panes.map(pane => withResumedSession(pane)))
   return snap
 }
 
