@@ -136,7 +136,7 @@ test('a modal session keeps the docked session in its own slot until the modal c
   const docked = boardUi(initialUi(stored({})), { type: 'open', key: 'pane-master', compose: true })
   const modal = boardUi(docked, { type: 'open', key: 'claude-session', modal: true, keepSidebar: true })
   expect(modal.open).toBe('claude-session')
-  expect(modal.sidebarSheet).toEqual({ key: 'pane-master', opened: docked.opened })
+  expect(modal.sidebarSheet).toEqual({ key: 'pane-master', opened: docked.opened, compose: false, forcePanel: true })
   expect(modal.sheetSlot).toBe(1)
 
   const next = boardUi(modal, { type: 'open', key: 'pane-pi', modal: true })
@@ -158,6 +158,18 @@ test('closing the dock or opening another side session clears only the dock rese
   const switched = boardUi(modal, { type: 'open', key: 'other-master' })
   expect(switched.open).toBe('other-master')
   expect(switched.sidebarSheet).toBeUndefined()
+})
+
+test('opening other cards keeps the separate dialog and associates each sidebar selection with its own session', () => {
+  const dialog = boardUi(initialUi(stored({})), { type: 'open', key: 'separate' })
+  const sidebar = boardUi(dialog, { type: 'open', key: 'other', keepDialog: true, compose: true })
+  expect([sidebar.open, sidebar.opened]).toEqual([dialog.open, dialog.opened])
+  expect(sidebar.sidebarSheet).toEqual({ key: 'other', opened: 2, compose: true, forcePanel: true })
+  const switched = boardUi(sidebar, { type: 'open', key: 'third', keepDialog: true })
+  expect([switched.open, switched.sidebarSheet?.key]).toEqual(['separate', 'third'])
+  expect(boardUi(switched, { type: 'closeSheet', slot: 1 }).open).toBe('separate')
+  const closed = boardUi(switched, { type: 'closeSheet', slot: 0 })
+  expect([closed.open, closed.forcePanel]).toEqual(['third', true])
 })
 
 test('a result read in the sheet is recorded as viewed', () => {

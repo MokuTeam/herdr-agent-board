@@ -93,11 +93,17 @@ export function BoardProvider({ children }: { children: ReactNode }) {
         return
       }
       const kindOf = (key: string) => sessionWindowKind(data?.items.find(item => item.key === key))
-      const modal = readCardWindow(kindOf(action.key)) === 'modal'
-      const panel = place.openPanel()
-      const keepSidebar =
-        modal && !ui.sidebarSheet && place.layout.dock !== 'float' && panel?.chat === true && !panel.modal
-      dispatchUi({ ...action, modal, keepSidebar })
+      const center = place.centeredPanel()
+      const keepDialog = center?.chat === true && !!ui.open
+      const modal = !center && readCardWindow(kindOf(action.key)) === 'modal'
+      const keepSidebar = modal && !ui.sidebarSheet && place.sidebarPanel()?.chat === true
+      dispatchUi({
+        ...action,
+        modal,
+        keepSidebar,
+        keepDialog,
+        forcePanel: !!center && !keepDialog,
+      })
     },
     [latest],
   )

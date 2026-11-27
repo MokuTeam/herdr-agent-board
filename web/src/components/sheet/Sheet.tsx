@@ -18,7 +18,7 @@ import type { SheetPick } from '../../hooks/useContextMenus.ts'
 import { useDecisions } from '../../hooks/useDecisions.ts'
 import { useFileDrop } from '../../hooks/useFileDrop.ts'
 import { useGoToSession } from '../../hooks/useGoToSession.ts'
-import type { HelpersUi } from '../../hooks/useHelpers.ts'
+import type { HelperRef, HelpersUi } from '../../hooks/useHelpers.ts'
 import { useKeepFocus } from '../../hooks/useKeepFocus.ts'
 import { type OpenLaunch, useNewSession } from '../../hooks/useNewSession.ts'
 import { useSessionActions } from '../../hooks/useSessionActions.ts'
@@ -117,8 +117,15 @@ function useShown(open: string | null, item: Item | undefined): { key: string | 
   return { key, item: item ?? (kept?.key === key ? kept : null) }
 }
 
-export function Sheet(slots: SheetSlots & { foreground?: boolean; onClose?: () => void }) {
-  const { foreground = true, onClose } = slots
+export function Sheet(
+  slots: SheetSlots & {
+    foreground?: boolean
+    forcePanel?: boolean | undefined
+    onShowModal?: (() => void) | undefined
+    onClose?: () => void
+  },
+) {
+  const { foreground = true, forcePanel, onShowModal, onClose } = slots
   const id = useSheetId()
   const {
     question,
@@ -175,12 +182,18 @@ export function Sheet(slots: SheetSlots & { foreground?: boolean; onClose?: () =
   // The helpers window lists what the open session's detail says.
   const fed = open !== null && detail.value.key === open ? detail.value.data : null
   useLayoutEffect(() => {
-    if (foreground) helpers?.engine.feed({ key: open, data: fed })
+    if (helpers && (helpers.open ? helpers.engine.view.get().key === open : foreground))
+      helpers.engine.feed({ key: open, data: fed })
   }, [foreground, helpers, open, fed])
   const goToSession = useGoToSession()
+  const showHelper = (ref: HelperRef, el: HTMLElement) => {
+    if (!helpers || !open) return
+    helpers.engine.feed({ key: open, data: fed })
+    helpers.engine.open(open, ref, el)
+  }
   const links: SheetLinks = {
-    onHelper: (id, el) => helpers?.show({ id }, el),
-    onList: (run, el) => helpers?.show({ list: true, run }, el),
+    onHelper: (id, el) => showHelper({ id }, el),
+    onList: (run, el) => showHelper({ list: true, run }, el),
     onSession: goToSession,
     // Tasks only while the board has them on: no 📌 otherwise.
     ...(onPin && data?.todos && open && { onPin: (turn: AssistantTurn, el: HTMLElement) => onPin(open, turn, el) }),
@@ -228,8 +241,11 @@ export function Sheet(slots: SheetSlots & { foreground?: boolean; onClose?: () =
   return (
     <Panel
       id={id('sheet')}
+      sessionKey={open ?? undefined}
       kind="session"
       cardWindow={sessionWindowKind(shown.item)}
+      forcePanel={forcePanel}
+      onShowModal={onShowModal}
       open={open !== null}
       onClose={onClose ?? (() => dispatch({ type: 'open', key: null }))}
       about={() => cardOf(open)}
@@ -255,7 +271,7 @@ export function Sheet(slots: SheetSlots & { foreground?: boolean; onClose?: () =
           fold={{
             compact: density.compact,
             onToggle: density.toggle,
-            helpers: chip ? { ...chip, onOpen: el => void helpers?.show({ list: true, run: null }, el) } : undefined,
+            helpers: chip ? { ...chip, onOpen: el => showHelper({ list: true, run: null }, el) } : undefined,
           }}
         />
       }

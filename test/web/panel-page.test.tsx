@@ -208,3 +208,30 @@ describe('a centered card window beside a docked chat', () => {
     })
   }
 })
+
+test('Team and other side panels replace each other while the separate session dialog stays open', async () => {
+  const side = await newSide({ viewport: VP, ids: ['sheet', 'team-sheet', 'cats-sheet'] })
+  const dialog = side.panel('sheet')
+  const stop = listenClickAway(side.shared)
+  try {
+    dialog.setModal(true)
+    await side.open('sheet')
+    await side.open('team-sheet')
+    expect(dialog.isOpen).toBe(true)
+    expect(side.panel('team-sheet').isOpen).toBe(true)
+
+    await side.open('cats-sheet')
+    expect(side.panel('team-sheet').isOpen).toBe(false)
+    expect(dialog.isOpen).toBe(true)
+    const { board } = mountBoard(side)
+    await clickOn(side, board)
+    expect(dialog.isOpen).toBe(true)
+    expect(side.panel('cats-sheet').isOpen).toBe(false)
+    dialog.close()
+    expect(side.shared.openPanel()).toBeUndefined()
+  } finally {
+    stop()
+    await side.world.settle()
+    side.dispose()
+  }
+})

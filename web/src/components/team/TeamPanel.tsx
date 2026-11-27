@@ -115,6 +115,7 @@ export function TeamPanel({ open, onClose, back, focus, onFocused }: TeamPanelPr
     <Panel
       id="team-sheet"
       kind="team"
+      cardWindow="team"
       back={back}
       measure="full"
       open={open}

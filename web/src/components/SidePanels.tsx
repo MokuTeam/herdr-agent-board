@@ -164,13 +164,19 @@ function SessionSheet({ slot, sheet }: { slot: SheetSlot; sheet: SheetSlots | un
   const close = () => dispatch({ type: 'closeSheet', slot })
   const localBoard = {
     ...board,
-    ui: foreground ? ui : { ...ui, open, opened: side?.opened ?? ui.opened, compose: false },
+    ui: foreground ? ui : { ...ui, open, opened: side?.opened ?? ui.opened, compose: side?.compose ?? false },
   }
   return (
     <BoardContext.Provider value={localBoard}>
       <SheetIds.Provider value={foreground ? '' : 'sidebar-'}>
         <ErrorBoundary scope="panel" resetKey={open} onClose={close}>
-          <Sheet {...sheet} foreground={foreground} onClose={close} />
+          <Sheet
+            {...sheet}
+            foreground={foreground}
+            forcePanel={foreground ? ui.forcePanel : side?.forcePanel}
+            onShowModal={foreground ? () => dispatch({ type: 'showSessionDialog' }) : undefined}
+            onClose={close}
+          />
         </ErrorBoundary>
       </SheetIds.Provider>
     </BoardContext.Provider>

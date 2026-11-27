@@ -19,7 +19,7 @@ export function listenClickAway(place: PanelPlace): () => void {
   const onClick = (e: MouseEvent) => {
     const press = down
     down = null
-    const open = place.openPanel()
+    const open = place.sidebarPanel()
     if (!open || !outsidePanelPress(press, e, KEEPS)) return
     open.close()
   }

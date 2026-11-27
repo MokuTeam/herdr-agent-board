@@ -1,7 +1,7 @@
 import type { Item } from '../../../src/core/types.ts'
 import { storage } from '../state/storage.ts'
 
-export type CardWindowKind = 'master' | 'session' | 'thread' | 'terminal'
+export type CardWindowKind = 'master' | 'session' | 'thread' | 'team' | 'terminal'
 export type CardWindowView = 'panel' | 'modal'
 
 export function sessionWindowKind(item: Pick<Item, 'teamMaster'> | null | undefined): CardWindowKind {

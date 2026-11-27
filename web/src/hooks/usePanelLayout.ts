@@ -36,7 +36,7 @@ export function usePanelLayout(): PanelLayoutApi {
       layout,
       open,
       dockTo(dock) {
-        const panel = place.openPanel()
+        const panel = place.sidebarPanel()
         if (panel) panel.setDock(dock)
         else if (dock !== place.layout.dock) place.setLayout({ ...place.layout, dock }, true)
       },

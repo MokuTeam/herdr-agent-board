@@ -45,12 +45,12 @@ export function usePanel({ open, modal = false, chat = false, onClose, about }: 
   const ref = useRef<HTMLElement>(null)
 
   useLayoutEffect(() => (ref.current ? motion.attach(ref.current) : undefined), [motion])
-  useLayoutEffect(() => motion.setModal(modal), [motion, modal])
   // After the element is taken: a panel asked open comes in, one asked closed goes.
   useLayoutEffect(() => {
+    if (!open) motion.close()
+    motion.setModal(modal)
     if (open) motion.open()
-    else motion.close()
-  }, [open, motion])
+  }, [open, motion, modal])
 
   const [controls] = useState(() => ({
     togglePlaceMenu: (button: HTMLElement) => place.menu.toggle(motion, button),

@@ -152,28 +152,34 @@ export class PanelPlace {
     if (open !== this.state.get().open) this.state.set({ ...this.state.get(), open })
   }
 
-  openPanel(): PlacedPanel | undefined {
-    return this.panels.find(p => p.isOpen && p.modal) ?? this.panels.find(p => p.isOpen)
+  centeredPanel(): PlacedPanel | undefined {
+    return this.panels.find(panel => panel.isOpen && panel.modal)
   }
 
-  /** A centered card can share the desktop with the chat docked beside it. */
+  sidebarPanel(): PlacedPanel | undefined {
+    return this.panels.find(panel => panel.isOpen && !panel.modal)
+  }
+
+  openPanel(): PlacedPanel | undefined {
+    return this.centeredPanel() ?? this.sidebarPanel()
+  }
+
+  /** Desktop side panels replace each other. A separate dialog has its own place. */
   activate(panel: PlacedPanel): void {
-    const sharesDock = !this.isPhone() && this.layout.dock !== 'float'
     for (const other of this.panels) {
       if (other === panel || !other.isOpen) continue
-      const sharesChat = panel.modal ? !other.modal && other.chat : panel.chat && other.modal
-      if (!sharesDock || !sharesChat) other.close()
+      if (this.isPhone() || !!other.modal === !!panel.modal) other.close()
     }
   }
 
   /** Settings picked a place: the open panel moves there, and the others open there next. */
   placePanels(dock: Dock): void {
-    ;(this.openPanel() ?? this.panels[0])?.setDock(dock)
+    ;(this.sidebarPanel() ?? this.panels[0])?.setDock(dock)
   }
 
   /** Settings asked for the default size of the panels' place. */
   resetPanelSize(): void {
-    ;(this.openPanel() ?? this.panels[0])?.resetSize()
+    ;(this.sidebarPanel() ?? this.panels[0])?.resetSize()
   }
 
   /** The room a panel at the bottom takes now: where the board's visible part ends. */
@@ -219,7 +225,7 @@ export class PanelPlace {
 
   /** The board's room for the open panel (none on a phone, or for a floating one). */
   syncRoom({ jump = false, velocity = {}, response = 0.4, about = nothing }: RoomOptions = {}): void {
-    const open = this.panels.find(p => p.isOpen && !p.modal)
+    const open = this.sidebarPanel()
     const vp = this.viewport()
     const phone = this.isPhone()
     const docked = !!open

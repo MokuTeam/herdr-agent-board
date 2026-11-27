@@ -316,7 +316,7 @@ export interface SheetMoreDeps {
   t(): Translator
   canMutate(): boolean
   /** The open session. */
-  open(): string | null
+  open(button: HTMLElement): string | null
   item(key: string): Item | undefined
   quickLook: Pick<QuickLook, 'lookChanges' | 'lookHistory'>
   newSession: OpenLaunch
@@ -339,9 +339,10 @@ export function sheetMoreMenuFrom(deps: SheetMoreDeps): (button: HTMLElement, ke
   return (button, keyboard) => {
     const rect = button.getBoundingClientRect()
     const t = deps.t()
+    const prefix = button.closest?.('#sidebar-sheet') ? 'sidebar-' : ''
     const groups = SHEET_MORE.map(group =>
       group
-        .map(id => document.getElementById(id))
+        .map(id => document.getElementById(prefix + id))
         .filter(isSheetButton)
         .filter(el => !el.hidden && overInRow(el)),
     )
@@ -355,14 +356,15 @@ export function sheetMoreMenuFrom(deps: SheetMoreDeps): (button: HTMLElement, ke
       onPick: id => {
         const action = document.getElementById(id)
         if (!isSheetButton(action) || action.disabled || action.hidden) return
-        const open = deps.open()
+        const open = deps.open(button)
+        const kind = id.slice(prefix.length)
         // Dialogs must return focus to this visible opener, not the hidden toolbar button.
-        if (id === 'sheet-history')
+        if (kind === 'sheet-history')
           return void (open && deps.quickLook.lookHistory(open, deps.item(open)?.cwd ?? '', button))
-        if (id === 'sheet-changes') return void (open && deps.quickLook.lookChanges(open, button))
-        if (id === 'sheet-term') return void (open && deps.terminal?.(open, button))
-        if (id === 'sheet-fork') return void (open && deps.fork?.(open, button))
-        if (id === 'sheet-new') {
+        if (kind === 'sheet-changes') return void (open && deps.quickLook.lookChanges(open, button))
+        if (kind === 'sheet-term') return void (open && deps.terminal?.(open, button))
+        if (kind === 'sheet-fork') return void (open && deps.fork?.(open, button))
+        if (kind === 'sheet-new') {
           const it = open ? deps.item(open) : undefined
           return void (open && deps.newSession(it ? { item: it } : {}, button))
         }
@@ -379,7 +381,9 @@ export interface SheetPickDeps {
   menu: MenuOpener
   t(): Translator
   /** The open session's card: its pin, its column and lane now, the lanes there are. */
-  card(): { key: string; item: Item; column: string; category: string; categories: readonly MenuCategory[] } | null
+  card(
+    button: HTMLElement,
+  ): { key: string; item: Item; column: string; category: string; categories: readonly MenuCategory[] } | null
   move(key: string, to: { cat: string | null; column: ColumnId | null }): void
   coarse(): boolean
 }
@@ -389,7 +393,7 @@ export function sheetPickMenuFrom(
   deps: SheetPickDeps,
 ): (kind: SheetPick, button: HTMLElement, keyboard: boolean) => void {
   return (kind, button, keyboard) => {
-    const card = deps.card()
+    const card = deps.card(button)
     if (!card) return
     const t = deps.t()
     const rect = button.getBoundingClientRect()
@@ -548,7 +552,8 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
       menu,
       t: () => latest.current.t,
       canMutate: () => latest.current.board.canMutate,
-      open: () => latest.current.board.ui.open,
+      open: button =>
+        button.closest<HTMLElement>('.sheet[data-session-key]')?.dataset.sessionKey ?? latest.current.board.ui.open,
       item: key => latest.current.board.data?.items.find(i => i.key === key),
       quickLook: {
         lookChanges: (key, el) => latest.current.options.quickLook.lookChanges(key, el),
@@ -565,9 +570,10 @@ export function useContextMenus(options: ContextMenusOptions): ContextMenus {
     sheetPickMenuFrom({
       menu,
       t: () => latest.current.t,
-      card: () => {
+      card: button => {
         const { ui, data } = latest.current.board
-        const item = ui.open ? data?.items.find(i => i.key === ui.open) : undefined
+        const key = button.closest<HTMLElement>('.sheet[data-session-key]')?.dataset.sessionKey ?? ui.open
+        const item = key ? data?.items.find(i => i.key === key) : undefined
         if (!item) return null
         const { moves } = ui
         const categories = data?.categories ?? []

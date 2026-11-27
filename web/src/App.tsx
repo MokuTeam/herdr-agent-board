@@ -388,7 +388,9 @@ export function App() {
     quickLookOpen: () => quickLook.isOpen() || pictureOpen(),
     panelOpen: () => !!panels.place.openPanel(),
     closePanel: () => {
-      if (!backToSettings()) panels.closeOpen()
+      if (backToSettings()) return
+      if (document.activeElement?.closest('.sheet[data-dock="modal"]')) panels.place.centeredPanel()?.close()
+      else panels.place.sidebarPanel()?.close()
     },
     rename: rename.start,
     sessionPanelOpen: () => !!panels.place.openPanel(),
@@ -414,7 +416,7 @@ export function App() {
       panels: {
         open: panels.open,
         close: () => {
-          if (!backToSettings()) panels.closeOpen()
+          if (!backToSettings()) panels.place.sidebarPanel()?.close()
         },
       },
     }),
@@ -471,7 +473,7 @@ export function App() {
         drawerOpen={drawerOpen}
         onCloseDrawer={() => setDrawerOpen(false)}
         activePlace={activePlace}
-        onBoard={() => panels.closeOpen()}
+        onBoard={() => panels.place.sidebarPanel()?.close()}
         {...(decisionsOn && { onDecisions: () => setDecisionsOpen(was => !was) })}
         {...(threads && { onThreads: () => threads.setShown(!threads.shown) })}
         {...(offersTeam(data) && { onTeam: () => (team ? setTeam(false) : openTeam()) })}
