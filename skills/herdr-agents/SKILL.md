@@ -28,16 +28,16 @@ The agent-board hook told you at the start how to keep your card current. Prefer
 Prefer the `agent-board` MCP server's `spawn` tool (`name`, `cwd`, optional `brief`, `profile`, `device`, `lane`, `agent`, `trust`), or fall back to `spawn-agent` (also needed for CLI-only flags such as `--label`, `--workspace`, `--model`, `--brief-file`, `--thread`):
 
 ```bash
-spawn-agent --name <Name> --cwd <folder> [--label "<tab label>"] [--brief-file <utf-8 file> | --brief "<text>"] [--workspace <herdr workspace id>] [--model <id or alias>] [--device <id|local>]
+spawn-agent --name <Name> --cwd <folder> [--label "<tab label>"] [--brief-file <utf-8 file> | --brief "<text>"] [--workspace <herdr workspace id>] [--model <id or alias>] [--device <id|local>] [--trust]
 ```
 
-PowerShell-style names work too (`-Name -Cwd -Label -BriefFile -Brief -Workspace -Model -Device`). It opens a tab, starts Claude the way this computer is set up to (`launch.claude` in the board's config), names the session in Claude and in herdr, sends the brief and prints `pane=<id> name=<Name> agent=<herdr name>`. The board links the two sessions by that line.
+PowerShell-style names work too (`-Name -Cwd -Label -BriefFile -Brief -Workspace -Model -Device -Trust`). It opens a tab, starts Claude the way this computer is set up to (`launch.claude` in the board's config), names the session in Claude and in herdr, sends the brief and prints `pane=<id> name=<Name> agent=<herdr name>`. The board links the two sessions by that line.
 
 - `--workspace` takes the workspace id (`wP`), not its label. Without it the session lands in your workspace.
 - Put a long brief in a UTF-8 file: quoting a long text on a command line breaks.
 - An agent on another model than the profile's default: `--model <id or alias>` (`opus`, `sonnet`, `haiku`, or a full name; pi's `provider/id` for pi). It goes on that session's command line only. Never type `/model` into the new session for this: Claude saves it as the default of every later session in the profile, and someone has to put it back by hand.
 - Do not start Claude with `herdr agent start --kind claude` or a bare `claude` in a pane: it gets no name, no brief, and the permission mode and launcher this computer uses are skipped.
-- A new folder may show Claude's "trust this folder" dialog: spawn-agent stops and says so; the user answers it in that tab.
+- A folder Claude has not opened yet shows its "trust this folder" dialog. Without `--trust` spawn-agent stops and says so, and the user answers it in that tab. When you made the folder for this session, or it is the user's own project, pass `--trust` (MCP `trust: true`): spawn-agent then answers Yes, but only to the dialog that names `--cwd` itself, never another folder's. A folder you do not know (downloaded, someone else's) you leave to the user.
 - Where the board has other devices, the board places a new worker, whichever of its machines you run on (the master, or a node: there spawn-agent asks the master). A worker may run on another machine when its folder is a pushed git checkout and its brief names no file of the computer you run on: paths inside the repository, the branch pushed. Otherwise it starts where its folder is.
 - `--device <id>` starts it on that machine: a device id of the board's, or `local` (or the master's own id) for the master itself. It fails at once, with the reason, when the board has no such device, the device is offline, or the folder cannot go there; without `--device` the board chooses.
 - On a node, when the master cannot be reached or does not place the start, spawn-agent starts the worker on your computer as before and says why on stderr; with `--device` naming another machine it fails instead.

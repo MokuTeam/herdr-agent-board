@@ -350,7 +350,14 @@ test('the skill install copies is upstream’s, word for word, but for what `boa
   // and two lines of their own.
   // #814: the board's MCP server in every agent, a line of its own.
   // #911: MCP tools first, the `board` / `spawn-agent` commands as fallback.
+  // #805: --trust, in the command line and the PowerShell names, and when to pass it.
   const ours = read(root, 'skills', 'herdr-agents', 'SKILL.md')
+    .replace(' [--device <id|local>] [--trust]\n```', ' [--device <id|local>]\n```')
+    .replace(' -Device -Trust`)', ' -Device`)')
+    .replace(
+      /- A folder Claude has not opened yet shows its "trust this folder" dialog\.[^\n]*\n/,
+      '- A new folder may show Claude\'s "trust this folder" dialog: spawn-agent stops and says so; the user answers it in that tab.\n',
+    )
     .replace(' [--device <id|local>]', '')
     .replace(' -Device`)', '`)')
     .replace(' [--model <id or alias>]\n```', '\n```')
