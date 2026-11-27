@@ -104,10 +104,12 @@ export const hides = (record: ArchiveRecord | null, item: Pick<Item, 'pane' | 's
  * Whether the item is in the pane its record was archived in. A sleeper whose pane wake closed
  * (#204) has none: null on the board, '' in its record. Read as different, it came straight back
  * (#323). Only a sleeper: a MokuPilot call agent going on in the session has no pane either, and
- * shows (#326).
+ * shows (#326). Closing a Codex sleeper's pane can leave its registry entry visible to a
+ * collector until wake prunes it. The resulting paneless sleeper still belongs to the archive.
  */
 const archivedPane = (record: ArchiveRecord, item: Pick<Item, 'pane' | 'sleeping'>): boolean =>
-  record.pane === item.pane || (record.pane === '' && item.pane == null && !!item.sleeping)
+  record.pane === item.pane ||
+  ((record.pane === '' || record.agent === CODEX_AGENT) && item.pane == null && !!item.sleeping)
 
 // ------------------------------------------------------------------ the session's profile
 
