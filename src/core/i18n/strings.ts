@@ -362,6 +362,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'qa.thread.waiting': 'Waits for your answer',
     'qa.thread.closed': 'Closed without an answer',
     'err.send': 'Could not send to {name}: {why}',
+    'err.codexDeliveryUnavailable': 'Waiting for the Codex conversation journal',
+    'err.codexDeliveryUnknown': 'Codex delivery could not be confirmed. Check the conversation before resending.',
     'err.gone': 'The session is no longer on the board',
     'err.unavailable': 'Session unavailable',
     'err.pinWork': 'A session lands in {col} by itself while it works',
@@ -701,6 +703,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'sched.dialog': 'Waits: a dialog is open in the session',
     'sched.tasks': 'Waits: background tasks run in the session',
     'sched.nodeOffline': 'Waits: the device is not reachable',
+    'sched.codexDeliveryUnknown': 'Delivery unconfirmed. Check the Codex conversation before resending.',
     'sched.mode.onTime': 'On time',
     'sched.mode.idle': 'When free',
     'sched.mode.onTimeHint':
@@ -1109,6 +1112,8 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'qa.thread.waiting': 'Ждёт твоего ответа',
     'qa.thread.closed': 'Закрыт без ответа',
     'err.send': 'Не отправил в {name}: {why}',
+    'err.codexDeliveryUnavailable': 'Ждём журнал диалога Codex',
+    'err.codexDeliveryUnknown': 'Не удалось подтвердить доставку в Codex. Проверь диалог перед повторной отправкой.',
     'err.gone': 'Сессии больше нет на доске',
     'err.unavailable': 'Сессия недоступна',
     'err.pinWork': 'В {col} сессия попадает сама, когда работает',
@@ -1440,6 +1445,7 @@ export const STRINGS: Record<Lang, Dictionary> = {
     'sched.dialog': 'Ждёт: в сессии открыт диалог',
     'sched.tasks': 'Ждёт: в сессии идут фоновые задачи',
     'sched.nodeOffline': 'Ждёт: устройство не на связи',
+    'sched.codexDeliveryUnknown': 'Доставка не подтверждена. Проверь диалог Codex перед повторной отправкой.',
     'sched.mode.onTime': 'Вовремя',
     'sched.mode.idle': 'Когда свободна',
     'sched.mode.onTimeHint':

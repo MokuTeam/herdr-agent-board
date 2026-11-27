@@ -189,7 +189,15 @@ function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
   // "Send anyway" (#164): herdr says a dialog holds the session, but the screen shows none.
   const anyway = body.anyway === true
   const draft = body.draft === true
-  const payload = [body.session ?? null, body.text, files, ...(anyway ? [true] : [])]
+  const verifyDelivery = body.verifyDelivery === true && isCodexItem(item)
+  const free = verifyDelivery && body.idleOnly === true
+  const payload = [
+    body.session ?? null,
+    body.text,
+    files,
+    ...(anyway ? [true] : []),
+    ...(verifyDelivery ? ['verify-delivery', free] : []),
+  ]
   return app.gate(item.key, body.requestId ?? randomUUID(), payload, async () => {
     // Always collect a new snapshot before accepting a message, even if SSE is connected: a
     // board that cannot reach herdr fails here rather than send on old data.
@@ -200,6 +208,8 @@ function message(app: SessionApp, item: Item, body: Body): Promise<Result> {
     return send(deps, fresh, [String(body.text ?? '').trim(), list].filter(Boolean).join('\n\n'), {
       look: true,
       anyway,
+      verifyDelivery,
+      free,
       ...(draft && { draft: true }),
     })
   })

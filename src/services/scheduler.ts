@@ -57,12 +57,20 @@ import { herdr } from '../adapters/herdr.ts'
 import { nameForCwd, nameScript } from '../adapters/name-for-cwd.ts'
 import { archiveDir, scheduleDir } from '../adapters/paths.ts'
 import { getEntry, listEntries, listWatches, logRun, removeEntry, updateEntry } from '../adapters/schedule-store.ts'
+import { isCodexItem } from '../core/codex.ts'
 import { itemProfile } from '../core/item-profile.ts'
 import { t } from '../core/lang.ts'
 import { matchNodeKey, parseNodeKey } from '../core/nodes.ts'
 import { callTitle } from '../core/notices.ts'
 import { profileLabel, sessionProfile } from '../core/profiles.ts'
-import { cleanText, NODE_OFFLINE_WHY, promptOf, type ScheduleEntry, targetOf } from '../core/schedule-rules.ts'
+import {
+  CODEX_DELIVERY_UNKNOWN,
+  cleanText,
+  NODE_OFFLINE_WHY,
+  promptOf,
+  type ScheduleEntry,
+  targetOf,
+} from '../core/schedule-rules.ts'
 import type { Item } from '../core/types.ts'
 import { wakeOffByKey } from '../core/wake/mode.ts'
 import { watchesConfig } from '../core/watches.ts'
@@ -129,6 +137,7 @@ export type RemoteSent =
       draft?: boolean
       offline?: boolean
       end?: boolean
+      deliveryUnknown?: true
     }
 
 /**
@@ -141,7 +150,7 @@ export interface RemoteDelivery {
   send(
     key: string,
     text: string,
-    o: { requestId: string; idle: boolean; noWake: boolean; draft?: boolean },
+    o: { requestId: string; idle: boolean; noWake: boolean; draft?: boolean; verifyDelivery?: boolean },
   ): Promise<RemoteSent>
 }
 
@@ -241,7 +250,13 @@ export function startScheduler({
         return !!at && woken.has(at.device)
       }
       // Due: what may go now. One tried a moment ago still goes along with another due beside it.
-      const ready = all.filter(e => e.next <= now && !later(e) && workdeskDue(e))
+      const ready = all.filter(
+        e =>
+          e.next <= now &&
+          !later(e) &&
+          workdeskDue(e) &&
+          (e.why !== CODEX_DELIVERY_UNKNOWN || delivered.get(e.id) === e.next),
+      )
       const due = ready.filter(e => !flying.has(e.key) && (!tried(e) || remoteWoke(e)))
       if (!due.length) return
       // Keep remote deliveries for the same session strictly FIFO when an earlier entry waits on dialog/draft/busy.
@@ -282,7 +297,8 @@ export function startScheduler({
         if (headBlocked(entry)) return
         flying.add(entry.key)
         let settled = false
-        viaNode(entry, via, device)
+        const remoteItem = remoteItems?.().find(i => i.key === entry.key)
+        viaNode(entry, via, device, !!remoteItem && isCodexItem(remoteItem))
           .then(done => {
             settled = done
           })
@@ -495,6 +511,13 @@ export function startScheduler({
           return
         }
       }
+      const verifyDelivery = isCodexItem(item)
+      if (r.ok && verifyDelivery && !entry.receipt) {
+        batch = batch.filter(e => holdCodexDelivery(e, now))
+        const left = batch[0]
+        if (!left) return
+        entry = left
+      }
       if (r.ok && entry.receipt) {
         const state = beginReport(entry)
         if (state !== 'dispatching') {
@@ -523,6 +546,7 @@ export function startScheduler({
           r = await send(deps, { ...item, sleeping: false, pane }, text, {
             free: !!entry.idle,
             draft: true,
+            verifyDelivery,
             // Woken just now: herdr may name it in its pane a few seconds later (#267).
             woken: !!item.sleeping,
           })
@@ -545,6 +569,7 @@ export function startScheduler({
         for (const e of batch) sent(e)
         return
       }
+      if (r.deliveryUnknown) return
       why = whyNot(r)
     }
     for (const e of batch) wait(e, now, why, !item)
@@ -577,22 +602,28 @@ export function startScheduler({
    * so a run sent twice is typed once (core/message-gate.ts on the node). Returns whether the entry
    * finished (sent or ended), so another queued entry for the same session can go next.
    */
-  async function viaNode(entry: ScheduleEntry, via: RemoteDelivery, device: string): Promise<boolean> {
+  async function viaNode(entry: ScheduleEntry, via: RemoteDelivery, device: string, codex: boolean): Promise<boolean> {
     const now = Date.now()
     if ((entry.kind && entry.kind !== 'telegram') || entry.receipt) {
       wait(entry, now, 'gone', true)
       return false
     }
     if (!claim(entry.id, now)) return false
+    if (codex && !holdCodexDelivery(entry, now)) return false
     const r = await via.send(entry.key, promptOf(entry, Date.now()), {
       requestId: `${entry.id}-${entry.next}`,
       idle: !!entry.idle,
       noWake: entry.noWake === true,
       ...(entry.kind === 'telegram' && { draft: true }),
+      verifyDelivery: true,
     })
     if (r.ok) {
       sent(entry)
       return true
+    }
+    if (r.deliveryUnknown) {
+      holdCodexDelivery(entry, now)
+      return false
     }
     if (r.offline) {
       holdNode(entry, now)
@@ -686,8 +717,13 @@ export function startScheduler({
       await nameAgain(item)
       if (stopped || !getEntry(entry.id)) return
     }
-    const r = await send(deps, item, promptOf(entry, Date.now()), { free: true, draft: true })
-    if (!r.ok) return wait(entry, now, whyNot(r), false)
+    const verifyDelivery = isCodexItem(item)
+    if (verifyDelivery && !holdCodexDelivery(entry, now)) return
+    const r = await send(deps, item, promptOf(entry, Date.now()), { free: true, draft: true, verifyDelivery })
+    if (!r.ok) {
+      if (!r.deliveryUnknown) wait(entry, now, whyNot(r), false)
+      return
+    }
     const failed = typeof entry.failed === 'string' ? entry.failed : ''
     return failed ? sent(entry, 'failed', failed) : sent(entry)
   }
@@ -872,6 +908,15 @@ export function startScheduler({
     if (drop && Array.isArray(entry.ownerPosts) && entry.ownerPosts.length && threadsConfig(cfg.threads)) {
       if (recordOwnerPostFailure(entry, why, now, log)) onChange()
     }
+  }
+
+  /** Persist before submitting. After a crash or an uncertain result only the owner resolves it. */
+  function holdCodexDelivery(entry: ScheduleEntry, now: number): boolean {
+    return !!updateEntry(entry.id, e => ({
+      ...e,
+      pendingSince: e.pendingSince ?? now,
+      why: CODEX_DELIVERY_UNKNOWN,
+    }))
   }
 
   /**

@@ -24,8 +24,10 @@
 //   node's (from its payload, kept in this process by the link) on the way out.
 // - A device that is not reachable: 503 `{ error: 'node-offline', device }`; one refused for its
 //   link's version: 503 `node-api`. A device config.json does not have: 404, as a session that is gone.
+
 import { isRecord } from '../../adapters/json-store.ts'
 import { knobMs } from '../../adapters/pacing.ts'
+import { isCodexItem } from '../../core/codex.ts'
 import { t } from '../../core/lang.ts'
 import {
   type Asked,
@@ -546,17 +548,31 @@ export function createNodeProxy(app: NodeProxyApp): NodeProxy {
       if (o.idle && item.status === 'working') return { ok: false, busy: true, error: 'busy' }
       const link = app.links.link(at.device)
       if (!link) return { ok: false, offline: true, error: 'node-offline' }
+      const verifyDelivery = o.verifyDelivery === true && isCodexItem(item)
+      const uncertain = { ok: false, deliveryUnknown: true, error: t('err.codexDeliveryUnknown') } as const
       const limit = AbortSignal.timeout(sendMs())
       const res = await forward(
         at.device,
         link,
         nodePath({ area: 'session', key: at.key, rest: '/message' }),
-        jsonInit({ text, session: item.session ?? null, requestId: o.requestId, ...(o.draft && { draft: true }) }),
+        jsonInit({
+          text,
+          session: item.session ?? null,
+          requestId: o.requestId,
+          ...(o.draft && { draft: true }),
+          ...(verifyDelivery && { verifyDelivery: true, draft: true, idleOnly: o.idle }),
+        }),
         undefined,
         limit,
       )
       const answer = await answerOf(res)
-      if (res.ok && isRecord(answer) && answer.ok === true) return { ok: true }
+      if (res.ok && isRecord(answer) && answer.ok === true)
+        return !verifyDelivery || answer.codexDeliveryConfirmed === true ? { ok: true } : uncertain
+      if (
+        verifyDelivery &&
+        (limit.aborted || res.status >= 500 || (isRecord(answer) && answer.deliveryUnknown === true))
+      )
+        return uncertain
       // No answer in time (#876): not sent as far as the master knows; the entry waits and goes
       // again on a later tick, with the same request id (core/message-gate.ts on the node).
       if (limit.aborted) return { ok: false, error: 'node-timeout' }

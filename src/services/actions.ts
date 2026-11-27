@@ -47,6 +47,7 @@ import { canWake, plainProfile } from '../core/wake/rules.ts'
 import { herdrWakeAnswers, type SleepProvider } from '../integrations/herdr-wake.ts'
 import { raiseTerminal } from '../integrations/terminal-window.ts'
 import type { BoardWake } from '../integrations/wake.ts'
+import { submitCodexReminder } from './codex-delivery.ts'
 import type { Deps } from './deps.ts'
 import { defaultAgyOps, wakeAgy } from './wake/agy.ts'
 import { defaultCodexOps } from './wake/codex.ts'
@@ -63,7 +64,7 @@ import { defaultTabOps, openTab } from './wake/tabs.ts'
  * reminder waits for either without counting the wait (services/scheduler.ts).
  */
 export type ActionResult =
-  | { ok: true; pane?: string }
+  | { ok: true; pane?: string; codexDeliveryConfirmed?: true }
   | {
       ok: false
       error: string
@@ -73,6 +74,7 @@ export type ActionResult =
       code?: 'stale'
       wakeBusy?: boolean
       herdrDown?: boolean
+      deliveryUnknown?: true
     }
 
 const messageOf = (err: unknown): string => (err instanceof Error ? err.message : String(err))
@@ -695,6 +697,7 @@ export async function send(
     boundTerminal,
     look = false,
     anyway = false,
+    verifyDelivery = false,
   }: {
     free?: boolean
     draft?: boolean
@@ -703,6 +706,7 @@ export async function send(
     boundTerminal?: string
     look?: boolean
     anyway?: boolean
+    verifyDelivery?: boolean
   } = {},
 ): Promise<ActionResult> {
   const text = String(message ?? '').trim()
@@ -716,6 +720,8 @@ export async function send(
   // A sleeping session whose pane is gone wakes in a new tab: pi's (#178), Claude's that wake closed (#204).
   if (!item?.pane && !item?.sleeping) return { ok: false, error: t('err.noPane') }
   const expectedSession = item.session ?? null
+  if (verifyDelivery && isCodexItem(item) && (!expectedSession || !isCodexSession(expectedSession)))
+    return { ok: false, error: t('err.codexDeliveryUnavailable') }
   const refused = (agent: HerdrAgent | null): Extract<ActionResult, { ok: false }> | null => {
     const actualSession =
       agent?.kind === AGY_AGENT && agent.session && agent.session !== expectedSession
@@ -828,6 +834,7 @@ export async function send(
       if (after) return after
     }
     if (probe) return { ok: true }
+    if (verifyDelivery && isCodexItem(item)) return await submitCodexReminder(deps, item, pane, text, free)
     // This read and prompt are separate CLI calls, not an atomic identity check and send.
     // A leading dash would be read as an option by the herdr CLI.
     await herdr(['agent', 'prompt', pane, /^-/.test(text) ? ` ${text}` : text])

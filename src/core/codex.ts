@@ -77,6 +77,13 @@ function userText(item: Rec): string {
     .trim()
 }
 
+/** Whether this rollout record contains the exact user message submitted to Codex. */
+export function codexUserEcho(line: string, text: string): boolean {
+  const record = parse(line)
+  const item = rec(record?.payload)
+  return record?.type === 'response_item' && item?.type === 'message' && item.role === 'user' && userText(item) === text
+}
+
 function toolInput(item: Rec): Rec | null {
   return parse(str(item.arguments))
 }

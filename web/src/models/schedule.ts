@@ -54,6 +54,7 @@ const WAITS: Record<string, string> = {
 
 /** Why a due entry has not gone out yet; nothing while it is not waiting. A restart: how it stands. */
 export function pendingText(e: ScheduleEntry, t: Translator): string {
+  if (e.why === 'delivery-unknown') return t('sched.codexDeliveryUnknown')
   if (e.kind === 'restart') return restartText(e, t)
   if (!e.pendingSince) return ''
   const why = e.why

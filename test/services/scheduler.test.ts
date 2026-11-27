@@ -1,6 +1,6 @@
 import { describe, expect, setDefaultTimeout, test } from 'bun:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { join } from 'node:path'
@@ -171,34 +171,112 @@ describe('startScheduler', () => {
   })
 
   test("a Codex session: a reminder is not typed over a draft in its composer; Claude's screen read stays Claude's", async () => {
+    const sid = '0f3c9a7e-1b2d-4e5f-8a9b-0c1d2e3f4a5b'
     const codexHerdr = (box: Sandbox, status: string, text: string): void => {
       const snapshot = {
-        panes: [{ pane_id: 'p1', agent: 'codex', agent_session: { value: 's1' }, agent_status: status, cwd: box.dir }],
+        panes: [{ pane_id: 'p1', agent: 'codex', agent_session: { value: sid }, agent_status: status, cwd: box.dir }],
         tabs: [],
         workspaces: [],
       }
       box.state({
         'api snapshot': { result: { snapshot } },
-        'agent get': { result: { agent: { agent: 'codex', agent_status: status, agent_session: { value: 's1' } } } },
+        'agent get': { result: { agent: { agent: 'codex', agent_status: status, agent_session: { value: sid } } } },
         'agent read': { text },
         'agent prompt': { result: {} },
       })
     }
     const free = await sandbox()
     codexHerdr(free, 'idle', '\x1b[1m›\x1b[22m \x1b[2mAsk Codex to do anything\x1b[0m\n \x1b[2m? for shortcuts\x1b[0m')
-    put(free, { id: 'cdcd11', text: 'into the empty composer', at: Date.now() - 1000, next: Date.now() - 1000 })
+    put(free, {
+      id: 'cdcd11',
+      key: sid,
+      text: 'into the empty composer',
+      at: Date.now() - 1000,
+      next: Date.now() - 1000,
+    })
     await scheduler(free)
-    await until(() => prompts(free).length === 1)
-    assert.deepEqual(prompts(free), ['[board reminder] into the empty composer'])
+    await until(() => String(read(free, 'cdcd11')?.why).includes('journal'))
+    assert.deepEqual(prompts(free), [])
 
     const draft = await sandbox()
     codexHerdr(draft, 'working', '\x1b[1m›\x1b[22m the user types\n \x1b[2m? for shortcuts\x1b[0m')
-    put(draft, { id: 'cdcd12', text: 'not over a draft', at: Date.now() - 1000, next: Date.now() - 1000 })
+    put(draft, { id: 'cdcd12', key: sid, text: 'not over a draft', at: Date.now() - 1000, next: Date.now() - 1000 })
     await scheduler(draft)
     await until(() => read(draft, 'cdcd12')?.why === 'draft')
     await sleep(400)
     assert.deepEqual(prompts(draft), [])
   })
+
+  test.each(['echo', 'no echo', 'pane changed', 'preflight retry'] as const)(
+    'Codex RPC success with %s',
+    async outcome => {
+      const box = await sandbox()
+      const sid = '0f3c9a7e-1b2d-4e5f-8a9b-0c1d2e3f4a5b'
+      const home = join(box.dir, 'codex')
+      const folder = join(home, 'sessions', '2026', '11', '27')
+      const rollout = join(folder, `rollout-2026-11-27T09-00-00-${sid}.jsonl`)
+      const prompt = '[board reminder] Verify 100% — доставка'
+      const echo = JSON.stringify({
+        type: 'response_item',
+        payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: prompt }] },
+      })
+      mkdirSync(folder, { recursive: true })
+      writeFileSync(
+        rollout,
+        `${JSON.stringify({ type: 'session_meta', payload: { id: sid, cwd: box.dir } })}\n${echo}\n`,
+      )
+      const pane = {
+        pane_id: 'p1',
+        terminal_id: 'term_original',
+        agent: 'codex',
+        agent_status: 'idle',
+        agent_session: { value: sid },
+        cwd: box.dir,
+      }
+      const state = (terminal = pane.terminal_id, liveSid = sid) =>
+        box.state({
+          'api snapshot': { result: { snapshot: { panes: [pane], tabs: [], workspaces: [] } } },
+          'pane get': { result: { pane: { ...pane, terminal_id: terminal, agent_session: { value: liveSid } } } },
+          'agent get': { result: { agent: pane } },
+          'agent read': { text: '› \x1b[2mAsk Codex to do anything\x1b[0m' },
+          'agent prompt': { result: {} },
+        })
+      if (outcome === 'preflight retry') state(pane.terminal_id, '00000000-0000-0000-0000-000000000000')
+      else state()
+      put(box, { id: 'c0de01', key: sid, text: 'Verify 100% — доставка', next: Date.now() - 1000 })
+      const proc = box.run(
+        'scheduler',
+        { scheduleTickSec: 0.15, wakeUrl: null },
+        { CODEX_HOME: home, BOARD_CODEX_DELIVERY_MS: '550' },
+      )
+      if (outcome === 'preflight retry') {
+        await until(() => String(read(box, 'c0de01')?.why).includes('another session'))
+        expect(prompts(box)).toEqual([])
+        state()
+      }
+      await until(() => prompts(box).length === 1)
+      if (outcome === 'pane changed') state('term_replacement')
+      if (outcome !== 'no echo') appendFileSync(rollout, `${echo}\n`)
+      if (outcome === 'echo' || outcome === 'preflight retry') {
+        await until(() => runs(box).some(run => run.result === 'sent'))
+        expect(read(box, 'c0de01')).toBeNull()
+      } else {
+        await until(() => read(box, 'c0de01')?.why === 'delivery-unknown')
+        await sleep(800)
+        expect(read(box, 'c0de01')).not.toBeNull()
+        expect(runs(box)).toEqual([])
+      }
+      expect(prompts(box)).toEqual([prompt])
+      proc.kill()
+      await proc.exited
+      if (outcome === 'no echo') {
+        const restarted = box.run('scheduler', { scheduleTickSec: 0.15, wakeUrl: null }, { CODEX_HOME: home })
+        await until(() => restarted.messages.some(m => (m as { ready?: boolean }).ready))
+        await sleep(500)
+        expect(prompts(box)).toEqual([prompt])
+      }
+    },
+  )
 
   test('--idle: a working session gets it once it is free; one that stays busy has it logged as missed', async () => {
     const box = await sandbox()

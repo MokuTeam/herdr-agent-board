@@ -19,6 +19,7 @@ export const MAX_REPORT = 16_000
 const LATE_MS = 2 * 60_000
 /** Why a master entry for a node session is held without expiring (#695). */
 export const NODE_OFFLINE_WHY = 'node-offline'
+export const CODEX_DELIVERY_UNKNOWN = 'delivery-unknown'
 
 /** Master schedule entries held while each device is offline (#695), keyed by device id. */
 export function heldByDevice(entries: readonly { key: string; why?: unknown }[]): Record<string, number> {

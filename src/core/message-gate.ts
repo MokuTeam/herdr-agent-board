@@ -2,7 +2,7 @@
 // within this server process; this does not make Herdr get/prompt atomic.
 import { t } from './lang.ts'
 
-export type GateResult = { ok: boolean; error?: string; [extra: string]: unknown }
+export type GateResult = { ok: boolean; error?: string; deliveryUnknown?: true; [extra: string]: unknown }
 export type MessageGate = (
   key: string,
   id: unknown,
@@ -31,7 +31,7 @@ export function messageGate(): MessageGate {
     entry.promise = promise
     try {
       const result = await promise
-      if (result.ok) {
+      if (result.ok || result.deliveryUnknown) {
         completed.set(token, { ...entry, result })
         if (completed.size > 500) completed.delete(completed.keys().next().value as string)
       }
