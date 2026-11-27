@@ -16,6 +16,8 @@ import {
   headButtons,
   liveEdit,
   NO_HEAD_BUTTONS,
+  NODE_LIVE_MS,
+  nodeLivePoll,
   sessionMissing,
   sheetAvailability,
   sheetHead,
@@ -77,6 +79,17 @@ describe('a new board and the open session’s detail', () => {
     expect(detailOnBoard({ ...turn, board: { stale: false, items: [] } })).toEqual({ kind: 'missing' })
     expect(detailOnBoard({ ...turn, board: { stale: true, items: [] } })).toBe(null)
   })
+})
+
+test("a node session's thread reads itself again while live: a message sent or a turn of late (#938)", () => {
+  const node = { device: 'win-laptop' }
+  expect(nodeLivePoll({ item: node, nudgedAt: NOW - 1000, newest: NOW - 3_600_000, now: NOW })).toBe(true)
+  expect(nodeLivePoll({ item: node, nudgedAt: 0, newest: NOW - 10_000, now: NOW })).toBe(true)
+  expect(nodeLivePoll({ item: node, nudgedAt: 0, newest: NOW - NODE_LIVE_MS, now: NOW })).toBe(false)
+  expect(nodeLivePoll({ item: node, nudgedAt: 0, newest: 0, now: NOW })).toBe(false)
+  // A card of this computer, or one gone: never.
+  expect(nodeLivePoll({ item: {}, nudgedAt: NOW, newest: NOW, now: NOW })).toBe(false)
+  expect(nodeLivePoll({ item: undefined, nudgedAt: NOW, newest: NOW, now: NOW })).toBe(false)
 })
 
 describe('the head', () => {
