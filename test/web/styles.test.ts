@@ -33,9 +33,10 @@ describe(`the stylesheets are upstream’s at ${STYLES_REF}`, () => {
       const rest = theirs
         .filter(line => !isSetupRule(line) && line !== '  .setup-pop { transition: opacity 160ms ease; }')
         .map(line => line.replace(', .setup-pop {', ' {'))
-      // The card's status, the session meter and its container query are the board's own rules.
+      // The card's status, its question links and the session meter are the board's own rules.
       const own = (line: string) =>
         line.startsWith('.card-status') ||
+        line.startsWith('.ask-link ') ||
         line.startsWith('@container card (max-width: 230px)') ||
         line.startsWith('.session-meter')
       expect(ours(sheet).filter(line => !own(line))).toEqual(rest)
